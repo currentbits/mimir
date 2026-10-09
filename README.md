@@ -20,7 +20,14 @@ email, calendar and the web, and ask before they act. Mimir has no AI and no ser
 - **Yours.** No Mimir servers or account: data in one SQLite file on your machine (or your own server), secrets in the
   OS keychain.
 
-## Quick start
+## Download
+
+Installers for macOS (Apple silicon), Windows and Linux are on the [releases page](https://github.com/currentbits/mimir/releases/latest).
+They aren't code-signed yet: on a Mac, right-click the app and choose **Open** the first time; on Windows, choose
+**More info**, then **Run anyway**. After that the app updates itself. Then: [Getting started](docs/getting-started.md).
+
+## Build it yourself
+
 
 ```sh
 cd ui && npm install && npm run tauri dev      # the desktop app (macOS, Windows, Linux)
