@@ -12,8 +12,13 @@ is in a page.
 
 ## 1. Install
 
-**Desktop app** (macOS on Apple silicon, Windows, Linux). Installers (`.dmg`, `.exe` / `.msi`, `.deb`, `.rpm`,
-`.AppImage`) come with the first public release. Until then, build it from source:
+**Desktop app** (macOS 11+ on Apple silicon, Windows 10 or 11, Linux on x86-64). Download the installer from
+[heymimir.app](https://heymimir.app/#get) or the [releases page](https://github.com/currentbits/mimir/releases/latest):
+`.dmg` (Mac), `-setup.exe` or `.msi` (Windows), `.AppImage`, `.deb` or `.rpm` (Linux). They aren't code-signed yet:
+on a Mac, right-click the app and choose **Open** the first time; on Windows, choose **More info**, then **Run
+anyway**.
+
+Or build it from source:
 
 ```sh
 cd ui && npm install && npm run tauri build     # the app and installer end up under $CARGO_TARGET_DIR/release/bundle/
@@ -23,8 +28,7 @@ Or run it in development mode: `cd ui && npm install && npm run tauri dev`.
 
 You need Rust, Node.js 22 and, for the built-in transcription, `cmake` (macOS: `brew install cmake`; Linux:
 `libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libdbus-1-dev libasound2-dev
-libclang-dev cmake`). The app isn't code-signed yet: on a Mac, right-click it and choose **Open** the first time; on
-Windows, choose **More info**, then **Run anyway**.
+libclang-dev cmake`).
 
 **Updates.** The app checks for a new version a minute after it starts and every 6 hours, and downloads it in the
 background. Each download is checked against Mimir's signing key, so a tampered file is refused. It doesn't restart on

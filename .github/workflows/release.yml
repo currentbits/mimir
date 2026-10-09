@@ -64,6 +64,15 @@ jobs:
           shopt -s nullglob
           files=(target/release/bundle/{dmg/*.dmg,nsis/*.exe,msi/*.msi,deb/*.deb,rpm/*.rpm,appimage/*.AppImage,macos/*.app.tar.gz} target/release/bundle/*/*.sig)
           [ ${#files[@]} -gt 0 ] || { echo "::error::no installers under target/release/bundle"; exit 1; }
+          # Also under names without the version, so heymimir.app can link releases/latest/download/<name> for good.
+          for f in "${files[@]}"; do
+            case "$f" in
+              *.dmg) cp "$f" Mimir-macOS.dmg; files+=(Mimir-macOS.dmg) ;;
+              *-setup.exe) cp "$f" Mimir-Windows-setup.exe; files+=(Mimir-Windows-setup.exe) ;;
+              *.AppImage) cp "$f" Mimir-Linux.AppImage; files+=(Mimir-Linux.AppImage) ;;
+              *.deb) cp "$f" Mimir-Linux.deb; files+=(Mimir-Linux.deb) ;;
+            esac
+          done
           gh release upload "$GITHUB_REF_NAME" "${files[@]}" -R "$GITHUB_REPOSITORY" --clobber
 
   # latest.json from the signatures the builds attached: one entry per kind of install (an app installed from the .deb

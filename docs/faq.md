@@ -85,7 +85,8 @@ server also serves the app on the web.
 **Does it update itself?** The desktop app does: it downloads a new version in the background, checks it against
 Mimir's signing key, and installs when you choose **Restart to update**.
 
-**Where do I download it?** Signed installers come with the first public release. Until then, build it from source
+**Where do I download it?** On [heymimir.app](https://heymimir.app/#get), or the
+[releases page](https://github.com/currentbits/mimir/releases/latest) for macOS, Windows and Linux
 ([Getting started](getting-started.md#1-install)).
 
 **Something isn't working.** The first item in the sidebar, **Needs you**, lists what failed in plain words with a fix
