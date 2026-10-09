@@ -1,0 +1,44 @@
+# Builds and tests Mimir on all three desktop platforms (the app ships for macOS, Windows and Linux).
+name: build
+on: [push, pull_request]
+# Read-only token: the build needs nothing more.
+permissions:
+  contents: read
+jobs:
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      # Actions pinned to a commit (the tag in the comment), so a moved tag can't change what runs here.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { persist-credentials: false }
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: { node-version: 22, cache: npm, cache-dependency-path: ui/package-lock.json }
+      - run: npm ci && npm run build
+        working-directory: ui
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - name: Linux libraries (WebKitGTK, tray, keyring, audio, whisper.cpp build)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libdbus-1-dev libasound2-dev libclang-dev cmake xvfb dbus-x11
+      # A hang fails in minutes, not after 6 hours.
+      - run: cargo test -p mimir-core
+        timeout-minutes: 45
+      # (Windows dev builds once died on a debug-heap assertion: two C runtimes. See Cargo.toml, sherpa-rs-sys.)
+      - run: cargo test -p mimir-desktop
+        timeout-minutes: 30
+      - run: cargo build -p mimir -p mimir-desktop --features tauri/custom-protocol
+      # Start the real app: the window renders, talks to the backend, and exits 0 with no UI errors. Catches what unit
+      # tests can't, like a library the app can't load at launch (macOS once died on a missing Swift runtime rpath).
+      - name: Launch the app (self-test)
+        shell: bash
+        env: { MIMIR_SELFTEST: '1' }
+        run: |
+          export MIMIR_HOME="$RUNNER_TEMP/mimir-home"
+          app=target/debug/mimir-desktop
+          if [ "$RUNNER_OS" = Linux ]; then app="xvfb-run -a dbus-launch $app"; fi
+          # perl's alarm: a timeout that exists on all three runners.
+          perl -e 'alarm 120; exec @ARGV' $app

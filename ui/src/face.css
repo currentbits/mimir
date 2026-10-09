@@ -1,0 +1,187 @@
+/* A bot's face (face.tsx). --s is the avatar's size, --pig its pigment. Each layer moves one thing:
+   .face-body breathes, hops and leans; .face-look aims the eyes; .face-eyes glances and scans;
+   each eye blinks. Moods swap those animations. */
+
+.avatar:has(> .face) { background: none; box-shadow: none; color: transparent; overflow: visible; }
+.empty > .avatar { margin-bottom: 12px; }
+.face { position: absolute; inset: 0; --lx: 0; --ly: 0; --ink: #201A15; pointer-events: none; }
+
+.face-body {
+  position: absolute; left: 50%; bottom: 2%; width: 94%; height: 92%; translate: -50% 0;
+  border-radius: 47% 53% 50% 50% / 55% 50% 50% 45%;
+  background:
+    radial-gradient(circle at 30% 24%, color-mix(in oklab, var(--pig) 45%, white) 0, transparent 42%),
+    linear-gradient(175deg, color-mix(in oklab, var(--pig) 80%, white), var(--pig) 55%, color-mix(in oklab, var(--pig) 82%, black));
+  box-shadow: inset 0 calc(var(--s) * -0.06) calc(var(--s) * 0.1) rgb(0 0 0 / 0.16), inset 0 0 0 0.5px rgb(0 0 0 / 0.14);
+  transform-origin: 50% 100%;
+  animation: face-breathe 3.8s ease-in-out infinite;
+  transition: filter 400ms, rotate 300ms cubic-bezier(0.2, 0.7, 0.1, 1);
+}
+.face[data-shape="dome"] .face-body { border-radius: 50% 50% 40% 40% / 66% 66% 34% 34%; }
+.face[data-shape="bean"] .face-body { width: 100%; height: 80%; border-radius: 50% / 56% 56% 44% 44%; }
+.face[data-shape="tall"] .face-body { width: 78%; height: 96%; border-radius: 50% / 44%; }
+
+/* Something of its own: a sprout from the world tree, or rosy cheeks. */
+.face[data-extra="sprout"] .face-body::before {
+  content: ""; position: absolute; left: 47%; top: calc(var(--s) * -0.075); width: calc(var(--s) * 0.17); height: calc(var(--s) * 0.11);
+  border-radius: 0 100% 0 100%; background: color-mix(in oklab, var(--pig) 40%, #4F7D2C); rotate: -24deg; transform-origin: 0 100%;
+  animation: face-sway 4.6s ease-in-out infinite;
+}
+/* By choice only: an antenna that sways, or freckles. */
+.face[data-extra="antenna"] .face-body::before {
+  content: ""; position: absolute; left: 50%; top: calc(var(--s) * -0.17); width: calc(var(--s) * 0.13); height: calc(var(--s) * 0.22); translate: -50% 0;
+  background:
+    radial-gradient(circle at 50% calc(var(--s) * 0.055), color-mix(in oklab, var(--pig) 50%, white) 0 calc(var(--s) * 0.05), transparent calc(var(--s) * 0.056)),
+    linear-gradient(color-mix(in oklab, var(--pig) 70%, black), color-mix(in oklab, var(--pig) 70%, black)) 50% 100% / max(1px, calc(var(--s) * 0.022)) 62% no-repeat;
+  transform-origin: 50% 100%; animation: face-sway 4.6s ease-in-out infinite;
+}
+.face[data-extra="freckles"] .face-look::after {
+  content: ""; position: absolute; left: 17%; right: 17%; top: 50%; height: calc(var(--s) * 0.09);
+  --fr: radial-gradient(circle, rgb(90 45 25 / 0.5) 0 calc(var(--s) * 0.017 + 0.3px), transparent calc(var(--s) * 0.022 + 0.6px));
+  background: var(--fr) 0 0 / 14% 50% no-repeat, var(--fr) 14% 100% / 14% 50% no-repeat, var(--fr) 28% 0 / 14% 50% no-repeat,
+              var(--fr) 72% 0 / 14% 50% no-repeat, var(--fr) 86% 100% / 14% 50% no-repeat, var(--fr) 100% 0 / 14% 50% no-repeat;
+}
+.face[data-extra="cheeks"] .face-look::after {
+  content: ""; position: absolute; left: 14%; right: 14%; top: 50%; height: 16%;
+  background: radial-gradient(closest-side, rgb(255 150 140 / 0.42), transparent) left / 30% 100% no-repeat,
+              radial-gradient(closest-side, rgb(255 150 140 / 0.42), transparent) right / 30% 100% no-repeat;
+}
+
+.face-look { position: absolute; inset: 0; translate: calc(var(--lx) * var(--s) * 0.09) calc(var(--ly) * var(--s) * 0.07); transition: translate 300ms cubic-bezier(0.2, 0.7, 0.1, 1); }
+.face-eyes {
+  position: absolute; left: 50%; top: 40%; display: flex; gap: calc(var(--s) * 0.17); translate: -50% -50%;
+  animation: face-glance 12s ease-in-out infinite var(--glance-at);
+}
+.face[data-looking] .face-eyes { animation: none; }
+.face-eyes i {
+  display: block; width: calc(var(--s) * 0.115); height: calc(var(--s) * 0.17); border-radius: 50%;
+  background: radial-gradient(circle at 34% 28%, #fff 0 14%, var(--ink) 20%);
+  transform-origin: 50% 60%; animation: face-blink var(--blink) infinite var(--blink-at);
+  transition: height 220ms, width 220ms, rotate 220ms, translate 220ms, border-radius 220ms;
+}
+.face[data-eyes="round"] .face-eyes i { width: calc(var(--s) * 0.135); height: calc(var(--s) * 0.135); }
+.face[data-eyes="wide"] .face-eyes { gap: calc(var(--s) * 0.24); }
+.face[data-eyes="wide"] .face-eyes i { width: calc(var(--s) * 0.125); height: calc(var(--s) * 0.15); }
+.face[data-eyes="bead"] .face-eyes { gap: calc(var(--s) * 0.15); top: 42%; }
+.face[data-eyes="bead"] .face-eyes i { width: calc(var(--s) * 0.095); height: calc(var(--s) * 0.115); }
+
+.face-mouth {
+  position: absolute; left: 50%; top: 58%; width: calc(var(--s) * 0.15); height: calc(var(--s) * 0.07); translate: -50% 0;
+  border-radius: 0 0 99px 99px; background: var(--ink); opacity: 0; scale: 0.3; transition: opacity 180ms, scale 220ms;
+}
+
+/* ---------------- moods ---------------- */
+
+/* Only blinks: avatars in a long history. */
+.face[data-still] .face-body, .face[data-still] .face-eyes, .face[data-still] .face-body::before { animation: none; }
+
+/* Listening while you type: leans towards it, eyes on the box, a small nod with each key. */
+.face[data-mood="listening"] .face-body { rotate: 7deg; animation: none; }
+.face[data-mood="listening"] .face-look { translate: calc(var(--s) * 0.07) calc(var(--s) * 0.035); }
+.face[data-mood="listening"] .face-eyes { animation: none; }
+.face[data-mood="listening"][data-beat="0"] .face-body { animation: face-nod-a 240ms ease-out; }
+.face[data-mood="listening"][data-beat="1"] .face-body { animation: face-nod-b 240ms ease-out; }
+
+/* Thinking: eyes up and away, the body slowly kneads itself. */
+.face[data-mood="thinking"] .face-body { animation: face-knead 2.2s ease-in-out infinite; }
+.face[data-mood="thinking"] .face-look { translate: calc(var(--s) * -0.06) calc(var(--s) * -0.075); }
+.face[data-mood="thinking"] .face-eyes { animation: none; }
+
+/* Searching: eyes sweep back and forth. Reading: they run along lines. */
+.face[data-mood="searching"] .face-eyes { animation: face-scan 0.9s ease-in-out infinite alternate; }
+.face[data-mood="searching"] .face-body { animation: face-breathe 1.8s ease-in-out infinite; }
+.face[data-mood="reading"] .face-look { translate: 0 calc(var(--s) * 0.04); }
+.face[data-mood="reading"] .face-eyes { animation: face-read 2.4s linear infinite; }
+.face[data-mood="reading"] .face-eyes i { height: calc(var(--s) * 0.09); }
+
+/* Writing: bobs along with the words, eyes on the page, mouth going. */
+.face[data-mood="writing"] .face-body { animation: face-bob 0.42s ease-in-out infinite alternate; }
+.face[data-mood="writing"] .face-look { translate: 0 calc(var(--s) * 0.045); }
+.face[data-mood="writing"] .face-eyes { animation: none; }
+.face[data-mood="writing"] .face-mouth { opacity: 1; animation: face-talk 0.3s ease-in-out infinite alternate; }
+
+/* Asking for your OK: looks right at you, eyes wide, leaning in. */
+.face[data-mood="asking"] .face-body { animation: face-ask 1.5s ease-in-out infinite; }
+.face[data-mood="asking"] .face-look { translate: 0 0; }
+.face[data-mood="asking"] .face-eyes { animation: none; }
+.face[data-mood="asking"] .face-eyes i { height: calc(var(--s) * 0.2); width: calc(var(--s) * 0.13); }
+
+/* Remembering: content, eyes shut, and the memory drops in like into the well. */
+.face[data-mood="remembering"] .face-eyes, .face[data-mood="happy"] .face-eyes { animation: none; }
+.face[data-mood="remembering"] .face-eyes i, .face[data-mood="happy"] .face-eyes i {
+  height: calc(var(--s) * 0.07); background: none; border-top: calc(var(--s) * 0.045) solid var(--ink); border-radius: 50% 50% 0 0; animation: none;
+}
+.face[data-mood="remembering"] .face-body { animation: face-nod-a 900ms ease-in-out infinite; }
+.face[data-mood="remembering"]::after, .face[data-mood="happy"]::after {
+  content: ""; position: absolute; left: 50%; bottom: -2%; width: 104%; height: 24%; translate: -50% 0; border-radius: 50%;
+  border: calc(var(--s) * 0.022) solid color-mix(in oklab, var(--pig) 55%, transparent); animation: face-ripple 1.1s ease-out infinite;
+}
+.face[data-mood="happy"]::after { animation-iteration-count: 1; }
+
+/* Happy (a reply done): a hop and a smile. */
+.face[data-mood="happy"] .face-body { animation: face-hop 0.62s cubic-bezier(0.3, 0.7, 0.4, 1.4) 2; }
+.face[data-mood="happy"] .face-mouth { opacity: 1; scale: 1; }
+
+/* Sad (something went wrong): slumps, worried eyes, colour drains. */
+.face[data-mood="sad"] .face-body { animation: none; scale: 1.05 0.88; filter: saturate(0.45) brightness(0.95); }
+.face[data-mood="sad"] .face-look { translate: 0 calc(var(--s) * 0.07); }
+.face[data-mood="sad"] .face-eyes { animation: none; }
+.face[data-mood="sad"] .face-eyes i { height: calc(var(--s) * 0.1); }
+.face[data-mood="sad"] .face-eyes i:first-child { rotate: -22deg; }
+.face[data-mood="sad"] .face-eyes i:last-child { rotate: 22deg; }
+
+/* Surprised (stopped mid-sentence): a jolt, round eyes, an O. */
+.face[data-mood="surprised"] .face-body { animation: face-jolt 0.45s ease-out; }
+.face[data-mood="surprised"] .face-eyes { animation: none; }
+.face[data-mood="surprised"] .face-eyes i { width: calc(var(--s) * 0.15); height: calc(var(--s) * 0.15); }
+.face[data-mood="surprised"] .face-mouth { opacity: 1; scale: 1; width: calc(var(--s) * 0.08); height: calc(var(--s) * 0.09); border-radius: 50%; }
+
+/* Asleep: eyes shut, slow deep breaths. */
+.face[data-mood="asleep"] .face-body { animation-duration: 6s; filter: saturate(0.7); }
+.face[data-mood="asleep"] .face-eyes { animation: none; }
+.face[data-mood="asleep"] .face-eyes i { height: calc(var(--s) * 0.035); border-radius: 99px; background: var(--ink); animation: none; translate: 0 calc(var(--s) * 0.04); }
+
+/* Needs you: hops every few seconds to be noticed. */
+.face[data-mood="attention"] .face-body { animation: face-call 2.6s cubic-bezier(0.3, 0.7, 0.4, 1.2) infinite; }
+.face[data-mood="attention"] .face-look { translate: 0 0; }
+
+/* ---------------- motion ---------------- */
+
+@keyframes face-breathe { 50% { scale: 0.985 1.035; } }
+@keyframes face-blink { 0%, 94%, 100% { scale: 1 1; } 96% { scale: 1 0.08; } }
+@keyframes face-glance {
+  0%, 36%, 100% { translate: -50% -50%; }
+  40%, 50% { translate: -64% -50%; }
+  54%, 78% { translate: -50% -50%; }
+  82%, 90% { translate: -38% -62%; }
+}
+@keyframes face-sway { 50% { rotate: -6deg; } }
+@keyframes face-nod-a { 40% { translate: -50% calc(var(--s) * 0.04); scale: 1.03 0.96; } }
+@keyframes face-nod-b { 40% { translate: -50% calc(var(--s) * 0.04); scale: 1.03 0.96; } }
+@keyframes face-knead {
+  0%, 100% { border-radius: 47% 53% 50% 50% / 55% 50% 50% 45%; scale: 1 1; }
+  33% { border-radius: 55% 45% 46% 54% / 48% 58% 42% 52%; scale: 1.03 0.98; }
+  66% { border-radius: 44% 56% 54% 46% / 58% 46% 54% 42%; scale: 0.98 1.03; }
+}
+@keyframes face-scan { from { translate: -66% -50%; } to { translate: -34% -50%; } }
+@keyframes face-read {
+  0% { translate: -66% -56%; } 30% { translate: -34% -56%; } 34% { translate: -66% -46%; }
+  64% { translate: -34% -46%; } 68% { translate: -66% -36%; } 98%, 100% { translate: -34% -36%; }
+}
+@keyframes face-bob { from { translate: -50% 0; scale: 1 1; } to { translate: -50% calc(var(--s) * -0.04); scale: 0.98 1.03; } }
+@keyframes face-talk { from { scale: 0.7 0.35; } to { scale: 0.85 1; } }
+@keyframes face-ask { 50% { scale: 1.04 1.05; translate: -50% calc(var(--s) * -0.02); } }
+@keyframes face-ripple { from { opacity: 1; scale: 0.5; } to { opacity: 0; scale: 1.15; } }
+@keyframes face-hop {
+  0% { translate: -50% 0; scale: 1 1; } 20% { translate: -50% 0; scale: 1.12 0.86; }
+  50% { translate: -50% calc(var(--s) * -0.28); scale: 0.92 1.1; } 80% { translate: -50% 0; scale: 1.1 0.9; } 100% { translate: -50% 0; scale: 1 1; }
+}
+@keyframes face-call {
+  0% { translate: -50% 0; scale: 1 1; } 6% { scale: 1.1 0.88; } 14% { translate: -50% calc(var(--s) * -0.22); scale: 0.94 1.08; }
+  22% { translate: -50% 0; scale: 1.06 0.94; } 28%, 100% { translate: -50% 0; scale: 1 1; }
+}
+@keyframes face-jolt { 0% { scale: 1 1; } 25% { scale: 0.86 1.14; translate: -50% calc(var(--s) * -0.06); } 60% { scale: 1.06 0.94; } 100% { scale: 1 1; translate: -50% 0; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .face *, .face::before, .face::after, .face *::before, .face *::after { animation: none !important; transition: none !important; }
+}

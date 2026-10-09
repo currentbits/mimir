@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- Mimir: ᛗ (mannaz, the Norse M, "a person") inside a speech bubble that is also the mouth of
+       Mimir's well; the rune's feet are lit by the water. Regenerate the icon set from this file:
+       npx @tauri-apps/cli icon crates/mimir-desktop/icons/icon.svg -o /tmp/mimir-icons
+       and copy 32x32.png, 128x128.png, 128x128@2x.png, icon.png, icon.icns and icon.ico here.
+       tray.svg is the macOS menu-bar version (a template image, 44x44). -->
+  <defs>
+    <linearGradient id="peat" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2B1F13"/><stop offset="1" stop-color="#0E0A06"/></linearGradient>
+    <radialGradient id="water" cx="0.5" cy="0.62" r="0.62"><stop offset="0" stop-color="#4A3017"/><stop offset="0.6" stop-color="#1B130A"/><stop offset="1" stop-color="#0A0705"/></radialGradient>
+    <linearGradient id="rune" x1="0" y1="360" x2="0" y2="636" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#F3EFE7"/><stop offset="0.62" stop-color="#ECE4D4"/><stop offset="1" stop-color="#D2A86C"/></linearGradient>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="184" fill="url(#peat)"/>
+  <rect x="101" y="101" width="822" height="822" rx="183" fill="none" stroke="#FFF0DC" stroke-opacity="0.07" stroke-width="2"/>
+  <path d="M389 728A270 270 0 1 0 278 617L244 750Z" fill="url(#water)" stroke="#ECE9E1" stroke-width="28" stroke-linejoin="round"/>
+  <path d="M418 360V636M610 360V636M418 360L610 516M610 360L418 516" fill="none" stroke="url(#rune)" stroke-width="50" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

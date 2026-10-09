@@ -1,0 +1,101 @@
+# A version tag (git tag v0.1.0 && git push origin v0.1.0) builds the desktop installers for macOS, Windows and Linux
+# onto a draft GitHub release. Read it over, then publish it by hand. Bump "version" in
+# crates/mimir-desktop/tauri.conf.json first: the tag has to match it.
+# Updates: with the TAURI_SIGNING_PRIVATE_KEY (+ _PASSWORD) secrets set, each build also signs its update files and the
+# release gets latest.json, which installed apps read once the release is published (drafts aren't served).
+name: release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+jobs:
+  draft:
+    runs-on: ubuntu-24.04
+    permissions: { contents: write }
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { persist-credentials: false }
+      - name: The tag matches the app's version
+        run: |
+          v=$(python3 -c "import json; print(json.load(open('crates/mimir-desktop/tauri.conf.json'))['version'])")
+          [ "$GITHUB_REF_NAME" = "v$v" ] || { echo "::error::tag $GITHUB_REF_NAME, but tauri.conf.json says $v"; exit 1; }
+      - name: Draft the release
+        env: { GH_TOKEN: '${{ github.token }}' }
+        run: |
+          gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --draft --verify-tag --title "Mimir $GITHUB_REF_NAME" --notes "Installers for macOS (Apple silicon), Windows and Linux. They aren't code-signed yet: on a Mac, right-click the app and choose Open the first time; on Windows, choose More info, then Run anyway. How to use Mimir: https://heymimir.app/docs/"
+
+  installers:
+    needs: draft
+    permissions: { contents: write }
+    strategy:
+      fail-fast: false
+      matrix:
+        # Linux on the older Ubuntu: its glibc is the oldest the .deb and AppImage need, so they run on more systems.
+        os: [macos-latest, windows-latest, ubuntu-22.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { persist-credentials: false }
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with: { node-version: 22, cache: npm, cache-dependency-path: ui/package-lock.json }
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+      - name: Linux libraries (WebKitGTK, tray, keyring, audio, whisper.cpp build, AppImage)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libdbus-1-dev libasound2-dev libclang-dev cmake xdg-utils
+      # Not `npm run tauri`: its POSIX-style variables don't work in Windows' cmd.
+      - name: Build the app and its installers
+        shell: bash
+        working-directory: ui
+        env:
+          TAURI_APP_PATH: ../crates/mimir-desktop
+          TAURI_FRONTEND_PATH: .
+          APPIMAGE_EXTRACT_AND_RUN: '1'
+          TAURI_SIGNING_PRIVATE_KEY: '${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}'
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: '${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}'
+        run: |
+          npm ci
+          # Signed update files only with the key (without it the installers are still made, just not updatable).
+          if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then npx tauri build --config '{"bundle":{"createUpdaterArtifacts":true}}'; else npx tauri build; fi
+      - name: Attach them to the draft release
+        shell: bash
+        env: { GH_TOKEN: '${{ github.token }}' }
+        run: |
+          shopt -s nullglob
+          files=(target/release/bundle/{dmg/*.dmg,nsis/*.exe,msi/*.msi,deb/*.deb,rpm/*.rpm,appimage/*.AppImage,macos/*.app.tar.gz} target/release/bundle/*/*.sig)
+          [ ${#files[@]} -gt 0 ] || { echo "::error::no installers under target/release/bundle"; exit 1; }
+          gh release upload "$GITHUB_REF_NAME" "${files[@]}" -R "$GITHUB_REPOSITORY" --clobber
+
+  # latest.json from the signatures the builds attached: one entry per kind of install (an app installed from the .deb
+  # updates with the .deb, from the AppImage with the AppImage), plus a plain {os}-{arch} entry on macOS and Windows for
+  # when the kind isn't known. Not on Linux: there it would hand a .deb install the AppImage.
+  manifest:
+    needs: [draft, installers]
+    runs-on: ubuntu-24.04
+    permissions: { contents: write }
+    steps:
+      - name: Write latest.json
+        env: { GH_TOKEN: '${{ github.token }}' }
+        run: |
+          mkdir sigs && gh release download "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" -p '*.sig' -D sigs || true
+          ls sigs/*.sig >/dev/null 2>&1 || { echo "No update signatures (TAURI_SIGNING_PRIVATE_KEY isn't set): no latest.json."; exit 0; }
+          gh release view "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --json body -q .body > notes.txt
+          python3 - <<'PY'
+          import datetime, glob, json, os
+          tag, repo = os.environ["GITHUB_REF_NAME"], os.environ["GITHUB_REPOSITORY"]
+          kinds = [(".app.tar.gz.sig", ["darwin-aarch64-app", "darwin-aarch64"]), ("-setup.exe.sig", ["windows-x86_64-nsis", "windows-x86_64"]),
+                   (".msi.sig", ["windows-x86_64-msi"]), (".AppImage.sig", ["linux-x86_64-appimage"]),
+                   (".deb.sig", ["linux-x86_64-deb"]), (".rpm.sig", ["linux-x86_64-rpm"])]
+          platforms = {}
+          for f in sorted(glob.glob("sigs/*.sig")):
+              name = os.path.basename(f)
+              for suffix, keys in kinds:
+                  if name.endswith(suffix):
+                      for k in keys:
+                          platforms[k] = {"signature": open(f).read().strip(), "url": f"https://github.com/{repo}/releases/download/{tag}/{name[:-4]}"}
+          manifest = {"version": tag.lstrip("v"), "notes": open("notes.txt").read().strip(),
+                      "pub_date": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "platforms": platforms}
+          json.dump(manifest, open("latest.json", "w"), indent=1)
+          print(json.dumps({k: v["url"] for k, v in platforms.items()}, indent=1))
+          PY
+          gh release upload "$GITHUB_REF_NAME" latest.json -R "$GITHUB_REPOSITORY" --clobber

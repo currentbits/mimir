@@ -1,0 +1,9 @@
+target/
+.env
+design-preview/
+.DS_Store
+# Internal planning and research: kept locally, not published.
+.solenta/
+plan.html
+reports/
+research_notes/

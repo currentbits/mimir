@@ -1,0 +1,49 @@
+{
+  "app": {
+    "windows": [
+      {
+        "title": "Mimir",
+        "width": 1180,
+        "height": 780,
+        "minWidth": 860,
+        "minHeight": 540,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "trafficLightPosition": {
+          "x": 18,
+          "y": 26
+        },
+        "transparent": true,
+        "windowEffects": {
+          "effects": [
+            "sidebar"
+          ],
+          "state": "followsWindowActiveState"
+        },
+        "label": "main",
+        "dragDropEnabled": false
+      },
+      {
+        "label": "quick",
+        "title": "Ask Mimir",
+        "width": 680,
+        "height": 72,
+        "resizable": false,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visible": false,
+        "center": true,
+        "shadow": true,
+        "windowEffects": {
+          "effects": [
+            "popover"
+          ],
+          "state": "active",
+          "radius": 16
+        }
+      }
+    ]
+  }
+}

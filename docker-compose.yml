@@ -1,0 +1,50 @@
+# First:  echo "MIMIR_COMPUTER_TOKEN=$(openssl rand -hex 24)" >> .env
+# docker compose up -d   →   docker compose exec mimir mimir admin-token
+services:
+  mimir:
+    build: .
+    restart: unless-stopped
+    volumes:
+      - mimir-data:/data
+    ports:
+      - "127.0.0.1:8080:8080"   # keep it local; expose through the TLS proxy below
+    # It needs no Linux capabilities and never gains privileges (it already runs as an unprivileged user).
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      # The bots' computer runs in the service below, away from your data.
+      MIMIR_COMPUTER: computer:7300
+      MIMIR_COMPUTER_TOKEN: ${MIMIR_COMPUTER_TOKEN:?put MIMIR_COMPUTER_TOKEN in .env (see the top of this file)}
+    #   MIMIR_ADMIN_TOKEN: <24+ characters>     # else one is generated on first run (openssl rand -hex 24)
+    #   CLAUDE_CODE_OAUTH_TOKEN: ...             # from `claude setup-token` on any machine
+    depends_on: [computer]
+
+  # The bots' computer (screen + Chromium). Its own user and no /data: a browser exploit from a page a bot visits
+  # lands somewhere without your database, secrets or the AI logins. Mimir reaches it on this compose network only
+  # (control on 7300 with the token, Chromium's DevTools on 9223); no ports are published.
+  computer:
+    build: .
+    restart: unless-stopped
+    user: computer
+    command: ["mimir", "computer", "--listen", "0.0.0.0:7300"]
+    environment:
+      HOME: /home/computer
+      MIMIR_COMPUTER_TOKEN: ${MIMIR_COMPUTER_TOKEN:?put MIMIR_COMPUTER_TOKEN in .env (see the top of this file)}
+    # The image declares /data a volume; an empty tmpfs keeps it from becoming one here.
+    tmpfs: [/data]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      disable: true
+
+  # Optional HTTPS with automatic certificates. Point a DNS name at this host and set it below.
+  # caddy:
+  #   image: caddy:2
+  #   restart: unless-stopped
+  #   ports: ["80:80", "443:443"]
+  #   command: caddy reverse-proxy --from bots.example.com --to mimir:8080
+  #   volumes: [caddy-data:/data]
+
+volumes:
+  mimir-data:
+  # caddy-data:

@@ -1,0 +1,75 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Mimir",
+  "version": "0.1.0",
+  "identifier": "app.heymimir",
+  "build": {
+    "frontendDist": "../../ui/dist",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": {
+      "script": "npm run dev",
+      "cwd": "../../ui",
+      "wait": false
+    },
+    "beforeBuildCommand": {
+      "script": "npm run build",
+      "cwd": "../../ui"
+    }
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Mimir",
+        "width": 1180,
+        "height": 780,
+        "minWidth": 860,
+        "minHeight": 540,
+        "label": "main",
+        "dragDropEnabled": false
+      },
+      {
+        "label": "quick",
+        "title": "Ask Mimir",
+        "width": 680,
+        "height": 72,
+        "resizable": false,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visible": false,
+        "center": true,
+        "shadow": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost https: http:"
+    },
+    "macOSPrivateApi": true
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "macOS": {
+      "signingIdentity": "-"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDc3ODJFM0EwQkEwNDE4QTcKUldTbkdBUzZvT09DZDk5ZXdhelNhSXlDL1VZYU96Nk5vUDFIbFZwT3Z2aUN3VTViZU5KK3l3cmUK",
+      "endpoints": [
+        "https://github.com/currentbits/mimir/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  }
+}

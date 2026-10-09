@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="190 170 652 652">
+  <!-- The macOS menu-bar icon: icon.svg's mark in one colour, drawn heavier. macOS tints it for light
+       and dark menu bars (a template image). Regenerate tray.png (44x44):
+       npx @tauri-apps/cli icon crates/mimir-desktop/icons/tray.svg -o /tmp/mimir-tray -p 44 -->
+  <path d="M389 728A270 270 0 1 0 278 617L244 750Z" fill="none" stroke="#000" stroke-width="50" stroke-linejoin="round"/>
+  <!-- Wider than in icon.svg, so the X keeps its notches at 22 points. -->
+  <path d="M396 352V640M636 352V640M396 352L636 548M636 352L396 548" fill="none" stroke="#000" stroke-width="58" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

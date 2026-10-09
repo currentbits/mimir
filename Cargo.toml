@@ -1,0 +1,20 @@
+[workspace]
+resolver = "3"
+members = ["crates/mimir-core", "crates/mimir", "crates/mimir-desktop"]
+
+# Shrinking a photo for a model is CPU-heavy; keep it quick in dev builds and tests too.
+[profile.dev.package.image]
+opt-level = 3
+[profile.dev.package.zune-jpeg]
+opt-level = 3
+[profile.dev.package.png]
+opt-level = 3
+[profile.dev.package.fdeflate]
+opt-level = 3
+
+# Windows dev builds: sherpa-rs-sys's build script links the debug dynamic C runtime (msvcrtd) whenever it was compiled
+# with debug assertions. Everything else uses the static release runtime (.cargo/config.toml), and two runtimes in one
+# process means two heaps: the app and its tests died on a debug-heap assertion (is_block_type_valid). Without debug
+# assertions that build script doesn't add it. Release builds were never affected.
+[profile.dev.package.sherpa-rs-sys]
+debug-assertions = false

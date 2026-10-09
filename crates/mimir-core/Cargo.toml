@@ -1,0 +1,49 @@
+[package]
+name = "mimir-core"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-only"
+
+[features]
+# whisper.cpp built into the app (the desktop turns it on): transcribing needs nothing installed.
+local-whisper = ["dep:whisper-rs"]
+metal = ["whisper-rs?/metal"]
+# Telling the other people on a call apart (sherpa-onnx, linked in; the desktop turns it on).
+diarize = ["dep:sherpa-rs"]
+# The same on Linux, where sherpa-onnx has no static build: its shared libraries are downloaded on first use and loaded.
+diarize-dl = ["dep:libloading", "dep:bzip2", "dep:tar"]
+
+[dependencies]
+whisper-rs = { version = "0.16", optional = true }
+libloading = { version = "0.8", optional = true }
+bzip2 = { version = "0.4", optional = true }
+tar = { version = "0.4", optional = true }
+sherpa-rs = { version = "0.6", default-features = false, features = ["download-binaries", "static"], optional = true }
+anyhow = "1.0.104"
+base64 = "0.22.1"
+chrono = "0.4.45"
+chrono-tz = "0.10"
+rrule = "0.14"
+cron = "0.17.0"
+futures-util = { version = "0.3.34", default-features = false, features = ["sink", "std"] }
+getrandom = "0.3.4"
+# Photos are shrunk to fit what a model takes inline (Grok's command line, API request sizes).
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
+# Text of PDFs people send their bots.
+pdf-extract = "0.12.1"
+url = "2"
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls", "http2", "multipart"] }
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+sha2 = "0.10.9"
+tokio = { version = "1.53.2", features = ["full"] }
+tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-webpki-roots"] }
+async-imap = { version = "0.12.0", default-features = false, features = ["runtime-tokio"] }
+mail-parser = "0.11.9"
+# CalDAV answers (adding events to your calendar).
+quick-xml = "0.42"
+tokio-rustls = "0.26"
+webpki-roots = "1"
+tokio-util = "0.7"
+lettre = { version = "0.11.23", default-features = false, features = ["builder", "smtp-transport", "tokio1", "tokio1-rustls", "aws-lc-rs", "webpki-roots"] }

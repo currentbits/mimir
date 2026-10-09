@@ -1,0 +1,26 @@
+[env]
+# whisper.cpp (built into the desktop app) for any CPU of the platform, not just the build machine's: a CI build
+# tuned to the runner's CPU would die with "illegal instruction" on older machines. (Also GCC 12 on ARM Linux
+# fails to compile the native build.)
+GGML_NATIVE = "OFF"
+# …but Intel/AMD still get the vector instructions every x86 machine since ~2013 has (x86-64-v3); without them
+# whisper.cpp runs several times slower. Ignored on ARM.
+GGML_AVX = "ON"
+GGML_AVX2 = "ON"
+GGML_FMA = "ON"
+GGML_F16C = "ON"
+# Windows: whisper.cpp with the static C runtime, like the rest (see below). whisper-rs-sys hands CMAKE_* variables to
+# cmake; the policy makes cmake honour the setting. Other platforms ignore both.
+CMAKE_MSVC_RUNTIME_LIBRARY = "MultiThreaded"
+CMAKE_POLICY_DEFAULT_CMP0091 = "NEW"
+
+# Windows:
+# - sherpa-onnx's static build is made with the static C runtime (/MT), and MSVC can't mix that with the default
+#   dynamic one (/MD) that whisper.cpp and Rust use: everything gets the static runtime (whisper.cpp through the
+#   CMAKE_ variables above). The app then needs no Visual C++ redistributable either.
+# - Its bundled onnxruntime (event tracing) and espeak-ng (registry) call advapi32, which its build doesn't link;
+#   sherpa-rs also builds itself as a DLL, so it has to go on every link step.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static", "-C", "link-arg=advapi32.lib"]
+[target.aarch64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static", "-C", "link-arg=advapi32.lib"]

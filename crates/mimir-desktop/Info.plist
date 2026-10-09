@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Merged into the app bundle by Tauri. macOS shows these when it asks for permission. -->
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Mimir transcribes meetings and calls you choose to record: your microphone is your side of the conversation.</string>
+  <key>NSAudioCaptureUsageDescription</key>
+  <string>Mimir transcribes meetings and calls you choose to record: the computer's sound is the other people on the call.</string>
+</dict>
+</plist>
