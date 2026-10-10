@@ -2,6 +2,18 @@
 
 What changed for people using Mimir. The newest release is at the top; "Unreleased" is what the next one brings.
 
+## 0.1.3
+
+- **Export everything works in the desktop app:** the file goes straight to your Downloads folder (the app's window
+  couldn't download anything, though it said it had).
+- **Copying works in the desktop app** (a reply, a transcript, a skill): the app copies itself.
+- **Switching chats or bots never shows the one before:** a slow answer for the chat you just left can't land in the
+  new one, and nothing of the last bot (its "read outside content" note) stays on screen.
+- **From Needs you, Open the chat shows the whole chat,** and after **Summarise with…** on a meeting you land in the chat
+  with the bot that's writing the notes.
+- **A button that fails says so:** Undo on a learned memory, Copy, Stop and opening a link.
+- Windows: files in a chat's workspace are listed as `notes/todo.md`, not `notes\todo.md`.
+
 ## 0.1.2
 
 - **Deleting works in the desktop app again:** routines, bots, files, meetings, tool servers, chat history and erased

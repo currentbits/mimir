@@ -242,6 +242,26 @@ async fn api(app: AppHandle, host: State<'_, Host>, cmd: String, args: Value) ->
         }
         return Ok(json!(auto.is_enabled().unwrap_or(false)));
     }
+    // The webview's clipboard refuses writes after any wait (WebKit's user-activation rule): the app copies instead.
+    if cmd == "copy_text" {
+        let text = args["text"].as_str().unwrap_or("");
+        arboard::Clipboard::new().and_then(|mut c| c.set_text(text)).map_err(|e| format!("couldn't copy: {e}"))?;
+        return Ok(Value::Null);
+    }
+    // A file to keep (an export): straight into Downloads, as a browser would; the webview itself downloads nothing.
+    if cmd == "save_download" {
+        let name = std::path::Path::new(args["name"].as_str().unwrap_or("mimir.txt")).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "mimir.txt".into());
+        let dir = dirs::download_dir().or_else(dirs::home_dir).ok_or("no Downloads folder")?;
+        let (stem, ext) = name.rsplit_once('.').map(|(s, e)| (s.to_string(), format!(".{e}"))).unwrap_or((name.clone(), String::new()));
+        let mut path = dir.join(&name);
+        let mut n = 1;
+        while path.exists() {
+            path = dir.join(format!("{stem} ({n}){ext}"));
+            n += 1;
+        }
+        std::fs::write(&path, args["text"].as_str().unwrap_or("")).map_err(|e| format!("couldn't save: {e}"))?;
+        return Ok(json!(path.to_string_lossy()));
+    }
     // Links in replies open in the user's browser, never inside the app window.
     if cmd == "open_url" {
         let url = args["url"].as_str().unwrap_or("");

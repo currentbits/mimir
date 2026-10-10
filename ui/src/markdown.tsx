@@ -1,6 +1,7 @@
 // A small Markdown renderer for bot replies. Builds React elements (never raw HTML), so a reply
 // can't inject markup. Covers what chat models actually write: paragraphs, lists, headings,
 // quotes, code, bold/italic, links.
+import { tell } from './ui'
 import type { ReactNode } from 'react'
 import { inDesktop, localInvoke } from './api'
 
@@ -53,7 +54,7 @@ function blocks(md: string): Block[] {
 export function openLink(e: React.MouseEvent<HTMLAnchorElement>) {
   e.preventDefault()
   const url = e.currentTarget.href
-  if (inDesktop) localInvoke('open_url', { url }).catch(() => {})
+  if (inDesktop) localInvoke('open_url', { url }).catch(e => tell(`Couldn't open the link: ${e}`))
   else window.open(url, '_blank', 'noopener,noreferrer')
 }
 

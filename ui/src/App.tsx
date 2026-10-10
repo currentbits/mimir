@@ -1,6 +1,6 @@
-import { inDesktop, insecureServer, invoke, keystore, localInvoke, platform, probe, remoteServer, setWebToken, connectServer, shortcut, trayName, webToken } from './api'
+import { copyText, inDesktop, insecureServer, invoke, saveDownload, keystore, localInvoke, platform, probe, remoteServer, setWebToken, connectServer, shortcut, trayName, webToken } from './api'
 import { createContext, Fragment, useCallback, useMemo, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { ask, askText, AskHost, Avatar, Empty, Group, Icon, Row, Segmented, Switch, type Presence } from './ui'
+import { ask, askText, AskHost, tell, Avatar, Empty, Group, Icon, Row, Segmented, Switch, type Presence } from './ui'
 import { ago, ahead, dayLabel, fullDay, fullTime, pigment, PIGMENTS, schedule, setLooks, tok, usd, type Look } from './format'
 import { Markdown, openLink } from './markdown'
 import { moodOf, type Mood } from './face'
@@ -90,7 +90,7 @@ function Actions({ actions, chatId, runId, onChange }: { actions: Action[]; chat
   // A memory the bot saved: Undo right on the chip (the same as Undo in Memory → Learned this week).
   const memOf = (a: Action) => a.tool === 'memory_store' && a.ok ? Number(a.result?.match(/^stored #(\d+)/)?.[1]) || null : null
   const [undone, setUndone] = useState<number[]>([])
-  const undo = (id: number) => invoke<boolean>('undo_memory', { chatId, id }).then(ok => { if (ok) setUndone(u => [...u, id]); onChange() }, () => {})
+  const undo = (id: number) => invoke<boolean>('undo_memory', { chatId, id }).then(ok => { if (ok) setUndone(u => [...u, id]); onChange() }, e => tell(`Couldn't undo that: ${e}`))
   return (
     <>
       <div className="msg-actions">
@@ -308,9 +308,18 @@ const Bots = createContext<(id: number) => { id: number; name: string }>(id => (
 function useLoad<T>(load: () => Promise<T>, deps: unknown[], ms = 5000) {
   const [data, setData] = useState<T | null>(null)
   const [error, setError] = useState<string | null>(null)
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const reload = useCallback(() => load().then(d => { setData(d); setError(null) }, e => setError(String(e))), deps)
+  // Each change of what's loaded (another chat, another bot) starts a new generation: an answer for the one before,
+  // still on its way, is dropped instead of landing over the new one.
+  const gen = useRef(0)
+  const mounted = useRef(false)
+  const reload = useCallback(() => {
+    const g = gen.current
+    return load().then(d => { if (g === gen.current) { setData(d); setError(null) } }, e => { if (g === gen.current) setError(String(e)) })
+  }, deps) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
+    // What was shown for the one before goes too (a banner, a list), rather than standing in until the new one loads.
+    if (mounted.current) { gen.current++; setData(null); setError(null) }
+    mounted.current = true
     reload()
     if (ms <= 0) return // load once, no polling
     const t = setInterval(reload, ms)
@@ -665,7 +674,8 @@ function Main() {
   const meetingNow = useLoad(() => inDesktop ? localInvoke<{ recording: boolean }>('meeting', { action: 'status' }) : Promise.resolve({ recording: false }), [], 3000)
   const recording = !!meetingNow.data?.recording
   const openBot = (id: number) => { setBotId(id); setView('bot'); setMenu(null) }
-  const openChat = (id: number, v: Tab) => { setChatId(id); setView(v) }
+  // From elsewhere (Needs you): the chat as a whole, not the bot view you had open before.
+  const openChat = (id: number, v: Tab) => { setChatId(id); setViaBot(false); setView(v) }
   // Clicking a bot opens a chat with it (on this computer); its settings are a right-click (or the gear by the
   // composer's bot picker) away.
   const [chatBot, setChatBot] = useState<number | null>(null)
@@ -837,7 +847,7 @@ function Main() {
               {view === 'activity' && <ActivityView chatId={chat.chat_id} />}
               {view === 'settings' && <SettingsView onComputer={computer.reload} />}
               {view === 'computer' && <ComputerView bots={botList} chats={list} chatName={chatName} />}
-              {view === 'meetings' && <MeetingsView bots={botList} onSent={() => { setChatId(LOCAL); setView('chat') }} />}
+              {view === 'meetings' && <MeetingsView bots={botList} onSent={talkTo} />}
               {view === 'inbox' && <InboxView data={inbox.data} troubled={troubled} reload={() => { inbox.reload(); pending.reload() }} chats={list} chatName={chatName} openBot={openBot} openChat={openChat} />}
               {view === 'bot' && (
                 // Keyed on whether the bot has loaded too: right after "Create bot" the list hasn't caught up yet.
@@ -1050,7 +1060,7 @@ const SCHEDULED = /^\[Scheduled (routine|quiet check) #(\d+) "([^"]+)"\]\s*([\s\
 
 function CopyButton({ text }: { text: string }) {
   const [done, setDone] = useState(false)
-  const copy = () => navigator.clipboard.writeText(text).then(() => { setDone(true); setTimeout(() => setDone(false), 1400) }, () => {})
+  const copy = () => copyText(text).then(() => { setDone(true); setTimeout(() => setDone(false), 1400) }, e => tell(`Couldn't copy: ${e}`))
   return (
     <button type="button" className={'msg-copy' + (done ? ' done' : '')} onClick={copy} aria-label={done ? 'Copied' : 'Copy reply'} title={done ? 'Copied' : 'Copy'}>
       <Icon name={done ? 'check' : 'copy'} size={13} />
@@ -1402,7 +1412,7 @@ function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, openBot
                     title={incognito ? 'Back to the normal chat' : 'Incognito chat: no memory, nothing saved'}><Icon name="incognito" size={16} /></button>
                 )}
                 {pending
-                  ? <button type="button" className="send stop" aria-label="Stop" title="Stop" onClick={() => invoke('stop', { botId, chatId: cid }).catch(() => {})}><span className="stop-square" /></button>
+                  ? <button type="button" className="send stop" aria-label="Stop" title="Stop" onClick={() => invoke('stop', { botId, chatId: cid }).catch(e => setErr(`Couldn't stop it: ${e}`))}><span className="stop-square" /></button>
                   : <button className="send" aria-label="Send" disabled={!text.trim() && !photos.length}><Icon name="send" size={15} /></button>}
               </form>
               <p className="composer-note">{platform === 'mac' ? 'Return to send · Shift-Return for a new line' : 'Enter to send · Shift+Enter for a new line'}</p>
@@ -1428,7 +1438,7 @@ const KIND_SINGULAR: Record<Kind, string> = { convention: 'Preference', knowledg
 function MemoryView({ chatId, onChange }: { chatId: number; onChange: () => void }) {
   const rows = useLoad(() => invoke<EntryRow[]>('entries', { chatId }), [chatId])
   // How much of the standing memory (what every reply is given) is used.
-  const standing = useLoad(() => invoke<{ used: number; budget: number; count: number }>('standing_memory', { chatId }), [chatId, rows.data])
+  const standing = useLoad(() => invoke<{ used: number; budget: number; count: number }>('standing_memory', { chatId }), [chatId, rows.data?.map(r => `${r.id}:${r.status}:${r.pinned}:${r.background}`).join()])
   const [query, setQuery] = useState('')
   const [found, setFound] = useState<number[] | null>(null)
   const [history, setHistory] = useState<'now' | 'all'>('now')
@@ -1692,7 +1702,7 @@ function SkillLibrary({ chatId, onAdded }: { chatId: number; onAdded: () => void
 
 function Skills({ chatId }: { chatId: number }) {
   const list = useLoad(() => invoke<Skill[]>('skills', { chatId }), [chatId], 15000)
-  const removed = useLoad(() => invoke<Skill[]>('removed_skills', { chatId }), [chatId, list.data])
+  const removed = useLoad(() => invoke<Skill[]>('removed_skills', { chatId }), [chatId, list.data?.map(k => `${k.id}:${k.status}`).join()])
   const [err, setErr] = useState<string | null>(null)
   const { leaving, leave } = useLeave()
   const botOf = useContext(Bots)
@@ -1753,7 +1763,7 @@ function Skills({ chatId }: { chatId: number }) {
             <article className={'mem' + (leaving.has(k.id) ? ' leaving' : '')} key={k.id}>
               <div className="mem-actions">
                 <button className="btn btn-ghost btn-sm" title="Copy as a SKILL.md file, for another agent or to share"
-                  onClick={() => invoke<string>('export_skill', { chatId, id: k.id }).then(md => navigator.clipboard.writeText(md)).then(() => setErr(null), e => setErr(String(e)))}>Copy as SKILL.md</button>
+                  onClick={() => copyText(invoke<string>('export_skill', { chatId, id: k.id })).then(() => setErr(null), e => setErr(String(e)))}>Copy as SKILL.md</button>
                 <button className="btn btn-ghost btn-danger btn-sm icon-btn" title="Remove" aria-label={`Remove ${k.name}`}
                   onClick={() => act(k.id, () => invoke('remove_skill', { chatId, id: k.id }))}><Icon name="trash" size={14} /></button>
               </div>
@@ -2643,14 +2653,9 @@ function SettingsView({ onComputer }: { onComputer: () => void }) {
 /** Take everything with you, as one file. */
 function DataSettings() {
   const [msg, setMsg] = useState<string | null>(null)
-  const exportAll = () => invoke<unknown>('export_all').then(data => {
-    const a = document.createElement('a')
-    a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }))
-    a.download = `mimir-export-${new Date().toISOString().slice(0, 10)}.json`
-    a.click()
-    URL.revokeObjectURL(a.href)
-    setMsg('Saved to your downloads.')
-  }, e => setMsg(String(e)))
+  const exportAll = () => invoke<unknown>('export_all')
+    .then(data => saveDownload(`mimir-export-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify(data, null, 2)))
+    .then(where => setMsg(`Saved to ${where}.`), e => setMsg(String(e)))
   return (
     <Group title="Your data" note="Memories, conversations, meetings, skills and routines are yours. Delete a chat's history from its Activity tab; erase a memory from Memory.">
       <Row icon={<Icon name="archive" size={15} />} title="Export everything" desc={msg ?? 'One JSON file with everything Mimir keeps about you (not your tokens or keys).'}>
@@ -2694,7 +2699,7 @@ const transcriptText = (lines: MeetingLine[], start: number, names: Record<strin
   lines.map(l => `[${mmss(Math.max(0, l.ts - start))}] ${l.who === 'you' ? 'Me' : speaker(l.who, names)}: ${l.text}`).join('\n')
 
 /** Meetings and calls, transcribed on this computer: your microphone is "you", the computer's sound is the others. */
-function MeetingsView({ bots, onSent }: { bots: Bot[]; onSent: () => void }) {
+function MeetingsView({ bots, onSent }: { bots: Bot[]; onSent: (bot: number) => void }) {
   const [st, setSt] = useState<MeetingStatus | null>(null)
   const [engine, setEngine] = useState<{ engine: string | null; model: string; model_ready: boolean } | null>(null)
   const [err, setErr] = useState<string | null>(null)
@@ -2850,7 +2855,7 @@ function Transcript({ lines, start, names, onName }: { lines: MeetingLine[]; sta
 
 const meetingTitle = (m: Pick<MeetingRow, 'title' | 'started_at'>) => m.title || `Meeting, ${new Date(m.started_at * 1000).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })}`
 
-function SavedMeeting({ m, open, toggle, bots, onSent, onChange }: { m: MeetingRow; open: boolean; toggle: () => void; bots: Bot[]; onSent: () => void; onChange: () => void }) {
+function SavedMeeting({ m, open, toggle, bots, onSent, onChange }: { m: MeetingRow; open: boolean; toggle: () => void; bots: Bot[]; onSent: (bot: number) => void; onChange: () => void }) {
   const detail = useLoad(() => open ? localInvoke<{ lines: MeetingLine[] }>('meeting', { action: 'get', id: m.id }) : Promise.resolve(null), [open, m.id], 60000)
   const [title, setTitle] = useState(m.title)
   const [jotted, setJotted] = useState(m.notes ?? '')
@@ -2875,7 +2880,8 @@ function SavedMeeting({ m, open, toggle, bots, onSent, onChange }: { m: MeetingR
       // The bot's reply is kept on the meeting too (the chat shows it as it's written).
       .then(reply => localInvoke('meeting', { action: 'summary', id: m.id, summary: reply }).then(onChange))
       .catch(e => setNote(String(e)))
-    onSent()
+    // To the chat with the bot that's writing the notes, so its reply is what you see.
+    onSent(bot)
   }
   return (
     <article className="mem">
@@ -2897,7 +2903,7 @@ function SavedMeeting({ m, open, toggle, bots, onSent, onChange }: { m: MeetingR
         <div className="er" style={{ marginTop: 10 }}>
           {bots.length > 1 && <select className="select" style={{ width: 'auto' }} value={bot} onChange={e => setBot(Number(e.target.value))} aria-label="Which bot">{bots.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}</select>}
           <button className="btn btn-primary" disabled={!lines.length} onClick={send}>{m.summary ? 'Summarise again with' : 'Summarise with'} {bots.find(b => b.id === bot)?.name ?? 'your bot'}</button>
-          <button className="btn btn-ghost" disabled={!lines.length} onClick={() => navigator.clipboard.writeText(transcriptText(lines, m.started_at, m.speakers)).then(() => setNote('Copied'))}>Copy</button>
+          <button className="btn btn-ghost" disabled={!lines.length} onClick={() => copyText(transcriptText(lines, m.started_at, m.speakers)).then(() => setNote('Copied'))}>Copy</button>
           <span className="grow" />
           <button className="btn btn-ghost btn-danger" onClick={() => ask(`Delete “${meetingTitle(m)}”?`, 'Delete', true).then(ok => { if (ok) localInvoke('meeting', { action: 'delete', id: m.id }).then(onChange) })}>Delete</button>
         </div>

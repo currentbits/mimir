@@ -150,12 +150,17 @@ export function Empty({ icon, title, children, actions }: { icon: string | React
 // The desktop app's webview has no confirm() or prompt(): they return at once, unanswered. So every "Delete …?" goes
 // through this one dialog, drawn by <AskHost /> (in the app's root).
 
-type Asking = { text: string; ok: string; danger: boolean; value?: string; done: (v: string | null) => void }
+type Asking = { text: string; ok: string; danger: boolean; value?: string; notice?: boolean; done: (v: string | null) => void }
 let show: ((a: Asking) => void) | null = null
 
 /** "Delete this routine?": true when you press the button, false for Cancel, Escape or a click beside it. */
 export function ask(text: string, ok = 'OK', danger = false): Promise<boolean> {
   return new Promise(res => (show ? show({ text, ok, danger, done: v => res(v !== null) }) : res(window.confirm(text))))
+}
+
+/** Something went wrong with what you just pressed ("Couldn't copy: …"): said in the app, with OK. */
+export function tell(text: string): Promise<void> {
+  return new Promise(res => (show ? show({ text, ok: 'OK', danger: false, notice: true, done: () => res() }) : (window.alert(text), res())))
 }
 
 /** A short answer ("Who is Speaker 2?"); null when cancelled. */
@@ -179,7 +184,7 @@ export function AskHost() {
         <p>{a.text}</p>
         {a.value !== undefined && <input className="input" autoFocus value={val} onChange={e => setVal(e.target.value)} aria-label={a.text} />}
         <div className="ask-actions">
-          <button type="button" className="btn btn-ghost" onClick={() => close(null)}>Cancel</button>
+          {!a.notice && <button type="button" className="btn btn-ghost" onClick={() => close(null)}>Cancel</button>}
           <button className={'btn ' + (a.danger ? 'btn-danger-solid' : 'btn-primary')} autoFocus={a.value === undefined}>{a.ok}</button>
         </div>
       </form>

@@ -93,3 +93,24 @@ export async function connectServer(s: Server | null) {
   else localStorage.removeItem(SERVER_KEY)
   location.reload()
 }
+
+/** Copy text. The desktop app copies itself: its webview refuses clipboard writes after a wait, and sometimes at all. */
+export async function copyText(text: string | Promise<string>): Promise<void> {
+  if (inDesktop) return localInvoke('copy_text', { text: await text })
+  if (typeof text !== 'string' && typeof ClipboardItem !== 'undefined') {
+    // Safari keeps the click's permission only if the copy starts now, with the text still to come.
+    return navigator.clipboard.write([new ClipboardItem({ 'text/plain': text.then(t => new Blob([t], { type: 'text/plain' })) })])
+  }
+  return navigator.clipboard.writeText(await text)
+}
+
+/** Save a file to Downloads; says where it went. (The desktop app's webview downloads nothing by itself.) */
+export async function saveDownload(name: string, text: string, type = 'application/json'): Promise<string> {
+  if (inDesktop) return localInvoke<string>('save_download', { name, text })
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(new Blob([text], { type }))
+  a.download = name
+  a.click()
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000)
+  return 'your downloads'
+}
