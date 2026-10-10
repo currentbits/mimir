@@ -80,6 +80,13 @@ pub const LOCAL_CHAT: i64 = 0;
 
 /// Secret name for a bot's channel token. Bot 1's Telegram token keeps its pre-multi-bot
 /// name so existing desktop installs don't lose it.
+/// "server" (mimir server) or "desktop": what's running this process, for things only one of them does.
+static MODE: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+
+pub fn is_server() -> bool {
+    MODE.get() == Some(&"server")
+}
+
 fn key(bot: i64, name: &str) -> String {
     if bot == 1 && name == TG { name.into() } else { format!("{name}:{bot}") }
 }
@@ -139,6 +146,7 @@ fn ok<T: Serialize>(v: T) -> Result<Value> {
 
 impl Host {
     pub fn new(db: Db, home: PathBuf, secrets: Arc<dyn SecretStore>, rt: tokio::runtime::Handle, mode: &'static str) -> Self {
+        let _ = MODE.set(mode);
         install_secrets(secrets.clone());
         if let Err(e) = db.incognito_leftovers().and_then(|_| db.prune_old()) {
             eprintln!("cleanup: {e:#}");
@@ -909,6 +917,22 @@ impl Host {
                     "failed": self.db.runs_failed(now - 7 * 86400)?,
                     "suggestions": counts,
                     "unconfirmed": self.db.unconfirmed_counts()?.into_iter().map(|(chat, n)| json!({"chat_id": chat, "count": n})).collect::<Vec<_>>(),
+                    // A newer release than this server runs (looked up by the bots' loops twice a day).
+                    "server_update": is_server().then(|| self.db.setting("update_latest").ok().flatten()).flatten()
+                        .filter(|v| crate::server_update::newer(v, crate::server_update::CURRENT))
+                        .map(|v| json!({"current": crate::server_update::CURRENT, "latest": v, "how": crate::server_update::how()})),
+                }))
+            }
+            // The server's own updates: whether it tells you about a new version (in your chat and Needs you).
+            "update_notice" => {
+                if let Some(on) = arg::<Option<bool>>(a, "on")? {
+                    self.db.set_setting("update_notice", if on { "on" } else { "off" })?;
+                }
+                ok(json!({
+                    "server": is_server(),
+                    "on": self.db.setting("update_notice")?.as_deref() != Some("off"),
+                    "current": crate::server_update::CURRENT,
+                    "latest": self.db.setting("update_latest")?,
                 }))
             }
             "inbox_dismiss" => ok(self.db.inbox_dismiss(&arg::<String>(a, "kind")?, arg(a, "id")?)?),

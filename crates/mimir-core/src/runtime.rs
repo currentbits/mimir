@@ -904,6 +904,30 @@ impl Core {
         Ok(())
     }
 
+/// A newer Mimir than this server runs: said once, in your most recent private chat this bot can reach (not a group,
+    /// not a guest's). A bot that reaches none leaves it to the others; Needs you in the app shows it either way.
+    async fn tell_update(&self, chans: &[Chan]) -> Result<()> {
+        let Some(latest) = crate::server_update::latest(&self.db).await else { return Ok(()) };
+        let Some(msg) = crate::server_update::to_tell(&self.db, &latest) else { return Ok(()) };
+        let mut best: Option<(i64, Chan, String)> = None;
+        for c in self.db.chats()? {
+            if c.chat_id == crate::host::LOCAL_CHAT || c.guest || !self.db.chat_private(c.chat_id) {
+                continue;
+            }
+            let Some((chan, ext)) = Self::chan_for(chans, c.chat_id, &self.db) else { continue };
+            let last = self.db.messages(c.chat_id, 1)?.first().map(|m| m.ts).unwrap_or(0);
+            if best.as_ref().is_none_or(|b| last > b.0) {
+                best = Some((last, chan, ext));
+            }
+        }
+        if let Some((_, chan, ext)) = best
+            && crate::server_update::told(&self.db, &latest)
+        {
+            chan.send(&ext, &msg).await;
+        }
+        Ok(())
+    }
+
     fn chan_for(chans: &[Chan], chat: i64, db: &Db) -> Option<(Chan, String)> {
         let (kind, ext) = db.chat_address(chat).ok()??;
         chans.iter().find(|c| c.kind() == kind).map(|c| (c.clone(), ext))
@@ -954,6 +978,11 @@ impl Core {
             }
             if let Err(e) = self.send_weekly(&chans).await {
                 eprintln!("weekly review: {e:#}");
+            }
+            if crate::host::is_server()
+                && let Err(e) = self.tell_update(&chans).await
+            {
+                eprintln!("update notice: {e:#}");
             }
             // Sleep-time memory tidy-up, run by one bot for everyone.
             if crate::tidy::memory_bot(&self.db) == Some(self.bot) {

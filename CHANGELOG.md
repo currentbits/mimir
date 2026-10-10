@@ -2,6 +2,12 @@
 
 What changed for people using Mimir. The newest release is at the top; "Unreleased" is what the next one brings.
 
+## Unreleased
+
+- **Your server tells you when to update it:** once per new version, in your own chat with your bots (Telegram, Slack
+  or Discord) and at the top of Needs you, with the exact commands for how it's installed. Settings → This server
+  switches it off.
+
 ## 0.1.3
 
 - **Export everything works in the desktop app:** the file goes straight to your Downloads folder (the app's window

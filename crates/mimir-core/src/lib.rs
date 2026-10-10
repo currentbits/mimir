@@ -75,6 +75,7 @@ pub mod tidy;
 pub mod mcp;
 pub mod provider;
 pub mod runtime;
+pub mod server_update;
 pub mod tools;
 pub mod caldav;
 pub mod calendar;

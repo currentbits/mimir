@@ -77,7 +77,12 @@ docker compose pull && docker compose up -d
 ```
 
 Your data is kept: it's in the `mimir-data` volume, not in the container. To stay on one version, put
-`MIMIR_VERSION=0.1.0` in `.env`. The server doesn't update itself; [releases](https://github.com/currentbits/mimir/releases)
+`MIMIR_VERSION=0.1.0` in `.env`.
+
+The server doesn't update itself, but it tells you: twice a day it looks for a newer release, and when there is one it
+says so **once per version** in your most recent private chat with your bots (Telegram, Slack or Discord; never a group
+or a guest's chat), with the commands above, and shows it at the top of **Needs you** until you've updated. Switch it
+off in Settings → This server → *Tell me when there's a new version*. [Releases](https://github.com/currentbits/mimir/releases)
 say what changed.
 
 ## Day to day

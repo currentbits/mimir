@@ -938,8 +938,8 @@ function Approvals({ list, chats, chatName, onDecided }: { list: Approval[]; cha
   )
 }
 
-type Inbox = { approvals: Approval[]; missed: Approval[]; failed: Run[]; suggestions: { chat_id: number; count: number }[]; unconfirmed?: { chat_id: number; count: number }[] }
-const inboxCount = (i: Inbox | null) => i ? i.approvals.length + i.missed.length + i.failed.length + i.suggestions.reduce((n, s) => n + s.count, 0) + (i.unconfirmed ?? []).reduce((n, s) => n + s.count, 0) : 0
+type Inbox = { approvals: Approval[]; missed: Approval[]; failed: Run[]; suggestions: { chat_id: number; count: number }[]; unconfirmed?: { chat_id: number; count: number }[]; server_update?: { current: string; latest: string; how: string } | null }
+const inboxCount = (i: Inbox | null) => i ? (i.server_update ? 1 : 0) + i.approvals.length + i.missed.length + i.failed.length + i.suggestions.reduce((n, s) => n + s.count, 0) + (i.unconfirmed ?? []).reduce((n, s) => n + s.count, 0) : 0
 
 /** A failed run in plain words, with the fix that most likely helps. */
 function failure(error: string | null, status?: Run['status']): { title: string; fix: 'bot' | 'chat' | 'routines' | null; fixLabel?: string } {
@@ -968,6 +968,19 @@ function InboxView({ data, troubled, reload, chats, chatName, openBot, openChat 
   )
   return (
     <div className="inbox">
+      {data.server_update && <>
+        <div className="section-title" style={{ marginTop: 0 }}><h2>Update your server</h2></div>
+        <div className="group">
+          <div className="inbox-row">
+            <span className="row-icon"><Icon name="server" size={15} /></span>
+            <div className="inbox-main">
+              <div className="inbox-title">Mimir {data.server_update.latest} is out (your server runs {data.server_update.current})</div>
+              <div className="inbox-desc selectable"><Markdown text={data.server_update.how} /></div>
+            </div>
+            <div className="row-ctl"><a className="btn btn-sm" href={`https://github.com/currentbits/mimir/releases/tag/v${data.server_update.latest}`} onClick={openLink}>What’s new</a></div>
+          </div>
+        </div>
+      </>}
       {troubled.length > 0 && <>
         <div className="section-title" style={{ marginTop: 0 }}><h2>Not working</h2><span className="count">{troubled.length}</span></div>
         <div className="group">{troubled.map(t => {
@@ -3441,6 +3454,20 @@ function ToolServerSettings({ onChange }: { onChange: () => void }) {
   )
 }
 
+/** A server doesn't update itself: whether it tells you when there's a new version (your chat, and Needs you). */
+function ServerUpdates() {
+  const st = useLoad(() => invoke<{ server: boolean; on: boolean; current: string; latest: string | null }>('update_notice', {}), [], 60000)
+  const s = st.data
+  if (!s?.server) return null
+  const behind = s.latest && s.latest !== s.current
+  return (
+    <Row icon={<Icon name="retry" size={15} />} title="Tell me when there’s a new version"
+      desc={`Runs ${s.current}${behind ? ` · ${s.latest} is out (see Needs you)` : ''}. Once per version, in your chat and in Needs you, with the commands to update.`}>
+      <Switch label="Tell me when there’s a new version" checked={s.on} onChange={on => invoke('update_notice', { on }).then(st.reload)} />
+    </Row>
+  )
+}
+
 function ServerSettings() {
   const current = remoteServer()
   const [url, setUrl] = useState(current?.url ?? '')
@@ -3451,6 +3478,7 @@ function ServerSettings() {
       <Row icon={<Icon name="server" size={15} />} title="Signed in" desc="Your bots and memory live on this server.">
         <button type="button" className="btn btn-sm" onClick={() => { setWebToken(null); location.reload() }}><Icon name="logout" size={13} />Sign out</button>
       </Row>
+      <ServerUpdates />
     </Group>
   )
   return (
