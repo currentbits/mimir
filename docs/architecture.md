@@ -160,7 +160,14 @@ serve the first, and start the second with `MIMIR_UPDATE_TEST=1`: it installs an
 ```sh
 cargo test --workspace          # unit and integration tests (needs cmake for the desktop crate)
 cd ui && npx tsc -b             # the UI typecheck (`tsc -p .` checks nothing here)
+cargo clippy --workspace --all-targets -- -D warnings; cd ui && npm run lint
 ```
+
+CI (`.github/workflows/build.yml`) runs all of these, plus the end-to-end flows on Linux: `scripts/fake-ai.py` and
+`mimir server` with `MIMIR_CHATGPT_*` pointed at it, then `scripts/e2e-flows.py` and `scripts/ui-flows.mjs` (see each
+script's header; Playwright comes with `npm ci` in `ui/`). If another checkout's test server already has ports 8789/8899,
+start yours on others and set `E2E_SERVER` / `E2E_AI`. A pull request that touches the `Dockerfile` or a lockfile also
+builds the server image (`docker.yml`, not pushed). Unit tests use a data folder of their own and no real channel tokens.
 
 Test hooks and opt-in tests:
 - `MIMIR_SELFTEST=1 <desktop binary>`: starts the real app, reports what rendered, exits 0 only without UI errors

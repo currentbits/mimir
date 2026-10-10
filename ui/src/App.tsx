@@ -79,6 +79,8 @@ function actionLine(a: Action): [string, string] | null {
 function Actions({ actions, chatId, runId, onChange }: { actions: Action[]; chatId: number; runId?: number; onChange: () => void }) {
   const [open, setOpen] = useState<number | null>(null)
   const [handoff, setHandoff] = useState(false)
+  const [skillOpen, setSkillOpen] = useState<number | null>(null)
+  const [undone, setUndone] = useState<number[]>([])
   const lines = actions.map(a => [a, actionLine(a)] as const).filter((l): l is readonly [Action, [string, string]] => !!l[1])
   if (!lines.length) return null
   const shown = lines.slice(0, 4)
@@ -86,10 +88,8 @@ function Actions({ actions, chatId, runId, onChange }: { actions: Action[]; chat
   const routineOf = (a: Action) => a.tool === 'routine_create' && a.ok ? Number(a.result?.match(/#(\d+)/)?.[1]) || null : null
   // A skill the bot proposed because you asked: the chip opens it, to Save or not.
   const skillOf = (a: Action) => a.tool === 'skill_save' && a.ok ? Number(a.result?.match(/skill #(\d+)/)?.[1]) || null : null
-  const [skillOpen, setSkillOpen] = useState<number | null>(null)
   // A memory the bot saved: Undo right on the chip (the same as Undo in Memory → Learned this week).
   const memOf = (a: Action) => a.tool === 'memory_store' && a.ok ? Number(a.result?.match(/^stored #(\d+)/)?.[1]) || null : null
-  const [undone, setUndone] = useState<number[]>([])
   const undo = (id: number) => invoke<boolean>('undo_memory', { chatId, id }).then(ok => { if (ok) setUndone(u => [...u, id]); onChange() }, e => tell(`Couldn't undo that: ${e}`))
   return (
     <>
