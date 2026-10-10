@@ -172,7 +172,8 @@ export function AskHost() {
   const [a, setA] = useState<Asking | null>(null)
   const [val, setVal] = useState('')
   useEffect(() => {
-    show = x => { setVal(x.value ?? ''); setA(x) }
+    // A second question while one is open replaces it; the first counts as cancelled (its caller isn't left waiting).
+    show = x => { setVal(x.value ?? ''); setA(old => { old?.done(null); return x }) }
     return () => { show = null }
   }, [])
   if (!a) return null

@@ -898,7 +898,7 @@ function Main() {
                   <button className={'btn btn-sm btn-ghost' + (chat.guest ? ' guest-on' : '')}
                     title={chat.guest ? 'Paired by someone else: bots here have their own memory, and none of your email, calendar, meetings, saved logins or tool servers. Click if this chat is yours.' : 'Click if someone else uses this chat (a partner, a housemate): bots here then get none of your email, calendar, meetings, saved logins or tool servers.'}
                     onClick={() => ask(chat.guest ? 'Make this chat yours? Bots here get your email, calendar, meetings, saved logins and tool servers.' : 'Treat this chat as a guest’s? Bots here lose your email, calendar, meetings, saved logins and tool servers.', chat.guest ? 'Make it mine' : 'Make it a guest’s')
-                      .then(ok => { if (ok) void invoke('chat_guest', { chatId: chat.chat_id, guest: !chat.guest }).then(chats.reload) })}>
+                      .then(ok => { if (ok) void invoke('chat_guest', { chatId: chat.chat_id, guest: !chat.guest }).then(chats.reload, e => tell(String(e))) })}>
                     {chat.guest ? 'Guest' : 'Yours'}
                   </button>
                 )}
