@@ -1,5 +1,5 @@
 import { copyText, inDesktop, insecureServer, invoke, saveDownload, keystore, localInvoke, platform, probe, remoteServer, setWebToken, connectServer, shortcut, trayName, webToken } from './api'
-import { createContext, Fragment, useCallback, useMemo, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { Component, createContext, Fragment, type ReactNode, useCallback, useMemo, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ask, askText, AskHost, tell, Avatar, Empty, Group, Icon, Row, Segmented, Switch, type Presence } from './ui'
 import { ago, ahead, dayLabel, fullDay, fullTime, pigment, PIGMENTS, schedule, setLooks, tok, usd, type Look } from './format'
 import { Markdown, openLink } from './markdown'
@@ -79,6 +79,8 @@ function actionLine(a: Action): [string, string] | null {
 function Actions({ actions, chatId, runId, onChange }: { actions: Action[]; chatId: number; runId?: number; onChange: () => void }) {
   const [open, setOpen] = useState<number | null>(null)
   const [handoff, setHandoff] = useState(false)
+  const [skillOpen, setSkillOpen] = useState<number | null>(null)
+  const [undone, setUndone] = useState<number[]>([])
   const lines = actions.map(a => [a, actionLine(a)] as const).filter((l): l is readonly [Action, [string, string]] => !!l[1])
   if (!lines.length) return null
   const shown = lines.slice(0, 4)
@@ -86,10 +88,8 @@ function Actions({ actions, chatId, runId, onChange }: { actions: Action[]; chat
   const routineOf = (a: Action) => a.tool === 'routine_create' && a.ok ? Number(a.result?.match(/#(\d+)/)?.[1]) || null : null
   // A skill the bot proposed because you asked: the chip opens it, to Save or not.
   const skillOf = (a: Action) => a.tool === 'skill_save' && a.ok ? Number(a.result?.match(/skill #(\d+)/)?.[1]) || null : null
-  const [skillOpen, setSkillOpen] = useState<number | null>(null)
   // A memory the bot saved: Undo right on the chip (the same as Undo in Memory → Learned this week).
   const memOf = (a: Action) => a.tool === 'memory_store' && a.ok ? Number(a.result?.match(/^stored #(\d+)/)?.[1]) || null : null
-  const [undone, setUndone] = useState<number[]>([])
   const undo = (id: number) => invoke<boolean>('undo_memory', { chatId, id }).then(ok => { if (ok) setUndone(u => [...u, id]); onChange() }, e => tell(`Couldn't undo that: ${e}`))
   return (
     <>
@@ -383,11 +383,21 @@ function SignIn({ onDone }: { onDone: () => void }) {
   )
 }
 
+// One UI bug costs a click, not a dead window.
+class Crashed extends Component<{ children: ReactNode }, { err: string | null }> {
+  state = { err: null as string | null }
+  static getDerivedStateFromError(e: unknown) { return { err: String(e) } }
+  render() {
+    if (!this.state.err) return this.props.children
+    return <div className="empty"><p>Something went wrong on this screen.</p><p className="mono">{this.state.err}</p><button type="button" className="btn btn-primary" onClick={() => location.reload()}>Reload</button></div>
+  }
+}
+
 function App() {
   const [onboarded, setOnboarded] = useState<boolean | null>(null)
   useEffect(() => { invoke<{ onboarded: boolean }>('info').then(i => setOnboarded(i.onboarded), () => setOnboarded(true)) }, [])
   if (onboarded === null) return null
-  return <><AskHost />{onboarded ? <Main /> : <Onboarding onDone={() => setOnboarded(true)} />}</>
+  return <><AskHost />{onboarded ? <Crashed><Main /></Crashed> : <Onboarding onDone={() => setOnboarded(true)} />}</>
 }
 
 // ---------------- onboarding ----------------
