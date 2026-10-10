@@ -15,8 +15,9 @@ is in a page.
 **Desktop app** (macOS 11+ on Apple silicon, Windows 10 or 11, Linux on x86-64). Download the installer from
 [heymimir.app](https://heymimir.app/#get) or the [releases page](https://github.com/currentbits/mimir/releases/latest):
 `.dmg` (Mac), `-setup.exe` or `.msi` (Windows), `.AppImage`, `.deb` or `.rpm` (Linux). The Mac app is signed and
-notarized by Apple, so it opens like any other. The Windows installer isn't code-signed yet: choose **More info**,
-then **Run anyway** the first time.
+notarized by Apple, so it opens like any other. The Windows installer isn't code-signed yet, so the first time Windows
+SmartScreen says "Windows protected your PC": click **More info**, then **Run anyway**. (If your browser warns about the
+download, choose **Keep**.) After that the app updates itself.
 
 Or build it from source:
 

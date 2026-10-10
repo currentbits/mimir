@@ -23,8 +23,8 @@ email, calendar and the web, and ask before they act. Mimir has no AI and no ser
 ## Download
 
 Installers for macOS (Apple silicon), Windows and Linux are on the [releases page](https://github.com/currentbits/mimir/releases/latest).
-The Mac app is signed and notarized by Apple. The Windows installer isn't code-signed yet: choose **More info**, then
-**Run anyway** the first time. After that the app updates itself. Then: [Getting started](docs/getting-started.md).
+The Mac app is signed and notarized by Apple. The Windows installer isn't code-signed yet: the first time, Windows SmartScreen says
+"Windows protected your PC"; click **More info**, then **Run anyway**. After that the app updates itself. Then: [Getting started](docs/getting-started.md).
 
 ## On your own server
 
