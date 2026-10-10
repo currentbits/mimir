@@ -14,9 +14,9 @@ is in a page.
 
 **Desktop app** (macOS 11+ on Apple silicon, Windows 10 or 11, Linux on x86-64). Download the installer from
 [heymimir.app](https://heymimir.app/#get) or the [releases page](https://github.com/currentbits/mimir/releases/latest):
-`.dmg` (Mac), `-setup.exe` or `.msi` (Windows), `.AppImage`, `.deb` or `.rpm` (Linux). They aren't code-signed yet:
-on a Mac, right-click the app and choose **Open** the first time; on Windows, choose **More info**, then **Run
-anyway**.
+`.dmg` (Mac), `-setup.exe` or `.msi` (Windows), `.AppImage`, `.deb` or `.rpm` (Linux). The Mac app is signed and
+notarized by Apple, so it opens like any other. The Windows installer isn't code-signed yet: choose **More info**,
+then **Run anyway** the first time.
 
 Or build it from source:
 

@@ -1,13 +1,13 @@
 [package]
 name = "mimir"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 license = "AGPL-3.0-only"
 
 [dependencies]
 anyhow = "1.0.104"
 axum = "0.8.9"
-mimir-core = { version = "0.1.0", path = "../mimir-core" }
+mimir-core = { version = "0.1.1", path = "../mimir-core" }
 serde_json = "1.0.151"
 tokio = { version = "1.53.2", features = ["full"] }
 tower-http = { version = "0.7.1", features = ["fs", "cors"] }

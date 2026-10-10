@@ -23,7 +23,7 @@ jobs:
       - name: Draft the release
         env: { GH_TOKEN: '${{ github.token }}' }
         run: |
-          gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --draft --verify-tag --title "Mimir $GITHUB_REF_NAME" --notes "Installers for macOS (Apple silicon), Windows and Linux. They aren't code-signed yet: on a Mac, right-click the app and choose Open the first time; on Windows, choose More info, then Run anyway. How to use Mimir: https://heymimir.app/docs/"
+          gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --draft --verify-tag --title "Mimir $GITHUB_REF_NAME" --notes "Installers for macOS (Apple silicon), Windows and Linux. The Mac app is signed and notarized by Apple. The Windows installer isn't code-signed yet: choose More info, then Run anyway the first time. How to use Mimir: https://heymimir.app/docs/"
 
   installers:
     needs: draft
@@ -53,10 +53,44 @@ jobs:
           APPIMAGE_EXTRACT_AND_RUN: '1'
           TAURI_SIGNING_PRIVATE_KEY: '${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}'
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: '${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}'
+          # macOS: Developer ID signing (APPLE_CERTIFICATE: the .p12, base64) and notarization with an App Store Connect
+          # API key (APPLE_API_KEY_P8: the .p8 file's text). Without them the app is signed ad hoc, as before.
+          APPLE_CERTIFICATE: '${{ secrets.APPLE_CERTIFICATE }}'
+          APPLE_CERTIFICATE_PASSWORD: '${{ secrets.APPLE_CERTIFICATE_PASSWORD }}'
+          APPLE_SIGNING_IDENTITY: '${{ secrets.APPLE_SIGNING_IDENTITY }}'
+          APPLE_API_ISSUER: '${{ secrets.APPLE_API_ISSUER }}'
+          APPLE_API_KEY: '${{ secrets.APPLE_API_KEY }}'
+          APPLE_API_KEY_P8: '${{ secrets.APPLE_API_KEY_P8 }}'
         run: |
+          # Tauri reads these when they're set at all: an empty secret has to be no variable.
+          for v in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_API_ISSUER APPLE_API_KEY; do
+            [ -n "${!v}" ] || unset "$v"
+          done
+          if [ "$RUNNER_OS" = macOS ] && [ -n "$APPLE_API_KEY_P8" ]; then
+            printf '%s\n' "$APPLE_API_KEY_P8" > "$RUNNER_TEMP/AuthKey.p8" && export APPLE_API_KEY_PATH="$RUNNER_TEMP/AuthKey.p8"
+          fi
+          unset APPLE_API_KEY_P8
           npm ci
           # Signed update files only with the key (without it the installers are still made, just not updatable).
           if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then npx tauri build --config '{"bundle":{"createUpdaterArtifacts":true}}'; else npx tauri build; fi
+      # Tauri notarizes and staples the app; the .dmg around it gets the same, so it opens without a warning too.
+      - name: Notarize the disk image (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          APPLE_API_ISSUER: '${{ secrets.APPLE_API_ISSUER }}'
+          APPLE_API_KEY: '${{ secrets.APPLE_API_KEY }}'
+          APPLE_API_KEY_P8: '${{ secrets.APPLE_API_KEY_P8 }}'
+          APPLE_SIGNING_IDENTITY: '${{ secrets.APPLE_SIGNING_IDENTITY }}'
+        run: |
+          # (The app inside is signed and notarized already; the image itself needn't be signed to be notarized.)
+          [ -n "$APPLE_API_KEY_P8" ] && [ -n "$APPLE_SIGNING_IDENTITY" ] || { echo "No Apple notarization secrets: skipped."; exit 0; }
+          printf '%s\n' "$APPLE_API_KEY_P8" > "$RUNNER_TEMP/AuthKey.p8"
+          for dmg in target/release/bundle/dmg/*.dmg; do
+            xcrun notarytool submit "$dmg" --key "$RUNNER_TEMP/AuthKey.p8" --key-id "$APPLE_API_KEY" --issuer "$APPLE_API_ISSUER" --wait
+            xcrun stapler staple "$dmg"
+          done
+          rm -f "$RUNNER_TEMP/AuthKey.p8"
       - name: Attach them to the draft release
         shell: bash
         env: { GH_TOKEN: '${{ github.token }}' }

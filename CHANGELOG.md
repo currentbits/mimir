@@ -2,7 +2,9 @@
 
 What changed for people using Mimir. The newest release is at the top; "Unreleased" is what the next one brings.
 
-## Unreleased
+## 0.1.1
+
+- **The Mac app is notarized by Apple:** it opens with a double-click, no right-click → Open.
 
 - **Search in Settings.** Type in the box at the top of Settings (or press ⌘F / Ctrl+F there) and only the matching
   settings stay: "email", "token", "brave", "quiet hours". A bot's own settings (its role, AI account, Telegram, Slack
