@@ -1,12 +1,13 @@
 """Bot flows end to end, without a real AI: delegation, memory, routines, files, making and deleting bots, threads.
 
     python3 scripts/fake-ai.py 8899 &
-    MIMIR_HOME=/tmp/flow-home MIMIR_ADMIN_TOKEN=testtoken-abcdefghijklmnop mimir server --listen 127.0.0.1:8789 &
+    MIMIR_HOME=/tmp/flow-home MIMIR_ADMIN_TOKEN=testtoken-abcdefghijklmnop MIMIR_CHATGPT_AUTH=http://127.0.0.1:8899 \
+        MIMIR_CHATGPT_API=http://127.0.0.1:8899/v1 mimir server --listen 127.0.0.1:8789 &
     python3 scripts/e2e-flows.py
 
 Sets up the bots itself (Ada and Search on the fake AI) in a fresh MIMIR_HOME; checks the database after each step.
 """
-import json, sqlite3, threading, time, urllib.request
+import json, sqlite3, threading, time, urllib.parse, urllib.request
 
 API = "http://127.0.0.1:8789/api/"
 import os
@@ -103,5 +104,39 @@ check("delete_bot: statuses don't list it", all(s.get("id") != scout[0][0] for s
 # Clearing history
 n = api("clear_history", {"chatId": 0})
 check("clear_history", not q("SELECT id FROM messages WHERE chat_id=0"), (n, q("SELECT count(*) FROM messages WHERE chat_id=0")))
+
+# Sign in with ChatGPT, against the fake one (the server started with MIMIR_CHATGPT_AUTH / MIMIR_CHATGPT_API: see fake-ai.py)
+start = api("chatgpt_sign_in")
+qs = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(start["url"]).query))
+if not start["url"].startswith("http://127.0.0.1:8899/"):
+    print("SKIP Sign in with ChatGPT: start the server with MIMIR_CHATGPT_AUTH=http://127.0.0.1:8899 MIMIR_CHATGPT_API=http://127.0.0.1:8899/v1")
+else:
+    check("chatgpt: the sign-in asks to use the plan", "chatgpt.tokens.use.direct" in qs["scope"] and qs["client_id"] == "dynamic_agent_client"
+          and qs["ext_agent_host_id"].startswith("urn:uuid:") and qs["code_challenge_method"] == "S256" and start["paste"], qs)
+    back = f"{qs['redirect_uri']}?code=nonce:{qs['nonce']}&state={qs['state']}&client_id=oaiapp_fake&scope=x"
+    try:
+        api("chatgpt_sign_in_paste", {"url": back.replace(qs["state"], "someone-elses")})
+        refused = False
+    except (RuntimeError, urllib.error.HTTPError):
+        refused = True
+    check("chatgpt: an address from another sign-in is refused", refused)
+    r = api("chatgpt_sign_in_paste", {"url": back})
+    check("chatgpt: signed in", r.get("account") == "you@example.com", r)
+    check("chatgpt: the plan's models, hidden ones left out", [m["id"] for m in api("models", {"provider": "chatgpt"})] == ["fake-plan"])
+    gpt = api("save_bot", {"bot": {"id": 0, "name": "Gpt", "persona": "", "provider": "chatgpt", "model": "", "base_url": "", "tools": "", "look": ""}})
+    r = send(gpt, "hello there")
+    check("chatgpt: a reply", "hello there" in json.dumps(r) and "OK:" in json.dumps(r), r)
+    r = send(gpt, "REMEMBER my dentist please")
+    check("chatgpt: a tool call goes round", "DONE memory_store" in json.dumps(r), r)
+    run = q("SELECT model, tokens_in FROM runs WHERE bot_id=? ORDER BY id DESC LIMIT 1", gpt)
+    check("chatgpt: the run says which model, and the tokens", run and run[0][0] == "fake-plan" and run[0][1] > 0, run)
+    try:
+        r = send(gpt, "LIMIT")
+    except urllib.error.HTTPError as e:
+        r = e.read().decode()
+    check("chatgpt: the plan's weekly limit is said plainly", "usage limit" in json.dumps(r).lower() and "chatgpt" in json.dumps(r).lower(), r)
+    api("chatgpt_sign_out")
+    check("chatgpt: signed out", not api("accounts")["chatgpt"]["signed_in"])
+    api("delete_bot", {"id": gpt})
 
 print("ALL PASS" if ok_all else "SOME FAILED")

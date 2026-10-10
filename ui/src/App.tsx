@@ -393,22 +393,23 @@ function App() {
 // ---------------- onboarding ----------------
 
 type Account = { installed: boolean; signed_in?: boolean; version?: string; plan?: string | null; account?: string | null; server?: string; base?: string; models?: Model[] }
-type Model = { id: string; tools: boolean | null }
+type Model = { id: string; tools: boolean | null; name?: string }
 
 const ACCOUNTS: Record<string, { name: string; mark: string; desc: string; install: string; signin: string }> = {
   claude: { name: 'Claude', mark: 'C', desc: 'Your Claude subscription, through Claude Code', install: 'Install Claude Code from claude.com/claude-code, then check again.', signin: 'Open Terminal, run claude, and sign in with your Claude account.' },
-  codex: { name: 'ChatGPT', mark: 'G', desc: 'Your ChatGPT subscription, through the Codex CLI', install: 'Install the Codex CLI with npm install -g @openai/codex, then check again.', signin: 'Open Terminal and run codex login to sign in with ChatGPT.' },
+  chatgpt: { name: 'ChatGPT', mark: 'G', desc: 'Your ChatGPT Plus or Pro plan. Sign in; nothing to install', install: '', signin: 'Sign in with your ChatGPT account. You set how much of your plan Mimir may use in ChatGPT’s settings.' },
+  codex: { name: 'Codex CLI', mark: 'G', desc: 'Your ChatGPT subscription, through the Codex CLI', install: 'Install the Codex CLI with npm install -g @openai/codex, then check again.', signin: 'Open Terminal and run codex login to sign in with ChatGPT.' },
   grok: { name: 'Grok', mark: 'X', desc: 'Your SuperGrok or X Premium+ subscription, through Grok Build', install: 'Install Grok Build with curl -fsSL https://x.ai/cli/install.sh | bash in Terminal, then check again.', signin: 'Sign in to Grok for Mimir. It keeps its own login, separate from your grok setup.' },
   openrouter: { name: 'OpenRouter', mark: 'R', desc: 'One key for Claude, GPT, Gemini, Llama and hundreds more', install: '', signin: '' },
   xai: { name: 'xAI API', mark: 'X', desc: 'Grok models billed per token, with an xAI API key', install: '', signin: '' },
   local: { name: 'Local model', mark: 'L', desc: 'Ollama or LM Studio on this computer. Private and free.', install: "Install Ollama from ollama.com and run ollama pull qwen3:4b in Terminal (or start LM Studio's local server), then check again.", signin: 'Ollama is running but has no models yet. Run ollama pull qwen3:4b in Terminal, then check again.' },
   openai: { name: 'API key', mark: 'K', desc: 'OpenAI, or any OpenAI-compatible service', install: '', signin: '' },
 }
-const ACCOUNT_ORDER = ['claude', 'codex', 'grok', 'openrouter', 'xai', 'local', 'openai']
+const ACCOUNT_ORDER = ['claude', 'chatgpt', 'codex', 'grok', 'openrouter', 'xai', 'local', 'openai']
 /** Accounts that run on an API key, with what the key looks like. */
 const KEYED: Record<string, string> = { openrouter: 'OpenRouter key (sk-or-…)', xai: 'xAI key (xai-…)', openai: 'API key (sk-…)' }
 const MODEL_HINT: Record<string, string> = {
-  claude: 'Default — or sonnet, opus, haiku', codex: 'Default — or gpt-5.5', grok: 'Default — or grok-4.7-build-fast', openrouter: 'Auto — or pick one, e.g. anthropic/claude-sonnet-5.5',
+  claude: 'Default — or sonnet, opus, haiku', chatgpt: 'Default — or one your plan offers', codex: 'Default — or gpt-5.5', grok: 'Default — or grok-4.7-build-fast', openrouter: 'Auto — or pick one, e.g. anthropic/claude-sonnet-5.5',
   xai: 'grok-4.7', local: "Pick a model you've downloaded", openai: 'gpt-5-mini',
 }
 
@@ -438,6 +439,49 @@ function ConnectOpenRouter({ onDone, children = 'Connect OpenRouter' }: { onDone
   </>
 }
 
+/** Sign in with ChatGPT: bots then run on your ChatGPT plan, no CLI. In the desktop app the browser comes back to the app;
+ *  a server can't receive that (it lands on your own computer), so you paste the address your browser ended up on.
+ *  `place` puts the button (or the waiting note) where it belongs, and the paste form below it. */
+function SignInChatGPT({ onDone, place }: { onDone: () => void; place: (control: React.ReactNode, below: React.ReactNode) => React.ReactNode }) {
+  const [flow, setFlow] = useState<{ url: string; paste: boolean } | null>(null)
+  const [pasted, setPasted] = useState('')
+  const [err, setErr] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const run = useRef(0)
+  const done = () => { run.current++; setFlow(null); setPasted(''); onDone() }
+  const go = async () => {
+    const me = ++run.current
+    setBusy(true); setErr(null)
+    try {
+      const f = await invoke<{ url: string; paste: boolean }>('chatgpt_sign_in')
+      setFlow(f); setBusy(false)
+      if (inDesktop) localInvoke('open_url', { url: f.url }).catch(() => {})
+      if (!f.paste) { await invoke('chatgpt_sign_in_wait'); if (me === run.current) done() }
+    } catch (e) { if (me === run.current) { setBusy(false); setFlow(null); setErr(String(e)) } }
+  }
+  const finish = () => { setErr(null); invoke('chatgpt_sign_in_paste', { url: pasted.trim() }).then(done, e => setErr(String(e))) }
+  const cancel = () => { run.current++; setFlow(null); setPasted(''); invoke('chatgpt_sign_in_cancel').catch(() => {}) }
+  const error = err && <span className="error" style={{ margin: 0 }}>{err}</span>
+  if (flow && !flow.paste) return place(
+    <span className="connect-wait" role="status"><span className="typing" aria-hidden="true"><i /><i /><i /></span>
+      Sign in in your browser… <a href={flow.url} onClick={openLink}>Open it again</a>
+      <button type="button" className="btn btn-sm btn-ghost" onClick={cancel}>Cancel</button></span>, null
+  )
+  if (flow) return place(<span className="hint">Waiting for the address…</span>,
+    <form className="row-block" onSubmit={e => { e.preventDefault(); if (pasted.trim()) finish() }}>
+      <span className="hint">1. <a href={flow.url} target="_blank" rel="noreferrer" onClick={openLink}>Sign in with ChatGPT</a>{inDesktop ? ' (it opened in your browser)' : ''}.
+        2. Your browser then lands on a page that doesn’t load, at an address starting with <code>http://127.0.0.1</code>. Copy that whole address and paste it here.</span>
+      <div className="editor" style={{ margin: 0 }}><div className="er">
+        <input className="input" placeholder="http://127.0.0.1:1455/auth/callback?code=…" value={pasted} onChange={e => setPasted(e.target.value)} autoComplete="off" aria-label="The address your browser ended up on" autoFocus />
+        <button className="btn" disabled={!pasted.trim()}>Finish</button>
+        <button type="button" className="btn btn-ghost" onClick={cancel}>Cancel</button>
+      </div></div>
+      {error}
+    </form>
+  )
+  return place(<button type="button" className="btn" disabled={busy} onClick={go}><Icon name="bolt" size={14} />{busy ? 'Starting…' : 'Continue with ChatGPT'}</button>, error)
+}
+
 /** Sign in to Grok for Mimir with a device code: open the page, confirm the code, and this notices when it's done. */
 function SignInGrok({ onDone }: { onDone: () => void }) {
   const [login, setLogin] = useState<{ url: string; code: string } | null>(null)
@@ -464,20 +508,20 @@ function SignInGrok({ onDone }: { onDone: () => void }) {
 }
 
 /** Model field with the account's models as suggestions. Warns about models that can't use tools. */
-function ModelInput({ provider, baseUrl, value, onChange }: { provider: string; baseUrl?: string; value: string; onChange: (v: string) => void }) {
+function ModelInput({ provider, baseUrl, value, onChange, signedIn = true }: { provider: string; baseUrl?: string; value: string; onChange: (v: string) => void; signedIn?: boolean }) {
   const [models, setModels] = useState<Model[]>([])
   useEffect(() => {
     setModels([])
-    if (provider === 'claude' || provider === 'codex' || provider === 'grok') return
+    if (provider === 'claude' || provider === 'codex' || provider === 'grok' || (provider === 'chatgpt' && !signedIn)) return
     let live = true
     invoke<Model[]>('models', { provider, baseUrl: baseUrl?.trim() || null }).then(m => live && setModels(m ?? []), () => {})
     return () => { live = false }
-  }, [provider, baseUrl])
+  }, [provider, baseUrl, signedIn])
   const picked = models.find(m => m.id === value.trim())
   return (
     <>
       <input className="input" list={'models-' + provider} placeholder={MODEL_HINT[provider]} value={value} onChange={e => onChange(e.target.value)} aria-label="Model" />
-      <datalist id={'models-' + provider}>{models.map(m => <option key={m.id} value={m.id} label={m.tools === false ? "can't use tools" : undefined} />)}</datalist>
+      <datalist id={'models-' + provider}>{models.map(m => <option key={m.id} value={m.id} label={m.tools === false ? "can't use tools" : m.name !== m.id ? m.name : undefined} />)}</datalist>
       {picked?.tools === false && <span className="hint warn"><Icon name="alert" size={13} />This model can't use tools: it can chat, but it can't remember things, set routines or browse. Models like qwen3 or llama3.1 can.</span>}
     </>
   )
@@ -569,11 +613,13 @@ function Onboarding({ onDone }: { onDone: () => void }) {
                 <button className="btn btn-sm" onClick={check}>Check again</button></div>
             )}
             {provider === 'grok' && acc?.installed && !acc.signed_in && <div className="connect-row"><SignInGrok onDone={check} /></div>}
+            {provider === 'chatgpt' && accounts && !acc?.signed_in && <SignInChatGPT onDone={check} place={(control, below) => <><div className="connect-row">{control}</div>{below}</>} />}
+            {provider === 'chatgpt' && acc?.signed_in && <p className="hint" style={{ margin: 0 }}>You’re using your ChatGPT plan ({acc.account}). Set how much Mimir may use each week in <a href="https://chatgpt.com/#settings" onClick={openLink}>ChatGPT’s settings</a>.</p>}
             {provider === 'openrouter' && !acc?.signed_in && inDesktop && !remoteServer() && (
               <div className="connect-row"><ConnectOpenRouter onDone={check} /><span className="hint">or paste a key below</span></div>
             )}
             {KEYED[provider] && <input className="input" type="password" placeholder={acc?.signed_in ? 'Key saved — paste a new one to replace it' : KEYED[provider]} value={key} onChange={e => setKey(e.target.value)} autoComplete="off" aria-label="API key" />}
-            <ModelInput provider={provider} baseUrl={provider === 'local' ? acc?.base : undefined} value={model} onChange={setModel} />
+            <ModelInput provider={provider} baseUrl={provider === 'local' ? acc?.base : undefined} value={model} onChange={setModel} signedIn={!!acc?.signed_in} />
             {provider === 'claude' && <p className="hint" style={{ margin: 0 }}>Runs <code>claude -p</code> with your own login. Anthropic may count use by other apps as extra usage.</p>}
             {provider === 'grok' && acc?.signed_in && <p className="hint" style={{ margin: 0 }}>Runs <code>grok -p</code> on your subscription, with only Mimir's tools.</p>}
             {provider === 'openrouter' && <p className="hint" style={{ margin: 0 }}>{acc?.signed_in ? 'Connected.' : <>Keys are at <a href="https://openrouter.ai/keys" onClick={openLink}>openrouter.ai/keys</a>.</>} OpenRouter bills you per message; the run log shows what each one cost.</p>}
@@ -2451,7 +2497,8 @@ function RunDetail({ run }: { run: Run }) {
 
 const PROVIDERS = [
   { id: 'claude', name: 'Claude', hint: 'Your Claude login (Claude Code)' },
-  { id: 'codex', name: 'ChatGPT', hint: 'Your ChatGPT login (Codex CLI)' },
+  { id: 'chatgpt', name: 'ChatGPT', hint: 'Your ChatGPT plan, signed in' },
+  { id: 'codex', name: 'Codex CLI', hint: 'Your ChatGPT login, through the Codex CLI' },
   { id: 'grok', name: 'Grok', hint: 'Your SuperGrok login (Grok Build)' },
   { id: 'openrouter', name: 'OpenRouter', hint: 'Hundreds of models, one key' },
   { id: 'xai', name: 'xAI API', hint: 'Grok, billed per token' },
@@ -2460,6 +2507,7 @@ const PROVIDERS = [
 ]
 const PROVIDER_NOTE: Record<string, React.ReactNode> = {
   claude: <>Runs <code>claude -p</code> with your own login. Anthropic may count use by other apps as extra usage.</>,
+  chatgpt: 'Runs on your ChatGPT Plus or Pro plan, signed in under Settings → AI keys. You set how much Mimir may use each week in ChatGPT’s settings.',
   openrouter: 'Uses your OpenRouter key from Settings. OpenRouter bills per message; the run log shows the cost.',
   local: "Runs on this computer (Ollama by default; set the endpoint for LM Studio, http://localhost:1234/v1). Chats and memories don't leave it.",
   grok: <>Runs <code>grok -p</code> on your SuperGrok or X Premium+ subscription. Sign in under Settings → AI keys.</>,
@@ -2702,7 +2750,7 @@ function ChannelRow({ icon, title, st, has, hint, onRemove, children }: {
 
 /** Words a setting goes by besides its own text, so a search finds it ("token" → AI keys, "2fa"…). */
 const SETTING_WORDS: Record<string, string> = {
-  'AI keys': 'api key token openai openrouter xai grok anthropic model provider',
+  'AI keys': 'api key token openai openrouter xai grok anthropic model provider chatgpt sign in plan',
   'Email': 'mail imap smtp gmail icloud fastmail inbox app password send draft',
   'Calendar': 'caldav icloud fastmail nextcloud events schedule',
   'Web search': 'brave searxng google internet search engine',
@@ -3313,7 +3361,8 @@ const KEY_ROWS = [
 function ApiKeySettings() {
   const [has, setHas] = useState<Record<string, boolean>>({})
   const [grok, setGrok] = useState<Account | null>(null)
-  const loadGrok = () => invoke<Record<string, Account>>('accounts').then(a => setGrok(a?.grok ?? null), () => {})
+  const [chatgpt, setChatgpt] = useState<Account | null>(null)
+  const loadGrok = () => invoke<Record<string, Account>>('accounts').then(a => { setGrok(a?.grok ?? null); setChatgpt(a?.chatgpt ?? null) }, () => {})
   useEffect(() => { loadGrok() }, [])
   const [open, setOpen] = useState<string | null>(null)
   const [key, setKey] = useState('')
@@ -3325,6 +3374,16 @@ function ApiKeySettings() {
     .then(() => { setKey(''); setOpen(null); setErr(null); setMsg({ ...msg, [kind]: k ? 'Key saved' : 'Key removed' }) }, e => setErr(String(e)))
   return (
     <Group title="AI keys" note={err ? <span className="error">{err}</span> : `Shared by all your bots on that account. Stored in ${SECRETS_AT}.`}>
+      {(() => {
+        const row = (control: React.ReactNode) => <Row icon={<Icon name="user" size={15} />} title="ChatGPT plan"
+          desc={!chatgpt ? 'Checking…' : chatgpt.signed_in ? `You’re using your ChatGPT plan (${chatgpt.account}). Set how much Mimir may use each week in ChatGPT’s settings.` : 'Sign in to run bots on your ChatGPT Plus or Pro plan, with nothing to install'}>{control}</Row>
+        if (!chatgpt) return row(null)
+        if (!chatgpt.signed_in) return <SignInChatGPT onDone={loadGrok} place={(control, below) => <>{row(control)}{below}</>} />
+        return row(<>
+          <a className="btn btn-sm btn-ghost" href="https://chatgpt.com/#settings" onClick={openLink}>Manage usage</a>
+          <button className="btn btn-sm btn-ghost btn-danger" onClick={() => invoke('chatgpt_sign_out').then(loadGrok, e => setErr(String(e)))}>Sign out</button>
+        </>)
+      })()}
       <Row icon={<Icon name="user" size={15} />} title="Grok subscription"
         desc={!grok ? 'Checking…' : !grok.installed ? 'Install Grok Build to use your SuperGrok or X Premium+ plan' : grok.signed_in ? 'Signed in for Mimir' : 'Not signed in'}>
         {grok?.installed && !grok.signed_in && <SignInGrok onDone={loadGrok} />}
@@ -3640,7 +3699,7 @@ function ServerUpdates() {
   return (
     <Row icon={<Icon name="retry" size={15} />} title="Tell me when there’s a new version"
       desc={`Runs ${s.current}${behind ? ` · ${s.latest} is out (see Needs you)` : ''}. Once per version, in your chat and in Needs you, with the commands to update.`}>
-      <Switch label="Tell me when there’s a new version" checked={s.on} onChange={on => invoke('update_notice', { on }).then(st.reload)} />
+      <Switch label="Tell me when there’s a new version" checked={s.on} onChange={on => invoke('update_notice', { on }).then(st.reload, e => tell(String(e)))} />
     </Row>
   )
 }

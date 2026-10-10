@@ -4,6 +4,10 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 
 ## Unreleased
 
+- **Sign in with ChatGPT:** bots run on your ChatGPT Plus or Pro plan without installing anything. *Continue with
+  ChatGPT* on the first screen or in Settings → AI keys, sign in, done. You choose how much of your plan Mimir may use
+  each week in ChatGPT's settings; when it's used up, bots say so. On a server, you paste the address your browser ends
+  up on. The Codex CLI route stays, as **Codex CLI**.
 - **A bot no longer forgets the conversation without saying so:** when its AI tool can't reopen the earlier session
   (after an update, moving to a server, or switching the bot to another account), it rereads the last part of your chat
   from Mimir's own log and tells you it did.

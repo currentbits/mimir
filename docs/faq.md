@@ -21,8 +21,8 @@ line, several bots with their own jobs, and an approval for every action that ma
 nothing extra. With an API key (OpenRouter, OpenAI, xAI) you pay that service for what you use, and Activity shows
 what each reply cost. A model on your own computer is free.
 
-**Do I need an API key?** No. For Claude or ChatGPT you sign in once to their official command-line app (`claude` or
-`codex`) and Mimir uses that login. Grok signs in from Mimir's settings.
+**Do I need an API key?** No. ChatGPT and Grok sign in from Mimir's settings. For Claude you sign in once to its
+official command-line app (`claude`) and Mimir uses that login.
 
 **Can my Claude plan stop working with it?** Anthropic has at times counted Claude-plan use outside its own apps as
 paid "extra usage". If that happens, the bot says so in plain words; turn on extra usage in your Claude account, or

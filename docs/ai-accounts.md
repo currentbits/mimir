@@ -5,7 +5,8 @@ Mimir has no model of its own. Each bot uses an AI account you choose, on the bo
 | Account | How Mimir uses it | Cost |
 |---|---|---|
 | **Claude** | Runs the official `claude` CLI (`claude -p`) with your signed-in subscription | Your plan |
-| **ChatGPT** | Runs the official `codex` CLI (`codex exec`) with your ChatGPT login | Your plan |
+| **ChatGPT** | Sign in with ChatGPT in Mimir; bots call OpenAI's API on your Plus or Pro plan. Nothing to install | Your plan |
+| **Codex CLI** | Runs the official `codex` CLI (`codex exec`) with your ChatGPT login | Your plan |
 | **Grok** | Runs Grok Build (`grok -p`) on your SuperGrok or X Premium+ plan | Your plan |
 | **OpenRouter** | One key for hundreds of models (only ones that can use tools are offered) | What OpenRouter charges |
 | **xAI API** | A per-token key from console.x.ai | Per token |
@@ -18,7 +19,14 @@ set up Brave Search or your own SearXNG once in Settings → Web search, and eve
 
 ## Signing in
 
-- **Claude / ChatGPT**: install the CLI and sign in once in a terminal (`claude`, then `codex login`). The app shows
+- **ChatGPT**: Settings → AI keys → *Continue with ChatGPT* (or pick ChatGPT on the first screen). You sign in on
+  chatgpt.com and allow Mimir to use your plan; nothing to install. Your plan's allowance for Mimir is separate from
+  ChatGPT's own, and you choose it: ChatGPT → Settings sets how much Mimir may use each week. When that's used up,
+  bots say so and wait. Needs ChatGPT Plus or Pro. On a [server](self-hosting.md), your browser ends on a page that
+  doesn't load (an address starting with `http://127.0.0.1`): paste that address into Mimir to finish. *Sign out* in
+  the same place ends the sign-in at OpenAI too. Bots use ChatGPT's own web search where your plan offers it to
+  other apps, and otherwise the search set up in Settings → Web search.
+- **Claude / Codex CLI**: install the CLI and sign in once in a terminal (`claude`, then `codex login`). The app shows
   whether it's installed and signed in. On a server, see [Self-hosting](self-hosting.md#your-ai-accounts-on-the-server).
   Since April 2026 Anthropic has at times counted Claude-plan use outside its own apps as paid "extra usage". If a reply
   fails because of that, the bot says so plainly; turn on extra usage in your Claude account, or use another account
