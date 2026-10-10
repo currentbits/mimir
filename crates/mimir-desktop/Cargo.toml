@@ -13,6 +13,8 @@ mimir-core = { version = "0.1.5", path = "../mimir-core", features = ["local-whi
 # Meeting transcription: the microphone (everywhere) and, on macOS, the computer's own sound.
 cpal = "0.18"
 serde = { version = "1", features = ["derive"] }
+# A database that can't open is shown in a dialog before Tauri starts (GTK on Linux, which Tauri already uses).
+rfd = { version = "0.17", default-features = false, features = ["gtk3"] }
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 serde_json = "1.0.151"
 tauri = { version = "2", features = ["image-png", "macos-private-api", "tray-icon"] }

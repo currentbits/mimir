@@ -645,7 +645,21 @@ fn main() {
     }
     mimir_core::use_pdf_helper();
     let home = mimir_core::data_dir().expect("data dir");
-    let db = Db::open(&home.join("mimir.db")).expect("open database");
+    let db = match Db::open(&home.join("mimir.db")) {
+        Ok(db) => db,
+        Err(e) => {
+            // The tools process has no window: its error goes to the app that started it.
+            if std::env::args().nth(1).as_deref() != Some("mcp") {
+                rfd::MessageDialog::new()
+                    .set_level(rfd::MessageLevel::Error)
+                    .set_title("Mimir can't open its data")
+                    .set_description(format!("{e:#}\n\nYour data is in {}", home.display()))
+                    .show();
+            }
+            eprintln!("open database: {e:#}");
+            std::process::exit(1);
+        }
+    };
     let rt = tokio::runtime::Runtime::new().expect("tokio");
 
     let args: Vec<String> = std::env::args().skip(1).collect();
