@@ -20,6 +20,7 @@ For contributors: how the pieces fit together.
 | `runtime` | Per-bot channel listeners (Telegram, Slack, Discord), the 30 s routine scheduler, approval cards, the daily digest |
 | `telegram`, `slack`, `discord` | The messaging apps (outbound connections, streaming replies) |
 | `provider` | AI accounts: starts `claude -p` / `codex exec` / `grok -p`, or calls an OpenAI-compatible API; streams replies |
+| `chatgpt` | Sign in with ChatGPT: OAuth (PKCE, dynamic registration), the plan's tokens, and replies on the Responses API |
 | `lib.rs` (`turn`) | One run: builds the instructions (role, standing memory, skills), calls the provider, records the run; `/skill` commands (`skill_command`) |
 | `tools` | Tool definitions, the allow / ask / deny gate, taint, plans, and the built-in tools' code |
 | `mcp` | The MCP server the CLIs start for each run (`<app> mcp --bot B --chat C --run R`, plus `--read-only` for quiet checks, `--no-tools`, `--depth` for hand-offs), exposing Mimir's tools |
@@ -127,6 +128,7 @@ One SQLite file in the data folder (`~/.mimir`, or `MIMIR_HOME`). Schema changes
 | `MIMIR_UI_DIR` | Server: the web UI folder (default `ui/dist` or `/app/ui`) |
 | `MIMIR_COMPUTER`, `MIMIR_COMPUTER_TOKEN` | Server: the bots' computer as a separate service (`computer:7300`, `mimir computer`) and the control channel's secret (24+ characters, on both sides) |
 | `MIMIR_TELEGRAM_API` | Telegram Bot API base URL (a self-hosted Bot API server, or the test mock) |
+| `MIMIR_CHATGPT_AUTH`, `MIMIR_CHATGPT_API` | Sign in with ChatGPT: the sign-in and API base URLs (for the test fake, `scripts/fake-ai.py`) |
 | `MIMIR_CLAUDE_BIN`, `MIMIR_CODEX_BIN`, `MIMIR_GROK_BIN`, `MIMIR_NPX` | Paths to the CLIs, if not on PATH |
 
 ## Releases

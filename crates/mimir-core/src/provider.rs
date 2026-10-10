@@ -1,7 +1,8 @@
 //! Model providers. `Claude` / `Codex` / `Grok` drive the user's own logged-in CLI
 //! (`claude -p`, `codex exec` = ChatGPT subscription, `grok -p` = SuperGrok / X Premium+); we never touch their
 //! credentials. `OpenAi` speaks /chat/completions: the `openai` account (OpenAI or any
-//! compatible endpoint), `openrouter`, and `local` (Ollama / LM Studio on this machine).
+//! compatible endpoint), `openrouter`, and `local` (Ollama / LM Studio on this machine). `ChatGpt` is your ChatGPT
+//! plan signed in from Mimir ("Sign in with ChatGPT"), on the Responses API: see chatgpt.rs.
 
 use crate::db::Usage;
 use crate::tools::{self, ToolCtx};
@@ -17,6 +18,7 @@ pub enum Provider {
     Codex { model: Option<String>, home: PathBuf },
     Grok { model: Option<String>, home: PathBuf },
     OpenAi { base: String, key: String, model: String },
+    ChatGpt { model: Option<String> },
 }
 
 #[derive(Debug)]
@@ -29,7 +31,7 @@ pub struct Reply {
 
 // Long enough to wait out an approval (tools::APPROVAL_TTL_SECS) mid-turn.
 const TURN_TIMEOUT: Duration = Duration::from_secs(600);
-const MAX_TOOL_ROUNDS: usize = 8;
+pub(crate) const MAX_TOOL_ROUNDS: usize = 8;
 pub const OLLAMA: &str = "http://localhost:11434/v1";
 const LM_STUDIO: &str = "http://localhost:1234/v1";
 
@@ -56,6 +58,7 @@ impl Provider {
             Provider::Codex { model, home } => Provider::Codex { model: m.or_else(|| model.clone()), home: home.clone() },
             Provider::Grok { model, home } => Provider::Grok { model: m.or_else(|| model.clone()), home: home.clone() },
             Provider::OpenAi { base, key, model } => Provider::OpenAi { base: base.clone(), key: key.clone(), model: m.unwrap_or_else(|| model.clone()) },
+            Provider::ChatGpt { model } => Provider::ChatGpt { model: m.or_else(|| model.clone()) },
         }
     }
 
@@ -72,9 +75,11 @@ impl Provider {
             "claude" => Ok(Provider::Claude { model, home }),
             "codex" => Ok(Provider::Codex { model, home }),
             "grok" => Ok(Provider::Grok { model, home }),
+            "chatgpt" if crate::chatgpt::account().is_none() => bail!("sign in with ChatGPT first (Settings → AI keys)"),
+            "chatgpt" => Ok(Provider::ChatGpt { model }),
             _ => {
                 let Some((default_base, default_model)) = api_defaults(kind) else {
-                    bail!("unknown provider '{kind}' (use claude, codex, grok, openrouter, xai, local or openai)")
+                    bail!("unknown provider '{kind}' (use claude, chatgpt, codex, grok, openrouter, xai, local or openai)")
                 };
                 match kind {
                     "openrouter" if key.is_none() => bail!("add your OpenRouter key in Settings first"),
@@ -102,6 +107,7 @@ impl Provider {
             Provider::Codex { model, .. } => format!("codex exec ({})", model.as_deref().unwrap_or("default model")),
             Provider::Grok { model, .. } => format!("grok -p ({})", model.as_deref().unwrap_or("default model")),
             Provider::OpenAi { base, model, .. } => format!("{model} @ {base}"),
+            Provider::ChatGpt { model } => format!("ChatGPT plan ({})", model.as_deref().unwrap_or("default model")),
         }
     }
 
@@ -112,6 +118,7 @@ impl Provider {
             Provider::Codex { .. } => "codex",
             Provider::Grok { .. } => "grok",
             Provider::OpenAi { .. } => "api",
+            Provider::ChatGpt { .. } => "chatgpt",
         }
     }
 
@@ -120,13 +127,13 @@ impl Provider {
     pub fn forget_session(&self, session: &str) {
         let home = match self {
             Provider::Claude { home, .. } | Provider::Codex { home, .. } | Provider::Grok { home, .. } => home.clone(),
-            Provider::OpenAi { .. } => return,
+            Provider::OpenAi { .. } | Provider::ChatGpt { .. } => return,
         };
         forget_session(&home, self.kind(), session);
     }
 
     pub fn uses_history(&self) -> bool {
-        matches!(self, Provider::OpenAi { .. })
+        matches!(self, Provider::OpenAi { .. } | Provider::ChatGpt { .. })
     }
 
     pub async fn run(&self, ctx: &ToolCtx, system: &str, history: &[(String, String)], user: &str, session: Option<String>) -> Result<Reply> {
@@ -147,6 +154,9 @@ impl Provider {
             }
             // One deadline for the whole reply, however many tool rounds it takes.
             Provider::OpenAi { base, key, model } => tokio::time::timeout(TURN_TIMEOUT, openai(ctx, base, key, model, system, history, user)).await.context("the AI service took too long")?,
+            Provider::ChatGpt { model } => {
+                tokio::time::timeout(TURN_TIMEOUT, crate::chatgpt::respond(ctx, model.as_deref(), system, history, user)).await.context("ChatGPT took too long")?
+            }
         }
     }
 }
@@ -430,7 +440,7 @@ async fn grok_turn(ctx: &ToolCtx, home: &std::path::Path, model: Option<&str>, s
 
 /// Photos for a model that takes them inline, as (mime, base64): the original when it fits, else a smaller JPEG,
 /// shrinking until every one fits its share of `budget` base64 characters.
-fn inline_images(images: &[PathBuf], budget: usize) -> Result<Vec<(String, String)>> {
+pub(crate) fn inline_images(images: &[PathBuf], budget: usize) -> Result<Vec<(String, String)>> {
     use base64::Engine;
     let b64 = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
     let each = budget / images.len().max(1);
@@ -707,6 +717,11 @@ pub async fn detect(kind: &str, home: &std::path::Path) -> Value {
             }
             json!({"installed": false})
         }
+        // Signed in from Mimir: nothing to install.
+        "chatgpt" => {
+            let account = crate::chatgpt::account();
+            json!({"installed": true, "signed_in": account.is_some(), "account": account})
+        }
         _ => json!({"installed": true, "signed_in": crate::host::api_key(kind).is_some()}),
     }
 }
@@ -715,6 +730,9 @@ pub async fn detect(kind: &str, home: &std::path::Path) -> Value {
 /// the model can call tools (remember things, run routines), if known. OpenRouter's list is public;
 /// we ask for tool-capable models only. Ollama reports each model's capabilities.
 pub async fn models(kind: &str, base: Option<&str>, key: Option<&str>) -> Result<Vec<Value>> {
+    if kind == "chatgpt" {
+        return crate::chatgpt::models().await;
+    }
     let Some((default_base, _)) = api_defaults(kind) else { return Ok(vec![]) };
     let base = base.filter(|b| !b.trim().is_empty()).unwrap_or(default_base).trim_end_matches('/');
     let url = if kind == "openrouter" { format!("{base}/models?supported_parameters=tools") } else { format!("{base}/models") };
@@ -791,6 +809,9 @@ impl Provider {
             Provider::Codex { home, .. } => ("codex", home),
             Provider::Grok { home, .. } => ("grok", home),
             Provider::OpenAi { .. } => return Ok(()),
+            // Signed in from Mimir: nothing to start, just whether the sign-in is still there.
+            Provider::ChatGpt { .. } if crate::chatgpt::account().is_none() => bail!("chatgpt isn't signed in, so the routine didn't run (nothing was spent)"),
+            Provider::ChatGpt { .. } => return Ok(()),
         };
         // A check that passed holds for 10 minutes: a quiet check every 15 minutes shouldn't start the CLI twice more each
         // time. A failed one is checked again at the next run.

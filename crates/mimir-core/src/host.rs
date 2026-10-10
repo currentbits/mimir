@@ -257,9 +257,17 @@ impl Host {
             "accounts" => {
                 use crate::provider::detect;
                 let h = &self.home;
-                let (c, x, gr, r, g, l, k) =
-                    tokio::join!(detect("claude", h), detect("codex", h), detect("grok", h), detect("openrouter", h), detect("xai", h), detect("local", h), detect("openai", h));
-                ok(json!({"claude": c, "codex": x, "grok": gr, "openrouter": r, "xai": g, "local": l, "openai": k}))
+                let (c, x, gr, r, g, l, k, cg) = tokio::join!(
+                    detect("claude", h),
+                    detect("codex", h),
+                    detect("grok", h),
+                    detect("openrouter", h),
+                    detect("xai", h),
+                    detect("local", h),
+                    detect("openai", h),
+                    detect("chatgpt", h)
+                );
+                ok(json!({"claude": c, "codex": x, "grok": gr, "openrouter": r, "xai": g, "local": l, "openai": k, "chatgpt": cg}))
             }
             // Sign in to Grok for Mimir: returns the device-code URL to open; `accounts` shows when it's done.
             "grok_login_cancel" => {
@@ -353,6 +361,27 @@ impl Host {
             "openrouter_connect_wait" => {
                 let key = crate::openrouter::finish().await?;
                 self.secrets.set(OPENROUTER_KEY, &key)?;
+                self.restart_all();
+                ok(())
+            }
+            // Sign in with ChatGPT (bots on your ChatGPT plan, no CLI). `chatgpt_sign_in` returns the address to open;
+            // in the desktop app `chatgpt_sign_in_wait` resolves when the browser comes back. A server can't receive that
+            // (it comes back to your own computer), so you paste the address you ended up on: `chatgpt_sign_in_paste`.
+            "chatgpt_sign_in" => {
+                let paste = self.mode == "server";
+                ok(json!({"url": crate::chatgpt::start(&self.db, !paste).await?, "paste": paste}))
+            }
+            "chatgpt_sign_in_wait" | "chatgpt_sign_in_paste" => {
+                let account = if cmd == "chatgpt_sign_in_wait" { crate::chatgpt::finish().await? } else { crate::chatgpt::paste(&arg::<String>(a, "url")?).await? };
+                self.restart_all();
+                ok(json!({"account": account}))
+            }
+            "chatgpt_sign_in_cancel" => {
+                crate::chatgpt::cancel();
+                ok(())
+            }
+            "chatgpt_sign_out" => {
+                crate::chatgpt::sign_out().await?;
                 self.restart_all();
                 ok(())
             }

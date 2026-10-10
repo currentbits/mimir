@@ -12,8 +12,14 @@ replies "DONE <tool>: <the tool's result>":
 
 Anything else gets "OK: <your message>". A message with SLOW in it is answered after 3 seconds (any bot), for
 switching away mid-reply. Each request is logged to stdout.
+
+It also stands in for ChatGPT's sign-in and Responses API ("Sign in with ChatGPT"): start the server with
+MIMIR_CHATGPT_AUTH=http://127.0.0.1:8899 MIMIR_CHATGPT_API=http://127.0.0.1:8899/v1. The fake sign-in code is
+"nonce:<the nonce from the sign-in address>". Requests that break the route's rules (stored items, tools outside a
+namespace, forbidden fields) get the 400 the real one would; web search is "not offered", and LIMIT in a message
+answers with the plan's usage limit.
 """
-import json, re, sys, time
+import base64, json, re, sys, time, urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8899
@@ -41,12 +47,21 @@ class H(BaseHTTPRequestHandler):
                         "usage": {"prompt_tokens": 10, "completion_tokens": 5}}).encode()
         self.send_response(200); self.send_header("content-type", "application/json"); self.send_header("content-length", str(len(b))); self.end_headers(); self.wfile.write(b)
 
-    def do_GET(self):  # model list
-        b = json.dumps({"data": [{"id": "fake"}]}).encode()
+    def send_json(self, status, v):
+        b = json.dumps(v).encode()
+        self.send_response(status); self.send_header("content-type", "application/json"); self.send_header("content-length", str(len(b))); self.end_headers(); self.wfile.write(b)
+
+    def do_GET(self):  # model list (a ChatGPT plan's has slugs, names and visibility)
+        b = json.dumps({"data": [{"id": "fake", "slug": "fake-plan", "display_name": "Fake Plan", "visibility": "list"}, {"id": "hidden", "slug": "hidden", "visibility": "hide"}]}).encode()
         self.send_response(200); self.send_header("content-type", "application/json"); self.send_header("content-length", str(len(b))); self.end_headers(); self.wfile.write(b)
 
     def do_POST(self):
-        req = json.loads(self.rfile.read(int(self.headers.get("content-length") or 0)) or b"{}")
+        raw = self.rfile.read(int(self.headers.get("content-length") or 0))
+        if self.path.startswith("/api/accounts/oauth/"):
+            return self.oauth(dict(urllib.parse.parse_qsl(raw.decode())))
+        req = json.loads(raw or b"{}")
+        if self.path.endswith("/responses"):
+            return self.respond_api(req)
         msgs = req.get("messages", [])
         system = " ".join(text_of(m.get("content")) for m in msgs if m.get("role") == "system")
         bot = (re.search(r"Your name is ([^.]+)\.", system) or [None, "?"])[1]
@@ -67,6 +82,59 @@ class H(BaseHTTPRequestHandler):
                 return self.reply({"role": "assistant", "content": None, "tool_calls": [
                     {"id": "call1", "type": "function", "function": {"name": tool, "arguments": json.dumps(args(last_user))}}]})
         return self.reply({"role": "assistant", "content": f"OK: {last_user[-100:]}"})
+
+    # ---- Sign in with ChatGPT ----
+
+    def oauth(self, form):
+        if self.path.endswith("/revoke"):
+            return self.send_json(200, {})
+        if form.get("grant_type") == "refresh_token":
+            return self.send_json(200, {"access_token": "fake-access", "refresh_token": "r2", "expires_in": 3600})
+        code = form.get("code", "")
+        if not code.startswith("nonce:") or not form.get("code_verifier") or form.get("resource") != "https://api.openai.com/v1":
+            return self.send_json(400, {"error": "invalid_grant"})
+        b64 = lambda v: base64.urlsafe_b64encode(json.dumps(v).encode()).decode().rstrip("=")
+        claims = {"iss": f"http://127.0.0.1:{PORT}", "aud": form["client_id"], "nonce": code[6:], "exp": int(time.time()) + 3600, "email": "you@example.com", "sub": "u1"}
+        print(f"[chatgpt] signed in, client {form['client_id']}", flush=True)
+        self.send_json(200, {"access_token": "fake-access", "refresh_token": "r1", "id_token": f"e30.{b64(claims)}.sig", "expires_in": 3600, "token_type": "Bearer"})
+
+    def respond_api(self, req):
+        if self.headers.get("authorization") != "Bearer fake-access":
+            return self.send_json(401, {"detail": "bad token"})
+        bad = [k for k in ("temperature", "max_output_tokens", "previous_response_id", "user", "metadata") if k in req]
+        items = req.get("input", [])
+        tools = req.get("tools", [])
+        if req.get("store") is not False or req.get("stream") is not True or bad or "instructions" not in req:
+            return self.send_json(400, {"error": {"code": "subscription_sharing_unsupported_capability", "message": f"preview rules: {bad}"}})
+        if any(t.get("type") == "web_search" for t in tools):
+            return self.send_json(400, {"error": {"code": "subscription_sharing_unsupported_capability", "message": "web search isn't offered here"}})
+        if any(t.get("type") == "function" for t in tools):
+            return self.send_json(400, {"error": {"code": "subscription_sharing_unsupported_capability", "message": "function tools must be in a namespace"}})
+        if any(isinstance(i, dict) and "id" in i for i in items):
+            return self.send_json(400, {"error": {"code": "invalid_request_error", "message": "Items are not persisted when store is false"}})
+        bot = (re.search(r"Your name is ([^.]+)\.", req["instructions"]) or [None, "?"])[1]
+        users = [text_of(i.get("content")) for i in items if i.get("role") == "user"]
+        last_user, last = (users[-1] if users else ""), (items[-1] if items else {})
+        print(f"[{bot} via chatgpt] last={last.get('type') or last.get('role')} user={last_user[-80:]!r}", flush=True)
+        self.send_response(200); self.send_header("content-type", "text/event-stream"); self.end_headers()
+        ev = lambda v: self.wfile.write(f"event: {v['type']}\ndata: {json.dumps(v)}\n\n".encode())
+        done = {"type": "response.completed", "response": {"model": "fake-plan", "usage": {"input_tokens": 20, "output_tokens": 4}, "output": []}}
+        if "LIMIT" in last_user:
+            return ev({"type": "response.failed", "response": {"error": {"code": "subscription_sharing_usage_limit_exceeded", "message": "weekly cap"}}})
+        def say(text):
+            for part in (text[:5], text[5:]):
+                ev({"type": "response.output_text.delta", "delta": part})
+            ev({"type": "response.output_item.done", "item": {"type": "message", "id": "msg_1", "role": "assistant", "content": [{"type": "output_text", "text": text}]}})
+            ev(done)
+        if last.get("type") == "function_call_output":
+            name = next((i["name"] for i in reversed(items) if i.get("type") == "function_call"), "?")
+            return say(f"DONE {name}: {str(last.get('output'))[:300]}")
+        for word, tool, args in SCRIPT:
+            if word in last_user:
+                ev({"type": "response.output_item.done", "item": {"type": "reasoning", "id": "rs_1", "summary": [], "encrypted_content": "opaque"}})
+                ev({"type": "response.output_item.done", "item": {"type": "function_call", "id": "fc_1", "call_id": "call1", "namespace": "mimir", "name": tool, "arguments": json.dumps(args(last_user))}})
+                return ev(done)
+        say(f"OK: {last_user[-100:]}")
 
 
 print(f"fake AI on http://127.0.0.1:{PORT}/v1", flush=True)

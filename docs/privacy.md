@@ -23,7 +23,8 @@ to the services you connected.
 
 - **Your messages and the context for a reply** (your instructions, your standing memories, memories that match the
   message, the conversation, tool results) go to the AI account the bot uses: Anthropic for Claude, OpenAI for
-  ChatGPT/OpenAI keys, xAI for Grok, OpenRouter and the model's provider, or nowhere for a local model.
+  ChatGPT/OpenAI keys (signed in with ChatGPT, each request asks OpenAI not to store it), xAI for Grok, OpenRouter
+  and the model's provider, or nowhere for a local model.
 - **The daily tidy-up** reads a chat's recent conversation with all your bots, on the AI account of the bot that does
   the tidy-up (Settings). So a conversation with a bot on a local model reaches that account too, if it's a cloud one.
 - **Voice notes** from Telegram are transcribed with your OpenAI-compatible key.

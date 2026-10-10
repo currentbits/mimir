@@ -63,7 +63,9 @@ in the server's terminal:
 
 - Claude: `docker compose exec -it mimir claude`, sign in, then `/exit` (or set `CLAUDE_CODE_OAUTH_TOKEN` from
   `claude setup-token` on any machine).
-- ChatGPT: `docker compose exec -it mimir codex login`.
+- ChatGPT: nothing in the terminal. Settings → AI keys → *Continue with ChatGPT*; after you sign in, your browser
+  lands on a page that doesn't load (`http://127.0.0.1:…`). Paste that address into Mimir. (Or the Codex CLI:
+  `docker compose exec -it mimir codex login`.)
 - Grok: not in the ready-made image (its installer is a script from x.ai without a fixed version). Build the image
   yourself with `--build-arg GROK_CLI=1` (below), then *Sign in to Grok* in Settings.
 

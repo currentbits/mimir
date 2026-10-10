@@ -44,8 +44,9 @@ install the new package.
 
 The first screen asks which AI to use. Pick the one you already pay for:
 
-- **Claude** or **ChatGPT**: install the official command-line app once and sign in; Mimir uses that login. No API
-  key, no extra cost beyond your plan. In a terminal:
+- **ChatGPT**: *Continue with ChatGPT* and sign in; bots then run on your Plus or Pro plan. Nothing to install.
+- **Claude** (or ChatGPT through the **Codex CLI**): install the official command-line app once and sign in; Mimir
+  uses that login. No API key, no extra cost beyond your plan. In a terminal:
 
   ```sh
   npm install -g @anthropic-ai/claude-code && claude    # Claude: sign in when it asks, then type /exit
