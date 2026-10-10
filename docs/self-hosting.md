@@ -32,7 +32,7 @@ containers Mimir runs as (below); `.env` holds a random key they use to talk to 
 ## 2. Start it
 
 ```sh
-docker compose up -d                          # downloads the image (about 1.5 GB) and starts Mimir
+docker compose up -d                          # downloads the image (about 800 MB) and starts Mimir
 docker compose exec mimir mimir admin-token   # prints your admin token: copy it
 ```
 
