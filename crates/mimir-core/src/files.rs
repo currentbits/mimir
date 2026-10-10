@@ -77,7 +77,12 @@ pub fn list(db: &crate::db::Db, chat: i64, dir: &str) -> Result<Vec<(String, u64
                 continue;
             }
             let Ok(m) = e.metadata() else { continue };
-            let rel = e.path().strip_prefix(root).map(|p| p.to_string_lossy().to_string()).unwrap_or(name);
+            // Always with "/", also on Windows: the same path a bot (or you) passes back to read it.
+            let rel = e
+                .path()
+                .strip_prefix(root)
+                .map(|p| p.components().map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/"))
+                .unwrap_or(name);
             if m.is_dir() {
                 walk(root, &e.path(), out);
             } else if m.is_file() {
