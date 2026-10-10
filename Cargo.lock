@@ -3166,7 +3166,7 @@ dependencies = [
 
 [[package]]
 name = "mimir"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "axum",
@@ -3178,7 +3178,7 @@ dependencies = [
 
 [[package]]
 name = "mimir-core"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "async-imap",
@@ -3214,7 +3214,7 @@ dependencies = [
 
 [[package]]
 name = "mimir-desktop"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "arboard",

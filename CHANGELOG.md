@@ -2,7 +2,7 @@
 
 What changed for people using Mimir. The newest release is at the top; "Unreleased" is what the next one brings.
 
-## Unreleased
+## 0.1.5
 
 - **Sign in with ChatGPT:** bots run on your ChatGPT Plus or Pro plan without installing anything. *Continue with
   ChatGPT* on the first screen or in Settings → AI keys, sign in, done. You choose how much of your plan Mimir may use
