@@ -2,7 +2,7 @@
 
 What changed for people using Mimir. The newest release is at the top; "Unreleased" is what the next one brings.
 
-## Unreleased
+## 0.1.4
 
 - **All at once:** **Accept all** / **Dismiss all** for memory suggestions (from two up, the outside-content ones
   included: they stay unconfirmed), **All look right** for memories waiting to be confirmed, **Allow all** / **Deny all**
