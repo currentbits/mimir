@@ -924,6 +924,26 @@ function useDecide(onDecided: () => unknown) {
   return { err, leaving, decide }
 }
 
+/** Asks you can answer all at once: plain ones (and plans). Sending an email, making a bot, a saved login and anything
+ *  asked after outside content stay one by one: those are the ones to read. */
+const bulkable = (a: Approval) => !a.kind || a.kind === 'rule' || a.kind === 'plan'
+
+function DecideAll({ list, decide }: { list: Approval[]; decide: (id: number, approve: boolean) => unknown }) {
+  const many = list.filter(bulkable)
+  if (many.length < 2) return null
+  const rest = list.length - many.length
+  const go = async (approve: boolean) => {
+    if (!await ask(`${approve ? 'Allow' : 'Deny'} these ${many.length}?${rest ? ` The other ${rest} (an email to send, a new bot, a saved login, or asked after outside content) you answer one by one.` : ''}`, approve ? `Allow ${many.length}` : `Deny ${many.length}`, !approve)) return
+    for (const a of many) decide(a.id, approve)
+  }
+  return (
+    <div className="decide-all">
+      <button type="button" className="btn btn-sm btn-ghost" onClick={() => go(false)}>Deny all</button>
+      <button type="button" className="btn btn-sm" onClick={() => go(true)}>Allow all{rest ? ` ${many.length}` : ''}</button>
+    </div>
+  )
+}
+
 /** Live asks float over the window. Parked ones (from routines) wait in the inbox instead. */
 function Approvals({ list, chats, chatName, onDecided }: { list: Approval[]; chats: Chat[]; chatName: (c: Chat) => string; onDecided: () => void }) {
   const { err, leaving, decide } = useDecide(onDecided)
@@ -932,6 +952,7 @@ function Approvals({ list, chats, chatName, onDecided }: { list: Approval[]; cha
   const where = (id: number) => { const c = chats.find(x => x.chat_id === id); return id === INCOGNITO ? 'Incognito chat' : c ? chatName(c) : `chat ${id}` }
   return (
     <section className="approvals" aria-live="polite" aria-label="Waiting for your approval">
+      <DecideAll list={live} decide={decide} />
       {live.map(a => <ApprovalCard key={a.id} a={a} where={where(a.chat_id)} leaving={leaving.has(a.id)} decide={decide} />)}
       {err && <p className="error">{err}</p>}
     </section>
@@ -995,7 +1016,7 @@ function InboxView({ data, troubled, reload, chats, chatName, openBot, openChat 
         })}</div>
       </>}
       {data.approvals.length > 0 && <>
-        <div className="section-title" style={troubled.length ? undefined : { marginTop: 0 }}><h2>Waiting for your OK</h2><span className="count">{data.approvals.length}</span></div>
+        <div className="section-title" style={troubled.length ? undefined : { marginTop: 0 }}><h2>Waiting for your OK</h2><span className="count">{data.approvals.length}</span><DecideAll list={data.approvals} decide={decide} /></div>
         <div className="inbox-list">{data.approvals.map(a => <ApprovalCard key={a.id} inline a={a} where={where(a.chat_id)} leaving={leaving.has(a.id)} decide={decide} />)}</div>
         {err && <p className="error">{err}</p>}
       </>}
@@ -1504,6 +1525,7 @@ function MemoryView({ chatId, onChange }: { chatId: number; onChange: () => void
         </div>
       })()}
       <Suggestions chatId={chatId} entries={all} onChange={refresh} />
+      <ConfirmAll chatId={chatId} entries={all} onDone={refresh} />
       <Learned chatId={chatId} entries={all} onChange={refresh} />
       <Files chatId={chatId} />
       {adding === 'one' && <div className="editor-card"><Editor submit="Save memory" onCancel={() => setAdding(null)} onSave={(kind, title, body) => act(invoke('remember', { chatId, kind, title, body, supersedes: null })).then(() => setAdding(null))} /></div>}
@@ -1549,6 +1571,21 @@ function TidyButton({ chatId, onDone }: { chatId: number; onDone: () => void }) 
   )
 }
 
+/** Memories saved after reading outside content wait for "Looks right": all of them at once, after you've read them. */
+function ConfirmAll({ chatId, entries, onDone }: { chatId: number; entries: EntryRow[]; onDone: () => void }) {
+  const waiting = entries.filter(e => e.tainted && e.status === 'active')
+  if (waiting.length < 2) return null
+  const confirm = async () => {
+    if (!await ask(`Mark all ${waiting.length} as right? They were saved after a bot read outside content (a page, a file, an email), so check they say what you meant: your bots then keep them in mind like anything you said.`, 'All look right')) return
+    for (const e of waiting) await invoke('confirm_memory', { chatId, id: e.id }).catch(err => tell(String(err)))
+    onDone()
+  }
+  return (
+    <div className="confirm-all"><Icon name="shield" size={14} /><span>{waiting.length} memories wait for you to say they look right (marked “after reading outside content” below).</span>
+      <button className="btn btn-sm" onClick={confirm}>All look right</button></div>
+  )
+}
+
 const ACTION: Record<Suggestion['action'], [string, string]> = { add: ['Remember', 'live'], update: ['Update', 'pending'], forget: ['Forget', 'danger'], demote: ['Background', 'pending'] }
 
 /** Proposed changes from the tidy-up. Nothing changes until accepted. */
@@ -1567,14 +1604,19 @@ function Suggestions({ chatId, entries, onChange }: { chatId: number; entries: E
   }
   const decide = (id: number, accept: boolean) =>
     leave(id, () => invoke('decide_suggestion', { chatId, id, accept }).then(() => { setErr(null); return list.reload().then(onChange) }, e => setErr(String(e))))
+  const all = async (accept: boolean) => {
+    if (!accept && !await ask(`Dismiss all ${items.length} suggestions?`, 'Dismiss all', true)) return
+    for (const s of items) await invoke('decide_suggestion', { chatId, id: s.id, accept }).catch(e => setErr(String(e)))
+    list.reload().then(onChange)
+  }
   return (
     <section className="suggest" aria-label="Suggested memory changes">
       <div className="suggest-head"><Icon name="wand" /><b>{items.length} suggested {items.length === 1 ? 'change' : 'changes'}</b><small>{items.every(s => s.reason.startsWith('Imported')) ? 'From what you imported.' : 'From recent conversations.'} Nothing changes until you accept.</small>
-        {/* Ones drawn from outside content are left for you to read one by one. */}
-        {items.filter(s => !s.tainted).length > 2 && <button className="btn btn-sm btn-ghost" title={items.some(s => s.tainted) ? 'Leaves out the ones drawn from outside content: read those one by one' : undefined} onClick={async () => {
-          for (const s of items.filter(x => !x.tainted)) await invoke('decide_suggestion', { chatId, id: s.id, accept: true }).catch(e => setErr(String(e)))
-          list.reload().then(onChange)
-        }}>{items.some(s => s.tainted) ? 'Accept the rest' : 'Accept all'}</button>}</div>
+        {/* All at once. Ones drawn from outside content stay marked unconfirmed after accepting, as one by one. */}
+        {items.length > 1 && <span className="suggest-all">
+          <button className="btn btn-sm btn-ghost" onClick={() => all(false)}>Dismiss all</button>
+          <button className="btn btn-sm" onClick={() => all(true)} title={items.some(s => s.tainted) ? 'The ones drawn from outside content stay marked unconfirmed until you say they look right' : undefined}>Accept all</button>
+        </span>}</div>
       {items.map(s => {
         const t = target(s.entry_id)
         const [label, tone] = ACTION[s.action]
@@ -3533,8 +3575,19 @@ function Permissions() {
   )
   const sites = useLoad(() => invoke<{ tool: string; host: string; action: string }[]>('site_rules'), [], 60000)
   const removeSite = (tool: string, host: string) => invoke('set_site_rule', { tool, host, action: 'default' }).then(sites.reload, e => setErr(String(e)))
+  const setAll = async (action: 'allow' | 'default') => {
+    const msg = action === 'allow'
+      ? 'Allow every tool without asking? Sending an email, making a bot and using a saved login still ask every time, and after a bot reads outside content, anything that changes your data still asks.'
+      : 'Put every tool back to how Mimir comes (deleting and opening sites ask, the rest is allowed)?'
+    if (!await ask(msg, action === 'allow' ? 'Allow all' : 'Back to defaults', action === 'allow')) return
+    for (const r of all) if (r.action !== (action === 'default' ? r.default : 'allow')) await invoke('set_rule', { tool: r.tool, action }).catch(e => setErr(String(e)))
+    rules.reload()
+  }
   return (
-    <Group title="Permissions" note={err ?? '“Ask” sends you Approve / Deny first. After a bot reads a web page, anything that changes your data asks, whatever is set here.'}>
+    <Group title="Permissions" action={<span className="perm-all">
+      <button type="button" className="btn btn-sm btn-ghost" onClick={() => setAll('default')} disabled={all.every(r => r.action === r.default)}>Back to defaults</button>
+      <button type="button" className="btn btn-sm btn-ghost" onClick={() => setAll('allow')} disabled={!all.length || all.every(r => r.action === 'allow')}>Allow all</button>
+    </span>} note={err ?? '“Ask” sends you Approve / Deny first. After a bot reads a web page, anything that changes your data asks, whatever is set here.'}>
       {builtin.map(row)}
       {(sites.data ?? []).map(r => (
         <Row key={r.tool + r.host} icon={<Icon name="globe" size={15} />} title={r.host}

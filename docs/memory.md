@@ -38,10 +38,12 @@ commitment).
   something you said: it stays out of their standing memory (a search can still find it, labelled, and then that
   reply counts as having read outside content). The mark sticks: a new version of an unconfirmed memory, a bot's
   proposal made after reading a page, or a tidy-up suggestion drawn from such a conversation is flagged on its card,
-  stays unconfirmed when you accept it, and is left out of "Accept all". *Looks right* clears the mark. The exception
+  stays unconfirmed when you accept it (also through "Accept all"). *Looks right* clears the mark. The exception
   is a suggestion that says what you wrote yourself ("No, use metric units only" becoming a metric-units preference):
   a page can't put words in your messages, so it stays yours even if a bot searched the web in that conversation. Memories
   waiting for *Looks right* are listed under **Needs you**, so they don't sit unseen (and unused).
+- **All at once.** With two or more suggestions, **Accept all** and **Dismiss all** answer them together; with two or
+  more memories waiting for *Looks right*, **All look right** confirms them after you've read them.
 
 ## Files
 

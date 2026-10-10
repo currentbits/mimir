@@ -4,6 +4,10 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 
 ## Unreleased
 
+- **All at once:** **Accept all** / **Dismiss all** for memory suggestions (from two up, the outside-content ones
+  included: they stay unconfirmed), **All look right** for memories waiting to be confirmed, **Allow all** / **Deny all**
+  for waiting approvals (an email, a new bot, a saved login and asks after outside content stay one by one), and
+  **Allow all** / **Back to defaults** in Settings → Permissions.
 - **Your server tells you when to update it:** once per new version, in your own chat with your bots (Telegram, Slack
   or Discord) and at the top of Needs you, with the exact commands for how it's installed. Settings → This server
   switches it off.

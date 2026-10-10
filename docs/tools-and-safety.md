@@ -87,6 +87,11 @@ To stop being asked at all, press **Always** on the card (in the app, Telegram, 
 tool, or that tool on that website, runs without asking. Change it back in **Settings → Permissions**. Asks after
 outside content, saved logins and plans don't offer it.
 
+**Several at once.** With two or more waiting, **Allow all** and **Deny all** (in the app and in Needs you) answer the
+plain asks together. An email to send, a new bot, a saved login and anything asked after outside content stay to be
+answered one by one: those are the ones to read. **Settings → Permissions → Allow all** sets every tool to allow (the
+always-ask ones above still ask, and so does anything after outside content); **Back to defaults** undoes it.
+
 ## The browser and saved logins
 
 **Settings → Browser** turns on a real headless browser for your bots (Playwright's MCP server; needs Node.js and

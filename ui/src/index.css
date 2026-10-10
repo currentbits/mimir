@@ -965,3 +965,12 @@ kbd, .keys { font: 500 11.5px var(--sans); color: var(--text-2); padding: 3px 7p
 .ask-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .btn-danger-solid { background: var(--danger); color: #fff; border-color: transparent; }
 .btn-danger-solid:hover { background: color-mix(in srgb, var(--danger) 88%, #000); }
+
+/* All at once: suggestions, memories to confirm, approvals, permissions. */
+.suggest-all { margin-left: auto; display: flex; gap: 6px; flex: none; }
+.confirm-all { display: flex; align-items: center; gap: 10px; padding: 10px 14px; margin: 0 0 16px; border-radius: 12px; background: var(--pending-soft); font-size: 12.5px; }
+.confirm-all .icon { color: var(--pending); flex: none; }
+.confirm-all span { flex: 1; }
+.decide-all { margin-left: auto; display: flex; gap: 6px; }
+.approvals > .decide-all { justify-content: flex-end; margin-bottom: 6px; }
+.perm-all { display: flex; gap: 4px; }
