@@ -102,6 +102,7 @@ half is built into the app); a tampered download is refused. It never restarts o
 - Replies from tool servers and AI services are size-capped.
 - The message formatter stays fast on hostile text.
 - A crash while handling one message reconnects that app instead of stopping it.
+- A crash in a routine or the memory tidy-up fails that run (shown in Needs you); a crash anywhere else in a bot starts the bot again, and its status says so.
 
 ## What's left
 
