@@ -1,4 +1,4 @@
-// The app's main flows clicked through in a browser (npm i playwright; npx playwright install chromium), against a
+// The app's main flows clicked through in a browser, switching bots mid-reply too (npm i playwright; npx playwright install chromium), against a
 // server set up as for scripts/e2e-flows.py, with MIMIR_UI_DIR=ui/dist: node scripts/ui-flows.mjs
 import pkg from 'playwright'; const { chromium } = pkg
 // Ada and Search on the fake AI (scripts/fake-ai.py on :8899), in a fresh server.
@@ -107,6 +107,59 @@ await p.getByRole('button', { name: 'Delete bot' }).click(); await p.waitForTime
 await p.locator('.ask-box').getByRole('button', { name: 'Delete bot' }).click(); await p.waitForTimeout(1200)
 check('bot deleted', (await p.locator('.rail-item', { hasText: 'Scout' }).count()) === 0)
 
+const settings = async name => { await bot(name).click({ button: 'right' }); await p.waitForTimeout(300); await p.getByRole('menuitem', { name: 'Settings' }).click(); await p.waitForTimeout(800) }
+
+// A slow reply, then switch away at once: it doesn't land in the other bot's thread, and is there on return
+await bot('Ada').click(); await p.waitForTimeout(500)
+await say('SLOW one')
+await p.waitForTimeout(300)
+await bot('Search').click(); await p.waitForTimeout(500)
+check("Search's thread doesn't show Ada's pending message", !(await main()).includes('SLOW one'), await main())
+await p.waitForTimeout(5000)
+check("Search's thread doesn't show Ada's late reply", !(await main()).includes('OK: SLOW one'))
+const composer = await p.locator('textarea').first().isEnabled()
+check("Search's composer is usable", composer)
+await bot('Ada').click()
+check("Ada's reply is there on return", await until(async () => (await main()).includes('OK: SLOW one'), 4000), await main())
+
+// Switch away and back mid-reply: the thread shows it's working, then the reply
+await say('SLOW two'); await p.waitForTimeout(300)
+await bot('Search').click(); await p.waitForTimeout(400); await bot('Ada').click(); await p.waitForTimeout(800)
+check('back mid-reply: the reply in progress shows', (await p.locator('.thread [aria-label="Thinking"], .thread .steps').count()) > 0)
+check('back mid-reply: the reply arrives without a reload', await until(async () => (await main()).includes('OK: SLOW two'), 8000))
+
+// Draft typed for Ada, switch to Search: Search's composer is empty
+await p.locator('textarea').first().fill('draft for ada')
+await bot('Search').click(); await p.waitForTimeout(500)
+check("Ada's draft doesn't show in Search's composer", (await p.locator('textarea').first().inputValue()) !== 'draft for ada')
+await bot('Ada').click(); await p.waitForTimeout(500)
+
+// Bot settings: Ada's page, then Search's: Search's own name and role
+await settings('Ada')
+const nameOf = () => p.locator('.main input').first().inputValue()
+check("Ada's page shows Ada", (await nameOf()) === 'Ada', await nameOf())
+await settings('Search')
+check("Search's page shows Search", (await nameOf()) === 'Search', await nameOf())
+check("Search's page shows its role", (await main()).includes('SEO research') || (await p.locator('.main textarea').first().inputValue()).includes('SEO research'))
+// Rename from the page
+await p.locator('.main input').first().fill('Searcher')
+const save = p.locator('.main').getByRole('button', { name: /^Save/ }).first()
+check('bot page has a Save button', (await save.count()) > 0)
+if (await save.count()) { await save.click(); await p.waitForTimeout(1200) }
+check('rename shows in the sidebar', (await p.locator('.rail-item', { hasText: 'Searcher' }).count()) > 0)
+
+// "@Name" from a bot's own thread moves to that bot's thread, with the message on its way
+await bot('Ada').click(); await p.waitForTimeout(500)
+await say('@Ada SLOW three'); await p.waitForTimeout(600)
+check('@mention: the message shows at once', (await main()).includes('SLOW three'))
+check('@mention: the reply arrives', await until(async () => (await main()).includes('OK: SLOW three'), 8000))
+
+// Every tab while on Ada, then switch chat to Search with each tab open: no errors
+for (const t of ['Memory', 'Skills', 'Routines', 'Activity', 'Chat']) {
+  await bot('Ada').click(); await p.waitForTimeout(300)
+  if (await tab(t).count()) { await tab(t).click(); await p.waitForTimeout(500) }
+  await bot('Searcher').click(); await p.waitForTimeout(500)
+}
 await p.screenshot({ path: '/tmp/ss/ui-flows-end.png' })
 console.log(errs.length ? errs.join('\n') : 'no page errors')
 console.log(failed ? `${failed} FAILED` : 'ALL PASS'); await b.close()

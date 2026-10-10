@@ -9,3 +9,8 @@ reports/
 research_notes/
 # heymimir.app (the website and its /docs/ pages) is a separate, private repository, checked out here as site/.
 site/
+# The launch film (Remotion project) and its renders stay local, not published.
+video/
+*.mp4
+*.mov
+*.webm

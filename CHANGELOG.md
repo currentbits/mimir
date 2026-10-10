@@ -2,6 +2,11 @@
 
 What changed for people using Mimir. The newest release is at the top; "Unreleased" is what the next one brings.
 
+## Unreleased
+
+- **Email providers that send on port 587 work:** Settings → Email has an *Outgoing port* next to the outgoing server.
+  Empty is 465 as before; 587 (or any other port) uses STARTTLS. Saving used to set it back to 465 every time.
+
 ## 0.1.5
 
 - **Sign in with ChatGPT:** bots run on your ChatGPT Plus or Pro plan without installing anything. *Continue with
@@ -32,6 +37,9 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
   - A slow Save no longer pulls you back to the bot you left.
   - Deleting the bot you were chatting with no longer leaves its chat behind.
   - Delete, Dismiss, Run now and a few switches now say so when they fail.
+  - The quick-ask panel sees bots added, renamed or deleted since it opened, and its bot can't be changed mid-answer.
+  - Guest/Yours on a chat and "Open in Mimir" say so when they fail; a second "are you sure?" no longer leaves the first
+    one hanging.
 
 - **Quiet checks that cost almost nothing:** a quiet check can watch a page, a feed or your inbox. Mimir looks first and
   runs the AI only when something changed, with just what changed. Unchanged checks show as free. Times, counters

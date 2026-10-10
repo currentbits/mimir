@@ -418,7 +418,7 @@ impl Host {
                         self.db.set_setting("email_host", &acc.host)?;
                         self.db.set_setting("email_port", &port.to_string())?;
                         self.db.set_setting("email_user", &acc.user)?;
-                        // Outgoing mail: as given, else worked out from the incoming server when it's used.
+                        // Outgoing mail: as given, else worked out from the incoming server when it's used; port 465 unless given (587 = STARTTLS).
                         let smtp: String = arg::<Option<String>>(a, "smtp_host")?.unwrap_or_default();
                         self.db.set_setting("email_smtp_host", smtp.trim())?;
                         self.db.set_setting("email_smtp_port", &arg::<Option<u16>>(a, "smtp_port")?.unwrap_or(465).to_string())?;
@@ -427,7 +427,7 @@ impl Host {
                     }
                 }
                 ok(match crate::email::account(&self.db) {
-                    Some(acc) => json!({"host": acc.host, "user": acc.user, "smtp": acc.smtp_host}),
+                    Some(acc) => json!({"host": acc.host, "user": acc.user, "smtp": acc.smtp_host, "smtp_port": acc.smtp_port}),
                     None => Value::Null,
                 })
             }

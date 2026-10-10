@@ -303,10 +303,11 @@ async fn deliver(a: &Account, d: &Draft<'_>) -> Result<(Session<Stream>, String,
     let creds = Credentials::new(a.user.clone(), a.pass.clone());
     let mailer = if local(&a.smtp_host) {
         AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&a.smtp_host).port(a.smtp_port).credentials(creds).build()
-    } else if a.smtp_port == 587 {
-        AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&a.smtp_host)?.port(587).credentials(creds).build()
+    } else if a.smtp_port == 465 {
+        AsyncSmtpTransport::<Tokio1Executor>::relay(&a.smtp_host)?.port(465).credentials(creds).build()
     } else {
-        AsyncSmtpTransport::<Tokio1Executor>::relay(&a.smtp_host)?.port(a.smtp_port).credentials(creds).build()
+        // 587 (and 25/2525): plain first, then STARTTLS, which lettre requires before it sends the password.
+        AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&a.smtp_host)?.port(a.smtp_port).credentials(creds).build()
     };
     mailer.send_raw(&envelope, msg.as_bytes()).await.map_err(|e| anyhow::anyhow!("couldn't send through {}: {e}", a.smtp_host))?;
     Ok((s, id, msg))
