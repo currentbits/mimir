@@ -561,22 +561,33 @@ async fn notifier(app: AppHandle) {
 /// Apps started from Finder or a Linux desktop launcher get a bare PATH (/usr/bin:/bin:…), so
 /// `claude`, `codex` and `npx` would look "not installed". Take the login shell's PATH, plus the usual
 /// install locations. Windows apps inherit the user's PATH already.
+/// The login shell takes about a second, so the app starts on the PATH it saw last time (in `home`) and asks the
+/// shell again in the background for the next launch; only the very first launch waits for it.
 #[cfg(windows)]
-fn fix_path() {}
+fn fix_path(_home: &std::path::Path) {}
 
 #[cfg(unix)]
-fn fix_path() {
+fn fix_path(home: &std::path::Path) {
     use std::path::PathBuf;
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| if cfg!(target_os = "macos") { "/bin/zsh".into() } else { "/bin/sh".into() });
-    let from_shell = std::process::Command::new(&shell)
-        .args(["-ilc", "printf %s \"$PATH\""])
-        .stdin(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .unwrap_or_default();
+    let cache = home.join("shell-path");
+    let ask_shell = move || {
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| if cfg!(target_os = "macos") { "/bin/zsh".into() } else { "/bin/sh".into() });
+        let path = std::process::Command::new(&shell)
+            .args(["-ilc", "printf %s \"$PATH\""])
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_default();
+        if !path.is_empty() {
+            let _ = std::fs::write(&cache, &path);
+        }
+        path
+    };
+    let cached = std::fs::read_to_string(home.join("shell-path")).ok().filter(|p| !p.is_empty());
+    let from_shell = cached.clone().unwrap_or_else(ask_shell.clone());
     let home = mimir_core::user_home().unwrap_or_default();
     let extra = [home.join(".local/bin"), "/opt/homebrew/bin".into(), "/usr/local/bin".into(), home.join(".npm-global/bin")];
     let current = std::env::var_os("PATH").unwrap_or_default();
@@ -589,6 +600,9 @@ fn fix_path() {
     if let Ok(joined) = std::env::join_paths(parts) {
         // SAFETY: called at startup before any other thread exists.
         unsafe { std::env::set_var("PATH", joined) };
+    }
+    if cached.is_some() {
+        std::thread::spawn(ask_shell);
     }
 }
 
@@ -638,18 +652,22 @@ fn app_menu(app: &mut tauri::App) -> tauri::Result<()> {
 }
 
 fn main() {
-    fix_path();
     // The PDF helper (a separate process for reading one PDF): nothing else, no data folder.
     if std::env::args().nth(1).as_deref() == Some("read-pdf") {
         mimir_core::pdf_helper_main();
     }
     mimir_core::use_pdf_helper();
     let home = mimir_core::data_dir().expect("data dir");
+    // The tools server (started by claude/codex/grok every turn) gets the app's fixed PATH from them: no fix_path.
+    let mcp_mode = std::env::args().nth(1).as_deref() == Some("mcp");
+    if !mcp_mode {
+        fix_path(&home);
+    }
     let db = match Db::open(&home.join("mimir.db")) {
         Ok(db) => db,
         Err(e) => {
             // The tools process has no window: its error goes to the app that started it.
-            if std::env::args().nth(1).as_deref() != Some("mcp") {
+            if !mcp_mode {
                 rfd::MessageDialog::new()
                     .set_level(rfd::MessageLevel::Error)
                     .set_title("Mimir can't open its data")
@@ -662,8 +680,8 @@ fn main() {
     };
     let rt = tokio::runtime::Runtime::new().expect("tokio");
 
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    if args.first().map(String::as_str) == Some("mcp") {
+    if mcp_mode {
+        let args: Vec<String> = std::env::args().skip(1).collect();
         mimir_core::host::install_secrets(Arc::new(Keychain));
         if let Err(err) = mcp::ctx_from_args(db, &args).and_then(|ctx| rt.block_on(mcp::serve_stdio(ctx))) {
             eprintln!("mcp: {err:#}");

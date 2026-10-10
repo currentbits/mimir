@@ -218,10 +218,23 @@ impl Host {
                 None
             }
             Ok(p) => {
-                let (db, st, ch) = (self.db.clone(), status.clone(), self.channels(bot));
+                let (db, st, ch, p) = (self.db.clone(), status.clone(), self.channels(bot), Arc::new(p));
                 Some(self.rt.spawn(async move {
-                    if let Err(err) = runtime::serve(db, bot, Arc::new(p), ch, st.clone()).await {
-                        st.lock().unwrap().error = Some(format!("{err:#}"));
+                    // A crash (a panic anywhere in the bot) starts it again, saying so; an error (a bad token) stops it.
+                    loop {
+                        let run = std::panic::AssertUnwindSafe(runtime::serve(db.clone(), bot, p.clone(), ch.clone(), st.clone()));
+                        let why = match futures_util::FutureExt::catch_unwind(run).await {
+                            Ok(Ok(())) => return,
+                            Ok(Err(err)) => {
+                                st.lock().unwrap_or_else(|e| e.into_inner()).error = Some(format!("{err:#}"));
+                                return;
+                            }
+                            Err(panic) => panic.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| panic.downcast_ref::<String>().cloned()).unwrap_or_default(),
+                        };
+                        eprintln!("bot #{bot} crashed ({why}); starting it again");
+                        let at = chrono::Local::now().format("%H:%M");
+                        st.lock().unwrap_or_else(|e| e.into_inner()).error = Some(format!("Stopped after a crash at {at} and started again: {why}"));
+                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                     }
                 }))
             }
