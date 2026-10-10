@@ -964,7 +964,19 @@ impl Host {
             )?),
             "delete_routine" => ok(self.db.routine_delete(arg(a, "chat_id")?, arg(a, "id")?)?),
             // With bot_id: that bot's own conversation in the chat (a bot opened from the sidebar); without, everyone's.
-            "messages" => ok(self.db.messages_of(arg(a, "chat_id")?, arg(a, "bot_id")?, 200)?),
+            // Paging back: before_id, the 200 before it; from_id, everything from it on (a search hit, and what's below).
+            "messages" => {
+                let from: Option<i64> = arg(a, "from_id")?;
+                // ponytail: from_id loads up to 20k at once; page it if chats ever get that long
+                ok(self.db.messages_of(arg(a, "chat_id")?, arg(a, "bot_id")?, arg(a, "before_id")?, from.unwrap_or(0), if from.is_some() { 20_000 } else { 200 })?)
+            }
+            // The chat's messages matching `query`, best first (for one bot only, with bot_id).
+            "chat_search" => {
+                let bot: Option<i64> = arg(a, "bot_id")?;
+                let hits = self.db.chat_search(arg(a, "chat_id")?, &arg::<String>(a, "query")?, None, (0, i64::MAX), 60)?;
+                ok(hits.into_iter().filter(|h| bot.is_none_or(|b| h.bot_id == b)).take(30)
+                    .map(|h| json!({"id": h.id, "ts": h.ts, "bot_id": h.bot_id, "role": h.role, "excerpt": h.excerpt})).collect::<Vec<_>>())
+            }
             "runs" => ok(self.db.runs(Some(arg(a, "chat_id")?), 200)?),
             // Last 30 days for one chat.
             // What other bots did for a run (tasks it handed over): their runs with each step.
