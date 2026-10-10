@@ -51,7 +51,8 @@ to the services you connected.
   sees your address and the request, nothing else), and downloads an update from there. Switch it off in
   Settings → Updates.
 
-Nothing is sent anywhere else: no analytics, no telemetry.
+Nothing is sent anywhere else: the app has no analytics and no telemetry. (The website, heymimir.app, counts visits and
+download clicks with Meterbird; that's the site, not the app.)
 
 ## Keeping and deleting
 
