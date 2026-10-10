@@ -556,6 +556,7 @@ pub type SkillMenu = (i64, Vec<(String, String)>);
 /// A past message found by chat_search.
 #[derive(Debug, Clone)]
 pub struct ChatHit {
+    pub id: i64,
     pub ts: i64,
     pub bot_id: i64,
     pub role: String,
@@ -2627,13 +2628,13 @@ impl Db {
         let c = self.c();
         let mut st = c.prepare(
             "SELECT m.ts, m.bot_id, m.role, snippet(messages_fts, 0, '', '', '…', 40), (m.role = 'assistant' AND coalesce(r.tainted, 1)) OR (m.role = 'user' AND m.content LIKE '%<document name=%'),
-               m.role = 'user' AND m.content LIKE '[Scheduled%'
+               m.role = 'user' AND m.content LIKE '[Scheduled%', m.id
              FROM messages_fts JOIN messages m ON m.id = messages_fts.rowid LEFT JOIN runs r ON r.id = m.run_id
              WHERE messages_fts MATCH ?1 AND m.chat_id = ?2 AND (?3 IS NULL OR m.run_id IS NOT ?3) AND m.ts BETWEEN ?5 AND ?6
              ORDER BY bm25(messages_fts) LIMIT ?4",
         )?;
         let v = st
-            .query_map(params![q, chat, exclude_run, limit as i64, range.0, range.1], |r| Ok(ChatHit { ts: r.get(0)?, bot_id: r.get(1)?, role: r.get(2)?, excerpt: r.get(3)?, tainted: r.get(4)?, routine: r.get(5)? }))?
+            .query_map(params![q, chat, exclude_run, limit as i64, range.0, range.1], |r| Ok(ChatHit { id: r.get(6)?, ts: r.get(0)?, bot_id: r.get(1)?, role: r.get(2)?, excerpt: r.get(3)?, tainted: r.get(4)?, routine: r.get(5)? }))?
             .collect::<Result<_, _>>()?;
         Ok(v)
     }
@@ -2691,23 +2692,27 @@ impl Db {
     }
 
     pub fn messages(&self, chat: i64, n: usize) -> Result<Vec<Message>> {
-        self.messages_of(chat, None, n)
+        self.messages_of(chat, None, None, 0, n)
     }
 
     /// The last `n` messages of a chat, oldest first; with `bot`, only that bot's conversation in it (what you said to
-    /// it and what it said), as when you open a bot from the sidebar.
-    pub fn messages_of(&self, chat: i64, bot: Option<i64>, n: usize) -> Result<Vec<Message>> {
+    /// it and what it said), as when you open a bot from the sidebar. Paging: only ids below `before`, and none below `from`.
+    pub fn messages_of(&self, chat: i64, bot: Option<i64>, before: Option<i64>, from: i64, n: usize) -> Result<Vec<Message>> {
         let c = self.c();
-        let mut st = c.prepare("SELECT bot_id, role, content, ts, run_id, id FROM messages WHERE chat_id=?1 AND (?3 IS NULL OR bot_id=?3) ORDER BY id DESC LIMIT ?2")?;
+        let mut st = c.prepare(
+            "SELECT bot_id, role, content, ts, run_id, id FROM messages WHERE chat_id=?1 AND (?3 IS NULL OR bot_id=?3)
+               AND (?4 IS NULL OR id < ?4) AND id >= ?5 ORDER BY id DESC LIMIT ?2",
+        )?;
         let mut v: Vec<(Message, Option<i64>)> = st
-            .query_map(params![chat, n as i64, bot], |r| Ok((Message { id: r.get(5)?, bot_id: r.get(0)?, role: r.get(1)?, content: r.get(2)?, ts: r.get(3)?, actions: vec![], run_id: None }, r.get(4)?)))?
+            .query_map(params![chat, n as i64, bot, before, from], |r| Ok((Message { id: r.get(5)?, bot_id: r.get(0)?, role: r.get(1)?, content: r.get(2)?, ts: r.get(3)?, actions: vec![], run_id: None }, r.get(4)?)))?
             .collect::<Result<_, _>>()?;
         v.reverse();
         // One query for every reply's actions.
         let first = v.iter().filter_map(|(_, r)| *r).min().unwrap_or(i64::MAX);
-        let mut acts = c.prepare("SELECT run_id, tool, summary, decision, ok, substr(result, 1, 200) FROM tool_calls WHERE chat_id=?1 AND run_id >= ?2 ORDER BY id")?;
+        let last = v.iter().filter_map(|(_, r)| *r).max().unwrap_or(0);
+        let mut acts = c.prepare("SELECT run_id, tool, summary, decision, ok, substr(result, 1, 200) FROM tool_calls WHERE chat_id=?1 AND run_id BETWEEN ?2 AND ?3 ORDER BY id")?;
         let mut by_run: std::collections::HashMap<i64, Vec<Action>> = Default::default();
-        for row in acts.query_map(params![chat, first], |r| Ok((r.get::<_, i64>(0)?, Action { tool: r.get(1)?, summary: r.get(2)?, decision: r.get(3)?, ok: r.get(4)?, result: r.get(5)? })))? {
+        for row in acts.query_map(params![chat, first, last], |r| Ok((r.get::<_, i64>(0)?, Action { tool: r.get(1)?, summary: r.get(2)?, decision: r.get(3)?, ok: r.get(4)?, result: r.get(5)? })))? {
             let (run, a) = row?;
             by_run.entry(run).or_default().push(a);
         }
@@ -3449,6 +3454,21 @@ mod tests {
         // A time range: only messages in it.
         assert!(d.chat_search(7, "12th", None, (now() + 3600, i64::MAX), 10).unwrap().is_empty());
         assert!(!d.chat_search(7, "12th", None, (now() - 3600, now() + 3600), 10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn earlier_messages_page_back() {
+        let d = db();
+        for i in 0..5 {
+            d.log(1, 7, "user", &format!("m{i}"), None).unwrap();
+        }
+        let text = |v: Vec<Message>| v.into_iter().map(|m| m.content).collect::<Vec<_>>().join(" ");
+        let last = d.messages_of(7, None, None, 0, 2).unwrap();
+        assert_eq!(text(last.clone()), "m3 m4");
+        assert_eq!(text(d.messages_of(7, None, Some(last[0].id), 0, 2).unwrap()), "m1 m2", "the page before");
+        // A search hit's id: everything from it on.
+        let hit = d.chat_search(7, "m1", None, (0, i64::MAX), 1).unwrap()[0].id;
+        assert_eq!(text(d.messages_of(7, None, None, hit, 100).unwrap()), "m1 m2 m3 m4");
     }
 
     #[test]
