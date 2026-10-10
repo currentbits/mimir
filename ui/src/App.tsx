@@ -1,6 +1,6 @@
 import { inDesktop, insecureServer, invoke, keystore, localInvoke, platform, probe, remoteServer, setWebToken, connectServer, shortcut, trayName, webToken } from './api'
 import { createContext, Fragment, useCallback, useMemo, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { Avatar, Empty, Group, Icon, Row, Segmented, Switch, type Presence } from './ui'
+import { ask, askText, AskHost, Avatar, Empty, Group, Icon, Row, Segmented, Switch, type Presence } from './ui'
 import { ago, ahead, dayLabel, fullDay, fullTime, pigment, PIGMENTS, schedule, setLooks, tok, usd, type Look } from './format'
 import { Markdown, openLink } from './markdown'
 import { moodOf, type Mood } from './face'
@@ -210,7 +210,7 @@ function RoutineCard({ id, chatId, onChange }: { id: number; chatId: number; onC
       <div className="rc-actions">
         <button className="btn btn-sm" disabled={busy} onClick={runNow}><Icon name="bolt" size={13} />{busy ? 'Running…' : 'Run now'}</button>
         <button className="btn btn-sm btn-ghost" onClick={() => update({ paused: !r.paused })}>{r.paused ? 'Resume' : 'Pause'}</button>
-        <button className="btn btn-sm btn-ghost btn-danger" onClick={() => confirm('Delete this routine?') && invoke('delete_routine', { chatId, id }).then(rows.reload)}>Delete</button>
+        <button className="btn btn-sm btn-ghost btn-danger" onClick={() => ask('Delete this routine?', 'Delete', true).then(ok => { if (ok) void invoke('delete_routine', { chatId, id }).then(rows.reload) })}>Delete</button>
         {busy && <span className="typing" aria-hidden="true"><i /><i /><i /></span>}
         {note && <span className="hint">{note}</span>}
       </div>
@@ -714,6 +714,7 @@ function Main() {
 
   return (
     <Bots.Provider value={botOf}>
+    <AskHost />
     <div className="app">
       <aside className="rail" aria-label="Bots and chats">
         <div className="rail-top" data-tauri-drag-region />
@@ -805,8 +806,8 @@ function Main() {
                 {!botChat && chat.chat_id !== LOCAL && (
                   <button className={'btn btn-sm btn-ghost' + (chat.guest ? ' guest-on' : '')}
                     title={chat.guest ? 'Paired by someone else: bots here have their own memory, and none of your email, calendar, meetings, saved logins or tool servers. Click if this chat is yours.' : 'Click if someone else uses this chat (a partner, a housemate): bots here then get none of your email, calendar, meetings, saved logins or tool servers.'}
-                    onClick={() => confirm(chat.guest ? 'Make this chat yours? Bots here get your email, calendar, meetings, saved logins and tool servers.' : 'Treat this chat as a guest’s? Bots here lose your email, calendar, meetings, saved logins and tool servers.')
-                      && invoke('chat_guest', { chatId: chat.chat_id, guest: !chat.guest }).then(chats.reload)}>
+                    onClick={() => ask(chat.guest ? 'Make this chat yours? Bots here get your email, calendar, meetings, saved logins and tool servers.' : 'Treat this chat as a guest’s? Bots here lose your email, calendar, meetings, saved logins and tool servers.', chat.guest ? 'Make it mine' : 'Make it a guest’s')
+                      .then(ok => { if (ok) void invoke('chat_guest', { chatId: chat.chat_id, guest: !chat.guest }).then(chats.reload) })}>
                     {chat.guest ? 'Guest' : 'Yours'}
                   </button>
                 )}
@@ -1852,7 +1853,7 @@ function Files({ chatId }: { chatId: number }) {
   const [err, setErr] = useState<string | null>(null)
   if (!list.data?.length) return null
   const show = (path: string) => open?.path === path ? setOpen(null) : invoke<string>('file', { chatId, path }).then(text => { setErr(null); setOpen({ path, text }) }, e => setErr(String(e)))
-  const remove = (path: string) => confirm(`Delete ${path}?`) && invoke('delete_file', { chatId, path }).then(() => { if (open?.path === path) setOpen(null); return list.reload() }, e => setErr(String(e)))
+  const remove = (path: string) => ask(`Delete ${path}?`, 'Delete', true).then(ok => { if (ok) void invoke('delete_file', { chatId, path }).then(() => { if (open?.path === path) setOpen(null); return list.reload() }, e => setErr(String(e))) })
   return (
     <section aria-label="Files">
       <div className="section-title"><h2>Files</h2><span className="count">{list.data.length}</span></div>
@@ -1912,7 +1913,7 @@ function MemoryCard({ r, versions, act, chatId, showKind }: { r: EntryRow; versi
       {r.status !== 'active' && (
         <div className="mem-actions">
           <button className="btn btn-ghost btn-danger btn-sm" title="Delete it for good, with its earlier versions" onClick={() => {
-            if (confirm(`Erase “${r.title}” for good${versions.length ? `, with ${versions.length} earlier version${versions.length === 1 ? '' : 's'}` : ''}? It can't be undone.`)) act(invoke('erase', { chatId, id: r.id }))
+            ask(`Erase “${r.title}” for good${versions.length ? `, with ${versions.length} earlier version${versions.length === 1 ? '' : 's'}` : ''}? It can't be undone.`, 'Erase', true).then(ok => { if (ok) act(invoke('erase', { chatId, id: r.id })) })
           }}>Erase</button>
         </div>
       )}
@@ -2161,7 +2162,7 @@ function RoutinesView({ chatId, bots }: { chatId: number; bots: Bot[] }) {
                     </button>
                     {/* A one-off has no schedule to edit: change its words by asking the bot, or delete it. */}
                     {!r.once && <button className="btn btn-ghost btn-sm" onClick={() => setEditing({ id: r.id, draft: { prompt: r.prompt, quiet: r.quiet, botId: r.bot_id, when: toWhen(r.cron), delivery: r.delivery ?? 'now' } })}>Edit</button>}
-                    <button className="btn btn-ghost btn-danger btn-sm icon-btn" title="Delete" aria-label="Delete routine" onClick={() => confirm('Delete this routine?') && invoke('delete_routine', { chatId, id: r.id }).then(rows.reload, e => setErr(String(e)))}><Icon name="trash" size={14} /></button>
+                    <button className="btn btn-ghost btn-danger btn-sm icon-btn" title="Delete" aria-label="Delete routine" onClick={() => ask('Delete this routine?', 'Delete', true).then(ok => { if (ok) void invoke('delete_routine', { chatId, id: r.id }).then(rows.reload, e => setErr(String(e))) })}><Icon name="trash" size={14} /></button>
                   </div>
                 </div>
               )
@@ -2245,8 +2246,8 @@ function ActivityView({ chatId }: { chatId: number }) {
 /** Delete this chat's conversation and run log (memories and routines stay). */
 function ClearHistory({ chatId, onDone }: { chatId: number; onDone: () => void }) {
   const [msg, setMsg] = useState<string | null>(null)
-  const clear = () => {
-    if (!confirm('Delete this chat’s history: the conversation, the run log and what each action did, corrections, and the AI apps’ own copies? Memories and routines stay.')) return
+  const clear = async () => {
+    if (!await ask('Delete this chat’s history: the conversation, the run log and what each action did, corrections, and the AI apps’ own copies? Memories and routines stay.', 'Delete history', true)) return
     invoke<number>('clear_history', { chatId }).then(n => { setMsg(`Deleted (${n} messages).`); onDone() }, e => setMsg(String(e)))
   }
   return (
@@ -2494,7 +2495,7 @@ function BotPage({ bot, status, canDelete, onSaved, onDeleted, onChat }: {
 
       <div className="savebar">
         {!isNew && canDelete && <button type="button" className="btn btn-ghost btn-danger" onClick={() => {
-          if (confirm(`Delete ${bot.name}? Its routines, conversations and run log go with it. Memories stay — they belong to you.`)) invoke('delete_bot', { id: bot.id }).then(onDeleted, e => setErr(String(e)))
+          ask(`Delete ${bot.name}? Its routines, conversations and run log go with it. Memories stay: they belong to you.`, 'Delete bot', true).then(ok => { if (ok) invoke('delete_bot', { id: bot.id }).then(onDeleted, e => setErr(String(e))) })
         }}><Icon name="trash" size={14} />Delete bot</button>}
         <span className="grow">{err ? <span className="error">{err}</span> : msg ? <span className="ok-note">{msg}</span> : dirty ? <span className="hint">Unsaved changes</span> : null}</span>
         <button className="btn btn-primary" disabled={!b.name.trim() || !dirty}>{isNew ? 'Create bot' : 'Save'}</button>
@@ -2889,15 +2890,16 @@ function SavedMeeting({ m, open, toggle, bots, onSent, onChange }: { m: MeetingR
         <textarea className="input meeting-notes" placeholder="Your notes (what mattered to you)" aria-label="Your notes" value={jotted} rows={Math.min(8, Math.max(2, jotted.split('\n').length))}
           onChange={e => setJotted(e.target.value)} onBlur={() => { if (jotted !== m.notes) localInvoke('meeting', { action: 'notes', id: m.id, notes: jotted }).then(onChange, e => setNote(String(e))) }} />
         {lines.length ? <Transcript lines={lines} start={m.started_at} names={m.speakers} onName={key => {
-          const name = prompt(`Who is ${speaker(key, m.speakers)}?`, m.speakers?.[key] ?? '')
-          if (name !== null) localInvoke('meeting', { action: 'speaker', id: m.id, key, name }).then(onChange, e => setNote(String(e)))
+          askText(`Who is ${speaker(key, m.speakers)}?`, m.speakers?.[key] ?? '').then(name => {
+            if (name !== null) localInvoke('meeting', { action: 'speaker', id: m.id, key, name }).then(onChange, e => setNote(String(e)))
+          })
         }} /> : <p className="hint">Nothing was said, or it was too quiet to transcribe.</p>}
         <div className="er" style={{ marginTop: 10 }}>
           {bots.length > 1 && <select className="select" style={{ width: 'auto' }} value={bot} onChange={e => setBot(Number(e.target.value))} aria-label="Which bot">{bots.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}</select>}
           <button className="btn btn-primary" disabled={!lines.length} onClick={send}>{m.summary ? 'Summarise again with' : 'Summarise with'} {bots.find(b => b.id === bot)?.name ?? 'your bot'}</button>
           <button className="btn btn-ghost" disabled={!lines.length} onClick={() => navigator.clipboard.writeText(transcriptText(lines, m.started_at, m.speakers)).then(() => setNote('Copied'))}>Copy</button>
           <span className="grow" />
-          <button className="btn btn-ghost btn-danger" onClick={() => { if (confirm(`Delete "${meetingTitle(m)}"?`)) localInvoke('meeting', { action: 'delete', id: m.id }).then(onChange) }}>Delete</button>
+          <button className="btn btn-ghost btn-danger" onClick={() => ask(`Delete “${meetingTitle(m)}”?`, 'Delete', true).then(ok => { if (ok) localInvoke('meeting', { action: 'delete', id: m.id }).then(onChange) })}>Delete</button>
         </div>
         {note && <p className="hint">{note}</p>}
       </>}
@@ -3383,7 +3385,7 @@ function ToolServerSettings({ onChange }: { onChange: () => void }) {
       setMsg(`${form.name.trim()} is ready with ${n} tool${n === 1 ? '' : 's'}.`); setForm(null); list.reload(); onChange()
     } catch (e) { setErr(String(e)) } finally { setBusy(false) }
   }
-  const remove = (s: ToolServer) => confirm(`Remove ${s.name}? Your bots lose its tools.`) && invoke('tool_server_delete', { name: s.name }).then(() => { setMsg(null); list.reload(); onChange() }, e => setErr(String(e)))
+  const remove = (s: ToolServer) => ask(`Remove ${s.name}? Your bots lose its tools.`, 'Remove', true).then(ok => { if (ok) void invoke('tool_server_delete', { name: s.name }).then(() => { setMsg(null); list.reload(); onChange() }, e => setErr(String(e))) })
 
   return (
     <Group title="Tool servers" note={<>Give your bots more abilities with <a href="https://github.com/modelcontextprotocol/servers" onClick={openLink}>MCP servers</a> that run on {here} or online: your files, GitHub, a database. Reading is allowed; anything that changes things asks you first (see Permissions). Tokens are stored in {SECRETS_AT}.</>}>

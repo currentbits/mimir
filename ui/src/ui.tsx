@@ -1,5 +1,5 @@
 // Small shared UI pieces: icons, bot faces, controls, and human-friendly time/schedule text.
-import { useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { Face, type Mood } from './face'
 import { pigment, type Look } from './format'
 
@@ -142,6 +142,47 @@ export function Empty({ icon, title, children, actions }: { icon: string | React
       <h3>{title}</h3>
       {children && <p>{children}</p>}
       {actions && <div className="empty-actions">{actions}</div>}
+    </div>
+  )
+}
+
+// ---------------- asking you: in the app, not the browser's own dialogs ----------------
+// The desktop app's webview has no confirm() or prompt(): they return at once, unanswered. So every "Delete …?" goes
+// through this one dialog, drawn by <AskHost /> (in the app's root).
+
+type Asking = { text: string; ok: string; danger: boolean; value?: string; done: (v: string | null) => void }
+let show: ((a: Asking) => void) | null = null
+
+/** "Delete this routine?": true when you press the button, false for Cancel, Escape or a click beside it. */
+export function ask(text: string, ok = 'OK', danger = false): Promise<boolean> {
+  return new Promise(res => (show ? show({ text, ok, danger, done: v => res(v !== null) }) : res(window.confirm(text))))
+}
+
+/** A short answer ("Who is Speaker 2?"); null when cancelled. */
+export function askText(text: string, value = '', ok = 'Save'): Promise<string | null> {
+  return new Promise(res => (show ? show({ text, ok, danger: false, value, done: res }) : res(window.prompt(text, value))))
+}
+
+export function AskHost() {
+  const [a, setA] = useState<Asking | null>(null)
+  const [val, setVal] = useState('')
+  useEffect(() => {
+    show = x => { setVal(x.value ?? ''); setA(x) }
+    return () => { show = null }
+  }, [])
+  if (!a) return null
+  const close = (v: string | null) => { setA(null); a.done(v) }
+  return (
+    <div className="ask-backdrop" onMouseDown={e => e.target === e.currentTarget && close(null)}>
+      <form className="ask-box" role="alertdialog" aria-modal="true" aria-label={a.text}
+        onSubmit={e => { e.preventDefault(); close(a.value !== undefined ? val : '') }} onKeyDown={e => e.key === 'Escape' && close(null)}>
+        <p>{a.text}</p>
+        {a.value !== undefined && <input className="input" autoFocus value={val} onChange={e => setVal(e.target.value)} aria-label={a.text} />}
+        <div className="ask-actions">
+          <button type="button" className="btn btn-ghost" onClick={() => close(null)}>Cancel</button>
+          <button className={'btn ' + (a.danger ? 'btn-danger-solid' : 'btn-primary')} autoFocus={a.value === undefined}>{a.ok}</button>
+        </div>
+      </form>
     </div>
   )
 }

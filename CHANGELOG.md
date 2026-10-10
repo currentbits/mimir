@@ -2,6 +2,11 @@
 
 What changed for people using Mimir. The newest release is at the top; "Unreleased" is what the next one brings.
 
+## 0.1.2
+
+- **Deleting works in the desktop app again:** routines, bots, files, meetings, tool servers, chat history and erased
+  memories. Their "are you sure?" now asks inside the app (the desktop app couldn't show the browser's own question).
+
 ## 0.1.1
 
 - **The Mac app is notarized by Apple:** it opens with a double-click, no right-click → Open.

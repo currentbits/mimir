@@ -957,3 +957,11 @@ kbd, .keys { font: 500 11.5px var(--sans); color: var(--text-2); padding: 3px 7p
 .library .mem-actions.lib-add { opacity: 1; transform: none; }
 .file-text { white-space: pre-wrap; font: 12px var(--mono); margin: 0; }
 .toolbar .guest-on { color: var(--pending); background: var(--pending-soft); }
+
+/* The in-app "are you sure?" dialog (ask() in ui.tsx). */
+.ask-backdrop { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; background: color-mix(in srgb, var(--bg) 55%, transparent); animation: fade-in 120ms ease-out both; }
+.ask-box { width: min(420px, calc(100vw - 32px)); display: grid; gap: 14px; padding: 18px; border-radius: 14px; background: var(--surface); box-shadow: var(--shadow-md), 0 0 0 0.5px var(--line); --rise: 8px; animation: rise 240ms var(--spring) both; }
+.ask-box p { margin: 0; font-size: 13.5px; line-height: 1.5; }
+.ask-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.btn-danger-solid { background: var(--danger); color: #fff; border-color: transparent; }
+.btn-danger-solid:hover { background: color-mix(in srgb, var(--danger) 88%, #000); }
