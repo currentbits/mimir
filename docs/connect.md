@@ -30,7 +30,8 @@ requires its own sign-in (OAuth), which Mimir doesn't do yet. Your Outlook *cale
 
 **Settings → Email**: the incoming server, the port (993 unless your provider says otherwise), your address and the
 app password. The outgoing server is worked out from the incoming one (`imap.gmail.com` → `smtp.gmail.com`); fill in
-*Outgoing server* only if yours is different. **Save** signs in once to check, and shows how many messages are in your
+*Outgoing server* only if yours is different. The outgoing port is 465 (SSL/TLS) when left empty; put 587 in
+*Outgoing port* if your provider says 587 or STARTTLS (any port but 465 uses STARTTLS). **Save** signs in once to check, and shows how many messages are in your
 inbox.
 
 ### What bots can then do

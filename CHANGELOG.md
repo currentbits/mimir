@@ -2,6 +2,11 @@
 
 What changed for people using Mimir. The newest release is at the top; "Unreleased" is what the next one brings.
 
+## Unreleased
+
+- **Email providers that send on port 587 work:** Settings → Email has an *Outgoing port* next to the outgoing server.
+  Empty is 465 as before; 587 (or any other port) uses STARTTLS. Saving used to set it back to 465 every time.
+
 ## 0.1.5
 
 - **Sign in with ChatGPT:** bots run on your ChatGPT Plus or Pro plan without installing anything. *Continue with

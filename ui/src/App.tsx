@@ -3431,22 +3431,22 @@ function ApiKeySettings() {
 
 /** Your email for the bots, read-only (email_search, email_read): IMAP with an app password. Saving signs in once. */
 function EmailSettings() {
-  const st = useLoad(() => invoke<{ host: string; user: string; smtp?: string } | null>('email_settings', {}), [])
-  const [d, setD] = useState({ host: '', port: '993', user: '', password: '', smtp: '' })
+  const st = useLoad(() => invoke<{ host: string; user: string; smtp?: string; smtp_port?: number } | null>('email_settings', {}), [])
+  const [d, setD] = useState({ host: '', port: '993', user: '', password: '', smtp: '', smtpPort: '' })
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
   const [err, setErr] = useState<string | null>(null)
   const save = () => {
     setBusy(true); setErr(null)
-    invoke<{ messages: number }>('email_settings', { host: d.host.trim(), port: Number(d.port) || 993, user: d.user.trim(), password: d.password, smtpHost: d.smtp.trim() })
-      .then(r => { setMsg(`Signed in · ${r.messages} messages in your inbox`); setD({ host: '', port: '993', user: '', password: '', smtp: '' }); return st.reload() }, e => setErr(String(e)))
+    invoke<{ messages: number }>('email_settings', { host: d.host.trim(), port: Number(d.port) || 993, user: d.user.trim(), password: d.password, smtpHost: d.smtp.trim(), smtpPort: Number(d.smtpPort) || undefined })
+      .then(r => { setMsg(`Signed in · ${r.messages} messages in your inbox`); setD({ host: '', port: '993', user: '', password: '', smtp: '', smtpPort: '' }); return st.reload() }, e => setErr(String(e)))
       .finally(() => setBusy(false))
   }
   const remove = () => invoke('email_settings', { host: '' }).then(() => { setMsg(null); return st.reload() }, e => setErr(String(e)))
   return (
     <Group title="Email" note={err ? <span className="error">{err}</span> : `Lets your bots search and read your email in a chat with you, never in a group, write drafts, and send an email when you approve it (every one asks you, at most 20 a day). Nothing is marked read, moved or deleted. Emails count as outside content. The password is stored in ${SECRETS_AT}.`}>
       {st.data ? (
-        <Row icon={<Icon name="inbox" size={15} />} title={st.data.user} desc={msg ?? `Read through ${st.data.host}${st.data.smtp ? ` · sent through ${st.data.smtp}` : ''}`}>
+        <Row icon={<Icon name="inbox" size={15} />} title={st.data.user} desc={msg ?? `Read through ${st.data.host}${st.data.smtp ? ` · sent through ${st.data.smtp}${st.data.smtp_port && st.data.smtp_port !== 465 ? `:${st.data.smtp_port}` : ''}` : ''}`}>
           <button className="btn btn-sm btn-ghost btn-danger" onClick={remove}>Remove</button>
         </Row>
       ) : (
@@ -3456,6 +3456,7 @@ function EmailSettings() {
               <input className="input" placeholder="IMAP server, e.g. imap.gmail.com" aria-label="IMAP server" value={d.host} onChange={e => setD({ ...d, host: e.target.value })} />
               <input className="input" style={{ width: 80 }} aria-label="Port" value={d.port} onChange={e => setD({ ...d, port: e.target.value })} />
               <input className="input" placeholder="Outgoing server (optional)" aria-label="Outgoing server" value={d.smtp} onChange={e => setD({ ...d, smtp: e.target.value })} />
+              <input className="input" style={{ width: 80 }} placeholder="465" inputMode="numeric" aria-label="Outgoing port" title="Outgoing port: 465, or 587 if your provider says STARTTLS" value={d.smtpPort} onChange={e => setD({ ...d, smtpPort: e.target.value })} />
             </div>
             <div className="er">
               <input className="input" placeholder="Your address" aria-label="Email address" autoComplete="off" value={d.user} onChange={e => setD({ ...d, user: e.target.value })} />

@@ -1,0 +1,61 @@
+{
+  "_": "The one clock for picture and sound. Scenes start on a bar (4 beats); cues are beats from the scene's start: [beat, sound?, options?]. score/score.py plays the sounds; the scenes animate on the same beats.",
+  "bpm": 100,
+  "bars": 53,
+  "scenes": {
+    "cold": { "at": 0, "len": 3, "cues": {
+      "drop": [0, "drop", { "pitch": 0.9, "gain": 1.2 }], "line1": [0.5], "line2": [3], "out1": [7],
+      "free": [8, "drop", { "pitch": 1.15, "gain": 1.1 }] } },
+    "title": { "at": 3, "len": 3, "cues": {
+      "draw": [0, "swell", { "dur": 4 }], "rune": [1.5], "word": [4, "thump"], "tag": [6], "out": [11.25, "whoosh"] } },
+    "how": { "at": 6, "len": 4, "cues": {
+      "head": [0], "app": [1, "thump"], "faces": [2.5, "boop", { "note": 67 }], "f2": [2.75, "boop", { "note": 71 }], "f3": [3, "boop", { "note": 74 }],
+      "you": [4, "pop", { "pitch": 0.9 }], "ai": [6.5, "pop", { "pitch": 1.05 }], "tools": [9, "pop", { "pitch": 1.2 }],
+      "flow": [11, "send"], "home": [14, "pop", { "pitch": 1.3 }] } },
+    "chat": { "at": 10, "len": 4, "cues": {
+      "card": [0], "head": [0.5], "type": [1, "type", { "dur": 2 }], "send": [3.25, "send"],
+      "search": [4, "tick"], "plan": [5, "tick"], "reply": [6], "chip1": [9, "pop"], "chip2": [9.5, "pop", { "pitch": 1.2 }],
+      "gloss": [10], "out": [15.25, "whoosh"] } },
+    "channels": { "at": 14, "len": 2, "cues": {
+      "phone": [0], "head": [0.25], "tg": [1, "tick"], "slack": [2.5, "tick"], "discord": [4, "tick"], "desk": [5.5, "tick"],
+      "msg1": [1.5, "pop", { "pitch": 0.9 }], "msg2": [3, "pop", { "pitch": 1.1 }], "msg3": [4.6, "pop", { "pitch": 0.95 }] } },
+    "memory": { "at": 16, "len": 4, "cues": {
+      "head": [0], "s1": [1, "drop", { "pitch": 1.0, "gain": 0.55 }], "s2": [1.75, "drop", { "pitch": 1.12, "gain": 0.5 }],
+      "s3": [2.5, "drop", { "pitch": 1.26, "gain": 0.5 }], "s4": [3.25, "drop", { "pitch": 1.33, "gain": 0.5 }],
+      "s5": [4, "drop", { "pitch": 1.5, "gain": 0.5 }], "gloss": [5],
+      "push": [8, "whoosh"], "head2": [8.5], "strike": [10, "scratch"], "fix": [10.75, "pop"], "gloss2": [12.75],
+      "sugg": [12.5, "pop", { "pitch": 0.85 }], "accept": [14, "click"] } },
+    "routines": { "at": 20, "len": 2, "cues": {
+      "type": [0, "type", { "dur": 2 }], "card": [2.5, "pop"], "spin": [3.5], "notify": [5.5, "chime"], "gloss": [6] } },
+    "sources": { "at": 22, "len": 2, "cues": {
+      "head": [0], "mail": [0.5, "whoosh", { "gain": 0.5 }], "cal": [1], "web": [1.5], "absorb": [3, "pop", { "pitch": 0.8 }],
+      "reply": [4] } },
+    "approve": { "at": 24, "len": 3, "cues": {
+      "card": [0], "head": [0.5], "cursor": [1.5], "click": [4.5, "click"], "sent": [5, "pop", { "pitch": 1.3 }], "fly": [5.5, "whoosh"],
+      "rules": [6.5], "r1": [7, "tick"], "r2": [7.5, "tick"], "r3": [8, "tick"], "gloss": [8.5] } },
+    "skills": { "at": 27, "len": 2, "cues": {
+      "card": [0], "head": [0.25], "st1": [1, "tick"], "st2": [1.5, "tick"], "st3": [2, "tick"], "st4": [2.5, "tick"], "st5": [3, "tick"],
+      "accept": [4, "click"], "cmd": [5, "type", { "dur": 0.75 }], "run": [6, "send"] } },
+    "bots": { "at": 29, "len": 2, "cues": {
+      "head": [0], "f1": [0.5, "boop", { "note": 69 }], "f2": [1, "boop", { "note": 73 }], "f3": [1.5, "boop", { "note": 76 }],
+      "f4": [2, "boop", { "note": 81 }], "f5": [2.5, "boop", { "note": 85 }], "one": [3], "flow": [4, "drop", { "pitch": 0.8, "gain": 0.8 }] } },
+    "meetings": { "at": 31, "len": 2, "cues": {
+      "card": [0], "head": [0.25], "l1": [1], "l2": [2], "l3": [3], "notes": [4.5, "pop"], "gloss": [5] } },
+    "server": { "at": 33, "len": 3, "cues": {
+      "head": [0], "laptop": [0.5], "box": [1.5, "thump"], "hop1": [2.25, "boop", { "note": 83 }], "hop2": [2.55, "boop", { "note": 79 }],
+      "hop3": [2.85, "boop", { "note": 76 }], "lid": [4, "thump", { "gain": 0.6 }], "night": [5], "notify": [6, "chime"], "swell": [10, "swell", { "dur": 2 }] } },
+    "computer": { "at": 36, "len": 4, "cues": {
+      "win": [0], "head": [0.25], "look": [1, "tick"], "gloss": [1.5], "open": [2, "pop"], "pass": [3, "pop", { "pitch": 1.2 }], "signin": [4, "click"],
+      "page": [4.5], "slot": [6, "click"], "booked": [7, "pop", { "pitch": 1.3 }], "gloss2": [9.5], "take": [9.75, "click"], "give": [13, "click"] } },
+    "teach": { "at": 40, "len": 3, "cues": {
+      "head": [0.25], "start": [0.5, "click"], "gloss": [1], "c1": [1.75, "click"], "c2": [3, "click"], "type": [3.75, "type", { "dur": 0.9 }],
+      "card": [5, "type", { "dur": 0.6 }], "done": [7, "click"], "skill": [7.5, "whoosh"] } },
+    "ai": { "at": 43, "len": 2, "cues": { "head": [0], "cycle": [2], "gloss": [5.5] } },
+    "yours": { "at": 45, "len": 2, "cues": {
+      "l1": [0, "thump"], "l2": [1, "thump"], "file": [3, "drop", { "pitch": 0.7, "gain": 0.8 }], "stays": [4] } },
+    "everywhere": { "at": 47, "len": 2, "cues": {
+      "os1": [0, "tick"], "os2": [0.5, "tick"], "os3": [1, "tick"], "os4": [1.5, "tick"], "term": [2.5, "type", { "dur": 1 }],
+      "free": [4], "gap": [7.5] } },
+    "outro": { "at": 49, "len": 4, "cues": { "hit": [0, "boom"], "tag": [2], "url": [5], "fade": [13] } }
+  }
+}
