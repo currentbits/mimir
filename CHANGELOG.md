@@ -18,6 +18,16 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 - **The memory tidy-up doesn't learn that something is broken:** no memories or skill steps from setup problems or
   errors that went away.
 - Settings no longer says that urgent things in the digest come right away; they don't (yet).
+- **Buttons that did nothing, fixed:**
+  - Photo thumbnails in the message box and the bots' computer screen show in the desktop app again.
+  - "@Another bot …" from a bot's own chat keeps your message on screen and opens that bot's chat when the answer is in.
+  - Leave a chat while a bot is replying and come back: the reply still shows as it's written.
+  - Switching bots mid-reply no longer streams (or stops) the wrong one.
+  - Long chats keep following new messages after 200.
+  - After you connect or disconnect Telegram, Slack or Discord, the bot's page shows it straight away.
+  - A slow Save no longer pulls you back to the bot you left.
+  - Deleting the bot you were chatting with no longer leaves its chat behind.
+  - Delete, Dismiss, Run now and a few switches now say so when they fail.
 
 - **Quiet checks that cost almost nothing:** a quiet check can watch a page, a feed or your inbox. Mimir looks first and
   runs the AI only when something changed, with just what changed. Unchanged checks show as free. Times, counters

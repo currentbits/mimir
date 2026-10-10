@@ -54,7 +54,7 @@ function LookPicker({ id, look, onChange }: { id: number; look: Look; onChange: 
 }
 type Secrets = { telegram_token: string | null; slack_bot_token: string | null; slack_app_token: string | null; discord_token: string | null }
 type Action = { tool: string; summary: string; decision: string; ok: boolean; result?: string }
-type Message = { bot_id: number; role: string; content: string; ts: number; actions?: Action[]; run_id?: number }
+type Message = { id: number; bot_id: number; role: string; content: string; ts: number; actions?: Action[]; run_id?: number }
 
 /** What a reply did, in a few words: ["memory", "Saved to memory · Dentist"]. Lookups and listings aren't worth a line. */
 function actionLine(a: Action): [string, string] | null {
@@ -229,7 +229,7 @@ function RoutineCard({ id, chatId, onChange }: { id: number; chatId: number; onC
       <div className="rc-actions">
         <button className="btn btn-sm" disabled={busy} onClick={runNow}><Icon name="bolt" size={13} />{busy ? 'Running…' : 'Run now'}</button>
         <button className="btn btn-sm btn-ghost" onClick={() => update({ paused: !r.paused })}>{r.paused ? 'Resume' : 'Pause'}</button>
-        <button className="btn btn-sm btn-ghost btn-danger" onClick={() => ask('Delete this routine?', 'Delete', true).then(ok => { if (ok) void invoke('delete_routine', { chatId, id }).then(rows.reload) })}>Delete</button>
+        <button className="btn btn-sm btn-ghost btn-danger" onClick={() => ask('Delete this routine?', 'Delete', true).then(ok => { if (ok) void invoke('delete_routine', { chatId, id }).then(rows.reload, e => tell(`Couldn't delete it: ${e}`)) })}>Delete</button>
         {busy && <span className="typing" aria-hidden="true"><i /><i /><i /></span>}
         {note && <span className="hint">{note}</span>}
       </div>
@@ -871,7 +871,7 @@ function Main() {
         {view === 'chat' ? (
           <ChatView key={`chat-${chat.chat_id}-${incognito && chat.chat_id === LOCAL}-${botChat ? chatBot ?? botList[0]?.id : 'all'}`} only={botChat} chat={chat} bots={botList} onTurn={chats.reload}
             incognito={incognito && chat.chat_id === LOCAL} setIncognito={setIncognito} openBot={openBot}
-            botId={chatBot ?? undefined} onBot={setChatBot} troubleOf={id => troubleOf(statusOf(id))} />
+            botId={chatBot ?? undefined} onBot={setChatBot} troubleOf={id => troubleOf(statusOf(id))} busy={busy.data ?? undefined} />
         ) : (
           // Keyed: each view starts at the top (the scroller used to keep the last view's position).
           <div className="page" key={`${view}-${chat.chat_id}-${botId}`}>
@@ -887,8 +887,9 @@ function Main() {
               {view === 'bot' && (
                 // Keyed on whether the bot has loaded too: right after "Create bot" the list hasn't caught up yet.
                 <BotPage key={`${botId}:${botList.some(b => b.id === botId)}`} bot={botList.find(b => b.id === botId)} status={statusOf(botId)} canDelete={botList.length > 1}
-                  onSaved={id => { bots.reload(); statuses.reload(); setBotId(id) }}
-                  onDeleted={() => { bots.reload(); setView('chat') }} onChat={() => talkTo(botId)} />
+                  // Only a new bot's page moves (to the bot it made): a slow save mustn't pull you back from another bot.
+                  onSaved={id => { bots.reload(); statuses.reload(); if (botId === 0) setBotId(id) }}
+                  onDeleted={() => { bots.reload(); if (chatBot === botId) { setChatBot(null); setViaBot(false) } setView('chat') }} onChat={() => talkTo(botId)} />
               )}
             </div>
           </div>
@@ -1025,7 +1026,7 @@ function InboxView({ data, troubled, reload, chats, chatName, openBot, openChat 
   const { err, leaving, decide } = useDecide(reload)
   const gone = useLeave()
   const where = (id: number) => { const c = chats.find(x => x.chat_id === id); return id === INCOGNITO ? 'Incognito chat' : c ? chatName(c) : `chat ${id}` }
-  const dismiss = (kind: 'run' | 'approval', id: number) => gone.leave(id, () => invoke('inbox_dismiss', { kind, id }).then(reload))
+  const dismiss = (kind: 'run' | 'approval', id: number) => gone.leave(id, () => invoke('inbox_dismiss', { kind, id }).then(reload, e => { reload(); return tell(`Couldn't dismiss it: ${e}`) }))
   if (!data) return null
   if (!inboxCount(data) && !troubled.length) return (
     <Empty icon="check" title="All clear">Nothing needs you right now. Approvals, runs that didn't work, bots that can't connect, memory suggestions and memories to confirm show up here.</Empty>
@@ -1095,7 +1096,7 @@ function InboxView({ data, troubled, reload, chats, chatName, openBot, openChat 
                 <div className="inbox-desc">{h.cap ? `${h.why[0].toUpperCase()}${h.why.slice(1)}.` : 'The AI plan reached its usage limit.'} {h.routine_id ? 'It runs' : 'They run'} then, once, and the run log says which times {h.routine_id ? 'it' : 'they'} skipped.</div>
               </div>
               <div className="row-ctl">
-                <button className="btn btn-sm" title={h.cap ? 'Let it go over the cap for the rest of today' : 'If you raised the limit or switched account'} onClick={() => Promise.all(hs.map(x => invoke('hold_clear', { key: x.key }))).then(reload)}>{h.cap ? 'Let it go on today' : 'Run now'}</button>
+                <button className="btn btn-sm" title={h.cap ? 'Let it go over the cap for the rest of today' : 'If you raised the limit or switched account'} onClick={() => Promise.all(hs.map(x => invoke('hold_clear', { key: x.key }))).then(reload, e => tell(`Couldn't let it go on: ${e}`))}>{h.cap ? 'Let it go on today' : 'Run now'}</button>
                 {!h.cap && <button className="btn btn-sm btn-ghost" onClick={() => openBot(h.bot_id)}>Use another account</button>}
               </div>
             </div>
@@ -1200,7 +1201,7 @@ function BotMenu({ at, name, onChat, onSettings, onClose }: { at: { x: number; y
   )
 }
 
-function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, openBot, botId: chosen, onBot, troubleOf: trouble, only = false }: {
+function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, openBot, botId: chosen, onBot, troubleOf: trouble, only = false, busy: running = [] }: {
   chat: Chat; bots: Bot[]; onTurn: () => void; incognito?: boolean; setIncognito?: (on: boolean) => void; openBot?: (id: number) => void
   // Opened from a bot in the sidebar: only that bot's conversation, not everyone's in this chat.
   only?: boolean
@@ -1208,10 +1209,12 @@ function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, openBot
   botId?: number; onBot?: (id: number) => void
   // What's wrong with a bot, if anything (shown above the composer, with a way to its settings).
   troubleOf?: (id: number) => string | null
+  // What bots are working on right now (to pick up a reply that started before this view opened).
+  busy?: Busy[]
 }) {
   const [own, setOwn] = useState<number>(bots[0]?.id ?? 1)
   // A bot that was deleted falls back to the first one.
-  const botId = chosen !== undefined && bots.some(b => b.id === chosen) ? chosen : own
+  const botId = chosen !== undefined && bots.some(b => b.id === chosen) ? chosen : bots.some(b => b.id === own) ? own : bots[0]?.id ?? own
   const mine = only ? botId : undefined
   const log = useLoad(() => incognito ? Promise.resolve([] as Message[]) : invoke<Message[]>('messages', { chatId: chat.chat_id, botId: mine }), [chat.chat_id, incognito, mine], incognito ? 0 : 4000)
   // Incognito messages exist only here; leaving or switching it off drops them.
@@ -1221,6 +1224,15 @@ function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, openBot
   const [text, setText] = useState('')
   const setBotId = (id: number) => { setOwn(id); onBot?.(id) }
   const [pending, setPending] = useState<string | null>(null)
+  // The bot your message went to: the reply streams from it even if the picker moves on.
+  const [to, setTo] = useState<number | null>(null)
+  // A reply started before this view opened (you came back mid-reply, "Summarise with…"): shown as it's written too.
+  // Not your own send's: the bots' list lags a moment behind it.
+  const [sentHere, setSentHere] = useState(false)
+  const replying = chat.chat_id === LOCAL && !incognito && !sentHere ? running.find(w => w.chat_id === LOCAL && w.trigger === 'message' && (!only || w.bot_id === botId))?.bot_id ?? null : null
+  useEffect(() => { if (!pending && !running.some(w => w.chat_id === LOCAL && w.trigger === 'message')) setSentHere(false) }, [running, pending])
+  const working = !!pending || replying !== null
+  const replier = to ?? replying ?? botId
   // "/" lists the bot's skills: "/book-padel Thursday" asks it to use that one.
   const skillList = useLoad(() => incognito ? Promise.resolve([] as Skill[]) : invoke<Skill[]>('skills', { chatId: chat.chat_id }), [chat.chat_id, incognito], 30000)
   const slashing = /^\/[^\s]*$/.test(text)
@@ -1255,39 +1267,41 @@ function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, openBot
   // (their bubbles are already on screen).
   const [animFrom, setAnimFrom] = useState(Infinity)
   const [chipsFrom, setChipsFrom] = useState(Infinity)
+  // By message id, not count: a long chat shows only its last 200, so the count stops changing.
+  const lastId = msgs.at(-1)?.id ?? 0
   const seen = useRef<number | null>(null)
   const ownSend = useRef(false)
   useLayoutEffect(() => {
     if (!log.data && !incognito) return
-    if (seen.current !== null && msgs.length > seen.current) (ownSend.current ? setChipsFrom : setAnimFrom)(seen.current)
+    if (seen.current !== null && lastId > seen.current) (ownSend.current ? setChipsFrom : setAnimFrom)(seen.current)
     ownSend.current = false
-    seen.current = msgs.length
-  }, [log.data, msgs.length])
-  const anim = (i: number) => (i >= animFrom ? ' msg-in' : i >= chipsFrom ? ' acts-in' : '')
+    seen.current = lastId
+  }, [log.data, lastId])
+  const anim = (m: Message) => (m.id > animFrom ? ' msg-in' : m.id > chipsFrom ? ' acts-in' : '')
 
   const shown = useRef(0)
   useLayoutEffect(() => {
     if (atBottom.current || pending) toEnd()
-    else if (msgs.length > shown.current && shown.current > 0) setUnseen(true)
-    shown.current = msgs.length
-  }, [msgs.length, pending, draft.length]) // eslint-disable-line react-hooks/exhaustive-deps
+    else if (lastId > shown.current && shown.current > 0) setUnseen(true)
+    shown.current = lastId
+  }, [lastId, pending, draft.length]) // eslint-disable-line react-hooks/exhaustive-deps
   // While a reply is being written, show it as it streams in.
   // How long it's been working (shown after a few seconds).
   const [started, setStarted] = useState(0)
   const [now, setNow] = useState(0)
   useEffect(() => {
-    if (!pending) return
+    if (!working) return
     const from = Math.floor(Date.now() / 1000)
     setStarted(from); setNow(from)
     const tick = setInterval(() => setNow(Math.floor(Date.now() / 1000)), 1000)
     return () => clearInterval(tick)
-  }, [pending])
+  }, [working])
   useEffect(() => {
-    if (!pending) return
-    const t = setInterval(() => invoke<{ draft: string | null; step: string | null; done: { summary: string; ok: boolean; decision: string }[] }>('live', { botId, chatId: cid })
+    if (!working) return
+    const t = setInterval(() => invoke<{ draft: string | null; step: string | null; done: { summary: string; ok: boolean; decision: string }[] }>('live', { botId: replier, chatId: cid })
       .then(l => { setDraft(l?.draft ?? ''); setStep(l?.step ?? null); setDone(l?.done ?? []) }, () => {}), 150)
     return () => { clearInterval(t); setDraft(''); setStep(null); setDone([]) }
-  }, [pending, botId, cid])
+  }, [working, replier, cid])
   useLayoutEffect(() => {
     const t = box.current
     if (t) { t.style.height = 'auto'; t.style.height = `${Math.min(t.scrollHeight, 160)}px` }
@@ -1321,10 +1335,10 @@ function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, openBot
   const sendIncognito = (t: string) => {
     setText(''); setPending(t); setErr(null); setFailed(null); atBottom.current = true
     const now = () => Math.floor(Date.now() / 1000)
-    const asked: Message = { bot_id: botId, role: 'user', content: t, ts: now() }
+    const asked: Message = { id: 0, bot_id: botId, role: 'user', content: t, ts: now() }
     invoke<string>('send_incognito', { botId, text: t, history: secret.map(m => [m.role, m.content]) })
-      .then(reply => setSecret(s => [...s, asked, { bot_id: botId, role: 'assistant', content: reply, ts: now() }]),
-        e => /stopped/i.test(String(e)) ? setSecret(s => [...s, asked, { bot_id: botId, role: 'assistant', content: '_Stopped._', ts: now() }]) : (setErr(String(e)), setFailed(t)))
+      .then(reply => setSecret(s => [...s, { ...asked, id: s.length + 1 }, { id: s.length + 2, bot_id: botId, role: 'assistant', content: reply, ts: now() }]),
+        e => /stopped/i.test(String(e)) ? setSecret(s => [...s, { ...asked, id: s.length + 1 }, { id: s.length + 2, bot_id: botId, role: 'assistant', content: '_Stopped._', ts: now() }]) : (setErr(String(e)), setFailed(t)))
       .finally(() => { ownSend.current = true; setPending(null); conv.reload() })
   }
   /** "@Name rest": the bot it names (longest name first, so "Follow-up keeper" beats "Follow") and the rest. */
@@ -1338,11 +1352,13 @@ function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, openBot
   const send = async (value = text) => {
     const at = incognito ? null : mentioned(value.trim())
     const t = at ? at[1].trim() : value.trim()
-    if ((!t && !photos.length && !doc) || pending) return
+    if ((!t && !photos.length && !doc) || working) return
     if (incognito) return sendIncognito(t)
-    // "@Researcher …" goes to that bot (and the picker follows, so its reply shows as it's written).
+    // "@Researcher …" goes to that bot (and the picker follows). In one bot's own chat, its thread opens when the reply is in
+    // (switching now would drop this view, and the reply with it).
     const to = at ? at[0].id : botId
-    if (at) setBotId(to)
+    if (at && !only) setBotId(to)
+    setTo(to); setSentHere(true)
     const shown = photos.length ? `📷 ${t || 'Photo'}` : doc ? `${t || '(I sent you a file.)'}\n\n[Attached: ${doc.name}. Its text follows` : t
     const attached = photos, file = doc
     setText(''); setPhotos([]); setDoc(null); setPending(shown); setErr(null); setFailed(null); atBottom.current = true
@@ -1355,20 +1371,20 @@ function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, openBot
     invoke<string>('send_local', { botId: to, text: message, images })
       .then(() => flash('happy'), e => { if (/stopped/i.test(String(e))) flash('surprised', 900); else { setErr(String(e)); setFailed(t) } })
       // Swap the pending bubbles for the saved messages in one frame: no flash in between.
-      .finally(() => { ownSend.current = true; log.reload().finally(() => setPending(null)); conv.reload(); onTurn() })
+      .finally(() => { ownSend.current = true; log.reload().finally(() => { setPending(null); setTo(null) }); conv.reload(); onTurn(); if (only && to !== botId) onBot?.(to) })
   }
-  const bubble = (m: Message, i: number) => {
+  const bubble = (m: Message) => {
     const sched = m.role === 'user' ? m.content.match(SCHEDULED) : null
     if (sched) return (
-      <div className={'msg-trigger' + anim(i)} title={sched[4]}>
+      <div className={'msg-trigger' + anim(m)} title={sched[4]}>
         <Icon name={sched[1] === 'quiet check' ? 'moon' : 'clock'} size={13} />
         <span>{sched[1] === 'quiet check' ? 'Quiet check' : 'Routine'} · {schedule(sched[3])} — {sched[4]}</span>
       </div>
     )
-    if (m.role === 'user') return <div className={'msg-user' + anim(i)} title={fullTime(m.ts)}><Said text={m.content} /></div>
+    if (m.role === 'user') return <div className={'msg-user' + anim(m)} title={fullTime(m.ts)}><Said text={m.content} /></div>
     const b = botOf(m.bot_id)
     return (
-      <div className={'msg-bot' + anim(i)} style={{ '--pig': pigment(b.id) } as React.CSSProperties}>
+      <div className={'msg-bot' + anim(m)} style={{ '--pig': pigment(b.id) } as React.CSSProperties}>
         <Avatar id={b.id} name={b.name} size={26} still />
         <div>
           <div className="msg-head"><b>{b.name}</b><time title={fullTime(m.ts)}>{ago(m.ts)}</time><CopyButton text={m.content} /></div>
@@ -1379,12 +1395,13 @@ function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, openBot
     )
   }
   const me = botOf(botId)
+  const them = botOf(replier)
 
   return (
     <div className="page view-in" ref={scroller} onScroll={onScroll}>
       <div className="chat">
         <div className="thread selectable">
-          {msgs.length === 0 && !pending && (
+          {msgs.length === 0 && !working && (
             incognito ? (
               <Empty icon="incognito" title="Incognito chat">
                 {me.name} won't see or save your memories here, and nothing from this chat is kept: not in history, memory or the run log. It ends when you switch it off or leave.
@@ -1398,17 +1415,17 @@ function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, openBot
             )
           )}
           {msgs.map((m, i) => (
-            <Fragment key={i}>
+            <Fragment key={m.id}>
               {(i === 0 || dayLabel(m.ts) !== dayLabel(msgs[i - 1].ts)) && <div className="day-sep" role="separator"><span>{dayLabel(m.ts)}</span></div>}
-              {bubble(m, i)}
+              {bubble(m)}
             </Fragment>
           ))}
-          {pending && (
+          {working && (
             <>
-              <div className="msg-user msg-in"><Said text={pending} /></div>
-              <div className="msg-bot msg-in" style={{ '--pig': pigment(me.id), animationDelay: '120ms' } as React.CSSProperties}>
-                <Avatar id={me.id} name={me.name} size={26} alive mood={moodOf(step, draft)} />
-                <div><div className="msg-head"><b>{me.name}</b>{draft && <time>writing…</time>}
+              {pending && <div className="msg-user msg-in"><Said text={pending} /></div>}
+              <div className="msg-bot msg-in" style={{ '--pig': pigment(them.id), animationDelay: '120ms' } as React.CSSProperties}>
+                <Avatar id={them.id} name={them.name} size={26} alive mood={moodOf(step, draft)} />
+                <div><div className="msg-head"><b>{them.name}</b>{draft && <time>writing…</time>}
                   {now - started >= 5 && <time className="elapsed">{now - started >= 60 ? `${Math.floor((now - started) / 60)}m ${(now - started) % 60}s` : `${now - started}s`}</time>}</div>
                   {(done.length > 0 || step) && (
                     <ol className="steps" aria-label="What it's doing">
@@ -1470,7 +1487,7 @@ function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, openBot
               {!incognito && bots.length > 1 && /^@[^\s]*$/.test(text) && (
                 <div className="mention-pick" role="listbox" aria-label="Message which bot?">
                   {bots.filter(b => b.name.toLowerCase().startsWith(text.slice(1).toLowerCase())).map(b => (
-                    <button key={b.id} type="button" role="option" aria-selected={false} onClick={() => { setText(`@${b.name} `); setBotId(b.id); box.current?.focus() }}>
+                    <button key={b.id} type="button" role="option" aria-selected={false} onClick={() => { setText(`@${b.name} `); if (!only) setBotId(b.id); box.current?.focus() }}>
                       <Avatar id={b.id} name={b.name} size={18} still />{b.name}
                     </button>
                   ))}
@@ -1490,9 +1507,9 @@ function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, openBot
                 onDrop={e => { e.preventDefault(); setDragging(false); if (!incognito) addPhotos(e.dataTransfer.files) }}>
                 <span className="bot-pick" title={bots.length > 1 ? 'Choose a bot' : me.name}>
                   <Avatar id={me.id} name={me.name} size={28} alive beat={text.length}
-                    mood={pending ? moodOf(step, draft) : react ?? (err ? 'sad' : text.trim() ? 'listening' : 'idle')} />
+                    mood={working ? moodOf(step, draft) : react ?? (err ? 'sad' : text.trim() ? 'listening' : 'idle')} />
                   {bots.length > 1 && (
-                    <select value={botId} onChange={e => setBotId(Number(e.target.value))} aria-label="Bot to message">
+                    <select value={botId} disabled={working} onChange={e => setBotId(Number(e.target.value))} aria-label="Bot to message">
                       {bots.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
                     </select>
                   )}
@@ -1502,18 +1519,18 @@ function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, openBot
                     <Icon name="settings" size={14} />
                   </button>
                 )}
-                <textarea ref={box} rows={1} placeholder={incognito ? `Message ${me.name} incognito` : `Message ${me.name}`} value={text} onChange={e => setText(e.target.value)} disabled={!!pending} autoFocus
+                <textarea ref={box} rows={1} placeholder={incognito ? `Message ${me.name} incognito` : `Message ${me.name}`} value={text} onChange={e => setText(e.target.value)} disabled={working} autoFocus
                   onPaste={e => { if (incognito) return; const imgs = [...e.clipboardData.files].filter(f => f.type.startsWith('image/')); if (imgs.length) { e.preventDefault(); addPhotos(imgs) } }}
                   onKeyDown={e => {
                     if (e.key === 'Tab' && skillHits[0]) { e.preventDefault(); setText(`/${skillSlug(skillHits[0].name)} `); return }
                     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send() }
                   }} />
-                {!pending && setIncognito && (
+                {!working && setIncognito && (
                   <button type="button" className={'incog-toggle' + (incognito ? ' on' : '')} aria-pressed={incognito} onClick={() => setIncognito(!incognito)}
                     title={incognito ? 'Back to the normal chat' : 'Incognito chat: no memory, nothing saved'}><Icon name="incognito" size={16} /></button>
                 )}
-                {pending
-                  ? <button type="button" className="send stop" aria-label="Stop" title="Stop" onClick={() => invoke('stop', { botId, chatId: cid }).catch(e => setErr(`Couldn't stop it: ${e}`))}><span className="stop-square" /></button>
+                {working
+                  ? <button type="button" className="send stop" aria-label="Stop" title="Stop" onClick={() => invoke('stop', { botId: replier, chatId: cid }).catch(e => setErr(`Couldn't stop it: ${e}`))}><span className="stop-square" /></button>
                   : <button className="send" aria-label="Send" disabled={!text.trim() && !photos.length}><Icon name="send" size={15} /></button>}
               </form>
               <p className="composer-note">{platform === 'mac' ? 'Return to send · Shift-Return for a new line' : 'Enter to send · Shift+Enter for a new line'}</p>
@@ -1968,7 +1985,7 @@ function Learned({ chatId, entries, onChange }: { chatId: number; entries: Entry
   return (
     <section className="suggest weekly" aria-label="Learned this week">
       <div className="suggest-head"><Icon name="memory" /><b>Learned this week</b><small>Saved without you typing it. Undo anything that's wrong.</small>
-        <button className="btn btn-sm btn-ghost" onClick={() => invoke('learned_seen', { chatId }).then(() => info.reload())}>All good</button></div>
+        <button className="btn btn-sm btn-ghost" onClick={() => invoke('learned_seen', { chatId }).then(() => info.reload(), e => tell(String(e)))}>All good</button></div>
       {items.map(r => (
         <div className={'sugg' + (leaving.has(r.id) ? ' leaving' : '')} key={r.id}>
           <span className="badge">{r.origin === 'tidy' ? 'Tidy-up' : r.origin === 'import' ? 'Imported' : r.bot_id ? botOf(r.bot_id).name : 'A bot'}</span>
@@ -2540,7 +2557,10 @@ function BotPage({ bot, status, canDelete, onSaved, onDeleted, onChat }: {
     const next = enabled.includes(tool) ? enabled.filter(t => t !== tool) : [...enabled, tool]
     edit({ tools: ALL.every(t => next.includes(t)) ? '' : next.join(',') })
   }
-  const dirty = JSON.stringify(b) !== JSON.stringify(bot ?? { ...BLANK, look: b.look }) || Object.values(sec).some(v => v !== null)
+  // Which channels are connected comes from the saved bot (it changes on save), not this form's copy.
+  const has = (k: 'has_telegram_token' | 'has_slack' | 'has_discord') => !!bot?.[k]
+  const form = (x: Bot) => JSON.stringify({ ...x, has_telegram_token: 0, has_slack: 0, has_discord: 0 })
+  const dirty = form(b) !== form(bot ?? { ...BLANK, look: b.look }) || Object.values(sec).some(v => v !== null)
   const save = (secrets: Secrets) =>
     invoke<number>('save_bot', { bot: b, secrets })
       .then(async id => {
@@ -2623,16 +2643,16 @@ function BotPage({ bot, status, canDelete, onSaved, onDeleted, onChat }: {
       </Group>
 
       <Group title="Messaging apps" note={`Each bot is its own Telegram, Slack or Discord bot. Tokens are stored in ${SECRETS_AT}.`}>
-        <ChannelRow icon="telegram" title="Telegram" st={chan('telegram')} has={b.has_telegram_token} onRemove={() => save({ ...NO_SECRETS, telegram_token: '' })}
+        <ChannelRow icon="telegram" title="Telegram" st={chan('telegram')} has={has('has_telegram_token')} onRemove={() => save({ ...NO_SECRETS, telegram_token: '' })}
           hint="Message @BotFather, send /newbot, and paste the token it gives you.">
           <input className="input" type="password" aria-label="Telegram bot token" placeholder="123456:ABC…" value={typed('telegram_token')} onChange={e => type('telegram_token', e.target.value)} autoComplete="off" />
         </ChannelRow>
-        <ChannelRow icon="slack" title="Slack" st={chan('slack')} has={b.has_slack} onRemove={() => save({ ...NO_SECRETS, slack_bot_token: '', slack_app_token: '' })}
+        <ChannelRow icon="slack" title="Slack" st={chan('slack')} has={has('has_slack')} onRemove={() => save({ ...NO_SECRETS, slack_bot_token: '', slack_app_token: '' })}
           hint="Create a Slack app with Socket Mode and Interactivity on; scopes chat:write, im:history, app_mentions:read, files:read, channels:history, groups:history; events message.im and app_mention (add message.channels and message.groups so it follows a thread without another @-mention).">
           <input className="input" type="password" aria-label="Slack bot token" placeholder="Bot token (xoxb-…)" value={typed('slack_bot_token')} onChange={e => type('slack_bot_token', e.target.value)} autoComplete="off" />
           <input className="input" type="password" aria-label="Slack app-level token" placeholder="App-level token (xapp-…)" value={typed('slack_app_token')} onChange={e => type('slack_app_token', e.target.value)} autoComplete="off" />
         </ChannelRow>
-        <ChannelRow icon="discord" title="Discord" st={chan('discord')} has={b.has_discord} onRemove={() => save({ ...NO_SECRETS, discord_token: '' })}
+        <ChannelRow icon="discord" title="Discord" st={chan('discord')} has={has('has_discord')} onRemove={() => save({ ...NO_SECRETS, discord_token: '' })}
           hint="In the Discord Developer Portal, create a bot, turn on Message Content Intent, and invite it with Send Messages.">
           <input className="input" type="password" aria-label="Discord bot token" placeholder="Bot token" value={typed('discord_token')} onChange={e => type('discord_token', e.target.value)} autoComplete="off" />
         </ChannelRow>
@@ -3050,7 +3070,7 @@ function SavedMeeting({ m, open, toggle, bots, onSent, onChange }: { m: MeetingR
           <button className="btn btn-primary" disabled={!lines.length} onClick={send}>{m.summary ? 'Summarise again with' : 'Summarise with'} {bots.find(b => b.id === bot)?.name ?? 'your bot'}</button>
           <button className="btn btn-ghost" disabled={!lines.length} onClick={() => copyText(transcriptText(lines, m.started_at, m.speakers)).then(() => setNote('Copied'))}>Copy</button>
           <span className="grow" />
-          <button className="btn btn-ghost btn-danger" onClick={() => ask(`Delete “${meetingTitle(m)}”?`, 'Delete', true).then(ok => { if (ok) localInvoke('meeting', { action: 'delete', id: m.id }).then(onChange) })}>Delete</button>
+          <button className="btn btn-ghost btn-danger" onClick={() => ask(`Delete “${meetingTitle(m)}”?`, 'Delete', true).then(ok => { if (ok) localInvoke('meeting', { action: 'delete', id: m.id }).then(onChange, e => tell(`Couldn't delete it: ${e}`)) })}>Delete</button>
         </div>
         {note && <p className="hint">{note}</p>}
       </>}
@@ -3639,7 +3659,7 @@ function ServerUpdates() {
   return (
     <Row icon={<Icon name="retry" size={15} />} title="Tell me when there’s a new version"
       desc={`Runs ${s.current}${behind ? ` · ${s.latest} is out (see Needs you)` : ''}. Once per version, in your chat and in Needs you, with the commands to update.`}>
-      <Switch label="Tell me when there’s a new version" checked={s.on} onChange={on => invoke('update_notice', { on }).then(st.reload)} />
+      <Switch label="Tell me when there’s a new version" checked={s.on} onChange={on => invoke('update_notice', { on }).then(st.reload, e => tell(String(e)))} />
     </Row>
   )
 }

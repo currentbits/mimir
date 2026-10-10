@@ -91,6 +91,8 @@ check("bot_create: Scout shows in the bot list", any(b["name"] == "Scout" for b 
 
 # Per-bot threads
 mine = api("messages", {"chatId": 0, "botId": search_id})
+ada = api("messages", {"chatId": 0, "botId": 1})
+check("messages carry their id (the app follows long chats by it)", ada and all(isinstance(m.get("id"), int) for m in ada), ada[:1])
 check("Search's own thread holds no Ada messages", all(m["bot_id"] == search_id for m in mine), [m["bot_id"] for m in mine])
 
 # Deleting a bot takes its routines and runs with it; memories stay

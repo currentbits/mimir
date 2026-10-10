@@ -32,6 +32,21 @@ check('Search replies', await until(async () => (await main()).includes('SEARCH-
 await bot('Ada').click(); await p.waitForTimeout(800)
 check("Ada's thread is back, without Search's", (await main()).includes('OK: hello Ada') && !(await main()).includes('SEARCH-ANSWER: the title tag is fine (asked: check the title)'))
 
+// "@Search …" from Ada's own chat: your message stays on screen while Search answers, then Search's chat opens
+await say('@Search SLOW about meta tags'); await p.waitForTimeout(700)
+check('your @mention message stays while the reply is written', (await main()).includes('SLOW about meta tags'))
+check("Search's own chat opens with the answer", await until(async () => (await main()).includes('SEARCH-ANSWER: the title tag is fine (asked: SLOW about meta tags)')
+  && (await p.locator('.composer textarea').getAttribute('placeholder'))?.includes('Search')))
+
+// Leaving mid-reply and coming back: the reply still shows as it's written, and arrives
+await bot('Ada').click(); await p.waitForTimeout(500)
+await say('SLOW are you there'); await p.waitForTimeout(500)
+await bot('Search').click(); await p.waitForTimeout(600)
+await bot('Ada').click(); await p.waitForTimeout(1800)
+check('a reply in progress shows after coming back', (await p.locator('.msg-bot .typing, .msg-bot .steps').count()) > 0 && await p.locator('.composer textarea').isDisabled())
+check('and it arrives', await until(async () => (await main()).includes('OK: SLOW are you there')))
+check('the composer unlocks after it', await until(async () => !(await p.locator('.composer textarea').isDisabled()), 5000))
+
 // Delegation from the app
 await say('please ASK SEARCH')
 check('delegation answer shows', await until(async () => (await main()).includes('DONE ask_bot')))

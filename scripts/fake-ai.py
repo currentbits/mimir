@@ -10,9 +10,10 @@ replies "DONE <tool>: <the tool's result>":
     ASK SEARCH → ask_bot    MAKE BOT → bot_create    ROUTINE → routine_create    REMEMBER → memory_store
     FORGET <n> → memory_forget(n)    FILE → file_write    LIST FILES → file_list    DELETE ROUTINE <n> → routine_delete(n)
 
-Anything else gets "OK: <your message>". Each request is logged to stdout.
+Anything else gets "OK: <your message>". A message with SLOW in it is answered after 3 seconds (any bot), for
+switching away mid-reply. Each request is logged to stdout.
 """
-import json, re, sys
+import json, re, sys, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8899
@@ -53,6 +54,8 @@ class H(BaseHTTPRequestHandler):
         last_user = users[-1] if users else ""
         last = msgs[-1] if msgs else {}
         print(f"[{bot}] last={last.get('role')} user={last_user[-80:]!r}", flush=True)
+        if "SLOW" in last_user and last.get("role") == "user":
+            time.sleep(3)
         if bot == "Search":
             return self.reply({"role": "assistant", "content": f"SEARCH-ANSWER: the title tag is fine (asked: {last_user[-60:]})"})
         if last.get("role") == "tool":
