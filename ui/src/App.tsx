@@ -328,26 +328,41 @@ const presenceOf = (s?: Status): Presence => !s ? 'off' : online(s).length ? 'li
 /** Bot id → bot, provided by Main. */
 const Bots = createContext<(id: number) => { id: number; name: string }>(id => ({ id, name: `Bot ${id}` }))
 
-/** Poll a loader every `ms` and on demand. */
-function useLoad<T>(load: () => Promise<T>, deps: unknown[], ms = 5000) {
+/** Load once and on demand; with `ms`, again `ms` after each answer. Nothing loads while the page is hidden;
+ *  it loads again when it shows. */
+function useLoad<T>(load: () => Promise<T>, deps: unknown[], ms = 0) {
   const [data, setData] = useState<T | null>(null)
   const [error, setError] = useState<string | null>(null)
   // Each change of what's loaded (another chat, another bot) starts a new generation: an answer for the one before,
   // still on its way, is dropped instead of landing over the new one.
   const gen = useRef(0)
   const mounted = useRef(false)
+  // The last answer as JSON: the same answer again keeps the old state, so nothing redraws.
+  const last = useRef('')
   const reload = useCallback(() => {
     const g = gen.current
-    return load().then(d => { if (g === gen.current) { setData(d); setError(null) } }, e => { if (g === gen.current) setError(String(e)) })
+    return load().then(d => {
+      if (g !== gen.current) return
+      const j = JSON.stringify(d)
+      if (j !== last.current) { last.current = j; setData(d) }
+      setError(null)
+    }, e => { if (g === gen.current) setError(String(e)) })
   }, deps) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     // What was shown for the one before goes too (a banner, a list), rather than standing in until the new one loads.
-    if (mounted.current) { gen.current++; setData(null); setError(null) }
+    if (mounted.current) { gen.current++; last.current = ''; setData(null); setError(null) }
     mounted.current = true
-    reload()
-    if (ms <= 0) return // load once, no polling
-    const t = setInterval(reload, ms)
-    return () => clearInterval(t)
+    // One load at a time: the next is timed from the answer, so a slow server never gets them stacked up.
+    let t = 0, busy = false, done = false
+    const tick = () => {
+      clearTimeout(t)
+      if (busy || done || document.hidden) return
+      busy = true
+      reload().finally(() => { busy = false; if (!done && ms > 0) t = window.setTimeout(tick, ms) })
+    }
+    tick()
+    document.addEventListener('visibilitychange', tick)
+    return () => { done = true; clearTimeout(t); document.removeEventListener('visibilitychange', tick) }
   }, [reload, ms])
   return { data, error, reload }
 }
@@ -696,9 +711,10 @@ function Main() {
   }, [statuses.data, bots.data]) // eslint-disable-line react-hooks/exhaustive-deps
   // What each bot is working on right now (a reply, a routine, a task from another bot, a memory tidy-up).
   const busy = useLoad(() => invoke<Busy[]>('busy'), [], 1500)
-  const chats = useLoad(() => invoke<Chat[]>('chats'), [])
-  const pending = useLoad(() => invoke<Approval[]>('approvals'), [], 1500)
-  const inbox = useLoad(() => invoke<Inbox>('inbox'), [], 3000)
+  const chats = useLoad(() => invoke<Chat[]>('chats'), [], 15000) // someone new writing to a bot adds a chat
+  // Approvals waiting come with the inbox.
+  const inbox = useLoad(() => invoke<Inbox>('inbox'), [], 2000)
+  const approvals = inbox.data?.approvals ?? []
   // Bots that aren't working (an account or a messaging app that won't connect) need you too.
   const troubled = (statuses.data ?? []).flatMap(s => { const t = troubleOf(s); return t ? [{ id: s.bot_id, text: t }] : [] })
   const needs = inboxCount(inbox.data) + troubled.length
@@ -855,7 +871,7 @@ function Main() {
                 }}>
                 {(() => {
                   // Waiting on you beats working: the reply (or routine) can't go on until you answer.
-                  const asks = (pending.data ?? []).some(a => a.bot_id === b.id)
+                  const asks = approvals.some(a => a.bot_id === b.id)
                   const w: Busy | undefined = asks ? { bot_id: b.id, chat_id: 0, trigger: 'ask', step: 'Waiting for your OK' } : busy.data?.find(x => x.bot_id === b.id)
                   return <>
                     <Avatar id={b.id} name={b.name} presence={p} mood={w ? busyMood(w) : undefined} />
@@ -913,7 +929,7 @@ function Main() {
           )}
         </header>
 
-        {view !== 'inbox' && <Approvals list={pending.data ?? []} chats={list} chatName={chatName} onDecided={() => { pending.reload(); inbox.reload() }} />}
+        {view !== 'inbox' && <Approvals list={approvals} chats={list} chatName={chatName} onDecided={inbox.reload} />}
 
         {view === 'chat' ? (
           <ChatView key={`chat-${chat.chat_id}-${incognito && chat.chat_id === LOCAL}-${botChat ? chatBot ?? botList[0]?.id : 'all'}`} only={botChat} chat={chat} bots={botList} onTurn={chats.reload}
@@ -930,7 +946,7 @@ function Main() {
               {view === 'settings' && <SettingsView onComputer={computer.reload} />}
               {view === 'computer' && <ComputerView bots={botList} chats={list} chatName={chatName} />}
               {view === 'meetings' && <MeetingsView bots={botList} onSent={talkTo} />}
-              {view === 'inbox' && <InboxView data={inbox.data} troubled={troubled} reload={() => { inbox.reload(); pending.reload() }} chats={list} chatName={chatName} openBot={openBot} openChat={openChat} />}
+              {view === 'inbox' && <InboxView data={inbox.data} troubled={troubled} reload={inbox.reload} chats={list} chatName={chatName} openBot={openBot} openChat={openChat} />}
               {view === 'bot' && (
                 // Keyed on whether the bot has loaded too: right after "Create bot" the list hasn't caught up yet.
                 <BotPage key={`${botId}:${botList.some(b => b.id === botId)}`} bot={botList.find(b => b.id === botId)} status={statusOf(botId)} canDelete={botList.length > 1}
@@ -1401,9 +1417,14 @@ function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, openBot
   }, [working])
   useEffect(() => {
     if (!working) return
-    const t = setInterval(() => invoke<{ draft: string | null; step: string | null; done: { summary: string; ok: boolean; decision: string }[] }>('live', { botId: replier, chatId: cid })
-      .then(l => { setDraft(l?.draft ?? ''); setStep(l?.step ?? null); setDone(l?.done ?? []) }, () => {}), 150)
-    return () => { clearInterval(t); setDraft(''); setStep(null); setDone([]) }
+    // The next look is 150 ms after the last answer, so a slow server doesn't get them stacked up.
+    let t = 0, off = false
+    const poll = () => invoke<{ draft: string | null; step: string | null; done: { summary: string; ok: boolean; decision: string }[] }>('live', { botId: replier, chatId: cid })
+      // done is a new array every time: set it only when it says something new.
+      .then(l => { setDraft(l?.draft ?? ''); setStep(l?.step ?? null); const d = l?.done ?? []; setDone(o => JSON.stringify(o) === JSON.stringify(d) ? o : d) }, () => {})
+      .finally(() => { if (!off) t = window.setTimeout(poll, 150) })
+    t = window.setTimeout(poll, 150)
+    return () => { off = true; clearTimeout(t); setDraft(''); setStep(null); setDone([]) }
   }, [working, replier, cid])
   useLayoutEffect(() => {
     const t = box.current
