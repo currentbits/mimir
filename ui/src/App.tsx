@@ -387,7 +387,7 @@ function App() {
   const [onboarded, setOnboarded] = useState<boolean | null>(null)
   useEffect(() => { invoke<{ onboarded: boolean }>('info').then(i => setOnboarded(i.onboarded), () => setOnboarded(true)) }, [])
   if (onboarded === null) return null
-  return onboarded ? <Main /> : <Onboarding onDone={() => setOnboarded(true)} />
+  return <><AskHost />{onboarded ? <Main /> : <Onboarding onDone={() => setOnboarded(true)} />}</>
 }
 
 // ---------------- onboarding ----------------
@@ -760,7 +760,6 @@ function Main() {
 
   return (
     <Bots.Provider value={botOf}>
-    <AskHost />
     <div className="app">
       <aside className="rail" aria-label="Bots and chats">
         <div className="rail-top" data-tauri-drag-region />
