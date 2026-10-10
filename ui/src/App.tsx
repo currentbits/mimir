@@ -823,7 +823,7 @@ function Main() {
         {view !== 'inbox' && <Approvals list={pending.data ?? []} chats={list} chatName={chatName} onDecided={() => { pending.reload(); inbox.reload() }} />}
 
         {view === 'chat' ? (
-          <ChatView key={`chat-${chat.chat_id}-${incognito && chat.chat_id === LOCAL}`} chat={chat} bots={botList} onTurn={chats.reload}
+          <ChatView key={`chat-${chat.chat_id}-${incognito && chat.chat_id === LOCAL}-${botChat ? chatBot ?? botList[0]?.id : 'all'}`} only={botChat} chat={chat} bots={botList} onTurn={chats.reload}
             incognito={incognito && chat.chat_id === LOCAL} setIncognito={setIncognito} openBot={openBot}
             botId={chatBot ?? undefined} onBot={setChatBot} troubleOf={id => troubleOf(statusOf(id))} />
         ) : (
@@ -1088,22 +1088,25 @@ function BotMenu({ at, name, onChat, onSettings, onClose }: { at: { x: number; y
   )
 }
 
-function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, openBot, botId: chosen, onBot, troubleOf: trouble }: {
+function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, openBot, botId: chosen, onBot, troubleOf: trouble, only = false }: {
   chat: Chat; bots: Bot[]; onTurn: () => void; incognito?: boolean; setIncognito?: (on: boolean) => void; openBot?: (id: number) => void
+  // Opened from a bot in the sidebar: only that bot's conversation, not everyone's in this chat.
+  only?: boolean
   // The bot to message, when the app chose it (a click on a bot in the sidebar); the picker reports changes back.
   botId?: number; onBot?: (id: number) => void
   // What's wrong with a bot, if anything (shown above the composer, with a way to its settings).
   troubleOf?: (id: number) => string | null
 }) {
-  const log = useLoad(() => incognito ? Promise.resolve([] as Message[]) : invoke<Message[]>('messages', { chatId: chat.chat_id }), [chat.chat_id, incognito], incognito ? 0 : 4000)
+  const [own, setOwn] = useState<number>(bots[0]?.id ?? 1)
+  // A bot that was deleted falls back to the first one.
+  const botId = chosen !== undefined && bots.some(b => b.id === chosen) ? chosen : own
+  const mine = only ? botId : undefined
+  const log = useLoad(() => incognito ? Promise.resolve([] as Message[]) : invoke<Message[]>('messages', { chatId: chat.chat_id, botId: mine }), [chat.chat_id, incognito, mine], incognito ? 0 : 4000)
   // Incognito messages exist only here; leaving or switching it off drops them.
   const [secret, setSecret] = useState<Message[]>([])
   const cid = incognito ? INCOGNITO : chat.chat_id
   const botOf = useContext(Bots)
   const [text, setText] = useState('')
-  const [own, setOwn] = useState<number>(bots[0]?.id ?? 1)
-  // A bot that was deleted falls back to the first one.
-  const botId = chosen !== undefined && bots.some(b => b.id === chosen) ? chosen : own
   const setBotId = (id: number) => { setOwn(id); onBot?.(id) }
   const [pending, setPending] = useState<string | null>(null)
   // "/" lists the bot's skills: "/book-padel Thursday" asks it to use that one.

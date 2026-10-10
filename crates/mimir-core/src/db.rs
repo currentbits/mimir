@@ -2589,10 +2589,16 @@ impl Db {
     }
 
     pub fn messages(&self, chat: i64, n: usize) -> Result<Vec<Message>> {
+        self.messages_of(chat, None, n)
+    }
+
+    /// The last `n` messages of a chat, oldest first; with `bot`, only that bot's conversation in it (what you said to
+    /// it and what it said), as when you open a bot from the sidebar.
+    pub fn messages_of(&self, chat: i64, bot: Option<i64>, n: usize) -> Result<Vec<Message>> {
         let c = self.c();
-        let mut st = c.prepare("SELECT bot_id, role, content, ts, run_id FROM messages WHERE chat_id=?1 ORDER BY id DESC LIMIT ?2")?;
+        let mut st = c.prepare("SELECT bot_id, role, content, ts, run_id FROM messages WHERE chat_id=?1 AND (?3 IS NULL OR bot_id=?3) ORDER BY id DESC LIMIT ?2")?;
         let mut v: Vec<(Message, Option<i64>)> = st
-            .query_map(params![chat, n as i64], |r| Ok((Message { bot_id: r.get(0)?, role: r.get(1)?, content: r.get(2)?, ts: r.get(3)?, actions: vec![], run_id: None }, r.get(4)?)))?
+            .query_map(params![chat, n as i64, bot], |r| Ok((Message { bot_id: r.get(0)?, role: r.get(1)?, content: r.get(2)?, ts: r.get(3)?, actions: vec![], run_id: None }, r.get(4)?)))?
             .collect::<Result<_, _>>()?;
         v.reverse();
         // One query for every reply's actions.

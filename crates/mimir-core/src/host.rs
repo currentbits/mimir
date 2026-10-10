@@ -865,7 +865,8 @@ impl Host {
                 arg(a, "paused")?,
             )?),
             "delete_routine" => ok(self.db.routine_delete(arg(a, "chat_id")?, arg(a, "id")?)?),
-            "messages" => ok(self.db.messages(arg(a, "chat_id")?, 200)?),
+            // With bot_id: that bot's own conversation in the chat (a bot opened from the sidebar); without, everyone's.
+            "messages" => ok(self.db.messages_of(arg(a, "chat_id")?, arg(a, "bot_id")?, 200)?),
             "runs" => ok(self.db.runs(Some(arg(a, "chat_id")?), 200)?),
             // Last 30 days for one chat.
             // What other bots did for a run (tasks it handed over): their runs with each step.

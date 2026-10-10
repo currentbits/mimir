@@ -6,7 +6,7 @@ You can run several bots. Each has its own **name**, **role** (persona and instr
 messaging-app tokens and **tool allowlist**. Create them with **+** in the sidebar; a template by job (Morning briefer,
 Follow-up keeper, Researcher, Page watcher, Weekly reviewer) fills in the role and offers the routines that job needs.
 
-Click a bot in the sidebar to chat with it (in the built-in chat). Its page, with all of the above, is a right-click
+Click a bot in the sidebar to chat with it: you see your conversation with that bot only. **This computer** under Chats shows the built-in chat with all your bots together. Its page, with all of the above, is a right-click
 away (**Settings**), or the gear next to the bot picker under the chat.
 
 Each bot is a small creature in its own colour, with a shape, eyes and a detail of its own. You choose it: a new bot

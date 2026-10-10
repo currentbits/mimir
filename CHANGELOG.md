@@ -5,6 +5,8 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 ## 0.1.1
 
 - **The Mac app is notarized by Apple:** it opens with a double-click, no right-click → Open.
+- **Each bot has its own conversation:** clicking a bot in the sidebar shows your chat with that bot, not every
+  bot's messages. This computer still shows them all together.
 
 - **Search in Settings.** Type in the box at the top of Settings (or press ⌘F / Ctrl+F there) and only the matching
   settings stay: "email", "token", "brave", "quiet hours". A bot's own settings (its role, AI account, Telegram, Slack
