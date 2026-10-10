@@ -187,6 +187,10 @@ pub struct Usage {
     /// Of tokens_in, how many were read back from the prompt cache (billed at about a tenth).
     #[serde(default)]
     pub cache_read: i64,
+    /// Of tokens_in, how many were written to the prompt cache (billed at about 1.25×). Many writes and few reads on
+    /// a resumed session mean its cached prefix keeps changing.
+    #[serde(default)]
+    pub cache_write: i64,
     /// The account didn't say what it used: worked out from the text's length.
     #[serde(default)]
     pub estimated: bool,
@@ -222,6 +226,8 @@ pub struct Run {
     pub repeats: i64,
     /// Of tokens_in, read back from the prompt cache.
     pub cache_read: i64,
+    /// Of tokens_in, written to the prompt cache.
+    pub cache_write: i64,
     /// Tokens worked out from the text, the account didn't report them.
     pub estimated: bool,
 }
@@ -734,6 +740,9 @@ impl Db {
         add_col("runs", "delivered", "TEXT")?;
         add_col("runs", "cache_read", "INTEGER NOT NULL DEFAULT 0")?;
         add_col("runs", "estimated", "INTEGER NOT NULL DEFAULT 0")?;
+        add_col("runs", "cache_write", "INTEGER NOT NULL DEFAULT 0")?;
+        // Memories already put in this session's messages (comma-separated ids): it keeps them, so they aren't sent again.
+        add_col("sessions", "sent", "TEXT NOT NULL DEFAULT ''")?;
         c.execute(
             "INSERT OR IGNORE INTO bots(id, name, provider, model, base_url, created_at) VALUES (1, 'Mimir',
                coalesce((SELECT value FROM settings WHERE key='provider'), 'claude'),
@@ -1460,8 +1469,8 @@ impl Db {
         let c = self.c();
         match outcome {
             Ok(u) => c.execute(
-                "UPDATE runs SET status='ok', ended_at=?2, model=?3, tokens_in=?4, tokens_out=?5, cost_usd=?6, cache_read=?7, estimated=?8 WHERE id=?1",
-                params![id, now(), u.model, u.tokens_in, u.tokens_out, u.cost_usd, u.cache_read, u.estimated],
+                "UPDATE runs SET status='ok', ended_at=?2, model=?3, tokens_in=?4, tokens_out=?5, cost_usd=?6, cache_read=?7, estimated=?8, cache_write=?9 WHERE id=?1",
+                params![id, now(), u.model, u.tokens_in, u.tokens_out, u.cost_usd, u.cache_read, u.estimated, u.cache_write],
             )?,
             Err(e) => c.execute("UPDATE runs SET status='error', ended_at=?2, error=?3 WHERE id=?1", params![id, now(), e])?,
         };
@@ -1492,7 +1501,7 @@ impl Db {
         let c = self.c();
         let mut st = c.prepare(
             "SELECT r.id, r.chat_id, r.trigger, r.routine_id, r.provider, r.model, r.status, r.error, r.started_at, r.ended_at,
-                    r.tokens_in, r.tokens_out, r.cost_usd, (SELECT count(*) FROM tool_calls t WHERE t.run_id = r.id), r.bot_id, r.reply, r.parent_run, r.delivered, r.cache_read, r.estimated
+                    r.tokens_in, r.tokens_out, r.cost_usd, (SELECT count(*) FROM tool_calls t WHERE t.run_id = r.id), r.bot_id, r.reply, r.parent_run, r.delivered, r.cache_read, r.estimated, r.cache_write
              FROM runs r WHERE (?1 IS NULL OR r.chat_id = ?1) AND (?3 IS NULL OR r.parent_run = ?3) ORDER BY r.id DESC LIMIT ?2",
         )?;
         let v = st
@@ -1519,6 +1528,7 @@ impl Db {
                     repeats: 1,
                     cache_read: r.get(18)?,
                     estimated: r.get(19)?,
+                    cache_write: r.get(20)?,
                 })
             })?
             .collect::<Result<_, _>>()?;
@@ -2560,6 +2570,19 @@ impl Db {
         Ok(self.c().query_row("SELECT session FROM sessions WHERE bot_id=?1 AND chat_id=?2", [bot, chat], |r| r.get(0)).optional()?)
     }
 
+    /// Memories already sent in the chat's current session.
+    pub fn session_sent(&self, bot: i64, chat: i64) -> Result<Vec<i64>> {
+        let s: Option<String> = self.c().query_row("SELECT sent FROM sessions WHERE bot_id=?1 AND chat_id=?2", [bot, chat], |r| r.get(0)).optional()?;
+        Ok(s.unwrap_or_default().split(',').filter_map(|s| s.parse().ok()).collect())
+    }
+
+    /// The memories the chat's current session holds (call after set_session).
+    pub fn set_session_sent(&self, bot: i64, chat: i64, ids: &[i64]) -> Result<()> {
+        let list = ids.iter().map(i64::to_string).collect::<Vec<_>>().join(",");
+        self.c().execute("UPDATE sessions SET sent=?3 WHERE bot_id=?1 AND chat_id=?2", params![bot, chat, list])?;
+        Ok(())
+    }
+
     pub fn set_session(&self, bot: i64, chat: i64, sid: Option<&str>) -> Result<()> {
         let c = self.c();
         match sid {
@@ -2639,6 +2662,18 @@ impl Db {
     }
 
     /// A bot's last `n` messages with a chat, oldest first (provider history).
+    /// The history an API account is handed: the last 10 to 19 messages, its start moving 10 at a time (not 2 every
+    /// turn), so the provider's cached prefix holds for five turns.
+    pub fn recent_stepped(&self, bot: i64, chat: i64) -> Result<Vec<(String, String)>> {
+        let n: i64 = self.c().query_row(
+            "SELECT count(*) FROM messages WHERE bot_id=?1 AND chat_id=?2
+               AND id > coalesce((SELECT CAST(value AS INTEGER) FROM settings WHERE key='fresh:' || ?1 || ':' || ?2), 0)",
+            [bot, chat],
+            |r| r.get(0),
+        )?;
+        self.recent(bot, chat, if n < 10 { n as usize } else { 10 + (n % 10) as usize })
+    }
+
     pub fn recent(&self, bot: i64, chat: i64, n: usize) -> Result<Vec<(String, String)>> {
         let c = self.c();
         let mut st = c.prepare(
@@ -3780,8 +3815,17 @@ mod tests {
         d.set_session(1, 5, Some("s1")).unwrap();
         d.set_session(id, 5, Some("s2")).unwrap();
         assert_eq!((d.session(1, 5).unwrap().as_deref(), d.session(id, 5).unwrap().as_deref()), (Some("s1"), Some("s2")));
+        d.set_session_sent(1, 5, &[3, 7]).unwrap();
+        d.set_session(1, 5, Some("s1b")).unwrap();
+        assert_eq!(d.session_sent(1, 5).unwrap(), vec![3, 7], "kept when the CLI names the resumed session anew");
         d.set_session(1, 5, None).unwrap();
         assert_eq!(d.session(1, 5).unwrap(), None);
+        assert!(d.session_sent(1, 5).unwrap().is_empty(), "a fresh conversation starts with none sent");
+        // API history: its start moves 10 messages at a time.
+        let lens: Vec<usize> = (0..25).map(|i| { d.log(1, 77, "user", &i.to_string(), None).unwrap(); d.recent_stepped(1, 77).unwrap().len() }).collect();
+        assert_eq!(&lens[..12], &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+        assert_eq!((lens[18], lens[19], lens[24]), (19, 10, 15));
+        assert_eq!(d.recent_stepped(1, 77).unwrap()[0].1, "10");
 
         d.log(1, 5, "user", "hi A", None).unwrap();
         d.log(id, 5, "user", "hi B", None).unwrap();

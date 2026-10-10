@@ -137,7 +137,8 @@ pub async fn incognito_turn(provider: &Provider, ctx: &ToolCtx, history: &[(Stri
     }
     let bot = ctx.db.bot(ctx.bot_id)?;
     let role = if bot.persona.trim().is_empty() { String::new() } else { format!("\n\nYour role, set by the user:\n{}", bot.persona.trim()) };
-    let system = format!("Your name is {}. {INCOGNITO}{role}\n\nCurrent local time: {}.", bot.name, chrono::Local::now().format("%A %Y-%m-%d %H:%M %Z"));
+    let system = format!("Your name is {}. {INCOGNITO}{role}\n\nToday is {}.", bot.name, chrono::Local::now().format("%A %Y-%m-%d %Z"));
+    let text = format!("{}{text}", now_line());
     // API providers take the history as messages; the CLIs (no saved session here) get it in the prompt.
     let (history, user) = if provider.uses_history() || history.is_empty() {
         (history.to_vec(), text.to_string())
@@ -149,6 +150,11 @@ pub async fn incognito_turn(provider: &Provider, ctx: &ToolCtx, history: &[(Stri
     let out = provider.run(&ctx, &system, &history, &user, None).await;
     live::end(ctx.bot_id, INCOGNITO_CHAT);
     Ok(out?.text)
+}
+
+/// "Now: Tue 14:05", at the top of each turn's message.
+fn now_line() -> String {
+    format!("Now: {}\n\n", chrono::Local::now().format("%a %H:%M"))
 }
 
 /// A routine running well after it was due (the computer slept, Mimir was off, a hold): said, so a morning brief at
@@ -666,10 +672,10 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
         ""
     };
     let system = format!(
-        "Your name is {}. {PERSONA}{role}{guest}{}{team}{logins}{plans}{skills}\n\nCurrent local time: {}.\n{}",
+        "Your name is {}. {PERSONA}{role}{guest}{}{team}{logins}{plans}{skills}\n\nToday is {}; each message starts with the time it was sent.\n{}",
         bot.name,
         if quiet { QUIET } else { "" },
-        chrono::Local::now().format("%A %Y-%m-%d %H:%M %Z"),
+        chrono::Local::now().format("%A %Y-%m-%d %Z"),
         block("standing_memory", &ctx.db.bootstrap(&scope)?)
     );
     // Standing memory and this automatic recall hold only confirmed memories (a word in common with an unconfirmed one
@@ -701,17 +707,24 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
         let said = tools::truncate(&said, 4000).replace('<', "‹").replace('>', "›");
         last = format!("<your_last_message kind=\"{kind}\">\nYou sent this in this chat outside your session, so it isn't in your history.\n{said}\n</your_last_message>\n\n");
     }
-    let user = format!("{}{past}{last}{text}", block("memory", &recall));
-
-    let history = if provider.uses_history() { ctx.db.recent(ctx.bot_id, ctx.chat_id, 20)? } else { vec![] };
-    // Accounts that are handed the history again: if it holds outside content, so does this turn.
-    if !history.is_empty() && ctx.db.recent_outside(ctx.bot_id, ctx.chat_id, 20)? {
-        ctx.pre_taint();
-    }
     // Routines run in a fresh session so they don't derail the live conversation.
     let session = if is_routine { None } else { ctx.db.session(ctx.bot_id, ctx.chat_id)? };
+    // A CLI session keeps every message it was sent: a memory recalled earlier in it isn't sent again.
+    let sent = if session.is_some() && !provider.uses_history() { ctx.db.session_sent(ctx.bot_id, ctx.chat_id)? } else { vec![] };
+    let unsent: Vec<_> = recall.iter().filter(|e| !sent.contains(&e.id)).cloned().collect();
+    // The time goes here, not in the system prompt: a resumed `claude -p` keeps its first turn's instructions (so the
+    // time froze there), and for API accounts a prompt that changed every minute broke the cached prefix behind it.
+    let user_with = |recall: &[db::Entry]| format!("{}{}{past}{last}{text}", now_line(), block("memory", recall));
+    let user = user_with(&unsent);
+
+    let history = if provider.uses_history() { ctx.db.recent_stepped(ctx.bot_id, ctx.chat_id)? } else { vec![] };
+    // Accounts that are handed the history again: if it holds outside content, so does this turn.
+    if !history.is_empty() && ctx.db.recent_outside(ctx.bot_id, ctx.chat_id, history.len())? {
+        ctx.pre_taint();
+    }
 
     let had_session = session.is_some();
+    let mut resumed = had_session;
     let mut reply = match provider.run(ctx, &system, &history, &user, session).await {
         // The session couldn't be reopened (the CLI was updated or cleaned up, the chat moved to a server, the bot
         // changed accounts): a new one starts with the chat so far, from Mimir's own log, so it isn't a blank page.
@@ -721,7 +734,8 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
             if ctx.db.recent_outside(ctx.bot_id, ctx.chat_id, 60)? {
                 ctx.pre_taint();
             }
-            let user = format!("<conversation_so_far>\nYour earlier session with this person couldn't be reopened. This is the last part of it, from Mimir's log:\n{so_far}\n</conversation_so_far>\n\n{user}");
+            let user = format!("<conversation_so_far>\nYour earlier session with this person couldn't be reopened. This is the last part of it, from Mimir's log:\n{so_far}\n</conversation_so_far>\n\n{}", user_with(&recall));
+            resumed = false;
             let mut r = provider.run(ctx, &system, &history, &user, None).await?;
             r.text = format!("_(I couldn't reopen our earlier conversation, so I reread the last part of it.)_\n\n{}", r.text);
             r
@@ -738,6 +752,11 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
     }
     if !is_routine && reply.session.is_some() {
         ctx.db.set_session(ctx.bot_id, ctx.chat_id, reply.session.as_deref())?;
+        let mut held = if resumed { sent } else { vec![] };
+        for e in recall.iter().filter(|e| !held.contains(&e.id)).collect::<Vec<_>>() {
+            held.push(e.id);
+        }
+        ctx.db.set_session_sent(ctx.bot_id, ctx.chat_id, &held)?;
     }
     // A quiet check that found nothing stays silent: no message, no conversation entry (the run log has it).
     if quiet && is_nothing(&reply.text) {
