@@ -8,7 +8,7 @@ keeps notes, and transcribes your calls. Anything that changes something asks yo
 ## What Mimir is, and isn't
 
 **It isn't an AI model.** Mimir has no AI of its own. Each bot uses an AI account you already have: your Claude,
-ChatGPT or Grok plan (through their official apps, so there's no API key and nothing extra to pay), an API key, or a
+ChatGPT or Grok plan (signed in, or through their official apps, so there's no API key and nothing extra to pay), an API key, or a
 model running on your own computer. Mimir is everything around the model: where you talk to it, what it remembers,
 what it may do, and when.
 
@@ -27,7 +27,7 @@ the lesson.
 | | |
 |---|---|
 | **A computer** | macOS (Apple silicon), Windows or Linux. Or a server you own (a VPS, a home server, a Raspberry Pi) for bots that are online while your laptop sleeps. |
-| **An AI account** | One of: a Claude plan with Claude Code, a ChatGPT plan with Codex, a SuperGrok or X Premium+ plan, an OpenRouter or other API key, or Ollama / LM Studio on your computer. |
+| **An AI account** | One of: a Claude plan with Claude Code, a ChatGPT Plus or Pro plan (signed in from Mimir), a SuperGrok or X Premium+ plan, an OpenRouter or other API key, or Ollama / LM Studio on your computer. |
 | **Optional** | A Telegram, Slack or Discord bot token, to talk to your bots from your phone. An email app password, a calendar link and a Brave Search key, to give them more to work with. |
 
 Setting it all up takes about ten minutes: [Getting started](getting-started.md).
@@ -60,7 +60,7 @@ Setting it all up takes about ten minutes: [Getting started](getting-started.md)
 
 - [Bots and chats](bots-and-chats.md): bots, roles and templates, Telegram / Slack / Discord, the built-in chat, quick
   ask, photos, voice notes and PDFs, incognito, handing tasks to another bot.
-- [AI accounts](ai-accounts.md): Claude, ChatGPT (Codex), Grok, OpenRouter, xAI, local models, any OpenAI-compatible
+- [AI accounts](ai-accounts.md): Claude, ChatGPT, Codex, Grok, OpenRouter, xAI, local models, any OpenAI-compatible
   service.
 - [Memory](memory.md): what bots remember, how they learn from your corrections, how you stay in charge, the daily
   tidy-up, files.
