@@ -7,3 +7,5 @@ design-preview/
 plan.html
 reports/
 research_notes/
+# heymimir.app (the website and its /docs/ pages) is a separate, private repository, checked out here as site/.
+site/

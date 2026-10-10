@@ -10,7 +10,6 @@ For contributors: how the pieces fit together.
 | `crates/mimir` | The CLI and the self-hosted server (`server.rs`: HTTP API + web UI) |
 | `crates/mimir-desktop` | The Tauri desktop app: window, tray, keychain, quick ask, notifications, meeting recorder |
 | `ui/` | React + Vite UI, shared by the desktop app and the server's web UI |
-| `site/` | The heymimir.app website (Vite, three.js WebGPU), including `/docs/` built from `docs/*.md`: `cd site && npm install && npm run dev`; `npm run build` writes `site/dist` |
 
 ### mimir-core modules
 
