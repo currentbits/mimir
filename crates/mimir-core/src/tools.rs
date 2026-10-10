@@ -164,7 +164,8 @@ pub fn specs() -> Vec<(&'static str, &'static str, Value)> {
             "memory_store",
             "Save a durable fact about the user. type: 'convention' = standing preference/instruction, \
              'knowledge' = fact, 'task' = open commitment. To correct an old memory pass its id as `supersedes`. \
-             A convention the user didn't state in their own message is proposed to them to accept, not saved.",
+             A convention the user didn't state in their own message is proposed to them to accept, not saved. \
+             Never save that a tool, account or site doesn't work, or an error you hit: those get fixed.",
             json!({"type":"object","properties":{
                 "type":{"type":"string","enum":TYPES},
                 "title":{"type":"string","description":"short label"},
@@ -252,8 +253,8 @@ pub fn specs() -> Vec<(&'static str, &'static str, Value)> {
         ),
         (
             "email_send",
-            "Send an email as the user. They approve every email (who it's to, the subject and the text), so only after \
-             they asked you to send it. Short emails only (the whole thing must fit on their approval card); for anything \
+            "Send an email as the user, once they asked you to. They approve every email on a card (who it's to, the subject \
+             and the text), so don't also ask in your reply: call this and the card asks. Short emails only (the whole thing must fit on their approval card); for anything \
              longer, or when unsure, use email_draft. With reply_to (an id from email_search) it's a reply in that thread.",
             json!({"type":"object","properties":{
                 "to":{"type":"string","description":"addresses, comma-separated"},

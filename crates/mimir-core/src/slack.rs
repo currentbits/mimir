@@ -1,7 +1,8 @@
 //! Slack via Socket Mode (outbound WebSocket, no public URL needed).
 //! App setup: enable Socket Mode, create an app-level token (connections:write), bot scopes
 //! chat:write, im:history, app_mentions:read, files:read (+ channels:history, groups:history to catch up channel
-//! mentions sent while Mimir was off); subscribe to message.im and app_mention events;
+//! mentions sent while Mimir was off); subscribe to message.im and app_mention events (+ message.channels and
+//! message.groups, so the bot follows a thread it was mentioned in without another @-mention);
 //! enable Interactivity (for Approve/Deny buttons).
 
 use crate::db::Approval;
@@ -165,8 +166,8 @@ impl Slack {
 
     /// A message event (live, or fetched on reconnect): text, or files with it.
     async fn on_message(&self, me: &Chan, core: &Arc<Core>, ev: &Value, my_user: &str) -> Result<()> {
-        let Some(t) = message_for_bot(ev, my_user) else { return Ok(()) };
         let ch = ev["channel"].as_str().unwrap_or("");
+        let Some(t) = message_for_bot(ev, my_user).or_else(|| self.followed(core, me, ev, my_user)) else { return Ok(()) };
         if let Some(k) = ev["ts"].as_str().and_then(ts_key)
             && !core.mark_seen(me, ch, k)
         {
@@ -187,6 +188,22 @@ impl Slack {
             return core.incoming_files(me, ch, from, &t, &files, sent, |f| self.download(f.url.clone(), f.mime.clone())).await;
         }
         core.incoming(me, ch, from, &title, &t, sent).await
+    }
+
+    /// A later reply from the paired person in the thread the bot was last mentioned in (and answered): for the bot,
+    /// without another @-mention. Anyone else's stays ignored.
+    fn followed(&self, core: &Arc<Core>, me: &Chan, ev: &Value, my_user: &str) -> Option<String> {
+        if ev["type"] != "message" || !ev["bot_id"].is_null() || !ev["subtype"].is_null() || ev["channel_type"] == "im" {
+            return None;
+        }
+        let (ch, thread) = (ev["channel"].as_str()?, ev["thread_ts"].as_str()?);
+        let mut threads = self.threads.lock().unwrap();
+        let t = threads.get_mut(ch).filter(|(ts, at)| ts == thread && at.elapsed() < THREAD_FOR)?;
+        if !core.is_owner(me, ch, ev["user"].as_str().unwrap_or("")) {
+            return None;
+        }
+        t.1 = Instant::now();
+        Some(ev["text"].as_str()?.replace(&format!("<@{my_user}>"), "").trim().to_string())
     }
 
     /// What came in the paired chats while Mimir was away (Socket Mode doesn't replay it), up to a day back: DMs, and

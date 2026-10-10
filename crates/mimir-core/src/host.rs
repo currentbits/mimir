@@ -872,6 +872,21 @@ impl Host {
                 ok(json!({"used": used, "budget": budget, "count": count}))
             }
             // The model for the background memory tidy-up (get without `model`, set with it; blank = the bot's own).
+            // A lighter model for every routine, per kind of account its bots use (a model name only means something
+            // to its own kind). Set with kind and model ("" = the bot's own model).
+            "routine_model" => {
+                if let (Some(kind), Some(m)) = (arg::<Option<String>>(a, "kind")?, arg::<Option<String>>(a, "model")?) {
+                    if !["claude", "codex", "grok", "api"].contains(&kind.as_str()) {
+                        bail!("unknown kind of account");
+                    }
+                    self.db.set_setting(&format!("routine_model:{kind}"), m.trim())?;
+                }
+                let mut kinds: Vec<&str> = self.db.bots()?.iter().filter_map(|b| self.provider(b.id).ok()).map(|p| p.kind()).collect();
+                kinds.sort();
+                kinds.dedup();
+                let model = |k: &str| self.db.setting(&format!("routine_model:{k}")).ok().flatten().unwrap_or_default();
+                ok(kinds.into_iter().map(|k| json!({"kind": k, "model": model(k)})).collect::<Vec<_>>())
+            }
             "tidy_model" => {
                 // Kept per kind of account (the memory bot's): a model name only means something to its own kind.
                 let kind = crate::tidy::memory_bot(&self.db).and_then(|b| self.provider(b).ok()).map_or("claude", |p| p.kind());

@@ -254,9 +254,31 @@ impl Discord {
         }
     }
 
+    /// A later message from the paired person in the thread the bot was last mentioned in: for the bot, without
+    /// another @-mention. Anyone else's stays ignored.
+    async fn followed(&self, me: &Chan, core: &Arc<Core>, d: &Value) -> Option<String> {
+        let raw = d["channel_id"].as_str()?;
+        if d["guild_id"].is_null() || d["author"]["bot"].as_bool() == Some(true) || !self.threads.lock().unwrap().values().any(|(t, _)| t == raw) {
+            return None;
+        }
+        let home = self.home(me, core, raw).await;
+        let mut threads = self.threads.lock().unwrap();
+        let t = threads.get_mut(&home).filter(|(t, at)| t == raw && at.elapsed() < THREAD_FOR)?;
+        if !core.is_owner(me, &home, d["author"]["id"].as_str().unwrap_or("")) {
+            return None;
+        }
+        t.1 = Instant::now();
+        d["content"].as_str().map(|c| c.trim().to_string()).filter(|c| !c.is_empty())
+    }
+
     /// A message (live, or fetched on reconnect): text, or attachments with it.
     async fn on_message(&self, me: &Chan, core: &Arc<Core>, d: &Value, my_id: &str) -> Result<()> {
-        let Some(t) = message_for_bot(d, my_id) else { return Ok(()) };
+        let Some(t) = (match message_for_bot(d, my_id) {
+            Some(t) => Some(t),
+            None => self.followed(me, core, d).await,
+        }) else {
+            return Ok(());
+        };
         let raw = d["channel_id"].as_str().unwrap_or("");
         let home = if d["guild_id"].is_null() { raw.to_string() } else { self.home(me, core, raw).await };
         let ch = home.as_str();
@@ -284,6 +306,12 @@ impl Discord {
         if !files.is_empty() {
             return core.incoming_files(me, ch, from, &t, &files, sent, |f| self.download(f.url.clone())).await;
         }
+        // A reply to one of the bot's messages: which one.
+        let r = &d["referenced_message"];
+        let t = match r["content"].as_str().filter(|q| r["author"]["id"] == my_id && !q.trim().is_empty()) {
+            Some(quoted) => crate::with_reply(&t, quoted),
+            None => t,
+        };
         core.incoming(me, ch, from, &title, &t, sent).await
     }
 

@@ -150,6 +150,33 @@ pub async fn incognito_turn(provider: &Provider, ctx: &ToolCtx, history: &[(Stri
     Ok(out?.text)
 }
 
+/// A routine running well after it was due (the computer slept, Mimir was off, a hold): said, so a morning brief at
+/// 13:10 doesn't read as if it were 07:30.
+fn late(due: i64, now: i64) -> String {
+    use chrono::TimeZone;
+    if now - due < db::MISSED_AFTER {
+        return String::new();
+    }
+    let at = chrono::Local.timestamp_opt(due, 0).single().map(|d| d.format(if now - due < 86400 { "%H:%M" } else { "%a %-d %b %H:%M" }).to_string()).unwrap_or_default();
+    format!(", due at {at}: it's running late, so leave out what's no longer useful and don't say \"this morning\" for something that already passed")
+}
+
+/// The newest messages that fit in `max` characters, oldest first, one per line ("user: …", "assistant: …").
+fn so_far(msgs: &[(String, String)], max: usize) -> String {
+    let mut kept: Vec<String> = vec![];
+    let mut len = 0;
+    for (role, text) in msgs.iter().rev() {
+        let line = format!("{role}: {}", text.replace('<', "‹").replace('>', "›"));
+        len += line.len() + 1;
+        if len > max && !kept.is_empty() {
+            break;
+        }
+        kept.push(tools::truncate(&line, max));
+    }
+    kept.reverse();
+    kept.join("\n")
+}
+
 pub enum Trigger<'a> {
     Message(&'a str),
     Routine(&'a db::Routine),
@@ -160,6 +187,15 @@ pub enum Trigger<'a> {
 /// One agent turn: bootstrap + recall → provider (with tools) → log.
 /// Every turn is recorded in the run log (status, model, tokens, cost, tool calls).
 pub async fn turn(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) -> Result<String> {
+    // Routines can run on a lighter model of the same account (Settings → Routines), which stretches the plan's windows.
+    let lighter;
+    let provider = match &trigger {
+        Trigger::Routine(_) => {
+            lighter = provider.with_model(ctx.db.setting(&format!("routine_model:{}", provider.kind()))?.as_deref());
+            &lighter
+        }
+        _ => provider,
+    };
     let (kind, routine_id) = match &trigger {
         // A rehearsal of a routine (or of a skill, with no routine yet) is logged as one, not as the routine's run.
         Trigger::Routine(r) if ctx.rehearsal => ("rehearsal", (r.id > 0).then_some(r.id)),
@@ -255,6 +291,18 @@ pub(crate) fn is_correction(text: &str) -> bool {
 
 /// A logged user message that holds only the person's own words: no attached file or forward (outside content), not a
 /// routine's prompt or another bot's task. Only these may come back as "what they asked / said".
+/// A reply to one of the bot's earlier messages (Telegram's swipe-to-reply, a Discord reply), ahead of what the person
+/// wrote, so "this one" or "move it to Friday" says which. The quote can't close the tag and pass for their words.
+pub fn with_reply(text: &str, quoted: &str) -> String {
+    let q = tools::truncate(&quoted.split_whitespace().collect::<Vec<_>>().join(" "), 2000).replace('<', "‹").replace('>', "›");
+    format!("<replying_to_your_message>{q}</replying_to_your_message>\n{text}")
+}
+
+/// What the person wrote, without the message they replied to.
+pub(crate) fn own_part(text: &str) -> &str {
+    text.strip_prefix("<replying_to_your_message>").and_then(|r| r.split_once("</replying_to_your_message>\n")).map_or(text, |(_, rest)| rest)
+}
+
 pub(crate) fn own_words(text: &str) -> bool {
     !text.contains("<document name=") && !text.starts_with("[Scheduled ") && !text.starts_with("[Task from ")
 }
@@ -485,7 +533,7 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
         Trigger::Routine(r) => {
             // A routine can just run a skill: its prompt is "/skill-name …".
             let prompt = skill_command(&ctx.db, &scope, ctx.bot_id, &r.prompt).unwrap_or_else(|| r.prompt.clone());
-            (format!("[Scheduled {} #{} \"{}\"] {prompt}", if r.quiet { "quiet check" } else { "routine" }, r.id, r.cron), true, r.quiet)
+            (format!("[Scheduled {} #{} \"{}\"{}] {prompt}", if r.quiet { "quiet check" } else { "routine" }, r.id, r.cron, late(r.next_fire, db::now())), true, r.quiet)
         }
     };
     // "/skill-name …" from the person: use that skill (the message is kept as they wrote it).
@@ -493,9 +541,18 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
         Trigger::Message(t) => skill_command(&ctx.db, &scope, ctx.bot_id, t).unwrap_or(text),
         _ => text,
     };
+    // Their own words, without a message they replied to (its text isn't theirs).
+    let own = match &trigger {
+        Trigger::Message(t) => Some(own_part(t)),
+        _ => None,
+    };
+    // A reply to one of the bot's messages quotes it: if a recent reply was written after reading a page, it may be that.
+    if matches!(&trigger, Trigger::Message(t) if own_part(t).len() != t.len()) && ctx.db.recent_outside(ctx.bot_id, ctx.chat_id, 20)? {
+        ctx.pre_taint();
+    }
     // Pushing back on the last reply is the strongest hint of how the person wants things done.
     // Not with a file or forward attached: its text could hold the words of a correction ("that is wrong…").
-    if let Trigger::Message(t) = &trigger
+    if let Some(t) = own
         && is_correction(t)
         && own_words(t)
         && let recent = ctx.db.recent(ctx.bot_id, ctx.chat_id, 2)?
@@ -523,7 +580,7 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
             }
             ctx.db.case_add(ctx.bot_id, ctx.chat_id, asked, last, t)?;
         }
-    } else if let Trigger::Message(t) = &trigger
+    } else if let Some(t) = own
         && !t.starts_with('/')
         && own_words(t)
         && let [.., asked, last] = ctx.db.messages(ctx.chat_id, 2)?.as_slice()
@@ -538,7 +595,7 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
         let said = format!("They asked: {} → You said: {} → They asked again: {t}", tools::truncate(&asked.content, 160), tools::truncate(&last.content, 200));
         ctx.db.signal_add(ctx.bot_id, ctx.chat_id, "re-asked", &said)?;
     }
-    if let (Trigger::Message(t), Some(run)) = (&trigger, ctx.run_id) {
+    if let (Some(t), Some(run)) = (own, ctx.run_id) {
         ctx.db.run_asked(run, t)?;
     }
     let mut ctx = ctx.clone();
@@ -584,7 +641,8 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
             v if v.is_empty() => String::new(),
             v => format!(
                 "\n\nThese actions ask the user for an OK each time: {}. If a request needs two or more of them, call plan_propose \
-                 first with all the steps, so they approve once instead of each time.",
+                 first with all the steps, so they approve once instead of each time. The OK is a card Mimir shows them: \
+                 once they've asked for something, call the tool and let the card ask. Don't also ask \"shall I?\" in your reply.",
                 v.join(", ")
             ),
         }
@@ -652,7 +710,23 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
     // Routines run in a fresh session so they don't derail the live conversation.
     let session = if is_routine { None } else { ctx.db.session(ctx.bot_id, ctx.chat_id)? };
 
-    let mut reply = provider.run(ctx, &system, &history, &user, session).await?;
+    let had_session = session.is_some();
+    let mut reply = match provider.run(ctx, &system, &history, &user, session).await {
+        // The session couldn't be reopened (the CLI was updated or cleaned up, the chat moved to a server, the bot
+        // changed accounts): a new one starts with the chat so far, from Mimir's own log, so it isn't a blank page.
+        Err(e) if had_session && !provider::is_usage_limit(&e) => {
+            eprintln!("resume failed ({e:#}); starting a new session with the chat so far");
+            let so_far = so_far(&ctx.db.recent(ctx.bot_id, ctx.chat_id, 60)?, 30_000);
+            if ctx.db.recent_outside(ctx.bot_id, ctx.chat_id, 60)? {
+                ctx.pre_taint();
+            }
+            let user = format!("<conversation_so_far>\nYour earlier session with this person couldn't be reopened. This is the last part of it, from Mimir's log:\n{so_far}\n</conversation_so_far>\n\n{user}");
+            let mut r = provider.run(ctx, &system, &history, &user, None).await?;
+            r.text = format!("_(I couldn't reopen our earlier conversation, so I reread the last part of it.)_\n\n{}", r.text);
+            r
+        }
+        r => r?,
+    };
     // An account that doesn't say what it used (some local models): about 4 characters a token, so caps and the
     // routine's use still see it. ponytail: tool rounds aren't counted, so it's low for runs that use many tools.
     if reply.usage.tokens_in == 0 && reply.usage.tokens_out == 0 {
@@ -703,6 +777,22 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_late_run_is_told() {
+        let now = super::db::now();
+        assert_eq!(super::late(now - 60, now), "", "on time");
+        assert!(super::late(now - 3 * 3600, now).starts_with(", due at "), "hours late");
+    }
+
+    #[test]
+    fn a_new_session_gets_the_newest_of_the_chat() {
+        let m = |r: &str, t: &str| (r.to_string(), t.to_string());
+        let msgs = [m("user", "old question"), m("assistant", "old <b>answer</b>"), m("user", "move it to Friday")];
+        assert_eq!(super::so_far(&msgs, 1000), "user: old question\nassistant: old ‹b›answer‹/b›\nuser: move it to Friday");
+        assert_eq!(super::so_far(&msgs, 30), "user: move it to Friday", "the newest that fit");
+        assert!(super::so_far(&[m("user", &"x".repeat(50))], 20).starts_with("user: xxxx"), "one too long is cut, not dropped");
+    }
 
     #[test]
     fn skills_can_be_called_by_name() {

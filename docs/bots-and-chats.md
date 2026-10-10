@@ -64,7 +64,13 @@ someone else's words. Replies
 never show link previews (the apps fetch those on their own) and never ping @everyone, @here or roles. In Slack channels and Discord servers the bot
 answers only when @-mentioned; DMs always work. In a Slack channel it answers in a thread; in a Discord server, as a
 reply. A Discord thread under a paired channel counts as that channel (no second pairing), and the bot answers in the
-thread. (Mentions in a thread while Mimir was off aren't picked up later.)
+thread. Once you've @-mentioned it in a thread, it follows that thread for half an hour: your next replies there reach
+it without another @-mention (on Slack, the app needs the `message.channels` and `message.groups` events for this).
+Other people's replies in the thread are still ignored. (Mentions in a thread while Mimir was off aren't picked up later.)
+
+**Replying to one of its messages** (swipe to reply on Telegram, Reply on Discord) tells the bot which message you mean,
+so "move this one to Friday" under item 3 of a briefing works. On Telegram, select part of the message first to quote
+just that part.
 
 Replies stream on all three: a message appears as soon as the bot starts and is edited as it grows (Telegram private
 chats use Telegram's own streaming, with a native stop button). A message answered 10+ minutes late (the computer was

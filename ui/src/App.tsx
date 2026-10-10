@@ -125,6 +125,9 @@ function Actions({ actions, chatId, runId, onChange }: { actions: Action[]; chat
 
 /** What you wrote. With a file, the bot got its text; here it's your words and the file's name. */
 function Said({ text }: { text: string }) {
+  // A reply to one of the bot's messages (Telegram's swipe-to-reply): the quote above what they wrote.
+  const re = text.match(/^<replying_to_your_message>([\s\S]*?)<\/replying_to_your_message>\n/)
+  if (re) return <><span className="msg-quote">{re[1]}</span><Said text={text.slice(re[0].length)} /></>
   const doc = text.match(/^([\s\S]*?)\n\n\[Attached: (.+?)\. Its text follows/)
   if (!doc) return <>{text}</>
   return <>{doc[1] !== '(I sent you a file.)' && <>{doc[1]}<br /></>}<span className="msg-file"><Icon name="file" size={13} />{doc[2]}</span></>
@@ -1155,7 +1158,7 @@ function Countdown({ until }: { until: number }) {
 
 const STARTERS = ['Remember that I prefer short answers.', 'What do you know about me?', 'Every weekday at 8:30, remind me of my open tasks.']
 /** "[Scheduled quiet check #3 "0 8 * * *"] Look at…" → its parts. */
-const SCHEDULED = /^\[Scheduled (routine|quiet check) #(\d+) "([^"]+)"\]\s*([\s\S]*)$/
+const SCHEDULED = /^\[Scheduled (routine|quiet check) #(\d+) "([^"]+)"[^\]]*\]\s*([\s\S]*)$/
 
 function CopyButton({ text }: { text: string }) {
   const [done, setDone] = useState(false)
@@ -2626,7 +2629,7 @@ function BotPage({ bot, status, canDelete, onSaved, onDeleted, onChat }: {
           <input className="input" type="password" aria-label="Telegram bot token" placeholder="123456:ABC…" value={typed('telegram_token')} onChange={e => type('telegram_token', e.target.value)} autoComplete="off" />
         </ChannelRow>
         <ChannelRow icon="slack" title="Slack" st={chan('slack')} has={b.has_slack} onRemove={() => save({ ...NO_SECRETS, slack_bot_token: '', slack_app_token: '' })}
-          hint="Create a Slack app with Socket Mode and Interactivity on; scopes chat:write, im:history, app_mentions:read, files:read, channels:history, groups:history; events message.im and app_mention.">
+          hint="Create a Slack app with Socket Mode and Interactivity on; scopes chat:write, im:history, app_mentions:read, files:read, channels:history, groups:history; events message.im and app_mention (add message.channels and message.groups so it follows a thread without another @-mention).">
           <input className="input" type="password" aria-label="Slack bot token" placeholder="Bot token (xoxb-…)" value={typed('slack_bot_token')} onChange={e => type('slack_bot_token', e.target.value)} autoComplete="off" />
           <input className="input" type="password" aria-label="Slack app-level token" placeholder="App-level token (xapp-…)" value={typed('slack_app_token')} onChange={e => type('slack_app_token', e.target.value)} autoComplete="off" />
         </ChannelRow>
@@ -2704,7 +2707,7 @@ const SETTING_WORDS: Record<string, string> = {
   'Calendar': 'caldav icloud fastmail nextcloud events schedule',
   'Web search': 'brave searxng google internet search engine',
   'Daily digest': 'quiet hours notifications summary weekly review do not disturb',
-  'Limits': 'cap budget tokens cost usage limit plan subscription quota five hour weekly',
+  'Limits': 'cap budget tokens cost usage limit plan subscription quota five hour weekly cheaper model haiku',
   'Permissions': 'allow ask deny approve rules tools safety always',
   'Browser': 'playwright chromium saved logins passwords vault',
   'Tool servers': 'mcp plugins integrations connectors',
@@ -3172,7 +3175,7 @@ function DigestSettings() {
   }
   const save = (time: string) => { setAt(time); invoke<string>('digest_time', { time }).then(t => { setAt(t); setMsg('Saved') }, e => setMsg(String(e))) }
   return (
-    <Group title="Daily digest" note="Routines set to “In my daily digest” are collected into one message a day, with a line for quiet checks that found nothing. Anything urgent still comes right away.">
+    <Group title="Daily digest" note="Routines set to “In my daily digest” are collected into one message a day, with a line for quiet checks that found nothing. Routines set to “Right away” still message you as soon as they run, outside quiet hours.">
       <Row icon={<Icon name="clock" size={15} />} title="Send my digest at" desc={msg ?? 'Once a day, to each chat that has digest routines.'}>
         {at !== null && <input className="input" type="time" aria-label="Digest time" style={{ width: 'auto' }} value={at} onChange={e => e.target.value && save(e.target.value)} />}
       </Row>
@@ -3199,11 +3202,15 @@ type Windows = { at: number; status: string; windows: { name: string; used: numb
 const WINDOW_NAME: Record<string, string> = { five_hour: '5-hour window', seven_day: 'Weekly', seven_day_opus: 'Weekly (Opus)', seven_day_sonnet: 'Weekly (Sonnet)' }
 
 /** Daily caps on what routines may use, and the AI plan's own windows where the AI reports them. */
+const KIND_NAME: Record<string, string> = { claude: 'Claude', codex: 'ChatGPT / Codex', grok: 'Grok', api: 'API key' }
+
 function LimitsSettings() {
   const [caps, setCaps] = useState<Caps | null>(null)
   const [win, setWin] = useState<Windows | null>(null)
   const [msg, setMsg] = useState<string | null>(null)
+  const [models, setModels] = useState<{ kind: string; model: string }[]>([])
   useEffect(() => {
+    invoke<{ kind: string; model: string }[]>('routine_model').then(setModels, () => {})
     invoke<Caps>('caps').then(setCaps, () => {})
     invoke<Windows | null>('ai_windows').then(setWin, () => {})
   }, [])
@@ -3219,6 +3226,13 @@ function LimitsSettings() {
       {field('routine', 'Each routine', 'What one routine may use in a day.')}
       {field('bot', 'Each bot', 'What one bot may use in a day, replies included; only its routines pause.')}
       {field('day', 'All bots together', 'Everything, every bot, in a day.')}
+      {models.map(m => (
+        <Row key={m.kind} icon={<Icon name="wand" size={15} />} title={models.length > 1 ? `Model for routines (${KIND_NAME[m.kind] ?? m.kind})` : 'Model for routines'}
+          desc="A lighter model of the same account (e.g. haiku, gpt-5-mini) makes every routine cheaper, and your plan's windows last longer. Use a routine's Test run to see if it's good enough. Blank: the bot's own model.">
+          <input className="input" style={{ width: 170 }} placeholder="Same as the bot" aria-label={`Model for routines (${m.kind})`} defaultValue={m.model}
+            onBlur={e => e.target.value.trim() !== m.model && invoke<{ kind: string; model: string }[]>('routine_model', { kind: m.kind, model: e.target.value }).then(v => { setModels(v); setMsg(null) }, er => setMsg(String(er)))} />
+        </Row>
+      ))}
       {win && win.windows.length > 0 && (
         <Row icon={<Icon name="clock" size={15} />} title="Your Claude plan"
           desc={`${win.windows.map(w => `${WINDOW_NAME[w.name] ?? w.name.replace(/_/g, ' ')}: ${Math.round(w.used * 100)}% used, resets ${fullTime(w.resets_at)}`).join(' · ')}. As Claude Code reported it ${ago(win.at)}; when a window is used up, routines wait until it resets.`} />

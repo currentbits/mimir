@@ -31,7 +31,9 @@ shows on the routine itself.
 A routine **missed** its time when it ran more than 15 minutes late: Mimir wasn't running then (the app was closed),
 the computer was asleep, or a long run before it held it up. It still runs once as soon as it can (not once for every
 slot it missed), and the run log gets a line saying which times it missed and why ("Missed 3 runs, 15:00 to 17:00:
-Mimir wasn't running then. It ran at 17:17 instead."). Missed and failed runs show in **Needs you**.
+Mimir wasn't running then. It ran at 17:17 instead."). Missed and failed runs show in **Needs you**. The late run is
+told when it was due, so a 7:30 briefing that runs at 13:10 leaves out what has already passed instead of saying "this
+morning".
 
 ## Caps
 
@@ -47,6 +49,11 @@ they're billed, so a cap isn't eaten by the same instructions read again; each r
 on that scale, which is a good guide for its cap. An AI that doesn't report what it used (some local models) gets an
 estimate from the text, about four characters a token, shown with ≈ in Activity, so caps still apply to it. Where the AI reports them (Claude Code does), Limits also shows
 your plan's own windows: how much of the 5-hour and weekly windows is used, and when each resets.
+
+**Model for routines** (also in Limits) runs every routine on a lighter model of the same account, e.g. `haiku` on
+Claude or `gpt-5-mini` on ChatGPT, while replies to you keep the bot's own model. Routines are usually the bulk of
+what a plan's windows go to, and most don't need the biggest model. A routine's **Test run** uses it too, so you can
+see whether it's good enough first. With bots on different kinds of account, there's one field for each kind.
 
 ## When a run doesn't work
 

@@ -4,6 +4,21 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 
 ## Unreleased
 
+- **A bot no longer forgets the conversation without saying so:** when its AI tool can't reopen the earlier session
+  (after an update, moving to a server, or switching the bot to another account), it rereads the last part of your chat
+  from Mimir's own log and tells you it did.
+- **Replying to a message says which one:** swipe to reply on Telegram (or select part of it first), or Reply on
+  Discord, and "move this one to Friday" reaches the bot with the message it's about.
+- **Threads without @-mentioning again:** after you mention a bot in a Slack or Discord thread, your next replies there
+  reach it for half an hour (Slack needs the `message.channels` and `message.groups` events).
+- **Model for routines** (Settings → Limits): every routine on a lighter model of the same account, e.g. haiku, so
+  your plan's windows last longer. Replies to you keep the bot's own model.
+- **A late routine knows it's late:** a morning briefing that runs at lunchtime is told when it was due.
+- **One question, not two:** bots let the approval card ask, instead of asking "shall I?" first.
+- **The memory tidy-up doesn't learn that something is broken:** no memories or skill steps from setup problems or
+  errors that went away.
+- Settings no longer says that urgent things in the digest come right away; they don't (yet).
+
 - **Quiet checks that cost almost nothing:** a quiet check can watch a page, a feed or your inbox. Mimir looks first and
   runs the AI only when something changed, with just what changed. Unchanged checks show as free. Times, counters
   and anything else that changes on every load don't count as a change.

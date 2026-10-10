@@ -136,6 +136,7 @@ impl Tg {
 
     pub(crate) async fn listen(&self, me: &Chan, core: Arc<Core>, slot: Slot) -> Result<()> {
         let bot = self.call("getMe", json!({})).await.context("Telegram rejected the bot token")?;
+        let me_id = bot["id"].as_i64();
         slot.connected(format!("@{}", bot["username"].as_str().unwrap_or("?")));
         // The "/" menu in Telegram shows these.
         let base = json!([
@@ -195,6 +196,8 @@ impl Tg {
                         // A forwarded message is someone else's words: outside content, like a file.
                         let said = crate::with_document("(I forwarded you a message.)", "a forwarded message", text);
                         core.incoming_outside(me, &chat.to_string(), who, title, &said, u["message"]["date"].as_i64()).await
+                    } else if let Some(quoted) = replied_to(&u["message"], me_id) {
+                        core.incoming(me, &chat.to_string(), who, title, &crate::with_reply(text, &quoted), u["message"]["date"].as_i64()).await
                     } else {
                         core.incoming(me, &chat.to_string(), who, title, text, u["message"]["date"].as_i64()).await
                     }
@@ -284,5 +287,37 @@ impl Tg {
         };
         self.call("answerCallbackQuery", json!({"callback_query_id": q["id"], "text": reply})).await?;
         Ok(())
+    }
+}
+
+/// The bot's own message this one replies to (swipe-to-reply): the part the person selected, else the whole message.
+/// Not a topic's opening message (every message in a topic replies to it), nor anyone else's.
+fn replied_to(m: &Value, me_id: Option<i64>) -> Option<String> {
+    let r = &m["reply_to_message"];
+    if me_id.is_none() || !r.is_object() || r["forum_topic_created"].is_object() || r["from"]["id"].as_i64() != me_id {
+        return None;
+    }
+    m["quote"]["text"].as_str().or(r["text"].as_str()).or(r["caption"].as_str()).filter(|q| !q.trim().is_empty()).map(str::to_string)
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    #[test]
+    fn a_reply_says_which_of_the_bots_messages() {
+        let reply = |r: serde_json::Value| json!({"text": "move this one", "reply_to_message": r});
+        let mine = json!({"from": {"id": 7}, "text": "1. Dentist\n2. Call Sam"});
+        assert_eq!(super::replied_to(&reply(mine.clone()), Some(7)).as_deref(), Some("1. Dentist\n2. Call Sam"));
+        let mut quoted = reply(mine);
+        quoted["quote"] = json!({"text": "2. Call Sam"});
+        assert_eq!(super::replied_to(&quoted, Some(7)).as_deref(), Some("2. Call Sam"), "the part they selected");
+        assert!(super::replied_to(&reply(json!({"from": {"id": 9}, "text": "someone else's"})), Some(7)).is_none());
+        assert!(super::replied_to(&reply(json!({"from": {"id": 7}, "forum_topic_created": {"name": "Trip"}})), Some(7)).is_none());
+        assert!(super::replied_to(&json!({"text": "hi"}), Some(7)).is_none());
+        let t = crate::with_reply("move this one", "2. Call <b>Sam</b>");
+        assert_eq!(crate::own_part(&t), "move this one");
+        assert!(t.contains("‹b›Sam‹/b›"), "the quote can't close the tag");
+        assert_eq!(crate::own_part("plain"), "plain");
     }
 }

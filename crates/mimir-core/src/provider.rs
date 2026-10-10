@@ -142,14 +142,8 @@ impl Provider {
                         }
                     }
                 };
-                match go(session.as_deref()).await {
-                    // Session expired or deleted: start fresh rather than failing the turn.
-                    Err(e) if session.is_some() && !is_usage_limit(&e) => {
-                        eprintln!("resume failed ({e:#}); retrying without session");
-                        go(None).await
-                    }
-                    r => r,
-                }
+                // A session that can't be reopened is the caller's to retry: it has the chat to start the new one with.
+                go(session.as_deref()).await
             }
             // One deadline for the whole reply, however many tool rounds it takes.
             Provider::OpenAi { base, key, model } => tokio::time::timeout(TURN_TIMEOUT, openai(ctx, base, key, model, system, history, user)).await.context("the AI service took too long")?,
@@ -819,7 +813,7 @@ impl Provider {
     }
 }
 
-fn is_usage_limit(e: &anyhow::Error) -> bool {
+pub(crate) fn is_usage_limit(e: &anyhow::Error) -> bool {
     let m = format!("{e:#}").to_lowercase();
     m.contains("usage limit") || m.contains("rate limit") || m.contains("extra usage")
 }
