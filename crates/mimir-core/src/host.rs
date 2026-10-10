@@ -174,9 +174,11 @@ impl Host {
             let (db, home) = (db.clone(), home.clone());
             rt.spawn(async move {
                 loop {
-                    if crate::computer::enabled(&db) && !crate::computer::running() {
+                    if crate::computer::enabled(&db) {
+                        // Both block (a TCP connect or xdotool, then up to ~13 s of starting).
                         let h = home.clone();
-                        if let Ok(Err(e)) = tokio::task::spawn_blocking(move || crate::computer::start(&h)).await {
+                        let up = move || if crate::computer::running() { Ok(()) } else { crate::computer::start(&h) };
+                        if let Ok(Err(e)) = tokio::task::spawn_blocking(up).await {
                             eprintln!("computer: {e:#}");
                         }
                     }
@@ -648,7 +650,10 @@ impl Host {
             "meeting_rename" => ok(self.db.meeting_update(arg(a, "id")?, Some(&arg::<String>(a, "title")?), None)?),
             "meeting_delete" => ok(self.db.meeting_delete(arg(a, "id")?)?),
             // ---- the bots' computer (self-hosted Linux server) ----
-            "computer" => ok(json!({"available": crate::computer::available(), "enabled": crate::computer::enabled(&self.db), "running": crate::computer::running()})),
+            "computer" => {
+                let running = tokio::task::spawn_blocking(crate::computer::running).await?;
+                ok(json!({"available": crate::computer::available(), "enabled": crate::computer::enabled(&self.db), "running": running}))
+            }
             "computer_enable" => {
                 let on: bool = arg(a, "on")?;
                 if on && !crate::computer::available() {
@@ -661,7 +666,7 @@ impl Host {
                 } else {
                     crate::computer::stop();
                 }
-                ok(json!({"enabled": on, "running": crate::computer::running()}))
+                ok(json!({"enabled": on, "running": tokio::task::spawn_blocking(crate::computer::running).await?}))
             }
             // The live view: the screen as a JPEG (base64), for watching in the app.
             "computer_screen" => {

@@ -477,6 +477,8 @@ CREATE TABLE IF NOT EXISTS tool_calls(
   decision TEXT NOT NULL, ok INTEGER NOT NULL, result TEXT NOT NULL, ts INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS tool_calls_run ON tool_calls(run_id);
+-- The messages poll asks for a chat's actions since a run.
+CREATE INDEX IF NOT EXISTS tool_calls_chat ON tool_calls(chat_id, run_id);
 CREATE TABLE IF NOT EXISTS suggestions(
   id INTEGER PRIMARY KEY, scope TEXT NOT NULL, action TEXT NOT NULL CHECK(action IN ('add','update','forget','demote')),
   entry_id INTEGER, type TEXT NOT NULL DEFAULT 'knowledge', title TEXT NOT NULL DEFAULT '', body TEXT NOT NULL DEFAULT '',
@@ -491,6 +493,8 @@ CREATE TABLE IF NOT EXISTS approvals(
 CREATE TABLE IF NOT EXISTS messages(
   id INTEGER PRIMARY KEY, chat_id INTEGER NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL, ts INTEGER NOT NULL
 );
+-- A chat's latest messages (the chat list, the messages poll).
+CREATE INDEX IF NOT EXISTS messages_chat ON messages(chat_id, id);
 CREATE TABLE IF NOT EXISTS routines(
   id INTEGER PRIMARY KEY, chat_id INTEGER NOT NULL, cron TEXT NOT NULL, prompt TEXT NOT NULL, next_fire INTEGER NOT NULL
 );
