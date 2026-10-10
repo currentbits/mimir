@@ -163,11 +163,16 @@ impl Provider {
 
 async fn claude(ctx: &ToolCtx, home: &PathBuf, model: Option<&str>, system: &str, user: &str, session: Option<&str>) -> Result<Reply> {
     let exe = std::env::current_exe()?;
-    let mcp = json!({"mcpServers": {"mimir": {
-        "command": exe,
-        "args": ctx.mcp_args(),
-        "env": {"MIMIR_HOME": home}
-    }}});
+    // Tools off: no tools server at all (with --strict-mcp-config nothing else loads), so the run doesn't pay its startup.
+    let mcp = if ctx.tools_off {
+        json!({"mcpServers": {}})
+    } else {
+        json!({"mcpServers": {"mimir": {
+            "command": exe,
+            "args": ctx.mcp_args(),
+            "env": {"MIMIR_HOME": home}
+        }}})
+    };
     let workdir = home.join("workspace");
     std::fs::create_dir_all(&workdir)?;
 
@@ -866,6 +871,11 @@ async fn codex(ctx: &ToolCtx, home: &PathBuf, model: Option<&str>, system: &str,
         r#"web_search="live""#.to_string(),
         // A JSON string is also a valid TOML string (Windows backslashes included).
         format!("model_instructions_file={}", serde_json::to_string(&instructions.0)?),
+    ] {
+        cmd.arg("-c").arg(kv);
+    }
+    // Tools off: no tools server (--ignore-user-config means none other loads), so the run doesn't pay its startup.
+    for kv in if ctx.tools_off { vec![] } else { vec![
         format!("mcp_servers.mimir.command={exe}"),
         // A JSON array of strings is also a valid TOML array.
         format!("mcp_servers.mimir.args={}", serde_json::to_string(&ctx.mcp_args())?),
@@ -874,7 +884,7 @@ async fn codex(ctx: &ToolCtx, home: &PathBuf, model: Option<&str>, system: &str,
         // Mimir's own gate decides (allow / ask / deny, outside content): Codex hands every call through instead of
         // refusing ones it would otherwise want approved (with approval_policy=never it rejects them outright).
         r#"mcp_servers.mimir.default_tools_approval_mode="approve""#.to_string(),
-    ] {
+    ] } {
         cmd.arg("-c").arg(kv);
     }
     if let Some(m) = model {
