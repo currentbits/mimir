@@ -224,8 +224,8 @@ pub(crate) struct Core {
     status: SharedStatus,
     /// Wrong pairing codes per chat in the last hour; after a few, that chat's tries are ignored until the hour is up.
     misses: std::sync::Mutex<std::collections::HashMap<String, (u32, i64)>>,
-    // ponytail: one turn at a time per bot (keeps CLI --resume sessions serial); per-chat locks if a bot gets busy
-    lock: Mutex<()>,
+    /// One reply or routine at a time per chat (keeps its CLI --resume session serial); other chats don't wait.
+    locks: std::sync::Mutex<std::collections::HashMap<i64, Arc<Mutex<()>>>>,
     /// Unpaired chats already told how to pair (once each per run, so a stranger can't make it chatty).
     greeted: std::sync::Mutex<std::collections::HashSet<String>>,
 }
@@ -248,6 +248,10 @@ pub(crate) enum Command<'a> {
 }
 
 impl Core {
+    fn chat_lock(&self, chat: i64) -> Arc<Mutex<()>> {
+        self.locks.lock().unwrap().entry(chat).or_default().clone()
+    }
+
     /// This bot's skills per Telegram chat, as menu commands (name, description), for the "/" menu.
     pub(crate) fn skill_menus(&self) -> Vec<(i64, Vec<(String, String)>)> {
         self.db
@@ -768,8 +772,18 @@ impl Core {
                 let late = late_note(sent, crate::db::now());
                 let (core, chan, ext, text) = (self.clone(), chan.clone(), ext.to_string(), text.trim().to_string());
                 tokio::spawn(async move {
-                    let _g = core.lock.lock().await;
+                    // Typing at once, even when this chat is still busy; a wait past a few seconds says why, once.
                     let typing = chan.typing(&ext);
+                    let wait = core.chat_lock(chat).lock_owned();
+                    tokio::pin!(wait);
+                    let _g = tokio::select! {
+                        g = &mut wait => g,
+                        _ = tokio::time::sleep(BUSY_NOTE_AFTER) => {
+                            let busy = TURNS.lock().unwrap().contains_key(&(core.bot, chat));
+                            chan.send(&ext, if busy { "_Finishing my last reply first…_" } else { "_Finishing a routine first…_" }).await;
+                            wait.await
+                        }
+                    };
                     // The reply shows up as it's written: one message, edited as it grows, then formatted.
                     let follower = chan.follow(core.bot, chat, &ext);
                     let mut ctx = ToolCtx::new(core.db.clone(), core.bot, chat);
@@ -988,7 +1002,7 @@ impl Core {
         };
         // Nothing is spent on an AI account that isn't there: that's a failure (tried again, like the network) instead.
         let ready = self.provider.ready().await;
-        let _g = self.lock.lock().await;
+        let _g = self.chat_lock(r.chat_id).lock_owned().await;
         // Local-chat routines (or ones whose channel isn't connected) still run; the reply lands in the app.
         let target = Self::chan_for(chans, r.chat_id, &self.db);
         let out = match ready {
@@ -1137,7 +1151,7 @@ impl Core {
             if crate::tidy::memory_bot(&self.db) == Some(self.bot) {
                 let now = crate::db::now();
                 for chat in self.db.chats().unwrap_or_default().into_iter().filter(|c| crate::tidy::is_due(&self.db, c.chat_id, now)) {
-                    let _g = self.lock.lock().await;
+                    // No chat lock: it reads the chat and calls the AI without a session, so replies needn't wait.
                     match crate::tidy::run(&self.db, &self.provider, self.bot, chat.chat_id).await {
                         Ok(n) if n > 0 => eprintln!("tidy-up: {n} memory suggestions for chat {}", chat.chat_id),
                         Ok(_) => {}
@@ -1178,6 +1192,9 @@ impl Core {
     }
 }
 
+/// How long a message waits on its chat's routine or earlier reply before saying so.
+const BUSY_NOTE_AFTER: Duration = Duration::from_secs(4);
+
 /// Wrong pairing codes a chat may send in an hour.
 const MAX_PAIR_TRIES: u32 = 5;
 
@@ -1216,7 +1233,7 @@ pub async fn serve(db: Db, bot: i64, provider: Arc<Provider>, channels: Channels
         code: std::sync::Mutex::new(code),
         status: status.clone(),
         misses: Default::default(),
-        lock: Mutex::new(()),
+        locks: Default::default(),
         greeted: Default::default(),
     });
 
@@ -1311,7 +1328,7 @@ mod tests {
             code: Default::default(),
             status: Default::default(),
             misses: Default::default(),
-            lock: Mutex::new(()),
+            locks: Default::default(),
             greeted: Default::default(),
         }
     }
@@ -1443,7 +1460,7 @@ mod tests {
             code: Default::default(),
             status: Default::default(),
             misses: Default::default(),
-            lock: Mutex::new(()),
+            locks: Default::default(),
             greeted: Default::default(),
         });
         let chan = Chan::Discord(Discord::new("t").unwrap());

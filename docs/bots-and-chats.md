@@ -78,6 +78,10 @@ asleep) starts with "Sorry for the slow reply". Messages sent while Mimir was of
 up to a day back: Telegram keeps them for it; on Slack your DMs and @-mentions in paired channels (with the
 `channels:history` and `groups:history` scopes; not replies inside threads), on Discord your paired DMs and channels. A failed reply says why in plain words and what to do.
 
+A bot does one thing at a time per chat; its other chats don't wait. A message that arrives while that chat is busy
+(a routine running there, or an earlier reply waiting for your OK) shows typing at once, and after a few seconds one
+note: "Finishing a routine first…" or "Finishing my last reply first…". Its reply follows.
+
 Chat commands: `/memory`, `/routines`, `/new`, `/stop` (a bare "stop" works too while it's writing), `/undo <n>`
 (take back something it learned; see [Memory](memory.md#learned-this-week)), and `/<skill>` for each of the bot's
 skills (see [Skills](skills.md)). Everything else is plain language.
