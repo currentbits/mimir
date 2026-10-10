@@ -10,8 +10,10 @@ email, calendar and the web, and ask before they act. Mimir has no AI and no ser
   corrections, when you say "save that as a skill", from a link or SKILL.md, or by watching you do it once on their
   computer. Run one with `/book-padel`, from a routine, or share it with all your bots. Every change is a proposal;
   nothing changes until you accept.
-- **Routines.** "Every weekday at 7:30, brief me on tech news." Quiet checks that only speak up when something changes.
-  A daily digest and quiet hours.
+- **Routines.** "Every weekday at 7:30, brief me on tech news." Quiet checks that only speak up when something changes,
+  and that don't run the AI at all while a watched page or inbox stays the same. Daily caps, a rehearsal before a
+  routine runs for real, and failures handled by cause (wait for the plan's limit, retry the network). A daily digest
+  and quiet hours.
 - **Tools, safely.** Web pages, a real browser with saved logins the AI never sees, any MCP tool server, and on your
   server a computer bots use like a person. Every action is allowed, asked or denied by your rules; after reading
   anything from outside, changes always ask.

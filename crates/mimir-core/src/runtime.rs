@@ -78,15 +78,27 @@ impl Chan {
     }
 
     pub(crate) async fn send(&self, ext: &str, text: &str) {
+        if let Err(e) = self.try_send(ext, text).await {
+            eprintln!("{} send to {ext} failed: {e:#}", self.kind());
+        }
+    }
+
+    async fn try_send(&self, ext: &str, text: &str) -> Result<()> {
         let text = if text.trim().is_empty() { "(no reply)" } else { text };
-        let r = match self {
+        match self {
             Chan::Telegram(c) => c.send(ext, text).await,
             Chan::Slack(c) => c.send(ext, text).await,
             Chan::Discord(c) => c.send(ext, text).await,
-        };
-        if let Err(e) = r {
-            eprintln!("{} send to {ext} failed: {e:#}", self.kind());
         }
+    }
+
+    /// A routine's result: tried once more after a moment if the app didn't take it, and the error if it still didn't.
+    async fn deliver(&self, ext: &str, text: &str) -> Result<()> {
+        if self.try_send(ext, text).await.is_ok() {
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        self.try_send(ext, text).await
     }
 
     /// Final reply; replaces the streamed draft if there is one.
@@ -329,6 +341,9 @@ pub(crate) fn offers_always(a: &Approval) -> bool {
 /// The buttons of a chat-app approval card, in rows: (label, button data "ap:<id>:<y|n|a|w>").
 pub(crate) fn card_buttons(a: &Approval) -> Vec<Vec<(String, String)>> {
     let b = |label: String, d: char| (label, format!("ap:{}:{d}", a.id));
+    if a.kind == "takeover" {
+        return vec![vec![b("Done".into(), 'y'), b("Can't now".into(), 'n')]];
+    }
     let mut rows = vec![vec![b("Approve".into(), 'y'), b("Deny".into(), 'n')]];
     if offers_all(a) {
         rows.push(vec![b("Approve all like this".into(), 'a')]);
@@ -415,11 +430,17 @@ pub(crate) fn card_text(a: &Approval) -> String {
     let then = if a.parked { "It runs when you approve." } else { "No answer means deny." };
     // Allowed the same thing a few times already: offer to stop asking (like the app).
     let again = if offers_always(a) && a.allowed_before >= 2 { format!("\nYou've allowed this {} times. Press Always to stop being asked.", a.allowed_before) } else { String::new() };
+    if a.kind == "takeover" {
+        return format!("🖐 I need you on the computer\n\n{}\n\nWaits {wait}.", a.summary);
+    }
     format!("🔐 Approve this action?\n\n{}\n\nWaits {wait}. {then}{again}", a.summary)
 }
 
 pub(crate) fn verdict(a: &Approval) -> String {
     let outcome = match a.status.as_str() {
+        "approved" if a.kind == "takeover" => "✅ Done, carrying on",
+        "expired" if a.kind == "takeover" => "⌛ Nobody took over in time",
+        _ if a.kind == "takeover" => "Not now",
         "approved" => "✅ Approved",
         "expired" => "⌛ No answer in time, so not done",
         _ => "❌ Denied",
@@ -933,44 +954,172 @@ impl Core {
         chans.iter().find(|c| c.kind() == kind).map(|c| (c.clone(), ext))
     }
 
+    /// One routine that's due: the change gate, a setup check, the run, what happens after a failure (wait for the
+    /// usage limit, try again soon, or say so), and where its result went.
+    async fn run_routine(&self, chans: &[Chan], mut r: crate::db::Routine) -> Result<()> {
+        // Quiet hours: what would message right away goes into the next digest instead.
+        if r.delivery == "now" && quiet_now(&self.db, chrono::Local::now()) {
+            r.delivery = "digest".into();
+        }
+        // Over a daily cap: pause (it stays due, so it runs once when the day's over) and ask, in Needs you.
+        let day_start = chrono::Local::now().date_naive().and_hms_opt(0, 0, 0).and_then(|t| chrono::TimeZone::from_local_datetime(&chrono::Local, &t).earliest()).map_or(0, |t| t.timestamp());
+        if let Some((key, h)) = self.db.over_cap(&r, day_start)? {
+            let said = format!("⏸ Paused until tomorrow: {}. You can let it go on today in Mimir's Needs you.", h.why);
+            self.db.hold_set(&key, &h)?;
+            if let Some((c, ext)) = Self::chan_for(chans, r.chat_id, &self.db).filter(|_| r.delivery == "now") {
+                c.send(&ext, &said).await;
+            }
+            return Ok(());
+        }
+        self.db.routine_advance(&r)?;
+        // A watched quiet check: Mimir looks first, and only wakes the AI when something changed.
+        let seen = match crate::watch::gate(&self.db, &r).await {
+            Some(crate::watch::Gate::Same) => {
+                self.db.run_unchanged(&r)?;
+                return self.db.routine_done(&r, true);
+            }
+            Some(crate::watch::Gate::Run { note, seen }) => {
+                // What changed is someone else's page or mail: the run has read outside content.
+                r.tainted |= !note.is_empty();
+                r.prompt.push_str(&note);
+                Some(seen)
+            }
+            None => None,
+        };
+        // Nothing is spent on an AI account that isn't there: that's a failure (tried again, like the network) instead.
+        let ready = self.provider.ready().await;
+        let _g = self.lock.lock().await;
+        // Local-chat routines (or ones whose channel isn't connected) still run; the reply lands in the app.
+        let target = Self::chan_for(chans, r.chat_id, &self.db);
+        let out = match ready {
+            Err(e) => {
+                self.db.run_not_started(&r, &self.provider.name(), &format!("{e:#}"))?;
+                Err(e)
+            }
+            Ok(()) => {
+                let typing = target.as_ref().and_then(|(c, ext)| c.typing(ext));
+                let out = turn(&self.provider, &ToolCtx::new(self.db.clone(), self.bot, r.chat_id), Trigger::Routine(&r)).await;
+                if let Some(t) = typing {
+                    t.abort();
+                }
+                out
+            }
+        };
+        let run = self.db.routine_last_run(r.id)?;
+        let text = match out {
+            Ok(text) => {
+                // Compared against next time only once a run has seen this change (a failed one sees it again).
+                if let Some(seen) = seen {
+                    self.db.routine_set_seen(r.id, &seen)?;
+                }
+                self.db.routine_done(&r, true)?;
+                text
+            }
+            Err(e) => {
+                let e = format!("{e:#}");
+                let now = crate::db::now();
+                let clock = |t: i64| chrono::TimeZone::timestamp_opt(&chrono::Local, t, 0).single().map(|d| d.format(if t - now < 18 * 3600 { "%H:%M" } else { "%a %-d %b %H:%M" }).to_string()).unwrap_or_default();
+                let again = match crate::cause(&e) {
+                    crate::Cause::Quota => {
+                        // ponytail: an hour when the AI didn't say when it resets; a run then finds out again
+                        let until = crate::provider::quota_reset(&self.db, self.provider.kind(), &e, now).unwrap_or(now + 3600).min(now + 8 * 86400);
+                        let why = "the AI plan was at its usage limit, so Mimir waited for it to reset".to_string();
+                        // Every bot on the same signed-in AI (Claude, ChatGPT or Grok is one login for all of them) waits
+                        // too, instead of each finding out with a failed run. Bots on an API key may be limited per model.
+                        let held = self.db.hold_account(self.bot, self.provider.kind(), &crate::db::Hold { until, why, waive: None })?;
+                        self.db.routine_retry(&r, until)?;
+                        let who = if held.len() > 1 { "Routines on this AI account wait" } else { "This bot's routines wait" };
+                        let note = format!("{who} until {}, when the limit resets; this one runs again then.", clock(until));
+                        // Said once, where this routine speaks; Needs you has it too.
+                        if let Some((c, ext)) = target.as_ref().filter(|_| r.delivery == "now") {
+                            c.send(ext, &format!("⏸ I've hit my AI plan's usage limit. {note}")).await;
+                        }
+                        Some(note)
+                    }
+                    crate::Cause::Network | crate::Cause::Setup if r.retries < 3 => {
+                        let at = now + [5, 15, 30][r.retries as usize] * 60;
+                        self.db.routine_retry(&r, at)?;
+                        Some(format!("Trying again at {}.", clock(at)))
+                    }
+                    _ => None,
+                };
+                if let (Some(run), Some(note)) = (run, &again) {
+                    self.db.run_note(run, note)?;
+                }
+                if again.is_some() {
+                    return Ok(());
+                }
+                self.db.routine_done(&r, false)?;
+                let text = format!("Routine #{}: {}", r.id, crate::friendly_error(&e));
+                // A failed digest-lane routine (incl. one held for quiet hours) says so in the digest.
+                if r.delivery == "digest" {
+                    self.db.digest_add(self.bot, r.chat_id, r.id, &text, false)?;
+                }
+                text
+            }
+        };
+        // Empty = a quiet check that found nothing worth saying. Digest / log-only routines don't message now.
+        if text.trim().is_empty() {
+            return Ok(());
+        }
+        let how = match (r.delivery.as_str(), &target) {
+            ("digest", _) => "in the digest".to_string(),
+            ("log", _) => "only in the log".to_string(),
+            (_, None) => "in the app".to_string(),
+            (_, Some((c, ext))) => match c.deliver(ext, &text).await {
+                Ok(()) => format!("sent to {}", c.kind()),
+                Err(e) => format!("{} to {}: {}", crate::db::NOT_SENT, c.kind(), crate::tools::truncate(&format!("{e:#}"), 200)),
+            },
+        };
+        if let Some(run) = run {
+            self.db.run_delivered(run, &how)?;
+        }
+        Ok(())
+    }
+
     async fn scheduler(self: Arc<Self>, chans: Vec<Chan>) -> Result<()> {
         // A routine due before this was Mimir not running; one due since, the computer asleep or a long run.
         let started = crate::db::now();
         loop {
-            match self.db.due(self.bot, crate::db::now()) {
-                Ok(due) => {
-                    for mut r in due {
-                        if let Err(e) = self.db.routine_missed(&r, crate::db::now(), r.next_fire < started) {
-                            eprintln!("routine #{} missed: {e:#}", r.id);
-                        }
-                        // Quiet hours: what would message right away goes into the next digest instead.
-                        if r.delivery == "now" && quiet_now(&self.db, chrono::Local::now()) {
-                            r.delivery = "digest".into();
-                        }
-                        if let Err(e) = self.db.routine_advance(&r) {
-                            eprintln!("routine #{} advance failed: {e:#}", r.id);
+            let now = crate::db::now();
+            // Routines on hold (a usage limit) wait; the first pass after it ends runs each of them once.
+            let bot_hold = format!("hold:{}", self.bot);
+            let hold = self.db.hold(&bot_hold).unwrap_or_default();
+            let held = hold.as_ref().is_some_and(|h| h.until > now);
+            if hold.is_some() && !held {
+                let _ = self.db.hold_clear(&bot_hold, false);
+            }
+            match self.db.due(self.bot, now) {
+                Ok(due) if !held => {
+                    for r in due {
+                        // One routine paused at its daily cap waits on its own.
+                        let own_key = format!("hold:routine:{}", r.id);
+                        let own = self.db.hold(&own_key).unwrap_or_default();
+                        if own.as_ref().is_some_and(|h| h.until > crate::db::now()) {
                             continue;
                         }
-                        let _g = self.lock.lock().await;
-                        // Local-chat routines (or ones whose channel isn't connected) still run; the reply lands in the app.
-                        let target = Self::chan_for(&chans, r.chat_id, &self.db);
-                        let typing = target.as_ref().and_then(|(c, ext)| c.typing(ext));
-                        let out = turn(&self.provider, &ToolCtx::new(self.db.clone(), self.bot, r.chat_id), Trigger::Routine(&r)).await;
-                        if let Some(t) = typing {
-                            t.abort();
+                        if own.is_some() {
+                            let _ = self.db.hold_clear(&own_key, false);
                         }
-                        let failed = out.is_err();
-                        let text = out.unwrap_or_else(|e| format!("Routine #{}: {}", r.id, crate::friendly_error(&format!("{e:#}"))));
-                        // A failed digest-lane routine (incl. one held for quiet hours) says so in the digest.
-                        if failed && r.delivery == "digest" {
-                            let _ = self.db.digest_add(self.bot, r.chat_id, r.id, &text, false);
+                        let why = match (&own, &hold) {
+                            (Some(h), _) | (_, Some(h)) if r.next_fire < h.until => h.why.as_str(),
+                            _ if r.next_fire < started => crate::db::AWAY,
+                            _ => crate::db::ASLEEP,
+                        };
+                        if let Err(e) = self.db.routine_missed(&r, crate::db::now(), why) {
+                            eprintln!("routine #{} missed: {e:#}", r.id);
                         }
-                        // Empty = a quiet check that found nothing worth saying. Digest / log-only routines don't message now.
-                        if let Some((c, ext)) = target.filter(|_| !text.trim().is_empty() && r.delivery == "now") {
-                            c.send(&ext, &text).await;
+                        let id = r.id;
+                        if let Err(e) = self.run_routine(&chans, r).await {
+                            eprintln!("routine #{id}: {e:#}");
+                        }
+                        // It hit the usage limit or the bot's cap: the rest wait too.
+                        if self.db.hold(&bot_hold).ok().flatten().is_some_and(|h| h.until > crate::db::now()) {
+                            break;
                         }
                     }
                 }
+                Ok(_) => {}
                 Err(e) => eprintln!("scheduler: {e:#}"),
             }
             if let Err(e) = self.send_digest(&chans).await {
@@ -1137,6 +1286,149 @@ mod tests {
         assert!(quiet_now(&db, at(13, 30)) && !quiet_now(&db, at(14, 0)));
         db.set_setting("quiet_hours", "").unwrap();
         assert!(!quiet_now(&db, at(23, 0)), "empty = off");
+    }
+
+    /// A pretend AI service answering every request with this status and body.
+    async fn fake_ai(status: &'static str, body: &'static str) -> String {
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = l.local_addr().unwrap();
+        tokio::spawn(async move {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            while let Ok((mut s, _)) = l.accept().await {
+                let mut buf = vec![0u8; 65536];
+                let _ = s.read(&mut buf).await;
+                let _ = s.write_all(format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await;
+            }
+        });
+        format!("http://{addr}/v1")
+    }
+
+    fn core_on(db: &Db, base: &str) -> Core {
+        Core {
+            db: db.clone(),
+            bot: 1,
+            provider: Arc::new(Provider::new("openai", Some("m".into()), Some(base.into()), Some("k".into()), std::env::temp_dir()).unwrap()),
+            code: Default::default(),
+            status: Default::default(),
+            misses: Default::default(),
+            lock: Mutex::new(()),
+            greeted: Default::default(),
+        }
+    }
+
+    #[tokio::test]
+    async fn routine_failures_by_cause() {
+        let p = std::env::temp_dir().join(format!("mimir-causes-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = Db::open(&p).unwrap();
+        let now = crate::db::now();
+        let r = db.routine_create(1, 0, "0 8 * * *", "brief me", false).unwrap();
+        let fresh = |db: &Db| db.routines(0).unwrap().into_iter().find(|x| x.id == r.id).unwrap();
+
+        // Can't reach the AI: tried again in 5 minutes, without a message; one item in Needs you that says so.
+        let down = core_on(&db, "http://127.0.0.1:9/v1");
+        down.run_routine(&[], fresh(&db)).await.unwrap();
+        let after = fresh(&db);
+        assert!((after.retries, after.next_fire > now + 200 && after.next_fire <= now + 400) == (1, true), "{after:?}");
+        down.run_routine(&[], after).await.unwrap();
+        assert_eq!(fresh(&db).retries, 2);
+        let failed = db.runs_failed(0).unwrap();
+        assert_eq!((failed.len(), failed[0].repeats), (1, 2), "one item for the same failure");
+        assert!(failed[0].error.as_deref().unwrap().contains("Trying again at"), "{:?}", failed[0].error);
+
+        // The plan's usage limit: the bot's routines wait (an hour, when nobody says when it resets), this one runs then.
+        let limited = core_on(&db, &fake_ai("429 Too Many Requests", r#"{"error":{"message":"Rate limit reached"}}"#).await);
+        limited.run_routine(&[], fresh(&db)).await.unwrap();
+        let h = db.hold("hold:1").unwrap().expect("held");
+        assert!(h.until > now + 3000 && h.until <= now + 3700 && fresh(&db).next_fire <= h.until, "{h:?}");
+        assert_eq!(db.holds(now).unwrap().len(), 1, "another bot on an API key isn't held");
+        assert_eq!(db.runs_failed(0).unwrap().len(), 2, "a usage limit is its own item");
+
+        // It works again: its failures leave Needs you, the tries start over, and the result's whereabouts are logged.
+        let ok = core_on(&db, &fake_ai("200 OK", r#"{"choices":[{"message":{"role":"assistant","content":"Three headlines."}}],"usage":{"prompt_tokens":3,"completion_tokens":2}}"#).await);
+        ok.run_routine(&[], fresh(&db)).await.unwrap();
+        assert_eq!(fresh(&db).retries, 0);
+        assert!(db.runs_failed(0).unwrap().is_empty(), "healed");
+        assert_eq!(db.runs(Some(0), 1).unwrap()[0].delivered.as_deref(), Some("in the app"));
+
+        // A one-off stays until its run is over (a crash mid-run tries it again), then it's gone.
+        let once = db.routine_once(1, 0, now + 60, "call mum", false).unwrap();
+        db.routine_advance(&once).unwrap();
+        assert!(db.routines(0).unwrap().iter().any(|x| x.id == once.id && x.next_fire > now + 3000));
+        ok.run_routine(&[], once.clone()).await.unwrap();
+        assert!(!db.routines(0).unwrap().iter().any(|x| x.id == once.id));
+    }
+
+    #[tokio::test]
+    async fn first_runs_ask_what_to_trim() {
+        let p = std::env::temp_dir().join(format!("mimir-tune-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = Db::open(&p).unwrap();
+        let ok = core_on(&db, &fake_ai("200 OK", r#"{"choices":[{"message":{"role":"assistant","content":"Three headlines."}}]}"#).await);
+        let r = db.routine_create(1, 0, "0 8 * * *", "brief me", false).unwrap();
+        for _ in 0..4 {
+            let r = db.routines(0).unwrap().into_iter().find(|x| x.id == r.id).unwrap();
+            ok.run_routine(&[], r).await.unwrap();
+        }
+        let said: Vec<String> = db.messages(0, 8).unwrap().into_iter().filter(|m| m.role == "assistant").map(|m| m.content).collect();
+        let asks = said.iter().filter(|m| m.contains(&format!("adjust this routine (#{})", r.id))).count();
+        assert_eq!((said.len(), asks), (4, 3), "{said:?}");
+        // That AI didn't say what it used: estimated from the text, and marked so.
+        let run = &db.runs(Some(0), 1).unwrap()[0];
+        assert!(run.estimated && run.tokens_in > 0 && run.tokens_out > 0, "{run:?}");
+    }
+
+    #[tokio::test]
+    async fn daily_caps_pause_and_ask() {
+        let p = std::env::temp_dir().join(format!("mimir-caps-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = Db::open(&p).unwrap();
+        let ok = core_on(&db, &fake_ai("200 OK", r#"{"choices":[{"message":{"role":"assistant","content":"Done."}}],"usage":{"prompt_tokens":3,"completion_tokens":2}}"#).await);
+        let r = db.routine_create(1, 0, "0 8 * * *", "brief me", false).unwrap();
+        let other = db.routine_create(1, 0, "0 9 * * *", "and this", false).unwrap();
+        let get = |id: i64| db.routines(0).unwrap().into_iter().find(|x| x.id == id).unwrap();
+        db.set_setting("cap_routine", "5").unwrap();
+        ok.run_routine(&[], get(r.id)).await.unwrap();
+        // 5 tokens used: the next run would go over this routine's cap. It pauses until tomorrow, still due.
+        let before = get(r.id).next_fire;
+        ok.run_routine(&[], get(r.id)).await.unwrap();
+        let key = format!("hold:routine:{}", r.id);
+        let h = db.hold(&key).unwrap().expect("paused");
+        assert!(h.why.contains("this routine reached the daily cap of 5 tokens") && h.until > crate::db::now(), "{h:?}");
+        assert_eq!((get(r.id).next_fire, db.runs(Some(0), 9).unwrap().len()), (before, 1), "no run, nothing advanced");
+        let held = db.holds(0).unwrap();
+        assert_eq!((held.len(), held[0].2), (1, Some(r.id)));
+        // Another routine has its own cap.
+        ok.run_routine(&[], get(other.id)).await.unwrap();
+        assert_eq!(db.runs(Some(0), 9).unwrap().len(), 2);
+        // "Let it go on today": it runs, and doesn't pause again today.
+        db.hold_clear(&key, true).unwrap();
+        assert!(db.holds(crate::db::now()).unwrap().is_empty(), "ended, out of Needs you");
+        assert!(db.hold(&key).unwrap().is_some_and(|h| h.until < crate::db::now()), "kept, so a late run says why");
+        ok.run_routine(&[], get(r.id)).await.unwrap();
+        ok.run_routine(&[], get(r.id)).await.unwrap();
+        assert!(db.hold(&key).unwrap().is_some_and(|h| h.until < crate::db::now()), "not paused again today");
+        assert_eq!(db.runs(Some(0), 9).unwrap().len(), 4);
+        // All bots together: a bot-wide pause.
+        db.set_setting("cap_routine", "0").unwrap();
+        db.set_setting("cap_day", "10").unwrap();
+        ok.run_routine(&[], get(other.id)).await.unwrap();
+        assert!(db.hold("hold:1").unwrap().unwrap().why.contains("all your bots together"));
+        // Ending on its own (the day is over) doesn't let tomorrow go over the cap.
+        db.hold_clear("hold:1", false).unwrap();
+        assert_eq!(db.setting("cap_waived:day").unwrap(), None);
+        // Cache reads weigh a tenth, as they're billed: 20,000 read from the cache + 1,000 more is 3,000.
+        let p2 = std::env::temp_dir().join(format!("mimir-caps2-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p2);
+        let db = Db::open(&p2).unwrap();
+        let r = db.routine_create(1, 0, "0 8 * * *", "brief me", false).unwrap();
+        let run = db.run_start(1, 0, "routine", Some(r.id), "claude -p").unwrap();
+        db.run_finish(run, Ok(&crate::db::Usage { tokens_in: 20_500, tokens_out: 500, cache_read: 20_000, ..Default::default() })).unwrap();
+        assert_eq!(db.routine_stats(0, crate::db::now()).unwrap()[0].tokens, 3_000);
+        db.set_setting("cap_routine", "3500").unwrap();
+        assert!(db.over_cap(&r, 0).unwrap().is_none());
+        db.set_setting("cap_routine", "3000").unwrap();
+        assert!(db.over_cap(&r, 0).unwrap().is_some());
     }
 
     #[tokio::test]

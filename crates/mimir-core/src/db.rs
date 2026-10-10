@@ -143,6 +143,10 @@ fn valid_look(look: &str) -> bool {
 impl Bot {
     /// Allowlist check; "browser__*" style entries match a whole tool server.
     pub fn allows(&self, tool: &str) -> bool {
+        // A bot that may set routines may also change them.
+        if tool == "routine_update" {
+            return self.allows("routine_create");
+        }
         self.tools.trim().is_empty()
             || self.tools.split(',').map(str::trim).any(|t| t == tool || t.strip_suffix('*').is_some_and(|p| !p.is_empty() && tool.starts_with(p)))
     }
@@ -179,7 +183,16 @@ pub struct Usage {
     pub tokens_out: i64,
     /// API-list-price equivalent when the provider reports it (claude -p); subscriptions aren't billed per token.
     pub cost_usd: Option<f64>,
+    /// Of tokens_in, how many were read back from the prompt cache (billed at about a tenth).
+    #[serde(default)]
+    pub cache_read: i64,
+    /// The account didn't say what it used: worked out from the text's length.
+    #[serde(default)]
+    pub estimated: bool,
 }
+
+/// A run's tokens as they weigh on a plan (caps, "about N tokens each"): cache reads count a tenth, as they're billed.
+pub const WEIGHED: &str = "(tokens_in + tokens_out - cache_read * 9 / 10)";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Run {
@@ -202,6 +215,14 @@ pub struct Run {
     pub reply: Option<String>,
     /// A task handed over by another bot: the run that asked.
     pub parent_run: Option<i64>,
+    /// Where a routine's result went: "sent to telegram", "in the digest", "not sent: …" (None: nothing to send).
+    pub delivered: Option<String>,
+    /// In Needs you: how many times this same failure happened (one item for all of them).
+    pub repeats: i64,
+    /// Of tokens_in, read back from the prompt cache.
+    pub cache_read: i64,
+    /// Tokens worked out from the text, the account didn't report them.
+    pub estimated: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -364,6 +385,10 @@ pub struct RoutineStats {
     pub cost_usd: Option<f64>,
     pub failed: i64,
     pub missed: i64,
+    /// Watched quiet checks that found nothing changed (no AI run; not in `runs`).
+    pub unchanged: i64,
+    /// Kinds of line on the watched page left out because they change on every load (e.g. "Views: #").
+    pub ignored: Vec<String>,
     pub last: Vec<RunMark>,
 }
 
@@ -386,7 +411,26 @@ pub struct Routine {
     /// Runs once, at next_fire, then is deleted (no cron).
     #[serde(default)]
     pub once: bool,
+    /// A quiet check's page or feed address, or "mail": Mimir looks first and runs the AI only when it changed.
+    #[serde(default)]
+    pub watch: String,
+    /// Tries since the last run that worked, after failures that may pass (the network, the setup).
+    #[serde(default)]
+    pub retries: i64,
 }
+
+/// Routines waiting: until a usage limit resets, or a daily cap's day is over. `why` finishes "Missed 3 runs, …: ".
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+pub struct Hold {
+    pub until: i64,
+    pub why: String,
+    /// A daily cap's hold: the setting that lets it go on today anyway when the person says so (None: a usage limit).
+    #[serde(default)]
+    pub waive: Option<String>,
+}
+
+/// Daily token caps (none when unset): each routine, each bot, all bots together.
+pub const CAPS: [&str; 3] = ["cap_routine", "cap_bot", "cap_day"];
 
 const SCHEMA: &str = "
 PRAGMA journal_mode=WAL;
@@ -521,6 +565,15 @@ pub struct ChatHit {
     /// A routine's scheduled prompt (logged as the user's turn, but a bot may have written it).
     pub routine: bool,
 }
+
+/// How a routine result that couldn't be sent is marked (`runs.delivered`).
+pub const NOT_SENT: &str = "not sent";
+/// Why a routine ran late, for its run log line.
+pub const AWAY: &str = "Mimir wasn't running then";
+pub const ASLEEP: &str = "the computer was asleep, or a long run held it up";
+
+/// A run's status when a watched quiet check found nothing changed, so no AI ran.
+pub const UNCHANGED: &str = "unchanged";
 
 /// Reason prefix of a habit a bot wanted to remember but the person never stated.
 pub const BOT_PROPOSED: &str = "A bot wants to remember this";
@@ -671,6 +724,15 @@ impl Db {
         add_col("routines", "quiet", "INTEGER NOT NULL DEFAULT 0")?;
         // A one-off (a reminder): runs at next_fire, then it's gone.
         add_col("routines", "once", "INTEGER NOT NULL DEFAULT 0")?;
+        // The change gate: what a quiet check watches, and how it looked when last checked (watch.rs).
+        add_col("routines", "watch", "TEXT NOT NULL DEFAULT ''")?;
+        add_col("routines", "watch_seen", "TEXT")?;
+        // Shapes of a watched page's lines that change on every load (watch.rs), one per line.
+        add_col("routines", "watch_noise", "TEXT NOT NULL DEFAULT ''")?;
+        add_col("routines", "retries", "INTEGER NOT NULL DEFAULT 0")?;
+        add_col("runs", "delivered", "TEXT")?;
+        add_col("runs", "cache_read", "INTEGER NOT NULL DEFAULT 0")?;
+        add_col("runs", "estimated", "INTEGER NOT NULL DEFAULT 0")?;
         c.execute(
             "INSERT OR IGNORE INTO bots(id, name, provider, model, base_url, created_at) VALUES (1, 'Mimir',
                coalesce((SELECT value FROM settings WHERE key='provider'), 'claude'),
@@ -1271,6 +1333,20 @@ impl Db {
         Ok(v)
     }
 
+    /// What started a run: message, routine, rehearsal, delegated…
+    pub fn run_trigger(&self, run: i64) -> Result<Option<String>> {
+        Ok(self.c().query_row("SELECT trigger FROM runs WHERE id=?1", [run], |r| r.get(0)).optional()?)
+    }
+
+    /// What a rehearsal would have done (the steps it only described) and what it looked at.
+    pub fn rehearsal_steps(&self, run: i64) -> Result<(Vec<String>, Vec<String>)> {
+        let c = self.c();
+        let mut st = c.prepare("SELECT summary, decision FROM tool_calls WHERE run_id=?1 ORDER BY id")?;
+        let v: Vec<(String, String)> = st.query_map([run], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<Result<_, _>>()?;
+        let (would, looked): (Vec<_>, Vec<_>) = v.into_iter().partition(|(_, d)| d == "rehearsal");
+        Ok((would.into_iter().map(|w| w.0).collect(), looked.into_iter().map(|l| l.0).collect()))
+    }
+
     /// The run in progress for (bot, chat), if any.
     /// A run's (bot, chat), while it's still running.
     pub fn run_where(&self, run: i64) -> Result<Option<(i64, i64)>> {
@@ -1383,8 +1459,8 @@ impl Db {
         let c = self.c();
         match outcome {
             Ok(u) => c.execute(
-                "UPDATE runs SET status='ok', ended_at=?2, model=?3, tokens_in=?4, tokens_out=?5, cost_usd=?6 WHERE id=?1",
-                params![id, now(), u.model, u.tokens_in, u.tokens_out, u.cost_usd],
+                "UPDATE runs SET status='ok', ended_at=?2, model=?3, tokens_in=?4, tokens_out=?5, cost_usd=?6, cache_read=?7, estimated=?8 WHERE id=?1",
+                params![id, now(), u.model, u.tokens_in, u.tokens_out, u.cost_usd, u.cache_read, u.estimated],
             )?,
             Err(e) => c.execute("UPDATE runs SET status='error', ended_at=?2, error=?3 WHERE id=?1", params![id, now(), e])?,
         };
@@ -1415,7 +1491,7 @@ impl Db {
         let c = self.c();
         let mut st = c.prepare(
             "SELECT r.id, r.chat_id, r.trigger, r.routine_id, r.provider, r.model, r.status, r.error, r.started_at, r.ended_at,
-                    r.tokens_in, r.tokens_out, r.cost_usd, (SELECT count(*) FROM tool_calls t WHERE t.run_id = r.id), r.bot_id, r.reply, r.parent_run
+                    r.tokens_in, r.tokens_out, r.cost_usd, (SELECT count(*) FROM tool_calls t WHERE t.run_id = r.id), r.bot_id, r.reply, r.parent_run, r.delivered, r.cache_read, r.estimated
              FROM runs r WHERE (?1 IS NULL OR r.chat_id = ?1) AND (?3 IS NULL OR r.parent_run = ?3) ORDER BY r.id DESC LIMIT ?2",
         )?;
         let v = st
@@ -1438,6 +1514,10 @@ impl Db {
                     bot_id: r.get(14)?,
                     reply: r.get(15)?,
                     parent_run: r.get(16)?,
+                    delivered: r.get(17)?,
+                    repeats: 1,
+                    cache_read: r.get(18)?,
+                    estimated: r.get(19)?,
                 })
             })?
             .collect::<Result<_, _>>()?;
@@ -1447,7 +1527,7 @@ impl Db {
     pub fn run_totals(&self, chat: Option<i64>, since: i64) -> Result<Totals> {
         Ok(self.c().query_row(
             "SELECT count(*), coalesce(sum(status='error'),0), coalesce(sum(tokens_in),0), coalesce(sum(tokens_out),0), coalesce(sum(cost_usd),0)
-             FROM runs WHERE (?1 IS NULL OR chat_id = ?1) AND started_at >= ?2 AND status != 'missed'",
+             FROM runs WHERE (?1 IS NULL OR chat_id = ?1) AND started_at >= ?2 AND status NOT IN ('missed','unchanged')",
             params![chat, since],
             |r| Ok(Totals { runs: r.get(0)?, errors: r.get(1)?, tokens_in: r.get(2)?, tokens_out: r.get(3)?, cost_usd: r.get(4)? }),
         )?)
@@ -2205,14 +2285,35 @@ impl Db {
         self.approvals_where("status = 'expired' AND chat_id != -1 AND created_at > ?1 AND id NOT IN (SELECT ref FROM inbox_dismissed WHERE kind='approval')", since)
     }
 
-    /// Failed runs since `since` (not yet dismissed from the inbox), newest first.
+    /// Failed runs since `since` (not yet dismissed from the inbox), newest first: one item per routine and cause (a
+    /// routine failing every 15 minutes is one item, with how often), and results that couldn't be sent.
     pub fn runs_failed(&self, since: i64) -> Result<Vec<Run>> {
         let gone: std::collections::HashSet<i64> = {
             let c = self.c();
             let mut st = c.prepare("SELECT ref FROM inbox_dismissed WHERE kind='run'")?;
             st.query_map([], |r| r.get(0))?.collect::<Result<_, _>>()?
         };
-        Ok(self.runs(None, 300)?.into_iter().filter(|r| (r.status == "missed" || r.status == "error" && r.error.as_deref() != Some("Stopped by you")) && r.started_at > since && !gone.contains(&r.id)).collect())
+        let failed = |r: &Run| r.status == "missed" || r.status == "error" && r.error.as_deref() != Some("Stopped by you") || r.delivered.as_deref().is_some_and(|d| d.starts_with(NOT_SENT));
+        let key = |r: &Run| match r.routine_id {
+            Some(id) if r.status == "error" => format!("{id}:{:?}", crate::cause(r.error.as_deref().unwrap_or(""))),
+            Some(id) if r.status == "missed" => format!("{id}:missed"),
+            Some(id) => format!("{id}:delivery"),
+            None => format!("run:{}", r.id),
+        };
+        let mut out: Vec<Run> = vec![];
+        let mut seen: std::collections::HashMap<String, usize> = Default::default();
+        // Newest first: the first of each kind stands for the rest. Dismissing it dismisses them all (a new one shows again).
+        // A rehearsal's failure was seen where it was run.
+        for r in self.runs(None, 300)?.into_iter().filter(|r| r.started_at > since && r.trigger != "rehearsal" && failed(r)) {
+            match seen.get(&key(&r)) {
+                Some(&i) => out[i].repeats += i64::from(!gone.contains(&r.id)),
+                None => {
+                    seen.insert(key(&r), out.len());
+                    out.push(r);
+                }
+            }
+        }
+        Ok(out.into_iter().filter(|r| !gone.contains(&r.id)).collect())
     }
 
     /// Pending memory suggestions per chat.
@@ -2632,7 +2733,7 @@ impl Db {
             "INSERT INTO routines(bot_id, chat_id, cron, prompt, next_fire, quiet) VALUES (?1,?2,?3,?4,?5,?6)",
             params![bot, chat, cron.trim(), prompt.trim(), next, quiet],
         )?;
-        Ok(Routine { id: c.last_insert_rowid(), bot_id: bot, chat_id: chat, cron: cron.trim().into(), prompt: prompt.trim().into(), next_fire: next, quiet, paused: false, delivery: "now".into(), tainted: false, once: false })
+        Ok(Routine { id: c.last_insert_rowid(), bot_id: bot, chat_id: chat, cron: cron.trim().into(), prompt: prompt.trim().into(), next_fire: next, quiet, paused: false, delivery: "now".into(), tainted: false, once: false, watch: String::new(), retries: 0 })
     }
 
     /// A one-off at `at` (unix seconds): a reminder, or a task for later. It's deleted once it has run.
@@ -2648,7 +2749,7 @@ impl Db {
             "INSERT INTO routines(bot_id, chat_id, cron, prompt, next_fire, quiet, once) VALUES (?1,?2,'',?3,?4,?5,1)",
             params![bot, chat, prompt.trim(), at, quiet],
         )?;
-        Ok(Routine { id: c.last_insert_rowid(), bot_id: bot, chat_id: chat, cron: String::new(), prompt: prompt.trim().into(), next_fire: at, quiet, paused: false, delivery: "now".into(), tainted: false, once: true })
+        Ok(Routine { id: c.last_insert_rowid(), bot_id: bot, chat_id: chat, cron: String::new(), prompt: prompt.trim().into(), next_fire: at, quiet, paused: false, delivery: "now".into(), tainted: false, once: true, watch: String::new(), retries: 0 })
     }
 
     /// A routine a bot made after reading outside content: its prompt may carry someone else's words.
@@ -2659,7 +2760,7 @@ impl Db {
 
     fn routines_where(&self, sql: &str, p: impl rusqlite::Params) -> Result<Vec<Routine>> {
         let c = self.c();
-        let mut st = c.prepare(&format!("SELECT id, chat_id, cron, prompt, next_fire, bot_id, quiet, paused, delivery, tainted, once FROM routines WHERE {sql} ORDER BY id"))?;
+        let mut st = c.prepare(&format!("SELECT id, chat_id, cron, prompt, next_fire, bot_id, quiet, paused, delivery, tainted, once, watch, retries FROM routines WHERE {sql} ORDER BY id"))?;
         let v = st
             .query_map(p, |r| {
                 Ok(Routine {
@@ -2674,6 +2775,8 @@ impl Db {
                     delivery: r.get(8)?,
                     tainted: r.get(9)?,
                     once: r.get(10)?,
+                    watch: r.get(11)?,
+                    retries: r.get(12)?,
                 })
             })?
             .collect::<Result<_, _>>()?;
@@ -2713,6 +2816,221 @@ impl Db {
         Ok(self.c().execute("UPDATE routines SET delivery=?3 WHERE id=?1 AND chat_id=?2", params![id, chat, delivery])? > 0)
     }
 
+    /// What a quiet check watches ("" for nothing, a page's address, or "mail"). A new target starts from a fresh look.
+    pub fn routine_set_watch(&self, chat: i64, id: i64, watch: &str) -> Result<bool> {
+        crate::watch::valid(watch)?;
+        Ok(self.c().execute("UPDATE routines SET watch=?3, watch_seen=NULL, watch_noise='' WHERE id=?1 AND chat_id=?2 AND watch != ?3", params![id, chat, watch.trim()])? > 0)
+    }
+
+    /// How the watched page or mailbox looked at the last check that ran.
+    pub fn routine_seen(&self, id: i64) -> Result<Option<String>> {
+        Ok(self.c().query_row("SELECT watch_seen FROM routines WHERE id=?1", [id], |r| r.get(0)).optional()?.flatten())
+    }
+
+    /// Start noticing every line of the watched page again.
+    pub fn routine_reset_noise(&self, chat: i64, id: i64) -> Result<bool> {
+        Ok(self.c().execute("UPDATE routines SET watch_noise='' WHERE id=?1 AND chat_id=?2", [id, chat])? > 0)
+    }
+
+    /// Line shapes of the watched page that churn on their own.
+    pub fn routine_noise(&self, id: i64) -> Result<Vec<String>> {
+        let v: Option<String> = self.c().query_row("SELECT watch_noise FROM routines WHERE id=?1", [id], |r| r.get(0)).optional()?;
+        Ok(v.unwrap_or_default().lines().filter(|l| !l.is_empty()).map(String::from).collect())
+    }
+
+    /// ponytail: the 100 newest shapes; a page with more churn than that is mostly noise anyway
+    pub fn routine_add_noise(&self, id: i64, shapes: &[String]) -> Result<()> {
+        let mut all = self.routine_noise(id)?;
+        all.extend(shapes.iter().map(|s| s.replace('\n', " ")).filter(|s| !s.is_empty()));
+        let keep = all.len().saturating_sub(100);
+        self.c().execute("UPDATE routines SET watch_noise=?2 WHERE id=?1", params![id, all[keep..].join("\n")])?;
+        Ok(())
+    }
+
+    pub fn routine_set_seen(&self, id: i64, seen: &str) -> Result<()> {
+        self.c().execute("UPDATE routines SET watch_seen=?2 WHERE id=?1", params![id, seen])?;
+        Ok(())
+    }
+
+    /// A watched quiet check that found nothing changed: a run log row with no AI run (and no tokens).
+    pub fn run_unchanged(&self, r: &Routine) -> Result<()> {
+        let t = now();
+        self.c().execute(
+            "INSERT INTO runs(bot_id, chat_id, trigger, routine_id, provider, status, started_at, ended_at, reply) VALUES (?1,?2,'routine',?3,'',?4,?5,?5,'')",
+            params![r.bot_id, r.chat_id, r.id, UNCHANGED, t],
+        )?;
+        Ok(())
+    }
+
+    /// After a failure that may pass: run again at `at` (or at the next slot, if that's sooner).
+    pub fn routine_retry(&self, r: &Routine, at: i64) -> Result<()> {
+        self.c().execute("UPDATE routines SET next_fire=min(next_fire, ?2), retries=retries+1 WHERE id=?1", params![r.id, at])?;
+        Ok(())
+    }
+
+    /// A routine's run is over and won't be tried again: a one-off is gone. When it worked, its earlier failures leave
+    /// Needs you (it healed), and the count of tries starts over.
+    pub fn routine_done(&self, r: &Routine, worked: bool) -> Result<()> {
+        let c = self.c();
+        if r.once {
+            c.execute("DELETE FROM routines WHERE id=?1", [r.id])?;
+        } else {
+            c.execute("UPDATE routines SET retries=0 WHERE id=?1", [r.id])?;
+        }
+        if worked {
+            c.execute("INSERT OR IGNORE INTO inbox_dismissed(kind, ref) SELECT 'run', id FROM runs WHERE routine_id=?1 AND status='error'", [r.id])?;
+        }
+        Ok(())
+    }
+
+    /// How many times a routine has run and said something: its first few ask what to trim.
+    pub fn routine_replies(&self, routine: i64) -> Result<i64> {
+        Ok(self.c().query_row("SELECT count(*) FROM runs WHERE routine_id=?1 AND trigger='routine' AND status='ok' AND coalesce(reply, '') != ''", [routine], |r| r.get(0))?)
+    }
+
+    pub fn routine(&self, id: i64) -> Result<Option<Routine>> {
+        Ok(self.routines_where("id = ?1", [id])?.pop())
+    }
+
+    /// Run a routine at the scheduler's next pass (within half a minute).
+    pub fn routine_run_soon(&self, id: i64) -> Result<()> {
+        self.c().execute("UPDATE routines SET next_fire=?2 WHERE id=?1", params![id, now()])?;
+        Ok(())
+    }
+
+    /// The routine a run was for.
+    pub fn run_routine_id(&self, run: i64) -> Result<Option<i64>> {
+        Ok(self.c().query_row("SELECT routine_id FROM runs WHERE id=?1", [run], |r| r.get(0)).optional()?.flatten())
+    }
+
+    pub fn routine_prompt(&self, id: i64) -> Result<Option<String>> {
+        Ok(self.c().query_row("SELECT prompt FROM routines WHERE id=?1", [id], |r| r.get(0)).optional()?)
+    }
+
+    /// A routine's newest run.
+    pub fn routine_last_run(&self, routine: i64) -> Result<Option<i64>> {
+        Ok(self.c().query_row("SELECT max(id) FROM runs WHERE routine_id=?1 AND trigger='routine'", [routine], |r| r.get(0))?)
+    }
+
+    /// Where a routine's result went.
+    pub fn run_delivered(&self, run: i64, how: &str) -> Result<()> {
+        self.c().execute("UPDATE runs SET delivered=?2 WHERE id=?1", params![run, how])?;
+        Ok(())
+    }
+
+    /// What happens next, after a failed run's error ("Trying again at 10:35.").
+    pub fn run_note(&self, run: i64, note: &str) -> Result<()> {
+        self.c().execute("UPDATE runs SET error = coalesce(error, '') || ' ' || ?2 WHERE id=?1", params![run, note])?;
+        Ok(())
+    }
+
+    /// A routine that couldn't start (its AI account isn't set up): a failed run, with nothing spent.
+    pub fn run_not_started(&self, r: &Routine, provider: &str, error: &str) -> Result<i64> {
+        let id = self.run_start(r.bot_id, r.chat_id, "routine", Some(r.id), provider)?;
+        self.run_finish(id, Err(error))?;
+        Ok(id)
+    }
+
+    /// A bot's routines on hold ("hold:3"), or one routine's ("hold:routine:12"). An expired hold too, so a late run
+    /// can say why; hold_clear removes it.
+    pub fn hold(&self, key: &str) -> Result<Option<Hold>> {
+        Ok(self.setting(key)?.and_then(|v| serde_json::from_str(&v).ok()))
+    }
+
+    pub fn hold_set(&self, key: &str, h: &Hold) -> Result<()> {
+        self.set_setting(key, &serde_json::to_string(h)?)
+    }
+
+    /// A usage limit: this bot's routines wait, and so do those of every bot signed in to the same AI (a Claude,
+    /// ChatGPT or Grok login is one for all bots). Bots on an API key may be limited per model, so only this one.
+    /// Returns the bots held.
+    pub fn hold_account(&self, bot: i64, kind: &str, h: &Hold) -> Result<Vec<i64>> {
+        let mut held = vec![bot];
+        if ["claude", "codex", "grok"].contains(&kind) {
+            held.extend(self.bots()?.into_iter().filter(|b| b.provider == kind && b.id != bot).map(|b| b.id));
+        }
+        for b in &held {
+            self.hold_set(&format!("hold:{b}"), h)?;
+        }
+        Ok(held)
+    }
+
+    /// End a hold. `go_on`: the person said to run anyway, so a daily cap's lets the rest of today go over it, and the
+    /// hold is left ended rather than gone (the scheduler removes it, and says why the routine ran late).
+    pub fn hold_clear(&self, key: &str, go_on: bool) -> Result<()> {
+        match self.hold(key)? {
+            Some(mut h) if go_on => {
+                if let Some(w) = &h.waive {
+                    self.set_setting(w, &Local::now().format("%Y-%m-%d").to_string())?;
+                }
+                h.until = now() - 1;
+                self.hold_set(key, &h)
+            }
+            _ => {
+                self.c().execute("DELETE FROM settings WHERE key=?1", [key])?;
+                Ok(())
+            }
+        }
+    }
+
+    /// Every hold that hasn't ended, for Needs you: (its key, the bot, the routine if it's one routine's, the hold).
+    pub fn holds(&self, now: i64) -> Result<Vec<(String, i64, Option<i64>, Hold)>> {
+        let v: Vec<(String, String)> = {
+            let c = self.c();
+            let mut st = c.prepare("SELECT key, value FROM settings WHERE key LIKE 'hold:%'")?;
+            st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<Result<_, _>>()?
+        };
+        let mut out = vec![];
+        for (k, v) in v {
+            let Ok(h) = serde_json::from_str::<Hold>(&v) else { continue };
+            if h.until <= now {
+                continue;
+            }
+            let rest = k.strip_prefix("hold:").unwrap_or_default();
+            if let Some(id) = rest.strip_prefix("routine:").and_then(|i| i.parse().ok()) {
+                let bot: Option<i64> = self.c().query_row("SELECT bot_id FROM routines WHERE id=?1", [id], |r| r.get(0)).optional()?;
+                if let Some(bot) = bot {
+                    out.push((k, bot, Some(id), h));
+                }
+            } else if let Ok(bot) = rest.parse() {
+                out.push((k, bot, None, h));
+            }
+        }
+        Ok(out)
+    }
+
+    /// The daily caps in tokens: each routine, each bot, all bots (None: no cap).
+    pub fn caps(&self) -> Result<[Option<i64>; 3]> {
+        let get = |k: &str| -> Result<Option<i64>> { Ok(self.setting(k)?.and_then(|v| v.parse().ok()).filter(|n: &i64| *n > 0)) };
+        Ok([get(CAPS[0])?, get(CAPS[1])?, get(CAPS[2])?])
+    }
+
+    /// The first daily cap a run of this routine would go over, counting tokens since `day_start`: (the hold's key, the
+    /// hold). None when it's under all of them, or the person let it go over today.
+    pub fn over_cap(&self, r: &Routine, day_start: i64) -> Result<Option<(String, Hold)>> {
+        let today = Local::now().format("%Y-%m-%d").to_string();
+        let tokens = |sql: &str, p: i64| -> Result<i64> {
+            Ok(self.c().query_row(&format!("SELECT coalesce(sum({WEIGHED}), 0) FROM runs WHERE started_at >= ?1 AND {sql}"), params![day_start, p], |r| r.get(0))?)
+        };
+        let [per_routine, per_bot, per_day] = self.caps()?;
+        let k = |n: i64| if n >= 10_000 { format!("{}k", n / 1000) } else { n.to_string() };
+        let checks = [
+            (per_routine, format!("cap_waived:routine:{}", r.id), format!("hold:routine:{}", r.id), tokens("routine_id = ?2", r.id)?, "this routine"),
+            (per_bot, format!("cap_waived:bot:{}", r.bot_id), format!("hold:{}", r.bot_id), tokens("bot_id = ?2", r.bot_id)?, "this bot"),
+            (per_day, "cap_waived:day".to_string(), format!("hold:{}", r.bot_id), tokens("?2 = ?2", 0)?, "all your bots together"),
+        ];
+        for (cap, waive, key, used, who) in checks {
+            let Some(cap) = cap else { continue };
+            if used < cap || self.setting(&waive)?.as_deref() == Some(today.as_str()) {
+                continue;
+            }
+            let why = format!("{who} reached the daily cap of {} tokens ({} used today)", k(cap), k(used));
+            let until = (Local::now().date_naive() + chrono::Duration::days(1)).and_hms_opt(0, 0, 0).and_then(|t| Local.from_local_datetime(&t).earliest()).map_or(now() + 86400, |t| t.timestamp());
+            return Ok(Some((key, Hold { until, why, waive: Some(waive) })));
+        }
+        Ok(None)
+    }
+
     // ---------- daily digest ----------
 
     pub fn digest_add(&self, bot: i64, chat: i64, routine: i64, text: &str, tainted: bool) -> Result<()> {
@@ -2743,7 +3061,7 @@ impl Db {
     pub fn quiet_nothing_since(&self, bot: i64, chat: i64, since: i64) -> Result<i64> {
         Ok(self.c().query_row(
             "SELECT count(*) FROM runs r JOIN routines o ON o.id = r.routine_id
-              WHERE r.bot_id=?1 AND r.chat_id=?2 AND r.started_at > ?3 AND r.status='ok' AND coalesce(r.reply,'') = ''
+              WHERE r.bot_id=?1 AND r.chat_id=?2 AND r.trigger='routine' AND r.started_at > ?3 AND r.status IN ('ok','unchanged') AND coalesce(r.reply,'') = ''
                 AND o.quiet = 1 AND o.delivery = 'digest'",
             params![bot, chat, since],
             |r| r.get(0),
@@ -2753,7 +3071,7 @@ impl Db {
     /// A routine that came due late gets one `missed` row in the run log, for the slots it didn't run at, so its history
     /// and Needs you show it. Then it runs once, now (the scheduler goes on as before). `away`: Mimir wasn't running at
     /// the time (it started after); otherwise the computer slept or a long run held the scheduler up.
-    pub fn routine_missed(&self, r: &Routine, now: i64, away: bool) -> Result<Option<i64>> {
+    pub fn routine_missed(&self, r: &Routine, now: i64, why: &str) -> Result<Option<i64>> {
         if now - r.next_fire < MISSED_AFTER {
             return Ok(None);
         }
@@ -2772,7 +3090,6 @@ impl Db {
             None => String::new(),
         };
         let what = if slots == 1 { format!("Didn't run at {}", at(r.next_fire)) } else { format!("Missed {slots} runs, {} to {}", at(r.next_fire), at(last)) };
-        let why = if away { "Mimir wasn't running then" } else { "the computer was asleep, or a long run held it up" };
         let c = self.c();
         c.execute(
             "INSERT INTO runs(bot_id, chat_id, trigger, routine_id, provider, status, error, started_at, ended_at)
@@ -2787,29 +3104,41 @@ impl Db {
     pub fn routine_stats(&self, chat: i64, now: i64) -> Result<Vec<RoutineStats>> {
         let c = self.c();
         let mut st = c.prepare(
-            "SELECT routine_id, coalesce(sum(status != 'missed'), 0), coalesce(sum(tokens_in + tokens_out), 0), sum(cost_usd), coalesce(sum(status='error'), 0), coalesce(sum(status='missed'), 0)
-               FROM runs WHERE chat_id=?1 AND routine_id IS NOT NULL AND started_at >= ?2 GROUP BY routine_id",
+            &format!("SELECT routine_id, coalesce(sum(status NOT IN ('missed','unchanged')), 0), coalesce(sum({WEIGHED}), 0), sum(cost_usd), coalesce(sum(status='error'), 0), coalesce(sum(status='missed'), 0), coalesce(sum(status='unchanged'), 0)
+               FROM runs WHERE chat_id=?1 AND routine_id IS NOT NULL AND trigger='routine' AND started_at >= ?2 GROUP BY routine_id"),
         )?;
         let mut v: Vec<RoutineStats> = st
             .query_map(params![chat, now - 30 * 86400], |r| {
-                Ok(RoutineStats { id: r.get(0)?, runs: r.get(1)?, tokens: r.get(2)?, cost_usd: r.get(3)?, failed: r.get(4)?, missed: r.get(5)?, last: vec![] })
+                Ok(RoutineStats { id: r.get(0)?, runs: r.get(1)?, tokens: r.get(2)?, cost_usd: r.get(3)?, failed: r.get(4)?, missed: r.get(5)?, unchanged: r.get(6)?, ignored: vec![], last: vec![] })
             })?
             .collect::<Result<_, _>>()?;
-        let mut last = c.prepare("SELECT status, started_at, tokens_in + tokens_out FROM runs WHERE routine_id=?1 AND chat_id=?2 ORDER BY started_at DESC, id DESC LIMIT 8")?;
+        let mut last = c.prepare(&format!("SELECT status, started_at, {WEIGHED} FROM runs WHERE routine_id=?1 AND chat_id=?2 AND trigger='routine' ORDER BY started_at DESC, id DESC LIMIT 8"))?;
         for s in &mut v {
             s.last = last.query_map(params![s.id, chat], |r| Ok(RunMark { status: r.get(0)?, at: r.get(1)?, tokens: r.get(2)? }))?.collect::<Result<_, _>>()?;
+        }
+        // After the connection is let go (routine_noise takes it again).
+        drop(last);
+        drop(st);
+        drop(c);
+        for s in &mut v {
+            s.ignored = self.routine_noise(s.id)?;
         }
         Ok(v)
     }
 
     pub fn routine_delete(&self, chat: i64, id: i64) -> Result<bool> {
-        Ok(self.c().execute("DELETE FROM routines WHERE id=?1 AND chat_id=?2", params![id, chat])? > 0)
+        let gone = self.c().execute("DELETE FROM routines WHERE id=?1 AND chat_id=?2", params![id, chat])? > 0;
+        if gone {
+            self.c().execute("DELETE FROM settings WHERE key=?1", [format!("hold:routine:{id}")])?;
+        }
+        Ok(gone)
     }
 
-    /// Advance before running so a crash mid-run can't fire the same slot twice.
+    /// Advance before running so a crash mid-run can't fire the same slot twice. A one-off stays until its run is done
+    /// (routine_done), with an hour's grace: a crash mid-run tries it once more then.
     pub fn routine_advance(&self, r: &Routine) -> Result<()> {
         if r.once {
-            self.c().execute("DELETE FROM routines WHERE id=?1", [r.id])?;
+            self.c().execute("UPDATE routines SET next_fire=?2 WHERE id=?1", params![r.id, now() + 3600])?;
             return Ok(());
         }
         let next = next_fire(&r.cron, now().max(r.next_fire))?;
@@ -3312,15 +3641,15 @@ mod tests {
         let d = db();
         let r = d.routine_create(1, 8, "0 * * * *", "check the page", true).unwrap();
         // On time (within 15 minutes): nothing missed.
-        assert_eq!(d.routine_missed(&r, r.next_fire + 600, false).unwrap(), None);
+        assert_eq!(d.routine_missed(&r, r.next_fire + 600, ASLEEP).unwrap(), None);
         // Five hours late: the slot it's running for and the four after it that are also past.
-        let late = d.routine_missed(&r, r.next_fire + 5 * 3600, true).unwrap().unwrap();
+        let late = d.routine_missed(&r, r.next_fire + 5 * 3600, AWAY).unwrap().unwrap();
         let run = d.runs(Some(8), 5).unwrap().into_iter().find(|x| x.id == late).unwrap();
         assert_eq!(run.status, "missed");
         assert!(run.error.as_deref().unwrap().starts_with("Missed 5 runs"), "{:?}", run.error);
         assert!(run.error.as_deref().unwrap().contains("Mimir wasn't running"));
         let a = d.run_start(1, 8, "routine", Some(r.id), "claude -p").unwrap();
-        d.run_finish(a, Ok(&Usage { model: None, tokens_in: 900, tokens_out: 100, cost_usd: Some(0.02) })).unwrap();
+        d.run_finish(a, Ok(&Usage { model: None, tokens_in: 900, tokens_out: 100, cost_usd: Some(0.02), ..Default::default() })).unwrap();
         let b = d.run_start(1, 8, "routine", Some(r.id), "claude -p").unwrap();
         d.run_finish(b, Err("usage limit")).unwrap();
 
@@ -3333,8 +3662,58 @@ mod tests {
         assert_eq!(d.run_totals(Some(8), 0).unwrap().runs, 2);
         // A one-off misses its one time only.
         let o = d.routine_once(1, 9, now() + 60, "call mum", false).unwrap();
-        let m = d.routine_missed(&o, o.next_fire + 3 * 86400, false).unwrap().unwrap();
+        let m = d.routine_missed(&o, o.next_fire + 3 * 86400, ASLEEP).unwrap().unwrap();
         assert!(d.runs(Some(9), 1).unwrap()[0].error.as_deref().unwrap().starts_with("Didn't run at"), "{m}");
+    }
+
+    #[test]
+    fn a_usage_limit_holds_everyone_on_that_login() {
+        let d = db();
+        let mut b = d.bot(1).unwrap();
+        b.provider = "claude".into();
+        d.bot_save(&b).unwrap();
+        for (name, provider) in [("Ada", "claude"), ("Scout", "codex"), ("Ollie", "local")] {
+            let mut x = b.clone();
+            (x.id, x.name, x.provider) = (0, name.into(), provider.into());
+            d.bot_save(&x).unwrap();
+        }
+        let h = Hold { until: now() + 600, why: "limit".into(), waive: None };
+        assert_eq!(d.hold_account(1, "claude", &h).unwrap().len(), 2, "Mimir and Ada share the Claude login");
+        assert_eq!(d.holds(now()).unwrap().len(), 2);
+        let ollie = d.bots().unwrap().into_iter().find(|x| x.name == "Ollie").unwrap().id;
+        assert_eq!(d.hold_account(ollie, "api", &h).unwrap(), vec![ollie]);
+    }
+
+    #[test]
+    fn watched_quiet_checks() {
+        let d = db();
+        let r = d.routine_create(1, 8, "*/15 * * * *", "tell me if the price drops", true).unwrap();
+        assert!(d.routine_set_watch(8, r.id, "http://localhost:8080/").is_err());
+        assert!(d.routine_set_watch(8, r.id, "https://shop.example/widget").unwrap());
+        d.routine_set_seen(r.id, "Price: 40").unwrap();
+        assert_eq!(d.routine_seen(r.id).unwrap().as_deref(), Some("Price: 40"));
+        // The same address again keeps what was seen; another one starts from a fresh look.
+        assert!(!d.routine_set_watch(8, r.id, "https://shop.example/widget").unwrap());
+        assert!(d.routine_seen(r.id).unwrap().is_some());
+        d.routine_set_watch(8, r.id, "mail").unwrap();
+        assert_eq!(d.routine_seen(r.id).unwrap(), None);
+        let r = d.routines(8).unwrap().remove(0);
+        assert_eq!(r.watch, "mail");
+        // Nothing changed: in the log and the digest's "nothing needed you", but not use.
+        d.run_unchanged(&r).unwrap();
+        let s = d.routine_stats(8, now()).unwrap();
+        assert_eq!((s[0].runs, s[0].unchanged, s[0].last[0].status.as_str()), (0, 1, UNCHANGED));
+        d.routine_add_noise(r.id, &["Views: #".to_string()]).unwrap();
+        assert_eq!(d.routine_stats(8, now()).unwrap()[0].ignored, vec!["Views: #".to_string()]);
+        assert!(d.routine_reset_noise(8, r.id).unwrap() && d.routine_noise(r.id).unwrap().is_empty());
+        assert_eq!(d.run_totals(Some(8), 0).unwrap().runs, 0);
+        d.routine_set_delivery(8, r.id, "digest").unwrap();
+        assert_eq!(d.quiet_nothing_since(1, 8, 0).unwrap(), 1);
+        assert!(d.runs_failed(0).unwrap().is_empty());
+        // A deleted routine takes its pause with it.
+        d.hold_set(&format!("hold:routine:{}", r.id), &Hold { until: now() + 60, why: "cap".into(), waive: None }).unwrap();
+        d.routine_delete(8, r.id).unwrap();
+        assert!(d.hold(&format!("hold:routine:{}", r.id)).unwrap().is_none());
     }
 
     #[test]
@@ -3343,7 +3722,7 @@ mod tests {
         let a = d.run_start(1, 3, "message", None, "claude -p").unwrap();
         d.tool_call_log(Some(a), 3, "memory_store", "Remember x", "allow", true, "stored #1").unwrap();
         d.tool_call_log(Some(a), 3, "memory_forget", "Forget #1", "ask", false, "denied").unwrap();
-        d.run_finish(a, Ok(&Usage { model: Some("sonnet".into()), tokens_in: 100, tokens_out: 20, cost_usd: Some(0.01) })).unwrap();
+        d.run_finish(a, Ok(&Usage { model: Some("sonnet".into()), tokens_in: 100, tokens_out: 20, cost_usd: Some(0.01), ..Default::default() })).unwrap();
         let b = d.run_start(2, 3, "routine", Some(1), "codex exec").unwrap();
         d.run_finish(b, Err("usage limit")).unwrap();
         d.run_start(1, 4, "message", None, "x").unwrap();

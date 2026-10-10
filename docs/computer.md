@@ -16,6 +16,7 @@ everything (build with `--build-arg COMPUTER=` to leave it out).
 | `computer_screenshot` | Looks at the screen (read-only) | allow |
 | `computer_click`, `computer_type`, `computer_key`, `computer_scroll` | Mouse and keyboard | allow |
 | `computer_open` | Opens a website | **ask** (or "always on this site") |
+| `computer_handoff` | Asks you to take over for a step only you should do (below) | allow |
 
 Each action returns a fresh screenshot. With the browser switched on (Settings → Browser), the browser tools drive the
 same Chromium, so a bot can mix precise page tools with looking and clicking.
@@ -25,6 +26,17 @@ same Chromium, so a bot can mix precise page tools with looking and clicking.
 **Computer** in the sidebar shows the screen live. Click it to take over: your clicks, typing and scrolling go to the
 computer, and while you're in control bots wait. **Give back** hands it over. One user at a time: a bot that needs the
 computer while another bot has it waits up to 30 seconds, then says it's busy.
+
+## When a bot needs you there
+
+At a sign-in, a verification or 2FA code, a captcha or a payment, a bot doesn't type passwords or card numbers or try
+to solve the captcha: it asks you to take over (`computer_handoff`). You get a card where you talk to it (your
+messaging app, the chat in Mimir, and Needs you) saying what's needed, with a link straight to the live screen:
+*Open the computer*. Take over, do the step, and press **Give back**; the bot sees you're done and carries on from
+there. **Done** on the card says the same, and **Can't now** stops it, so it tells you what's left. It waits up to
+10 minutes. A routine doesn't wait (nobody's watching it): it asks, ends that run, and the card stays in Needs you for
+12 hours; when you've done the step and press **Done**, the routine runs again from the start, and the computer keeps
+what you did (a sign-in stays signed in). The link uses the address you last opened the web app at (or connected the desktop app to).
 
 ## Teach by showing
 

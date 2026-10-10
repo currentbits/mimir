@@ -222,6 +222,10 @@ async fn claude(ctx: &ToolCtx, home: &PathBuf, model: Option<&str>, system: &str
             let Ok(v) = serde_json::from_str::<Value>(&line) else { continue };
             match v["type"].as_str() {
                 Some("result") => result = Some(v),
+                // The plan's usage windows (5-hour, weekly): shown with routines, and when a limit resets.
+                Some("rate_limit_event") => {
+                    let _ = ctx.db.set_setting(WINDOWS, &json!({"at": crate::db::now(), "info": v["rate_limit_info"]}).to_string());
+                }
                 Some("stream_event") if stream => on_claude_event(bot, chat, &v["event"]),
                 // Search results are pages anyone can write: the run has read outside content.
                 Some("assistant") if searched_web(&v) => ctx.taint(),
@@ -390,6 +394,10 @@ async fn grok_turn(ctx: &ToolCtx, home: &std::path::Path, model: Option<&str>, s
             let Ok(v) = serde_json::from_str::<Value>(&line) else { continue };
             match v["type"].as_str() {
                 Some("result") => result = Some(v),
+                // The plan's usage windows (5-hour, weekly): shown with routines, and when a limit resets.
+                Some("rate_limit_event") => {
+                    let _ = ctx.db.set_setting(WINDOWS, &json!({"at": crate::db::now(), "info": v["rate_limit_info"]}).to_string());
+                }
                 Some("stream_event") if stream => on_claude_event(bot, chat, &v["event"]),
                 // Search results are pages anyone can write: the run has read outside content.
                 Some("assistant") if searched_web(&v) => ctx.taint(),
@@ -649,6 +657,8 @@ fn claude_usage(v: &Value) -> Usage {
         tokens_in: n("input_tokens") + n("cache_creation_input_tokens") + n("cache_read_input_tokens"),
         tokens_out: n("output_tokens"),
         cost_usd: v["total_cost_usd"].as_f64(),
+        cache_read: n("cache_read_input_tokens"),
+        estimated: false,
     }
 }
 
@@ -666,7 +676,8 @@ pub async fn detect(kind: &str, home: &std::path::Path) -> Value {
                 return json!({"installed": false});
             };
             let auth: Value = run(&bin, &["auth", "status", "--json"]).await.and_then(|o| serde_json::from_slice(&o.stdout).ok()).unwrap_or_default();
-            json!({"installed": true, "version": text(&v), "signed_in": auth["loggedIn"].as_bool().unwrap_or(false),
+            // null when this CLI couldn't say (an older version without `auth status`).
+            json!({"installed": true, "version": text(&v), "signed_in": auth["loggedIn"],
                    "plan": auth["subscriptionType"], "account": auth["email"]})
         }
         "codex" => {
@@ -676,7 +687,9 @@ pub async fn detect(kind: &str, home: &std::path::Path) -> Value {
             };
             let status = run(&bin, &["login", "status"]).await;
             let (ok, how) = status.map(|o| (o.status.success(), format!("{} {}", text(&o), String::from_utf8_lossy(&o.stderr).trim()))).unwrap_or((false, String::new()));
-            json!({"installed": true, "version": text(&v), "signed_in": ok && how.to_lowercase().contains("logged in"), "plan": null})
+            let how = how.to_lowercase();
+            let signed_in = if how.contains("not logged in") { json!(false) } else if ok && how.contains("logged in") { json!(true) } else { Value::Null };
+            json!({"installed": true, "version": text(&v), "signed_in": signed_in, "plan": null})
         }
         // Signed in for Mimir (its own grok home), not the person's own ~/.grok.
         "grok" => {
@@ -746,6 +759,63 @@ impl Provider {
         let t = std::time::Instant::now();
         let r = self.run(&ctx, "You are a connection test. Reply with exactly: OK", &[], "ping", None).await?;
         Ok((r.text.trim().to_string(), t.elapsed().as_secs_f64()))
+    }
+}
+
+/// The settings key for what Claude Code last said about the plan's usage windows.
+pub const WINDOWS: &str = "ai_windows:claude";
+
+/// The plan's usage windows as Claude Code last reported them: [(name, share used 0–1, resets at)], with when.
+pub fn windows(db: &crate::db::Db) -> Option<Value> {
+    let v: Value = serde_json::from_str(&db.setting(WINDOWS).ok()??).ok()?;
+    let list: Vec<Value> = v["info"]["unifiedWindows"]
+        .as_object()?
+        .iter()
+        .map(|(name, w)| json!({"name": name, "used": w["utilization"], "resets_at": w["resetsAt"]}))
+        .collect();
+    Some(json!({"at": v["at"], "status": v["info"]["status"], "windows": list}))
+}
+
+/// When a usage limit that stopped a run resets: for a Claude bot, what Claude Code reported (a rejected request's reset
+/// time, or a full window's); else a reset time in the error itself ("…|1791650400"). None when nobody said.
+pub fn quota_reset(db: &crate::db::Db, kind: &str, error: &str, now: i64) -> Option<i64> {
+    let from_cli = db.setting(WINDOWS).ok().flatten().filter(|_| kind == "claude").and_then(|s| serde_json::from_str::<Value>(&s).ok()).and_then(|v| {
+        let info = &v["info"];
+        let full = info["unifiedWindows"].as_object().into_iter().flatten().filter(|(_, w)| w["utilization"].as_f64().is_some_and(|u| u >= 1.0)).filter_map(|(_, w)| w["resetsAt"].as_i64()).max();
+        if info["status"] == "rejected" { info["resetsAt"].as_i64().or(full) } else { full }
+    });
+    let in_error = error.split('|').filter_map(|p| p.trim().get(..10)).find_map(|d| d.parse::<i64>().ok().filter(|t| *t > 1_600_000_000));
+    from_cli.or(in_error).filter(|t| *t > now)
+}
+
+impl Provider {
+    /// Before a routine spends anything: is the AI account there? Only definite answers count (an older CLI that can't
+    /// say whether it's signed in is taken as signed in), so a routine never stops on a guess.
+    pub async fn ready(&self) -> Result<()> {
+        let (kind, home) = match self {
+            Provider::Claude { home, .. } => ("claude", home),
+            Provider::Codex { home, .. } => ("codex", home),
+            Provider::Grok { home, .. } => ("grok", home),
+            Provider::OpenAi { .. } => return Ok(()),
+        };
+        // A check that passed holds for 10 minutes: a quiet check every 15 minutes shouldn't start the CLI twice more each
+        // time. A failed one is checked again at the next run.
+        static PASSED: std::sync::Mutex<Vec<(&str, std::time::Instant)>> = std::sync::Mutex::new(vec![]);
+        if PASSED.lock().unwrap_or_else(|e| e.into_inner()).iter().any(|(k, t)| *k == kind && t.elapsed() < Duration::from_secs(600)) {
+            return Ok(());
+        }
+        let v = detect(kind, home).await;
+        if v["installed"] == false {
+            bail!("failed to start `{kind}`: it isn't installed here, so the routine didn't run (nothing was spent)");
+        }
+        // grok's sign-in check reads its model list's wording, which is too loose to stop a routine on.
+        if kind != "grok" && v["signed_in"] == false {
+            bail!("{kind} isn't signed in, so the routine didn't run (nothing was spent)");
+        }
+        let mut passed = PASSED.lock().unwrap_or_else(|e| e.into_inner());
+        passed.retain(|(k, _)| *k != kind);
+        passed.push((kind, std::time::Instant::now()));
+        Ok(())
     }
 }
 
@@ -841,6 +911,7 @@ fn parse_codex_jsonl(stdout: &str) -> Result<Reply> {
             "turn.completed" => {
                 usage.tokens_in += v["usage"]["input_tokens"].as_i64().unwrap_or(0);
                 usage.tokens_out += v["usage"]["output_tokens"].as_i64().unwrap_or(0);
+                usage.cache_read += v["usage"]["cached_input_tokens"].as_i64().unwrap_or(0);
             }
             "turn.failed" => err = v["error"]["message"].as_str().map(String::from),
             "error" => err = err.or(v["message"].as_str().map(String::from)),
@@ -991,6 +1062,7 @@ async fn openai(ctx: &ToolCtx, base: &str, key: &str, model: &str, system: &str,
         };
         usage.tokens_in += v["usage"]["prompt_tokens"].as_i64().unwrap_or(0);
         usage.tokens_out += v["usage"]["completion_tokens"].as_i64().unwrap_or(0);
+        usage.cache_read += v["usage"]["prompt_tokens_details"]["cached_tokens"].as_i64().unwrap_or(0);
         if let Some(c) = v["usage"]["cost"].as_f64() {
             usage.cost_usd = Some(usage.cost_usd.unwrap_or(0.0) + c);
         }
@@ -1201,5 +1273,16 @@ mod tests {
 {"type":"turn.failed","error":{"message":"You've hit your usage limit."}}"#;
         let e = parse_codex_jsonl(limited).unwrap_err();
         assert!(is_usage_limit(&e), "{e}");
+        // When it resets: what Claude Code reported, else the time in the error.
+        let p = std::env::temp_dir().join(format!("mimir-reset-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = crate::db::Db::open(&p).unwrap();
+        assert_eq!(quota_reset(&db, "claude", "Claude AI usage limit reached|1791650400", 1_791_600_000), Some(1_791_650_400));
+        assert_eq!(quota_reset(&db, "claude", "usage limit", 1_791_600_000), None);
+        let info = serde_json::json!({"at": 1, "info": {"status": "rejected", "resetsAt": 1_791_700_000, "unifiedWindows": {"five_hour": {"utilization": 1.0, "resetsAt": 1_791_700_000}, "seven_day": {"utilization": 0.4, "resetsAt": 1_792_000_000}}}});
+        db.set_setting(WINDOWS, &info.to_string()).unwrap();
+        assert_eq!(quota_reset(&db, "claude", "usage limit", 1_791_600_000), Some(1_791_700_000));
+        assert_eq!(quota_reset(&db, "codex", "usage limit", 1_791_600_000), None, "Claude's windows aren't another account's");
+        assert_eq!(windows(&db).unwrap()["windows"].as_array().unwrap().len(), 2);
     }
 }

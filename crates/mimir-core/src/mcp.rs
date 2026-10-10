@@ -24,6 +24,7 @@ pub fn ctx_from_args(db: crate::db::Db, args: &[String]) -> Result<ToolCtx> {
     ctx.via_bot = flag("--via");
     ctx.sticky = args.iter().any(|a| a == "--sticky");
     ctx.unattended = args.iter().any(|a| a == "--unattended");
+    ctx.rehearsal = args.iter().any(|a| a == "--rehearsal");
     // The flag from the parent, or the run itself: a server started again mid-run (grok resuming a session, a CLI
     // restarting its servers) must not forget that this run already read untrusted content.
     if args.iter().any(|a| a == "--tainted")

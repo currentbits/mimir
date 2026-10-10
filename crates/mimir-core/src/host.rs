@@ -781,6 +781,50 @@ impl Host {
                 let reply = turn(&provider, &ToolCtx::new(self.db.clone(), r.bot_id, chat), Trigger::Routine(&r)).await?;
                 ok(if reply.trim().is_empty() { "Nothing needed your attention.".to_string() } else { reply })
             }
+            // A rehearsal of a routine or a skill: it runs for real, except that anything that would change or send
+            // something (or ask you) only says what it would do. Nothing lands in the chat.
+            "rehearse" => {
+                let chat: i64 = arg(a, "chat_id")?;
+                let mut r = match arg::<Option<i64>>(a, "routine_id")? {
+                    Some(id) => self.db.routines(chat)?.into_iter().find(|r| r.id == id).context("no such routine")?,
+                    None => {
+                        let (bot, skill): (i64, i64) = (arg(a, "bot_id")?, arg(a, "skill_id")?);
+                        let k = self.db.skills_active(&format!("chat:{chat}"), bot)?.into_iter().find(|k| k.id == skill).context("no such skill for this bot")?;
+                        let input = arg::<Option<String>>(a, "input")?.unwrap_or_default();
+                        crate::db::Routine {
+                            id: 0,
+                            bot_id: bot,
+                            chat_id: chat,
+                            cron: String::new(),
+                            prompt: format!("/{} {}", crate::skill_slug(&k.name), input.trim()),
+                            next_fire: 0,
+                            quiet: false,
+                            paused: false,
+                            delivery: String::new(),
+                            tainted: false,
+                            once: true,
+                            watch: String::new(),
+                            retries: 0,
+                        }
+                    }
+                };
+                r.delivery = "log".into();
+                r.prompt.push_str(
+                    "\n\n[Rehearsal run: do this exactly as in a real run, calling your tools as you normally would. It's safe: Mimir \
+                     catches every tool call that would change or send something and answers with what would have happened instead. \
+                     Then reply with what you found and what you did.]",
+                );
+                let provider = self.provider(r.bot_id)?;
+                let mut ctx = ToolCtx::new(self.db.clone(), r.bot_id, chat);
+                ctx.rehearsal = true;
+                let reply = turn(&provider, &ctx, Trigger::Routine(&r)).await?;
+                let run = self.db.runs(Some(chat), 20)?.into_iter().find(|x| x.trigger == "rehearsal" && x.bot_id == r.bot_id).map(|x| x.id);
+                let (would, looked) = match run {
+                    Some(run) => self.db.rehearsal_steps(run)?,
+                    None => (vec![], vec![]),
+                };
+                ok(json!({"reply": reply, "would": would, "looked": looked}))
+            }
             // A photo pasted or dropped into the chat: base64 in, a path under <home>/media out.
             // A PDF or text file dropped into the app's chat: its text, wrapped for the bot as outside content. The
             // conversation is marked as having read outside content, like a web page.
@@ -819,6 +863,8 @@ impl Host {
                 std::fs::write(&path, bytes)?;
                 ok(path.display().to_string())
             }
+            "reset_watch_noise" => ok(self.db.routine_reset_noise(arg(a, "chat_id")?, arg(a, "id")?)?),
+            "set_watch" => ok(self.db.routine_set_watch(arg(a, "chat_id")?, arg(a, "id")?, &arg::<String>(a, "watch")?)?),
             "set_delivery" => ok(self.db.routine_set_delivery(arg(a, "chat_id")?, arg(a, "id")?, &arg::<String>(a, "delivery")?)?),
             // How full standing memory is (the Memory tab's meter).
             "standing_memory" => {
@@ -915,6 +961,11 @@ impl Host {
                     "approvals": self.db.approvals_pending()?,
                     "missed": self.db.approvals_missed(now - 86400)?,
                     "failed": self.db.runs_failed(now - 7 * 86400)?,
+                    // Routines waiting: for a usage limit to reset, or for tomorrow after a daily cap.
+                    "holds": self.db.holds(now)?.into_iter().map(|(key, bot, routine, h)| {
+                        let prompt = routine.and_then(|id| self.db.routine_prompt(id).ok().flatten()).map(|p| crate::tools::truncate(&p, 60));
+                        json!({"key": key, "bot_id": bot, "routine_id": routine, "routine": prompt, "until": h.until, "why": h.why, "cap": h.waive.is_some()})
+                    }).collect::<Vec<_>>(),
                     "suggestions": counts,
                     "unconfirmed": self.db.unconfirmed_counts()?.into_iter().map(|(chat, n)| json!({"chat_id": chat, "count": n})).collect::<Vec<_>>(),
                     // A newer release than this server runs (looked up by the bots' loops twice a day).
@@ -935,6 +986,42 @@ impl Host {
                     "latest": self.db.setting("update_latest")?,
                 }))
             }
+            // Run now instead of waiting for a hold to end (the limit was raised, another plan…); a cap's, for the rest of today.
+            "hold_clear" => {
+                let key: String = arg(a, "key")?;
+                if !key.starts_with("hold:") {
+                    bail!("not a hold");
+                }
+                ok(self.db.hold_clear(&key, true)?)
+            }
+            // Daily token caps (get without values, set with them; 0 or null = no cap).
+            "caps" => {
+                for (k, name) in crate::db::CAPS.iter().zip(["routine", "bot", "day"]) {
+                    if let Some(v) = a.get(name).filter(|v| !v.is_null()) {
+                        let n = v.as_i64().filter(|n| *n >= 0).context("a cap is a number of tokens")?;
+                        self.db.set_setting(k, &n.to_string())?;
+                    }
+                }
+                let [routine, bot, day] = self.db.caps()?;
+                ok(json!({"routine": routine, "bot": bot, "day": day}))
+            }
+            // Where people reach this server's web app (the app tells it on load): links in messages, like to the live
+            // computer when a bot needs you there.
+            "public_url" => {
+                let url: String = arg(a, "url")?;
+                let url = url.trim().trim_end_matches('/');
+                if !(url.starts_with("https://") || url.starts_with("http://")) || url.len() > 300 || url.contains(char::is_whitespace) {
+                    bail!("not a web address");
+                }
+                // Opened on the server itself (or through a tunnel) after the real address: the real one stays.
+                let local = |u: &str| url::Url::parse(u).ok().and_then(|u| u.host_str().map(str::to_lowercase)).is_some_and(|h| h == "localhost" || h.starts_with("127.") || h == "[::1]");
+                if local(url) && self.db.setting("public_url")?.is_some_and(|known| !local(&known)) {
+                    return ok(false);
+                }
+                ok(self.db.set_setting("public_url", url).map(|_| true)?)
+            }
+            // The AI plan's usage windows, where the AI reports them (Claude Code does).
+            "ai_windows" => ok(crate::provider::windows(&self.db)),
             "inbox_dismiss" => ok(self.db.inbox_dismiss(&arg::<String>(a, "kind")?, arg(a, "id")?)?),
             "site_rules" => ok(self.db.site_rules()?.into_iter().map(|(tool, host, action)| json!({"tool": tool, "host": host, "action": action})).collect::<Vec<_>>()),
             "set_site_rule" => ok(self.db.set_site_rule(&arg::<String>(a, "tool")?, &arg::<String>(a, "host")?, &arg::<String>(a, "action")?)?),

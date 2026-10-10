@@ -10,6 +10,7 @@ Bots act through **tools**. Every tool call is checked against your rules before
 | `chat_search` | Search earlier conversations with you (any of your bots) for what was said but not saved | allow |
 | `memory_forget` | Forget a memory | **ask** |
 | `routine_create`, `routine_list` | Schedule and list routines, recurring or once (a reminder) ([Routines](routines.md)) | allow |
+| `routine_update` | Change a routine's brief, schedule, quiet or watch (when you reply to its result with what to change); a bot allowed `routine_create` may use it | allow |
 | `routine_delete` | Delete a routine | **ask** |
 | `web_fetch` | Read a web page (outside content; never this computer or your local network: addresses, names that resolve there, and redirects are all checked) | allow |
 | `calendar_add` | Make one-click "add to calendar" links (Google Calendar, Outlook) for an event; you open one and save it, nothing is added for you | allow |

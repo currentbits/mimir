@@ -2,6 +2,26 @@
 
 What changed for people using Mimir. The newest release is at the top; "Unreleased" is what the next one brings.
 
+## Unreleased
+
+- **Quiet checks that cost almost nothing:** a quiet check can watch a page, a feed or your inbox. Mimir looks first and
+  runs the AI only when something changed, with just what changed. Unchanged checks show as free. Times, counters
+  and anything else that changes on every load don't count as a change.
+- **Daily caps:** Settings → Limits caps what each routine, each bot and all bots may use in a day. One that would go
+  over pauses until midnight, and Needs you asks whether to let it go on today. Tokens from the AI's cache count a
+  tenth, as they're billed; an AI that reports nothing gets an estimate. Limits also shows your Claude plan's 5-hour and
+  weekly windows.
+- **Routines that heal:** when the AI plan hits its usage limit, routines of every bot on that login wait until it
+  resets and then run; network
+  trouble is retried after 5, 15 and 30 minutes; a signed-out AI account is noticed before anything is spent. A
+  routine that keeps failing is one item in Needs you, and it leaves once the routine works again. Activity says
+  where each result went, and a result a messaging app wouldn't take shows in Needs you.
+- **Tune a new routine by replying:** its first three results ask what you didn't need; reply and the bot rewrites it.
+- **Rehearse** a routine or a skill: it runs once, but anything it would send or change is only described.
+- **"I need you on the computer":** at a sign-in, a 2FA code, a captcha or a payment, a bot on your server's computer
+  asks you to take over, with a link to the live screen, and carries on once you give it back. A routine asks without
+  waiting, and runs again once you press Done.
+
 ## 0.1.4
 
 - **All at once:** **Accept all** / **Dismiss all** for memory suggestions (from two up, the outside-content ones

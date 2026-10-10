@@ -185,6 +185,22 @@ function SkillCard({ id, chatId }: { id: number; chatId: number }) {
   )
 }
 
+type Rehearsed = { reply: string; would: string[]; looked: string[] }
+
+/** What a rehearsal found, and what it would have done (nothing was sent or changed). */
+function RehearsalResult({ r, onClose }: { r: Rehearsed; onClose: () => void }) {
+  return (
+    <div className="rehearsal">
+      <div className="rehearsal-head"><b>Rehearsal</b><span className="hint grow">Nothing was sent or changed.</span><button className="btn btn-ghost btn-sm" onClick={onClose}>Close</button></div>
+      {r.would.length > 0
+        ? <div><span className="field-label">It would have</span><ul>{r.would.map((w, i) => <li key={i} className="selectable">{w}</li>)}</ul></div>
+        : <span className="hint">It wouldn’t change or send anything.</span>}
+      {r.looked.length > 0 && <span className="hint">It looked at: {r.looked.join(' · ')}</span>}
+      <div><span className="field-label">What it would say</span><div className="selectable"><Markdown text={r.reply.trim() || 'Nothing needed your attention.'} /></div></div>
+    </div>
+  )
+}
+
 function RoutineCard({ id, chatId, onChange }: { id: number; chatId: number; onChange: () => void }) {
   const rows = useLoad(() => invoke<Routine[]>('routines', { chatId }), [chatId], 10000)
   const [busy, setBusy] = useState(false)
@@ -225,40 +241,45 @@ type EntryRow = {
   origin?: '' | 'you' | 'bot' | 'tidy' | 'import'; bot_id?: number | null; tainted?: boolean; missteps?: number; valid_until?: number | null; asked?: string | null
 }
 type Delivery = 'now' | 'digest' | 'log'
-type Routine = { id: number; bot_id: number; quiet: boolean; paused: boolean; chat_id: number; cron: string; prompt: string; next_fire: number; delivery: Delivery; once?: boolean }
+type Routine = { id: number; bot_id: number; quiet: boolean; paused: boolean; chat_id: number; cron: string; prompt: string; next_fire: number; delivery: Delivery; once?: boolean; watch?: string }
 /** When a routine runs, in words: its schedule, or the one time a one-off (a reminder) runs. */
 const when = (r: Routine) => r.once ? `Once · ${fullTime(r.next_fire)}` : schedule(r.cron)
 type Tab = 'chat' | 'memory' | 'skills' | 'routines' | 'activity'
 type View = Tab | 'settings' | 'bot' | 'inbox' | 'computer' | 'meetings'
 type ComputerStatus = { available: boolean; enabled: boolean; running: boolean }
 type Run = {
-  id: number; bot_id: number; chat_id: number; reply?: string | null; parent_run?: number | null; trigger: 'message' | 'routine' | 'tidy' | 'delegated' | 'import' | 'check'; routine_id: number | null; provider: string; model: string | null
-  status: 'running' | 'ok' | 'error' | 'missed'; error: string | null; started_at: number; ended_at: number | null
+  id: number; bot_id: number; chat_id: number; reply?: string | null; parent_run?: number | null; trigger: 'message' | 'routine' | 'rehearsal' | 'tidy' | 'delegated' | 'import' | 'check'; routine_id: number | null; provider: string; model: string | null
+  status: 'running' | 'ok' | 'error' | 'missed' | 'unchanged'; error: string | null; started_at: number; ended_at: number | null
   tokens_in: number; tokens_out: number; cost_usd: number | null; tool_calls: number
+  delivered?: string | null; repeats?: number; cache_read?: number; estimated?: boolean
 }
 type ToolCall = { id: number; tool: string; summary: string; decision: string; ok: boolean; result: string }
 type Totals = { runs: number; errors: number; tokens_in: number; tokens_out: number; cost_usd: number }
 /** A routine's last 30 days and its last runs, newest first. */
-type RoutineStats = { id: number; runs: number; tokens: number; cost_usd: number | null; failed: number; missed: number; last: { status: Run['status']; at: number; tokens: number }[] }
-const RUN_DOT: Record<Run['status'], string> = { ok: 'live', error: 'err', missed: 'missed', running: 'wait' }
-const RUN_WORD: Record<Run['status'], string> = { ok: 'Ran', error: 'Failed', missed: 'Missed', running: 'Running' }
+type RoutineStats = { id: number; runs: number; tokens: number; cost_usd: number | null; failed: number; missed: number; unchanged?: number; ignored?: string[]; last: { status: Run['status']; at: number; tokens: number }[] }
+const RUN_DOT: Record<Run['status'], string> = { ok: 'live', error: 'err', missed: 'missed', running: 'wait', unchanged: 'same' }
+const RUN_WORD: Record<Run['status'], string> = { ok: 'Ran', error: 'Failed', missed: 'Missed', running: 'Running', unchanged: 'Nothing changed, so no AI run' }
 
 /** Under a routine: its last runs as dots (oldest left), and what it used in 30 days. */
-function RoutineHealth({ s }: { s?: RoutineStats }) {
-  if (!s || !s.last.length) return null
+function RoutineHealth({ s, onReset }: { s?: RoutineStats; onReset?: () => void }) {
+  if (!s || (!s.last.length && !s.ignored?.length)) return null
   const each = s.runs ? Math.round(s.tokens / s.runs) : 0
   return (
     <div className="rh">
       <span className="rh-dots" aria-label="Last runs">{[...s.last].reverse().map((m, i) => <span key={i} className={'dot ' + RUN_DOT[m.status]} title={`${RUN_WORD[m.status]} · ${fullTime(m.at)}${m.tokens ? ` · ${tok(m.tokens)} tokens` : ''}`} />)}</span>
       {s.runs > 0 && <span>30 days: {s.runs} {s.runs === 1 ? 'run' : 'runs'}{each ? ` · about ${tok(each)} tokens each` : ''}{s.cost_usd ? ` · ${usd(s.cost_usd)} API-equivalent` : ''}</span>}
+      {!!s.unchanged && <span title="Mimir looked and nothing had changed, so the AI didn't run">{s.unchanged} unchanged, free</span>}
+      {!!s.ignored?.length && <span title={`Left out because they change on every load:\n${s.ignored.join('\n')}`}>
+        ignoring {s.ignored.length} {s.ignored.length === 1 ? 'line' : 'lines'} that change on every load{onReset && <> · <button type="button" className="linkish" onClick={onReset}>Reset</button></>}</span>}
       {(s.failed > 0 || s.missed > 0) && <span className="bad">{[s.failed && `${s.failed} failed`, s.missed && `${s.missed} missed`].filter(Boolean).join(' · ')}</span>}
     </div>
   )
 }
-type Approval = { id: number; bot_id: number; chat_id: number; tool: string; summary: string; created_at: number; expires_at: number; kind?: 'rule' | 'guarded' | 'login' | 'plan' | 'bot' | 'send'; site?: string | null; parked?: boolean; allowed_before?: number }
+type Approval = { id: number; bot_id: number; chat_id: number; tool: string; summary: string; created_at: number; expires_at: number; kind?: 'rule' | 'guarded' | 'login' | 'plan' | 'bot' | 'send' | 'takeover'; site?: string | null; parked?: boolean; allowed_before?: number }
 
 /** What an approval would do, in a few words, and whether it can become an "always allow". */
 function approvalRisk(a: Approval): { icon: string; label: string; tone: string; always: boolean } {
+  if (a.kind === 'takeover') return { icon: 'laptop', label: 'A step only you should do. Take over on the live screen, then press Give back; the bot carries on.', tone: 'login', always: false }
   if (a.kind === 'login') return { icon: 'key', label: 'Types a saved login. Every use asks you.', tone: 'login', always: false }
   if (a.kind === 'send') return { icon: 'send', label: 'Sends an email as you, to the address shown first. Every email asks you.', tone: 'rule', always: false }
   if (a.kind === 'bot') return { icon: 'user', label: 'Makes a new bot with this role, on the same AI account. Every new bot asks you.', tone: 'rule', always: false }
@@ -637,7 +658,19 @@ function Main() {
   const [incognito, setIncognito] = useState(false)
   // Incognito ends when you go to another chat.
   useEffect(() => setIncognito(false), [chatId])
-  const [view, setView] = useState<View>('chat')
+  // A link to the live computer (a bot asking you to take over) opens it: #computer.
+  const [view, setView] = useState<View>(() => location.hash === '#computer' ? 'computer' : 'chat')
+  useEffect(() => {
+    const go = () => { if (location.hash === '#computer') { setView('computer'); history.replaceState(null, '', location.pathname + location.search) } }
+    go()
+    window.addEventListener('hashchange', go)
+    return () => window.removeEventListener('hashchange', go)
+  }, [])
+  // Tell the server where its web app is reached, for links in messages (only a server keeps it).
+  useEffect(() => {
+    const at = inDesktop ? remoteServer()?.url : location.origin
+    if (at && (!inDesktop || remoteServer())) invoke('public_url', { url: at }).catch(() => {})
+  }, [])
   // Content drifts in from the side of the tab you moved to (left or right); other views just rise.
   const lastTab = useRef(0)
   const tabIndex = TABS.findIndex(t => t.id === view)
@@ -890,13 +923,17 @@ function ApprovalCard({ a, where, leaving, decide, inline }: {
     <div className={'approval tone-' + risk.tone + (inline ? ' inline' : '') + (leaving ? ' leaving' : '')}>
       <Avatar id={b.id} name={b.name} size={32} mood="asking" />
       <div className="approval-main">
-        <div className="ask">{b.name} needs your OK · {where}</div>
+        <div className="ask">{b.name} {a.kind === 'takeover' ? 'needs you on the computer' : 'needs your OK'} · {where}</div>
         <div className={'what selectable' + (a.kind === 'plan' ? ' plan' : '')}>{a.summary}</div>
         <div className="risk"><Icon name={risk.icon} size={12} />{risk.label}</div>
         {learned && <div className="learned">You've allowed this {a.allowed_before} times. Stop asking?</div>}
         {a.parked && <div className="parked">From a routine. It runs when you approve; it waits {((w: string) => w.startsWith('in ') ? `for ${w.slice(3)}` : `until ${w}`)(ahead(a.expires_at))}.</div>}
       </div>
-      <div className="choices">
+      {a.kind === 'takeover' ? <div className="choices">
+        <button className="btn" onClick={() => decide(a.id, false)}>Can’t now</button>
+        <button className="btn" onClick={() => decide(a.id, true)}>Done</button>
+        <a className="btn btn-primary" href="#computer">Open the computer</a>
+      </div> : <div className="choices">
         <button className="btn" onClick={() => decide(a.id, false)}>Deny</button>
         {risk.always && (
           <button className={'btn' + (learned ? ' btn-primary' : '')} onClick={() => decide(a.id, true, a.site ? 'site' : 'tool')}
@@ -909,7 +946,7 @@ function ApprovalCard({ a, where, leaving, decide, inline }: {
           <button className="btn" onClick={() => decide(a.id, true, 'run')} title="Allow this, and anything else like it while the bot finishes this reply.">All like this</button>
         )}
         <button className={'btn' + (learned ? '' : ' btn-primary')} onClick={() => decide(a.id, true)}>{a.kind === 'plan' ? 'Approve plan' : 'Allow once'}</button>
-      </div>
+      </div>}
       {!a.parked && <Countdown until={a.expires_at} />}
     </div>
   )
@@ -959,11 +996,15 @@ function Approvals({ list, chats, chatName, onDecided }: { list: Approval[]; cha
   )
 }
 
-type Inbox = { approvals: Approval[]; missed: Approval[]; failed: Run[]; suggestions: { chat_id: number; count: number }[]; unconfirmed?: { chat_id: number; count: number }[]; server_update?: { current: string; latest: string; how: string } | null }
-const inboxCount = (i: Inbox | null) => i ? (i.server_update ? 1 : 0) + i.approvals.length + i.missed.length + i.failed.length + i.suggestions.reduce((n, s) => n + s.count, 0) + (i.unconfirmed ?? []).reduce((n, s) => n + s.count, 0) : 0
+type Hold = { key: string; bot_id: number; routine_id: number | null; routine?: string | null; until: number; why: string; cap: boolean }
+/** One item per usage limit: every bot on that AI login waits for the same reset. */
+const holdGroups = (hs: Hold[]) => Object.values(hs.reduce<Record<string, Hold[]>>((g, h) => { const k = h.cap || h.routine_id ? h.key : `limit:${h.until}`; (g[k] ??= []).push(h); return g }, {}))
+type Inbox = { approvals: Approval[]; missed: Approval[]; failed: Run[]; holds?: Hold[]; suggestions: { chat_id: number; count: number }[]; unconfirmed?: { chat_id: number; count: number }[]; server_update?: { current: string; latest: string; how: string } | null }
+const inboxCount = (i: Inbox | null) => i ? (i.server_update ? 1 : 0) + i.approvals.length + i.missed.length + i.failed.length + holdGroups(i.holds ?? []).length + i.suggestions.reduce((n, s) => n + s.count, 0) + (i.unconfirmed ?? []).reduce((n, s) => n + s.count, 0) : 0
 
 /** A failed run in plain words, with the fix that most likely helps. */
-function failure(error: string | null, status?: Run['status']): { title: string; fix: 'bot' | 'chat' | 'routines' | null; fixLabel?: string } {
+function failure(error: string | null, status?: Run['status'], delivered?: string | null): { title: string; fix: 'bot' | 'chat' | 'routines' | null; fixLabel?: string } {
+  if (status !== 'error' && delivered?.startsWith('not sent')) return { title: `A routine ran, but its result couldn't be sent ${delivered.replace(/^not sent to (\w+).*/, (_, k: string) => `to ${k[0].toUpperCase()}${k.slice(1)}`)}`, fix: 'chat', fixLabel: 'Read it in the chat' }
   if (status === 'missed') return { title: error ?? 'A routine didn’t run on time', fix: 'routines', fixLabel: 'See routines' }
   const e = (error ?? '').toLowerCase()
   if (/usage limit|rate limit|quota|429/.test(e)) return { title: 'Hit the AI plan\'s usage limit', fix: 'bot', fixLabel: 'Use another account or model' }
@@ -1037,17 +1078,41 @@ function InboxView({ data, troubled, reload, chats, chatName, openBot, openChat 
           </Row>
         ))}</div>
       </>}
+      {(data.holds ?? []).length > 0 && <>
+        <div className="section-title"><h2>Paused</h2><span className="count">{holdGroups(data.holds!).length}</span></div>
+        <div className="group">{holdGroups(data.holds!).map(hs => {
+          const h = hs[0], b = botOf(h.bot_id)
+          const names = hs.map(x => botOf(x.bot_id).name)
+          const who = names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}` : names[0]
+          const what = h.routine ? `“${h.routine}”` : h.routine_id ? 'A routine' : `${who}’s routines`
+          return (
+            <div key={h.key} className="inbox-row">
+              <Avatar id={b.id} name={b.name} size={28} still />
+              <div className="inbox-main">
+                <div className="inbox-title">{what} {h.routine_id ? 'waits' : 'wait'} until {fullTime(h.until)}</div>
+                <div className="inbox-desc">{h.cap ? `${h.why[0].toUpperCase()}${h.why.slice(1)}.` : 'The AI plan reached its usage limit.'} {h.routine_id ? 'It runs' : 'They run'} then, once, and the run log says which times {h.routine_id ? 'it' : 'they'} skipped.</div>
+              </div>
+              <div className="row-ctl">
+                <button className="btn btn-sm" title={h.cap ? 'Let it go over the cap for the rest of today' : 'If you raised the limit or switched account'} onClick={() => Promise.all(hs.map(x => invoke('hold_clear', { key: x.key }))).then(reload)}>{h.cap ? 'Let it go on today' : 'Run now'}</button>
+                {!h.cap && <button className="btn btn-sm btn-ghost" onClick={() => openBot(h.bot_id)}>Use another account</button>}
+              </div>
+            </div>
+          )
+        })}</div>
+      </>}
       {data.failed.length > 0 && <>
         <div className="section-title"><h2>Didn’t work</h2><span className="count">{data.failed.length}</span></div>
         <div className="group">{data.failed.map(r => {
-          const f = failure(r.error, r.status)
+          const f = failure(r.error, r.status, r.delivered)
           const b = botOf(r.bot_id)
           return (
             <div key={r.id} className={'inbox-row' + (gone.leaving.has(r.id) ? ' leaving' : '')}>
               <Avatar id={b.id} name={b.name} size={28} mood="sad" />
               <div className="inbox-main">
                 <div className="inbox-title">{f.title}</div>
-                <div className="inbox-desc">{b.name} · {RUN_TITLE[r.trigger]} in {where(r.chat_id)} · {ago(r.started_at)}</div>
+                <div className="inbox-desc">{b.name} · {RUN_TITLE[r.trigger]} in {where(r.chat_id)} · {ago(r.started_at)}{(r.repeats ?? 1) > 1 ? ` · ${r.repeats} times` : ''}</div>
+                {r.status === 'error' && r.error?.match(/(Trying again at [^.]+\.|This bot's routines wait until [^;]+)/) && <div className="inbox-desc">{r.error.match(/(Trying again at [^.]+\.|This bot's routines wait until [^;]+)/)![1]}</div>}
+                {r.delivered?.startsWith('not sent') && <details className="inbox-raw"><summary>Details</summary><code className="selectable">{r.delivered}</code></details>}
                 {r.error && r.status !== 'missed' && <details className="inbox-raw"><summary>Details</summary><code className="selectable">{r.error}</code></details>}
               </div>
               <div className="row-ctl">
@@ -1769,6 +1834,11 @@ function Skills({ chatId }: { chatId: number }) {
   // Teach a skill from a link or pasted text (a proposal like the rest).
   const bots = useLoad(() => invoke<Bot[]>('bots'), []).data ?? []
   const [teaching, setTeaching] = useState<{ source: string; bot: number; busy: boolean } | null>(null)
+  const [rehearsal, setRehearsal] = useState<{ id: number; r: Rehearsed | null } | null>(null)
+  const rehearse = (k: Skill) => {
+    setRehearsal({ id: k.id, r: null })
+    invoke<Rehearsed>('rehearse', { chatId, botId: k.bot_id || bots[0]?.id || 1, skillId: k.id }).then(r => setRehearsal({ id: k.id, r }), e => { setRehearsal(null); setErr(String(e)) })
+  }
   const teach = () => {
     if (!teaching?.source.trim()) return
     setTeaching({ ...teaching, busy: true })
@@ -1817,6 +1887,7 @@ function Skills({ chatId }: { chatId: number }) {
           <div className="mem-list">{active.map(k => (
             <article className={'mem' + (leaving.has(k.id) ? ' leaving' : '')} key={k.id}>
               <div className="mem-actions">
+                <button className="btn btn-ghost btn-sm" disabled={rehearsal?.id === k.id && !rehearsal.r} title="Try it once without sending or changing anything: see what it would do" onClick={() => rehearse(k)}>Rehearse</button>
                 <button className="btn btn-ghost btn-sm" title="Copy as a SKILL.md file, for another agent or to share"
                   onClick={() => copyText(invoke<string>('export_skill', { chatId, id: k.id })).then(() => setErr(null), e => setErr(String(e)))}>Copy as SKILL.md</button>
                 <button className="btn btn-ghost btn-danger btn-sm icon-btn" title="Remove" aria-label={`Remove ${k.name}`}
@@ -1825,6 +1896,7 @@ function Skills({ chatId }: { chatId: number }) {
               <div className="mem-title">{k.name}</div>
               <p className="mem-body">{k.description}</p>
               <div className="skill-steps selectable"><Markdown text={k.body} /></div>
+              {rehearsal?.id === k.id && (rehearsal.r ? <RehearsalResult r={rehearsal.r} onClose={() => setRehearsal(null)} /> : <p className="hint">Rehearsing… it runs for real, but anything it would send or change is only described.</p>)}
               <div className="mem-meta">
                 {bots.length > 1
                   ? <select className="select select-inline" value={k.bot_id} aria-label={`Which bots use ${k.name}`}
@@ -2079,7 +2151,7 @@ function Editor({ initial, submit, onSave, onCancel }: {
 const CHECKINS = [
   { title: 'Morning task check', cron: '30 8 * * Mon-Fri', icon: 'check', prompt: 'Look at my open tasks in memory. If any are due today or overdue, remind me which and why. Otherwise say nothing.' },
   { title: 'Evening look-ahead', cron: '0 19 * * Sun-Thu', icon: 'moon', prompt: 'Check my memory for anything happening tomorrow (appointments, deadlines, people to contact). If there is something, give me a short heads-up.' },
-  { title: 'Watch a web page', cron: '0 */3 * * *', icon: 'globe', prompt: 'Read https://example.com/status and tell me only if it reports a problem or something changed since you last remembered it.' },
+  { title: 'Watch a web page', cron: '0 */3 * * *', icon: 'globe', prompt: 'Tell me if the page reports a problem, or what changed if it matters.', watch: 'https://example.com/status' },
 ]
 
 // ---- schedule picker: plain choices in, cron out (anything else stays editable as "Custom") ----
@@ -2110,7 +2182,7 @@ function toCron(w: When): string {
     : w.mode === 'hours' ? `0 */${w.hours} * * *` : w.cron
 }
 
-type RoutineDraft = { prompt: string; botId: number; quiet: boolean; when: When; delivery: Delivery }
+type RoutineDraft = { prompt: string; botId: number; quiet: boolean; when: When; delivery: Delivery; watch: string }
 
 function RoutineForm({ draft, setDraft, bots, onCancel, onSave, inline, skills = [] }: {
   draft: RoutineDraft; setDraft: (d: RoutineDraft) => void; bots: Bot[]; onCancel: () => void; onSave: () => void; inline?: boolean; skills?: Skill[]
@@ -2155,6 +2227,12 @@ function RoutineForm({ draft, setDraft, bots, onCancel, onSave, inline, skills =
         <Switch label="Quiet" checked={draft.quiet} onChange={quiet => setDraft({ ...draft, quiet })} />
         <div><b>Quiet</b><span>Read-only, and it only messages you when something needs your attention.</span></div>
       </div>
+      {draft.quiet && (
+        <label className="field-label"><span>Watch (optional)</span>
+          <input className="input" value={draft.watch} placeholder="https://… or mail" onChange={e => setDraft({ ...draft, watch: e.target.value })} />
+          <span className="hint">A page, a feed, or <code>mail</code> for new unread email. Mimir looks first and only runs the AI when it changed, so checking often costs almost nothing.</span>
+        </label>
+      )}
       <div className="field-label"><span>Send it</span>
         <Segmented size="sm" label="Send it" value={draft.delivery} onChange={delivery => setDraft({ ...draft, delivery })}
           options={[{ id: 'now', label: 'Right away' }, { id: 'digest', label: 'In my daily digest' }, { id: 'log', label: 'Just log it' }]} />
@@ -2182,15 +2260,20 @@ function RoutinesView({ chatId, bots }: { chatId: number; bots: Bot[] }) {
   const [draft, setDraft] = useState<RoutineDraft | null>(null)
   const [editing, setEditing] = useState<{ id: number; draft: RoutineDraft } | null>(null)
   const [runningId, setRunningId] = useState<number | null>(null)
+  const [rehearsal, setRehearsal] = useState<{ id: number; r: Rehearsed | null } | null>(null)
+  const rehearse = (id: number) => { setRehearsal({ id, r: null }); invoke<Rehearsed>('rehearse', { chatId, routineId: id }).then(r => setRehearsal({ id, r }), e => { setRehearsal(null); setErr(String(e)) }) }
   const skillRows = useLoad(() => invoke<Skill[]>('skills', { chatId }), [chatId])
   const list = rows.data ?? []
   const deliver = (id: number, delivery: Delivery) => invoke('set_delivery', { chatId, id, delivery })
-  const update = (r: Routine, patch: { cron?: string; prompt?: string; quiet?: boolean; paused?: boolean; delivery?: Delivery }) =>
+  const watch = (id: number, w: string) => invoke('set_watch', { chatId, id, watch: w.trim() })
+  const update = (r: Routine, patch: { cron?: string; prompt?: string; quiet?: boolean; paused?: boolean; delivery?: Delivery; watch?: string }) =>
     invoke('update_routine', { chatId, id: r.id, cron: r.cron, prompt: r.prompt, quiet: r.quiet, paused: r.paused, ...patch })
+      .then(() => patch.watch !== undefined && patch.watch.trim() !== (r.watch ?? '') ? watch(r.id, patch.watch) : null)
       .then(() => patch.delivery && patch.delivery !== r.delivery ? deliver(r.id, patch.delivery) : null)
       .then(() => { setErr(null); setEditing(null); rows.reload() }, e => setErr(String(e)))
-  const start = (cron: string, prompt: string, quiet: boolean) => { setErr(null); setDraft({ prompt, quiet, botId: bots[0]?.id ?? 1, when: toWhen(cron), delivery: 'now' }) }
+  const start = (cron: string, prompt: string, quiet: boolean, w = '') => { setErr(null); setDraft({ prompt, quiet, botId: bots[0]?.id ?? 1, when: toWhen(cron), delivery: 'now', watch: w }) }
   const add = () => draft && invoke<Routine>('add_routine', { chatId, botId: draft.botId, cron: toCron(draft.when), prompt: draft.prompt, quiet: draft.quiet })
+    .then(async r => { if (draft.quiet && draft.watch.trim()) await watch(r.id, draft.watch); return r })
     .then(r => draft.delivery !== 'now' ? deliver(r.id, draft.delivery) : null)
     .then(() => { setDraft(null); setErr(null); rows.reload() }, e => setErr(String(e)))
   return (
@@ -2208,16 +2291,17 @@ function RoutinesView({ chatId, bots }: { chatId: number; bots: Bot[] }) {
               const b = botOf(r.bot_id)
               if (editing?.id === r.id) return (
                 <RoutineForm key={r.id} inline skills={skillRows.data ?? []} draft={editing.draft} setDraft={d => setEditing({ id: r.id, draft: d })} bots={bots} onCancel={() => setEditing(null)}
-                  onSave={() => update(r, { cron: toCron(editing.draft.when), prompt: editing.draft.prompt, quiet: editing.draft.quiet, delivery: editing.draft.delivery })} />
+                  onSave={() => update(r, { cron: toCron(editing.draft.when), prompt: editing.draft.prompt, quiet: editing.draft.quiet, delivery: editing.draft.delivery, watch: editing.draft.quiet ? editing.draft.watch : '' })} />
               )
               return (
                 <div className={'routine' + (r.paused ? ' paused' : '')} key={r.id}>
                   <span className={'ri' + (r.quiet ? ' quiet' : '')}><Icon name={r.quiet ? 'moon' : 'clock'} /></span>
                   <div>
-                    <div className="rt">{when(r)}{r.quiet && <span className="badge pending" title="Read-only; speaks up only when something needs your attention">Quiet</span>}{r.paused && <span className="badge">Paused</span>}{r.delivery === 'digest' && <span className="badge" title="Collected into your daily digest">In digest</span>}{r.delivery === 'log' && <span className="badge" title="Not sent; see Activity">Log only</span>}</div>
+                    <div className="rt">{when(r)}{r.quiet && <span className="badge pending" title="Read-only; speaks up only when something needs your attention">Quiet</span>}{r.paused && <span className="badge">Paused</span>}{r.delivery === 'digest' && <span className="badge" title="Collected into your daily digest">In digest</span>}{r.delivery === 'log' && <span className="badge" title="Not sent; see Activity">Log only</span>}{r.quiet && r.watch && <span className="badge" title="Mimir looks first and only runs the AI when this changed">Watching {r.watch === 'mail' ? 'mail' : (() => { try { return new URL(r.watch).host } catch { return r.watch } })()}</span>}</div>
                     <div className="rp selectable">{r.prompt}</div>
                     <div className="rm"><Avatar id={b.id} name={b.name} size={16} still /><span>{b.name}</span><span>·</span><span>{r.paused ? 'Won’t run until you turn it back on' : `${r.once ? 'Runs' : 'Next run'} ${ahead(r.next_fire)}${r.once ? ', then it’s gone' : ''}`}</span></div>
-                    <RoutineHealth s={stats.data?.find(x => x.id === r.id)} />
+                    <RoutineHealth s={stats.data?.find(x => x.id === r.id)} onReset={() => invoke('reset_watch_noise', { chatId, id: r.id }).then(stats.reload, e => setErr(String(e)))} />
+                    {rehearsal?.id === r.id && (rehearsal.r ? <RehearsalResult r={rehearsal.r} onClose={() => setRehearsal(null)} /> : <p className="hint">Rehearsing… it runs for real, but anything it would send or change is only described.</p>)}
                   </div>
                   <div className="routine-actions">
                     <Switch label={r.paused ? `Resume: ${when(r)}` : `Pause: ${when(r)}`} checked={!r.paused} onChange={on => update(r, { paused: !on })} />
@@ -2225,8 +2309,10 @@ function RoutinesView({ chatId, bots }: { chatId: number; bots: Bot[] }) {
                       onClick={() => { setRunningId(r.id); invoke<string>('run_routine', { chatId, id: r.id }).then(() => setErr(null), e => setErr(String(e))).finally(() => { setRunningId(null); rows.reload(); stats.reload() }) }}>
                       {runningId === r.id ? 'Running…' : 'Run now'}
                     </button>
+                    <button className="btn btn-ghost btn-sm" disabled={rehearsal?.id === r.id && !rehearsal.r} title="Run it once without sending or changing anything: see what it would do"
+                      onClick={() => rehearse(r.id)}>Rehearse</button>
                     {/* A one-off has no schedule to edit: change its words by asking the bot, or delete it. */}
-                    {!r.once && <button className="btn btn-ghost btn-sm" onClick={() => setEditing({ id: r.id, draft: { prompt: r.prompt, quiet: r.quiet, botId: r.bot_id, when: toWhen(r.cron), delivery: r.delivery ?? 'now' } })}>Edit</button>}
+                    {!r.once && <button className="btn btn-ghost btn-sm" onClick={() => setEditing({ id: r.id, draft: { prompt: r.prompt, quiet: r.quiet, botId: r.bot_id, when: toWhen(r.cron), delivery: r.delivery ?? 'now', watch: r.watch ?? '' } })}>Edit</button>}
                     <button className="btn btn-ghost btn-danger btn-sm icon-btn" title="Delete" aria-label="Delete routine" onClick={() => ask('Delete this routine?', 'Delete', true).then(ok => { if (ok) void invoke('delete_routine', { chatId, id: r.id }).then(rows.reload, e => setErr(String(e))) })}><Icon name="trash" size={14} /></button>
                   </div>
                 </div>
@@ -2244,7 +2330,7 @@ function RoutinesView({ chatId, bots }: { chatId: number; bots: Bot[] }) {
             <Icon name="plus" size={18} /><b>New routine</b><span>Pick what and when</span>
           </button>
           {CHECKINS.map(c => (
-            <button key={c.title} className="preset" onClick={() => start(c.cron, c.prompt, true)}>
+            <button key={c.title} className="preset" onClick={() => start(c.cron, c.prompt, true, c.watch)}>
               <Icon name={c.icon} size={18} /><b>{c.title}</b><span>{schedule(c.cron)}</span>
             </button>
           ))}
@@ -2256,7 +2342,7 @@ function RoutinesView({ chatId, bots }: { chatId: number; bots: Bot[] }) {
 
 // ---------------- activity ----------------
 
-const RUN_TITLE: Record<Run['trigger'], string> = { message: 'Reply', routine: 'Routine', tidy: 'Memory tidy-up', delegated: 'Task from another bot', import: 'Memory import', check: 'Checked a suggestion' }
+const RUN_TITLE: Record<Run['trigger'], string> = { message: 'Reply', routine: 'Routine', rehearsal: 'Rehearsal', tidy: 'Memory tidy-up', delegated: 'Task from another bot', import: 'Memory import', check: 'Checked a suggestion' }
 /** "Quiet check · Weekdays at 8:30 AM"; a deleted routine keeps its number. */
 const runTitle = (r: Run, routine?: Routine) =>
   r.trigger !== 'routine' ? RUN_TITLE[r.trigger] : routine ? `${routine.quiet ? 'Quiet check' : routine.once ? 'One-off' : 'Routine'} · ${when(routine)}` : `Routine #${r.routine_id}`
@@ -2291,9 +2377,9 @@ function ActivityView({ chatId }: { chatId: number }) {
                   const asker = r.parent_run ? list.find(x => x.id === r.parent_run) : undefined
                   return asker ? `Task from ${botOf(asker.bot_id).name}` : runTitle(r, routines.data?.find(x => x.id === r.routine_id))
                 })()}</b>
-                  <small>{ago(r.started_at)}{r.status === 'error' ? ' · failed' : r.status === 'missed' ? ' · missed' : r.ended_at ? ` · ${r.ended_at - r.started_at}s` : ' · running'}{r.model ? ` · ${r.model}` : ''}</small></span>
+                  <small>{ago(r.started_at)}{r.status === 'error' ? ' · failed' : r.status === 'missed' ? ' · missed' : r.status === 'unchanged' ? ' · nothing changed, no AI run' : r.ended_at ? ` · ${r.ended_at - r.started_at}s` : ' · running'}{r.model ? ` · ${r.model}` : ''}{r.delivered ? ` · ${r.delivered.startsWith('not sent') ? 'not sent' : r.delivered}` : ''}</small></span>
                 <span className="run-bot"><Avatar id={b.id} name={b.name} size={18} still /><span>{b.name}</span></span>
-                <span className="num">{r.status === 'running' ? '…' : r.status === 'error' || r.status === 'missed' ? '—' : `${tok(r.tokens_in)} → ${tok(r.tokens_out)}`}</span>
+                <span className="num">{r.status === 'running' ? '…' : r.status === 'error' || r.status === 'missed' || r.status === 'unchanged' ? '—' : <span title={r.estimated ? 'Estimated from the text: this AI doesn’t say what it used' : r.cache_read ? `${tok(r.cache_read)} of the input came from the AI’s cache` : undefined}>{r.estimated ? '≈ ' : ''}{tok(r.tokens_in)} → {tok(r.tokens_out)}</span>}</span>
                 <span className="num">{r.cost_usd != null ? usd(r.cost_usd) : '—'}</span>
                 <span className="num">{r.tool_calls} {r.tool_calls === 1 ? 'tool' : 'tools'}</span>
                 <Icon name="chevron" size={14} />
@@ -2618,6 +2704,7 @@ const SETTING_WORDS: Record<string, string> = {
   'Calendar': 'caldav icloud fastmail nextcloud events schedule',
   'Web search': 'brave searxng google internet search engine',
   'Daily digest': 'quiet hours notifications summary weekly review do not disturb',
+  'Limits': 'cap budget tokens cost usage limit plan subscription quota five hour weekly',
   'Permissions': 'allow ask deny approve rules tools safety always',
   'Browser': 'playwright chromium saved logins passwords vault',
   'Tool servers': 'mcp plugins integrations connectors',
@@ -2690,6 +2777,7 @@ function SettingsView({ onComputer }: { onComputer: () => void }) {
       {inDesktop && !remoteServer() && <AppSettings />}
       {inDesktop && <UpdateSettings />}
       <DigestSettings />
+      <LimitsSettings />
       <ApiKeySettings />
       <WebSearchSettings />
       <EmailSettings />
@@ -3102,6 +3190,39 @@ function DigestSettings() {
       <Row icon={<Icon name="memory" size={15} />} title="Weekly “what I learned”" desc="Once a week at that time, each Telegram, Slack or Discord chat gets a list of what your bots learned there on their own. Reply /undo with a number to take one back.">
         {weekly !== null && <Switch label="Weekly what I learned" checked={weekly} onChange={v => { setWeekly(v); invoke<boolean>('weekly_review', { on: v }).then(setWeekly, () => setWeekly(!v)) }} />}
       </Row>
+    </Group>
+  )
+}
+
+type Caps = { routine: number | null; bot: number | null; day: number | null }
+type Windows = { at: number; status: string; windows: { name: string; used: number; resets_at: number }[] }
+const WINDOW_NAME: Record<string, string> = { five_hour: '5-hour window', seven_day: 'Weekly', seven_day_opus: 'Weekly (Opus)', seven_day_sonnet: 'Weekly (Sonnet)' }
+
+/** Daily caps on what routines may use, and the AI plan's own windows where the AI reports them. */
+function LimitsSettings() {
+  const [caps, setCaps] = useState<Caps | null>(null)
+  const [win, setWin] = useState<Windows | null>(null)
+  const [msg, setMsg] = useState<string | null>(null)
+  useEffect(() => {
+    invoke<Caps>('caps').then(setCaps, () => {})
+    invoke<Windows | null>('ai_windows').then(setWin, () => {})
+  }, [])
+  const save = (k: keyof Caps, v: string) => invoke<Caps>('caps', { [k]: v.trim() ? Math.max(0, Math.round(Number(v) * 1000)) : 0 }).then(c => { setCaps(c); setMsg(null) }, e => setMsg(String(e)))
+  const field = (k: keyof Caps, title: string, desc: string) => (
+    <Row icon={<Icon name="activity" size={15} />} title={title} desc={desc}>
+      {caps && <><input className="input mono" type="number" min={0} step={10} aria-label={title} placeholder="No cap" style={{ width: 96 }}
+        defaultValue={caps[k] ? caps[k]! / 1000 : ''} onBlur={e => save(k, e.target.value)} /><span className="hint">k tokens a day</span></>}
+    </Row>
+  )
+  return (
+    <Group title="Limits" note={msg ?? 'Caps on what routines use in a day. One that would go over pauses until midnight, and Needs you asks whether to let it go on today. Replies to your own messages are never stopped. Tokens read back from the AI’s cache count a tenth, as they’re billed; each routine shows what it uses on average.'}>
+      {field('routine', 'Each routine', 'What one routine may use in a day.')}
+      {field('bot', 'Each bot', 'What one bot may use in a day, replies included; only its routines pause.')}
+      {field('day', 'All bots together', 'Everything, every bot, in a day.')}
+      {win && win.windows.length > 0 && (
+        <Row icon={<Icon name="clock" size={15} />} title="Your Claude plan"
+          desc={`${win.windows.map(w => `${WINDOW_NAME[w.name] ?? w.name.replace(/_/g, ' ')}: ${Math.round(w.used * 100)}% used, resets ${fullTime(w.resets_at)}`).join(' · ')}. As Claude Code reported it ${ago(win.at)}; when a window is used up, routines wait until it resets.`} />
+      )}
     </Group>
   )
 }

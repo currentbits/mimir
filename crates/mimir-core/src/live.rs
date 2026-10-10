@@ -54,6 +54,7 @@ pub fn step_label(tool: &str) -> String {
         "memory_forget" => "Forgetting a memory".into(),
         "routine_create" => "Scheduling".into(),
         "routine_list" => "Looking at routines".into(),
+        "routine_update" => "Changing a routine".into(),
         "routine_delete" => "Deleting a routine".into(),
         "web_fetch" => "Reading a web page".into(),
         "meeting_search" | "meeting_read" => "Looking at your meetings".into(),

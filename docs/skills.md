@@ -4,6 +4,9 @@ A **skill** is a procedure a bot follows step by step for one kind of task: your
 expense report. A bot sees only each skill's name and when to use it; it reads the steps when a task fits (or when you
 call the skill by name), so having skills costs little until they're used.
 
+**Rehearse** on a skill in the Skills tab tries it once without sending or changing anything: each step that would
+write, send or ask you is only described ([Routines](routines.md#rehearse-before-it-runs-for-real) has the details).
+
 Every skill has the same shape, whoever wrote it: **When to use**, **You'll need**, **Steps**, **Check** (how to tell
 it worked), **Return** (what to tell you) and **Stop and ask if**.
 

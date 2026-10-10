@@ -39,6 +39,8 @@ pub struct ToolCtx {
     pub sticky: bool,
     /// Nobody is watching (a routine): asks are parked in the inbox instead of blocking the run.
     pub unattended: bool,
+    /// A rehearsal: anything that would change or send something, or ask the person, only says what it would do.
+    pub rehearsal: bool,
     /// Images the person sent with this message (saved under <home>/media). Host-side only.
     pub images: Vec<std::path::PathBuf>,
     /// External tool servers started during this turn (killed when the turn's context is dropped).
@@ -71,6 +73,7 @@ impl ToolCtx {
             private: Arc::default(),
             sticky: false,
             unattended: false,
+            rehearsal: false,
             images: vec![],
             ext: Arc::default(),
             page_url: Arc::default(),
@@ -136,7 +139,14 @@ impl ToolCtx {
         if self.unattended {
             a.push("--unattended".into());
         }
+        if self.rehearsal {
+            a.push("--rehearsal".into());
+        }
         a
+    }
+    /// A rehearsal turn: the flag, or the run itself says so (a tool server started without the flag still can't act).
+    pub fn rehearsing(&self) -> bool {
+        self.rehearsal || self.run_id.is_some_and(|r| self.db.run_trigger(r).ok().flatten().as_deref() == Some("rehearsal"))
     }
     /// The incognito chat: no memory, routines or hand-offs, and nothing logged.
     pub fn incognito(&self) -> bool {
@@ -307,10 +317,20 @@ pub fn specs() -> Vec<(&'static str, &'static str, Value)> {
              ('2026-10-12 15:00', the user's local time) for reminders and anything for later; a one-off is gone after it runs. \
              prompt is what you will be asked to do each time it fires; the result is sent to this chat. \
              Set quiet=true for watches/check-ins (\"keep an eye on…\", \"only tell me if…\"): it runs read-only and \
-             messages the user only when something needs their attention.",
-            json!({"type":"object","properties":{"cron":{"type":"string"},"at":{"type":"string","description":"YYYY-MM-DD HH:MM, for a one-off instead of cron"},"prompt":{"type":"string"},"quiet":{"type":"boolean"}},"required":["prompt"]}),
+             messages the user only when something needs their attention. A quiet check about one web page or feed, or \
+             about new email, should set watch (the page's address, or \"mail\"): Mimir then looks itself before each \
+             run and only runs you when it changed, with what changed, which costs far less.",
+            json!({"type":"object","properties":{"cron":{"type":"string"},"at":{"type":"string","description":"YYYY-MM-DD HH:MM, for a one-off instead of cron"},"prompt":{"type":"string"},"quiet":{"type":"boolean"},"watch":{"type":"string","description":"quiet checks only: a page or feed URL, or \"mail\""}},"required":["prompt"]}),
         ),
         ("routine_list", "List this chat's routines.", json!({"type":"object","properties":{}})),
+        (
+            "routine_update",
+            "Change one of this chat's routines: what it does (prompt), when (cron), quiet, or watch. Use it when the person \
+             replies to a routine's result with what to leave out, add or change (\"skip the crypto stuff\", \"make it shorter\", \
+             \"move it to 9\"): rewrite the prompt to include that, keeping everything they didn't ask to change. Give only \
+             the fields that change.",
+            json!({"type":"object","properties":{"id":{"type":"integer"},"prompt":{"type":"string"},"cron":{"type":"string"},"quiet":{"type":"boolean"},"watch":{"type":"string"}},"required":["id"]}),
+        ),
         (
             "plan_propose",
             "Before a task that takes several actions needing the user's OK (sending, deleting, booking, browsing a site), \
@@ -413,8 +433,19 @@ pub fn specs() -> Vec<(&'static str, &'static str, Value)> {
             "Open a web address in a new tab of your computer's Chromium. Returns a screenshot.",
             json!({"type":"object","properties":{"url":{"type":"string"}},"required":["url"]}),
         ),
+        (
+            "computer_handoff",
+            "Ask the person to take over your computer for a step only they should do: signing in, a verification or 2FA \
+             code, a captcha, or paying. Never type passwords, codes or card numbers yourself, and don't try to solve a captcha. \
+             Say in reason what's needed (\"sign in to Padel Club\", \"enter the code sent to your phone\"). Mimir sends them \
+             a link to the live screen and waits up to 10 minutes until they give it back; then take a screenshot and carry on.",
+            json!({"type":"object","properties":{"reason":{"type":"string"}},"required":["reason"]}),
+        ),
     ]
 }
+
+/// How long a bot waits for the person to take over its computer.
+const HANDOFF_SECS: i64 = 600;
 
 /// Built-in plus external (`server__tool`) tools: (name, description, JSON schema).
 pub fn all_specs(db: &Db) -> Vec<(String, String, Value)> {
@@ -447,8 +478,8 @@ fn is_read_only(db: &Db, tool: &str) -> bool {
 /// What a bot may do in a guest's chat: their own memory, routines, files and skills, the web, and calendar links.
 /// Nothing of yours (email, calendar, meetings, saved logins and the browser, tool servers, the computer), and no new
 /// bots in your app.
-const GUEST_TOOLS: [&str; 18] = [
-    "memory_store", "memory_search", "memory_forget", "chat_search", "routine_create", "routine_list", "routine_delete", "web_fetch", "web_search",
+const GUEST_TOOLS: [&str; 19] = [
+    "memory_store", "memory_search", "memory_forget", "chat_search", "routine_create", "routine_update", "routine_list", "routine_delete", "web_fetch", "web_search",
     "file_list", "file_read", "file_write", "file_delete", "skill_view", "skill_save", "calendar_add", "plan_propose", "ask_bot",
 ];
 
@@ -744,6 +775,11 @@ fn describe(ctx: &ToolCtx, name: &str, args: &Value) -> String {
             format!("Delete routine #{id}{}", r.map(|r| format!(" ({}: {})", r.cron, r.prompt)).unwrap_or_default())
         }
         "memory_store" => format!("Remember \"{}\": {}", args["title"].as_str().unwrap_or(""), args["body"].as_str().unwrap_or("")),
+        "routine_update" => format!(
+            "Change routine #{id}:{}{}",
+            args["cron"].as_str().map(|c| format!(" [{c}]")).unwrap_or_default(),
+            args["prompt"].as_str().map(|p| format!(" {p}")).unwrap_or_default()
+        ),
         "routine_create" => match args["at"].as_str().filter(|a| !a.trim().is_empty()) {
             Some(at) => format!("Once at {at}: {}", args["prompt"].as_str().unwrap_or("")),
             None => format!("Create routine [{}] {}", args["cron"].as_str().unwrap_or(""), args["prompt"].as_str().unwrap_or("")),
@@ -794,6 +830,7 @@ fn describe(ctx: &ToolCtx, name: &str, args: &Value) -> String {
         "skill_view" => format!("Read skill \"{}\"", args["name"].as_str().unwrap_or("")),
         "skill_save" => format!("Save as a skill: {}", args["title"].as_str().unwrap_or("")),
         "computer_screenshot" => "Look at the computer's screen".into(),
+        "computer_handoff" => format!("Ask you to take over the computer: {}", args["reason"].as_str().unwrap_or("")),
         "computer_click" => format!("Click the computer at {},{}", args["x"], args["y"]),
         "computer_type" => format!("Type on the computer: {}", args["text"].as_str().unwrap_or("")),
         "computer_key" => format!("Press {} on the computer", args["keys"].as_str().unwrap_or("")),
@@ -1033,6 +1070,25 @@ fn precheck(ctx: &ToolCtx, name: &str, args: &Value) -> Result<()> {
         "memory_store" if len("title") > 120 || len("body") > 1000 => {
             bail!("too long for a memory (title up to 120 characters, body up to 1000): keep it to the fact, or split it")
         }
+        "computer_handoff" if args["reason"].as_str().is_none_or(|r| r.trim().is_empty()) || len("reason") > 300 => {
+            bail!("say briefly what the person needs to do (up to 300 characters)")
+        }
+        "routine_update" => {
+            if len("prompt") > 1000 || len("cron") > 100 {
+                bail!("a routine's prompt can be up to 1000 characters: say what to do, briefly");
+            }
+            if args["prompt"].as_str().is_some_and(|p| p.trim().is_empty()) {
+                bail!("a routine needs a prompt");
+            }
+            if let Some(cron) = args["cron"].as_str()
+                && crate::db::min_gap_minutes(cron)? < 15
+            {
+                bail!("routines a bot sets run at most every 15 minutes; pick a slower schedule");
+            }
+            if let Some(w) = args["watch"].as_str() {
+                crate::watch::valid(w)?;
+            }
+        }
         "routine_create" => {
             if len("prompt") > 1000 || len("cron") > 100 {
                 bail!("a routine's prompt can be up to 1000 characters: say what to do, briefly");
@@ -1050,6 +1106,12 @@ fn precheck(ctx: &ToolCtx, name: &str, args: &Value) -> Result<()> {
                     bail!("routines a bot creates run at most every 15 minutes; pick a slower schedule")
                 }
                 None => {}
+            }
+            if let Some(w) = args["watch"].as_str().filter(|w| !w.trim().is_empty()) {
+                crate::watch::valid(w)?;
+                if !args["quiet"].as_bool().unwrap_or(false) {
+                    bail!("watch is for quiet checks: set quiet=true too");
+                }
             }
             if ctx.db.routines(ctx.chat_id)?.len() >= 25 {
                 bail!("this chat already has 25 routines; ask the person to remove some first");
@@ -1169,6 +1231,22 @@ fn park(ctx: &ToolCtx, name: &str, args: &Value, why: &str, site: Option<&str>) 
 pub async fn run_parked(db: Db, a: crate::db::Approval) {
     let Ok(Some((raw, tainted))) = db.approval_args(a.id) else { return };
     let args: Value = serde_json::from_str(&raw).unwrap_or(json!({}));
+    // A routine asked the person to take over its computer, and they're done: the routine runs again from the start.
+    if a.tool == "computer_handoff" {
+        let routine = args["routine"].as_i64().filter(|id| db.routine(*id).ok().flatten().is_some());
+        let again = match (routine, args["prompt"].as_str()) {
+            (Some(id), _) => db.routine_run_soon(id).map(|_| id),
+            // A one-off that already finished: once more, as a new one-off.
+            (None, Some(prompt)) => db.routine_once(a.bot_id, a.chat_id, crate::db::now() + 60, prompt, args["quiet"].as_bool().unwrap_or(false)).map(|r| r.id),
+            (None, None) => Err(anyhow::anyhow!("the routine is gone")),
+        };
+        let note = match again {
+            Ok(_) => "Thanks. I'll run that routine again now, from where you left the computer.".to_string(),
+            Err(e) => format!("Thanks. I couldn't run the routine again ({e:#}); ask me to, and I'll carry on."),
+        };
+        let _ = db.log(a.bot_id, a.chat_id, "assistant", &note, None);
+        return;
+    }
     // It runs as the routine that asked would have: unattended, and still marked if that run had read outside
     // content (so a memory it saves stays unconfirmed, a routine it makes stays marked).
     let mut ctx = ToolCtx::new(db.clone(), a.bot_id, a.chat_id);
@@ -1243,6 +1321,11 @@ pub async fn call(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
     // A new bot asks every time, never "always" or "all like this" (a standing rule would let bots make bots on their
     // own), and after outside content it's marked as such: the role could be a page's words.
     let (mut decision, why) = always_ask(name, decision, why, ctx.is_tainted());
+    // A rehearsal: what would change or send something, or ask the person, says what it would do instead.
+    let would_ask = decision == "ask";
+    if decision != "deny" && (would_ask || !is_read_only(&ctx.db, name)) && ctx.rehearsing() {
+        decision = "rehearsal".into();
+    }
     // The user approved a plan that includes this: no second ask. Guarded asks (outside content) still ask.
     // A tool whose rule is "ask" stays labelled "rule" even after reading outside content, so check that too.
     if decision == "ask" && why == "rule" && !ctx.is_tainted() && planned(&plan_of(ctx), name, site.as_deref()) {
@@ -1258,6 +1341,11 @@ pub async fn call(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
         "deny" if !enabled && ctx.incognito() => Err(anyhow::anyhow!("{name} isn't available in an incognito chat. Tell the user it works in a normal chat.")),
         "deny" if !enabled => Err(anyhow::anyhow!("{name} isn't enabled for this bot. Tell the user it can't be done here.")),
         "deny" => Err(anyhow::anyhow!("blocked by the user's rules: {name} is set to deny. Tell the user it can't be done.")),
+        "rehearsal" => Ok(format!(
+            "REHEARSAL, nothing was done: {}. In a real run this would {}. Carry on as if it had worked, and in your reply say what you would have done.",
+            describe(ctx, name, args),
+            if would_ask { "first ask the user for an OK" } else { "happen without asking" }
+        )),
         "ask" if ctx.unattended => park(ctx, name, args, why, site.as_deref()),
         "ask" => match wait_for_approval_with(ctx, name, &describe(ctx, name, args), why, site.as_deref()).await {
             Ok(()) => exec(ctx, name, args).await,
@@ -1502,6 +1590,51 @@ async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
             meetings_tool(&ctx.db, name, args)?
         }
         "plan_propose" => propose_plan(ctx, args).await?,
+        "computer_handoff" => {
+            let reason = s(args, "reason")?.trim().to_string();
+            // Let go of the computer first, so the person's clicks make it theirs.
+            if let Some(r) = ctx.run_id {
+                ctx.db.computer_release(&format!("run:{r}"))?;
+            }
+            let link = match ctx.db.setting("public_url")? {
+                Some(url) => format!("Open {}/#computer", url.trim_end_matches('/')),
+                None => "Open Mimir and go to Computer".into(),
+            };
+            // A routine has nobody watching it: ask, end this run, and run the routine again once they're done (the
+            // computer keeps what they did, like a sign-in), instead of holding the bot for ten minutes.
+            if ctx.unattended {
+                let routine = ctx.run_id.and_then(|r| ctx.db.run_routine_id(r).ok().flatten()).and_then(|id| ctx.db.routine(id).ok().flatten());
+                let summary = format!("{reason}\n\n{link}, do it on the screen, then press Done here: the routine runs again.");
+                let id = ctx.db.approval_create(ctx.via_bot.unwrap_or(ctx.bot_id), ctx.chat_id, "computer_handoff", &summary, PARKED_TTL_SECS, "takeover", None)?;
+                let again = json!({"reason": reason, "routine": routine.as_ref().map(|r| r.id), "prompt": routine.as_ref().map(|r| r.prompt.clone()), "quiet": routine.as_ref().is_some_and(|r| r.quiet)});
+                ctx.db.approval_park(id, &again.to_string(), ctx.is_tainted())?;
+                return Ok("The person has been asked to take over for this step. When they're done, this routine runs again from the start. \
+                           Stop here, and say briefly what's waiting for them."
+                    .into());
+            }
+            let summary = format!("{reason}\n\n{link}, do it on the screen, then press Give back.");
+            let id = ctx.db.approval_create(ctx.via_bot.unwrap_or(ctx.bot_id), ctx.chat_id, "computer_handoff", &summary, HANDOFF_SECS, "takeover", None)?;
+            // Done when they give it back after taking over, or say so on the card; "Can't now" or nobody in time, stop.
+            let mut took = false;
+            loop {
+                match ctx.db.approval_status(id)?.as_str() {
+                    "approved" => break,
+                    "denied" => bail!("the person can't do it now ({reason}). Stop here and tell them what's left to do."),
+                    "expired" => bail!("nobody took over in 10 minutes ({reason}). Stop here and tell them what's needed."),
+                    _ => {}
+                }
+                // Theirs while the lease is (even after a quiet minute waiting for a text message), until Give back.
+                let theirs = ctx.db.setting("computer_lease")?.is_some_and(|v| v.contains("\"who\":\"you\""));
+                if took && !theirs {
+                    ctx.db.approval_decide(id, true, None)?;
+                    break;
+                }
+                took |= theirs;
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+            ctx.taint();
+            "The person did it and gave the computer back. Take a screenshot to see where things are now, then carry on.".into()
+        }
         n if n.starts_with("computer_") => {
             // One user of the computer at a time: this run holds it while it works; another bot waits a little;
             // the person taking over in the app always wins (bots wait until they give it back).
@@ -1571,6 +1704,9 @@ async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
             if ctx.is_tainted() {
                 ctx.db.routine_taint(r.id)?;
             }
+            if let Some(w) = args["watch"].as_str().filter(|w| quiet && !w.trim().is_empty()) {
+                ctx.db.routine_set_watch(ctx.chat_id, r.id, w)?;
+            }
             format!("{} #{} created; {} {}", if quiet { "quiet check" } else if r.once { "one-off" } else { "routine" }, r.id, if r.once { "runs once," } else { "next run" }, fmt_ts(r.next_fire))
         }
         "routine_list" => {
@@ -1579,13 +1715,32 @@ async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
                 "no routines".into()
             } else {
                 v.iter()
-                    .map(|r| format!("#{} [{}]{}{} — {}", r.id, if r.once { "once" } else { &r.cron }, if r.quiet { " quiet" } else { "" }, if r.paused { " paused".into() } else { format!(" next {}", fmt_ts(r.next_fire)) }, r.prompt))
+                    .map(|r| format!("#{} [{}]{}{}{} — {}", r.id, if r.once { "once" } else { &r.cron }, if r.quiet { " quiet" } else { "" }, if r.watch.is_empty() { String::new() } else { format!(" watching {}", r.watch) }, if r.paused { " paused".into() } else { format!(" next {}", fmt_ts(r.next_fire)) }, r.prompt))
                     .collect::<Vec<_>>()
                     .join("\n")
             }
         }
         "routine_delete" => {
             if ctx.db.routine_delete(ctx.chat_id, i(args, "id")?)? { "deleted".into() } else { "no such routine".into() }
+        }
+        "routine_update" => {
+            let id = i(args, "id")?;
+            let r = ctx.db.routines(ctx.chat_id)?.into_iter().find(|r| r.id == id).context("no such routine in this chat")?;
+            let quiet = args["quiet"].as_bool().unwrap_or(r.quiet);
+            let prompt = args["prompt"].as_str().unwrap_or(&r.prompt);
+            if r.once && args["cron"].is_string() {
+                bail!("a one-off has a time, not a schedule: delete it and create a new one");
+            }
+            ctx.db.routine_update(ctx.chat_id, id, args["cron"].as_str().unwrap_or(&r.cron), prompt, quiet, r.paused)?;
+            // Watching only makes sense for a quiet check: one that stops being quiet stops watching.
+            let watch = if quiet { args["watch"].as_str().unwrap_or(&r.watch) } else { "" };
+            ctx.db.routine_set_watch(ctx.chat_id, id, watch)?;
+            // Rewritten after reading outside content: its words may be someone else's, like a routine made then.
+            if ctx.is_tainted() {
+                ctx.db.routine_taint(id)?;
+            }
+            let r = ctx.db.routines(ctx.chat_id)?.into_iter().find(|r| r.id == id).context("no such routine")?;
+            format!("routine #{id} updated; {} {}: {}", if r.once { "runs once," } else { "next run" }, fmt_ts(r.next_fire), r.prompt)
         }
         "web_fetch" => {
             let url = s(args, "url")?;
@@ -1623,6 +1778,8 @@ async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
             sub.depth = ctx.depth + 1;
             // Inside a routine, the helper's asks wait in the inbox too, rather than sending a live card.
             sub.unattended = ctx.unattended;
+            // A rehearsal stays one in the helper.
+            sub.rehearsal = ctx.rehearsing();
             sub.via_bot = Some(ctx.via_bot.unwrap_or(ctx.bot_id));
             // Boxed: the handed-over turn may itself call tools::call (async recursion).
             let reply = Box::pin(crate::turn(&provider, &sub, crate::Trigger::Delegated { from: &from, task })).await?;
@@ -1767,6 +1924,16 @@ pub fn truncate(s: &str, max: usize) -> String {
 
 // ponytail: crude tag stripper, swap for a readability crate if pages come back noisy
 pub fn strip_html(html: &str) -> String {
+    html_text(html, false)
+}
+
+/// A page's text with a line per paragraph, list item, row or feed entry (what a quiet check compares).
+pub fn html_lines(html: &str) -> String {
+    html_text(html, true)
+}
+
+fn html_text(html: &str, lines: bool) -> String {
+    const BLOCKS: &[&str] = &["p", "br", "div", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6", "item", "entry", "title", "article", "section", "dt", "dd", "pre", "blockquote"];
     let lower = html.to_ascii_lowercase();
     let mut out = String::with_capacity(html.len() / 3);
     let mut i = 0;
@@ -1776,11 +1943,13 @@ pub fn strip_html(html: &str) -> String {
             let close = if rest.starts_with("<script") { "</script>" } else { "</style>" };
             i += rest.find(close).map(|p| p + close.len()).unwrap_or(rest.len());
         } else if rest.starts_with('<') {
+            let name: String = rest[1..].trim_start_matches('/').chars().take_while(|c| c.is_ascii_alphanumeric()).collect();
             i += rest.find('>').map(|p| p + 1).unwrap_or(rest.len());
-            out.push(' ');
+            out.push(if lines && BLOCKS.contains(&name.as_str()) { '\n' } else { ' ' });
         } else {
             let ch = html[i..].chars().next().unwrap();
-            out.push(ch);
+            // The source's own line breaks are layout, not the page's lines.
+            out.push(if lines && ch == '\n' { ' ' } else { ch });
             i += ch.len_utf8();
         }
     }
@@ -1791,7 +1960,11 @@ pub fn strip_html(html: &str) -> String {
         .replace("&gt;", ">")
         .replace("&quot;", "\"")
         .replace("&#39;", "'");
-    out.split_whitespace().collect::<Vec<_>>().join(" ")
+    let flat = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+    if !lines {
+        return flat(&out);
+    }
+    out.lines().map(flat).filter(|l| !l.is_empty()).collect::<Vec<_>>().join("\n")
 }
 
 /// Passwords, tokens and keys don't belong in memory. Checks the vault's own values and common key shapes.
@@ -2358,7 +2531,118 @@ mod tests {
         assert!(ctx.db.routine_update(9, r.id, "", "Remind me to call mum and dad", false, false).unwrap());
         assert_eq!(ctx.db.routines(9).unwrap()[0].next_fire, r.next_fire);
         ctx.db.routine_advance(&r).unwrap();
+        ctx.db.routine_done(&r, true).unwrap();
         assert!(ctx.db.routines(9).unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn handing_the_computer_to_the_person() {
+        let p = std::env::temp_dir().join(format!("mimir-handoff-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = Db::open(&p).unwrap();
+        db.set_setting("public_url", "https://bots.example.com").unwrap();
+        let run = db.run_start(1, 9, "message", None, "test").unwrap();
+        let ctx = ToolCtx::new(db.clone(), 1, 9).with_run(Some(run));
+        // The bot held the computer; asking hands it over, so the person's clicks make it theirs.
+        db.computer_lease(&format!("run:{run}"), "Mimir", 120).unwrap();
+        let task = { let ctx = ctx.clone(); tokio::spawn(async move { exec(&ctx, "computer_handoff", &json!({"reason": "Sign in to Padel Club"})).await }) };
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let a = db.approvals_pending().unwrap().remove(0);
+        assert_eq!(a.kind, "takeover");
+        assert!(a.summary.contains("Sign in to Padel Club") && a.summary.contains("https://bots.example.com/#computer"), "{}", a.summary);
+        assert_eq!(crate::runtime::card_buttons(&a)[0].iter().map(|b| b.0.as_str()).collect::<Vec<_>>(), ["Done", "Can't now"]);
+        assert!(crate::runtime::card_text(&a).starts_with("🖐 I need you on the computer"));
+        assert!(db.computer_lease("you", "you", 60).unwrap().is_none(), "the person can take it");
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+        assert!(!task.is_finished(), "still theirs");
+        db.computer_release("you").unwrap();
+        let out = task.await.unwrap().unwrap();
+        assert!(out.contains("gave the computer back"), "{out}");
+        assert_eq!(db.approval_status(a.id).unwrap(), "approved");
+        // "Can't now": the bot stops and says what's left.
+        let task = { let ctx = ctx.clone(); tokio::spawn(async move { exec(&ctx, "computer_handoff", &json!({"reason": "Pay for the court"})).await }) };
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let a = db.approvals_pending().unwrap().remove(0);
+        db.approval_decide(a.id, false, None).unwrap();
+        assert!(task.await.unwrap().unwrap_err().to_string().contains("can't do it now"));
+
+        // In a routine: ask without waiting, and run the routine again once they press Done.
+        let r = db.routine_create(1, 9, "0 8 * * *", "book padel", false).unwrap();
+        let run = db.run_start(1, 9, "routine", Some(r.id), "test").unwrap();
+        let mut unattended = ToolCtx::new(db.clone(), 1, 9).with_run(Some(run));
+        unattended.unattended = true;
+        let t = std::time::Instant::now();
+        let out = exec(&unattended, "computer_handoff", &json!({"reason": "Sign in to Padel Club"})).await.unwrap();
+        assert!(out.contains("runs again") && t.elapsed() < Duration::from_secs(1), "{out}");
+        let a = db.approvals_pending().unwrap().remove(0);
+        assert!(a.parked && a.summary.contains("press Done here"), "{a:?}");
+        let a = db.approval_decide(a.id, true, None).unwrap().unwrap();
+        run_parked(db.clone(), a).await;
+        assert!(db.routine(r.id).unwrap().unwrap().next_fire <= crate::db::now(), "due again");
+        assert!(db.messages(9, 1).unwrap()[0].content.contains("run that routine again"));
+        // A one-off that already finished comes back as a new one-off.
+        let o = db.routine_once(1, 9, crate::db::now() + 600, "pay for the court", false).unwrap();
+        let run = db.run_start(1, 9, "routine", Some(o.id), "test").unwrap();
+        exec(&unattended.clone().with_run(Some(run)), "computer_handoff", &json!({"reason": "Pay"})).await.unwrap();
+        db.routine_done(&o, true).unwrap();
+        let a = db.approvals_pending().unwrap().remove(0);
+        run_parked(db.clone(), db.approval_decide(a.id, true, None).unwrap().unwrap()).await;
+        assert!(db.routines(9).unwrap().iter().any(|x| x.once && x.prompt == "pay for the court"));
+    }
+
+    #[tokio::test]
+    async fn rehearsals_only_say_what_they_would_do() {
+        let p = std::env::temp_dir().join(format!("mimir-rehearse-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = Db::open(&p).unwrap();
+        db.store("chat:9", "knowledge", "Dentist", "Dr. Lee", "", None).unwrap();
+        let run = db.run_start(1, 9, "rehearsal", None, "test").unwrap();
+        let mut ctx = ToolCtx::new(db.clone(), 1, 9).with_run(Some(run));
+        ctx.rehearsal = true;
+        ctx.unattended = true;
+        assert!(ctx.mcp_args().contains(&"--rehearsal".to_string()));
+        // Reading still happens.
+        assert!(call(&ctx, "memory_search", &json!({"query": "dentist"})).await.unwrap().contains("Dr. Lee"));
+        // Writing doesn't: it says what it would do. Neither does a delete that would ask (no approval is parked).
+        let out = call(&ctx, "memory_store", &json!({"type": "knowledge", "title": "Gym", "body": "Mondays at 7", "source": "x"})).await.unwrap();
+        assert!(out.starts_with("REHEARSAL") && out.contains("happen without asking"), "{out}");
+        let r = db.routine_create(1, 9, "0 8 * * *", "news", false).unwrap();
+        let out = call(&ctx, "routine_delete", &json!({"id": r.id})).await.unwrap();
+        assert!(out.contains("first ask the user"), "{out}");
+        assert_eq!((db.entries("chat:9").unwrap().len(), db.routines(9).unwrap().len()), (1, 1));
+        assert!(db.approvals_pending().unwrap().is_empty());
+        let (would, looked) = db.rehearsal_steps(run).unwrap();
+        assert_eq!((would.len(), looked.len()), (2, 1), "{would:?} {looked:?}");
+        // A tool server started without the flag still knows from the run.
+        let bare = ToolCtx::new(db.clone(), 1, 9).with_run(Some(run));
+        assert!(call(&bare, "memory_store", &json!({"type": "knowledge", "title": "Gym", "body": "Mondays", "source": "x"})).await.unwrap().starts_with("REHEARSAL"));
+        let from_args = crate::mcp::ctx_from_args(db.clone(), &ctx.mcp_args()).unwrap();
+        assert!(from_args.rehearsal);
+    }
+
+    #[tokio::test]
+    async fn routines_can_be_tuned() {
+        let p = std::env::temp_dir().join(format!("mimir-tune-tool-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let ctx = ToolCtx::new(Db::open(&p).unwrap(), 1, 9);
+        let r = ctx.db.routine_create(1, 9, "0 8 * * *", "Top tech and crypto news", false).unwrap();
+        let out = call(&ctx, "routine_update", &json!({"id": r.id, "prompt": "Top tech news, no crypto"})).await.unwrap();
+        assert!(out.contains("updated") && out.contains("no crypto"), "{out}");
+        let now = ctx.db.routines(9).unwrap().remove(0);
+        assert_eq!((now.cron.as_str(), now.prompt.as_str()), ("0 8 * * *", "Top tech news, no crypto"), "what wasn't asked stays");
+        assert!(call(&ctx, "routine_update", &json!({"id": r.id, "cron": "*/5 * * * *"})).await.unwrap_err().to_string().contains("15 minutes"));
+        assert!(call(&ctx, "routine_update", &json!({"id": 999})).await.is_err());
+        call(&ctx, "routine_update", &json!({"id": r.id, "quiet": true, "watch": "https://news.example/"})).await.unwrap();
+        assert_eq!(ctx.db.routines(9).unwrap()[0].watch, "https://news.example/");
+        call(&ctx, "routine_update", &json!({"id": r.id, "quiet": false})).await.unwrap();
+        assert_eq!(ctx.db.routines(9).unwrap()[0].watch, "", "not quiet, not watching");
+        // Another chat's routine can't be changed from here.
+        let theirs = ctx.db.routine_create(1, 10, "0 8 * * *", "theirs", false).unwrap();
+        assert!(call(&ctx, "routine_update", &json!({"id": theirs.id, "prompt": "mine now"})).await.is_err());
+        // A bot allowed to set routines may change them.
+        let mut b = ctx.db.bot(1).unwrap();
+        b.tools = "routine_create,web_fetch".into();
+        assert!(b.allows("routine_update") && !b.allows("routine_delete"));
     }
 
     #[tokio::test]

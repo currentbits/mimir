@@ -77,6 +77,7 @@ pub mod provider;
 pub mod runtime;
 pub mod server_update;
 pub mod tools;
+pub mod watch;
 pub mod caldav;
 pub mod calendar;
 pub mod email;
@@ -160,6 +161,8 @@ pub enum Trigger<'a> {
 /// Every turn is recorded in the run log (status, model, tokens, cost, tool calls).
 pub async fn turn(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) -> Result<String> {
     let (kind, routine_id) = match &trigger {
+        // A rehearsal of a routine (or of a skill, with no routine yet) is logged as one, not as the routine's run.
+        Trigger::Routine(r) if ctx.rehearsal => ("rehearsal", (r.id > 0).then_some(r.id)),
         Trigger::Message(_) => ("message", None),
         Trigger::Routine(r) => ("routine", Some(r.id)),
         Trigger::Delegated { .. } => ("delegated", None),
@@ -399,6 +402,37 @@ pub fn with_document(said: &str, name: &str, text: &str) -> String {
     )
 }
 
+const QUOTA: &[&str] = &["extra usage", "usage limit", "rate limit", "quota", "429"];
+const SIGNED_OUT: &[&str] = &["isn't signed in", "not signed in", "not logged in", "log in", "sign in", "unauthor", "401", "rejected", "api key"];
+const NOT_STARTED: &[&str] = &["failed to start", "not installed", "no such file"];
+const NETWORK: &[&str] = &["error sending request", "connection refused", "connection reset", "connection error", "dns", "unreachable", "couldn't connect", "network"];
+
+/// Why a run failed, which decides what happens next: wait for the plan's limit to reset, try again soon, or say so.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Cause {
+    /// The AI plan's usage limit: nothing works until it resets.
+    Quota,
+    /// Couldn't reach the AI: likely gone in minutes.
+    Network,
+    /// Not installed, signed out, no model: needs the person, but a retry after they fix it works.
+    Setup,
+    Other,
+}
+
+pub fn cause(e: &str) -> Cause {
+    let l = e.to_lowercase();
+    let has = |words: &[&str]| words.iter().any(|w| l.contains(w));
+    if has(QUOTA) {
+        Cause::Quota
+    } else if has(SIGNED_OUT) || has(NOT_STARTED) || has(&["pick a model"]) {
+        Cause::Setup
+    } else if has(NETWORK) {
+        Cause::Network
+    } else {
+        Cause::Other
+    }
+}
+
 pub fn friendly_error(e: &str) -> String {
     let l = e.to_lowercase();
     let has = |words: &[&str]| words.iter().any(|w| l.contains(w));
@@ -408,13 +442,13 @@ pub fn friendly_error(e: &str) -> String {
             "My Claude plan won't cover this: Anthropic is counting it as paid extra usage, and there's none left.",
             "Turn on or top up extra usage in your Claude account, or give me another AI account in Mimir (ChatGPT, or an API key).",
         )
-    } else if has(&["usage limit", "rate limit", "quota", "429"]) {
+    } else if has(QUOTA) {
         ("I've hit the AI plan's usage limit.", "Try again later, or give me another AI account or model in Mimir.")
-    } else if has(&["isn't signed in", "not signed in", "not logged in", "log in", "sign in", "unauthor", "401", "rejected", "api key"]) {
+    } else if has(SIGNED_OUT) {
         ("My AI account isn't signed in, or its key was rejected.", "Open Mimir and check my AI account (Settings, or my page).")
-    } else if has(&["failed to start", "not installed", "no such file"]) {
+    } else if has(NOT_STARTED) {
         ("I couldn't start my AI.", "Open Mimir and check that my AI account is installed and signed in.")
-    } else if has(&["error sending request", "connection refused", "dns", "unreachable", "couldn't connect"]) {
+    } else if has(NETWORK) {
         ("I couldn't reach my AI.", "If it's a local model, check it's running; otherwise try again in a minute.")
     } else if has(&["pick a model"]) {
         ("I don't have a model chosen.", "Open my page in Mimir and pick one.")
@@ -428,6 +462,9 @@ pub fn friendly_error(e: &str) -> String {
 
 /// What a quiet check replies when nothing needs the user's attention.
 const NOTHING: &str = "NOTHING";
+
+/// A new routine's first results that end by asking what to trim.
+const TUNING_RUNS: i64 = 3;
 
 const QUIET: &str = "\n\nThis is a quiet check that runs on a schedule. You can only look (read-only tools), not act. \
 If nothing needs the user's attention right now, reply with exactly NOTHING and no other text. \
@@ -615,7 +652,15 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
     // Routines run in a fresh session so they don't derail the live conversation.
     let session = if is_routine { None } else { ctx.db.session(ctx.bot_id, ctx.chat_id)? };
 
-    let reply = provider.run(ctx, &system, &history, &user, session).await?;
+    let mut reply = provider.run(ctx, &system, &history, &user, session).await?;
+    // An account that doesn't say what it used (some local models): about 4 characters a token, so caps and the
+    // routine's use still see it. ponytail: tool rounds aren't counted, so it's low for runs that use many tools.
+    if reply.usage.tokens_in == 0 && reply.usage.tokens_out == 0 {
+        let sent = system.len() + user.len() + history.iter().map(|(_, t)| t.len()).sum::<usize>();
+        reply.usage.tokens_in = (sent / 4) as i64;
+        reply.usage.tokens_out = (reply.text.len() / 4) as i64;
+        reply.usage.estimated = true;
+    }
     if !is_routine && reply.session.is_some() {
         ctx.db.set_session(ctx.bot_id, ctx.chat_id, reply.session.as_deref())?;
     }
@@ -635,6 +680,15 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
         }
         Trigger::Routine(r) if r.delivery == "log" => {}
         _ => {
+            // A new routine's first results ask what to trim, so the brief gets tuned by a reply rather than left as
+            // first written (the bot changes it with routine_update).
+            if let Trigger::Routine(r) = &trigger
+                && !r.quiet
+                && !r.once
+                && ctx.db.routine_replies(r.id)? < TUNING_RUNS
+            {
+                reply.text = format!("{}\n\n_Anything here you didn't need, or something missing? Reply and I'll adjust this routine (#{})._", reply.text.trim_end(), r.id);
+            }
             // What the person typed ("/book-padel Thursday"), not the instruction it became.
             let said = if let Trigger::Message(t) = &trigger { t.to_string() } else { text.clone() };
             ctx.db.log(ctx.bot_id, ctx.chat_id, "user", &said, None)?;
@@ -717,6 +771,13 @@ mod tests {
     #[test]
     fn errors_in_plain_words() {
         assert!(super::friendly_error("claude error: You've hit your usage limit").starts_with("⚠️ I've hit the AI plan's usage limit."));
+        use super::{Cause, cause};
+        assert_eq!(cause("claude error: Claude AI usage limit reached|1791650400"), Cause::Quota);
+        assert_eq!(cause("provider 429 Too Many Requests: slow down"), Cause::Quota);
+        assert_eq!(cause("error sending request for url (http://localhost:11434/v1/chat/completions)"), Cause::Network);
+        assert_eq!(cause("claude isn't signed in, so the routine didn't run"), Cause::Setup);
+        assert_eq!(cause("failed to start `codex` — is the Codex CLI installed"), Cause::Setup);
+        assert_eq!(cause("claude timed out"), Cause::Other);
         assert!(super::friendly_error("claude error: You're out of extra usage · resets 5pm").contains("paid extra usage"));
         assert!(super::friendly_error("grok isn't signed in for Mimir yet: sign in to Grok in Settings").contains("isn't signed in"));
         assert!(super::friendly_error("failed to start `codex` — is the Codex CLI installed").contains("couldn't start"));
