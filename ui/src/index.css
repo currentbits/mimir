@@ -452,6 +452,8 @@ a { color: inherit; }
 .search { position: relative; flex: 1; }
 .search .icon { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--text-3); }
 .search .input { padding-left: 32px; border-radius: 9px; }
+.settings-search { display: block; margin: -6px 0 22px; }
+.group-wrap[hidden], .group > [hidden] { display: none !important; }
 
 .mem-list { display: grid; gap: 8px; }
 .mem {

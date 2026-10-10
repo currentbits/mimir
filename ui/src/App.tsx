@@ -674,6 +674,13 @@ function Main() {
   const botChat = viaBot && view === 'chat' && chat.chat_id === LOCAL
   const [menu, setMenu] = useState<{ x: number; y: number; id: number } | null>(null)
 
+  // ⌘F: on the Settings page it searches settings; anywhere else, memory.
+  const findIt = () => {
+    const box = document.querySelector<HTMLInputElement>('.settings-search input')
+    if (box) { box.focus(); box.select(); return }
+    setView('memory')
+    setTimeout(() => document.querySelector<HTMLInputElement>('.search input')?.focus(), 50)
+  }
   // The macOS menu bar sends its commands here (same actions as the shortcuts below).
   useEffect(() => {
     if (!inDesktop) return
@@ -681,7 +688,7 @@ function Main() {
     import('@tauri-apps/api/event').then(({ listen }) => listen<string>('menu', e => {
       const id = e.payload
       if (id === 'new_bot') { setBotId(0); setView('bot') }
-      else if (id === 'search') { setView('memory'); setTimeout(() => document.querySelector<HTMLInputElement>('.search input')?.focus(), 50) }
+      else if (id === 'search') findIt()
       else if (['settings', 'inbox', 'chat', 'memory', 'skills', 'routines', 'activity', 'meetings'].includes(id)) setView(id as View)
     })).then(u => { off = u }, () => {})
     return () => off?.()
@@ -695,10 +702,8 @@ function Main() {
       else if (e.key === ',') setView('settings')
       else if (e.key === '0') setView('inbox')
       else if (e.key === 'n') { setBotId(0); setView('bot') }
-      else if (e.key === 'f') {
-        setView('memory')
-        setTimeout(() => document.querySelector<HTMLInputElement>('.search input')?.focus(), 50)
-      } else return
+      else if (e.key === 'f') findIt()
+      else return
       e.preventDefault()
     }
     window.addEventListener('keydown', onKey)
@@ -2537,13 +2542,82 @@ function ChannelRow({ icon, title, st, has, hint, onRemove, children }: {
 
 // ---------------- settings ----------------
 
+/** Words a setting goes by besides its own text, so a search finds it ("token" → AI keys, "2fa"…). */
+const SETTING_WORDS: Record<string, string> = {
+  'AI keys': 'api key token openai openrouter xai grok anthropic model provider',
+  'Email': 'mail imap smtp gmail icloud fastmail inbox app password send draft',
+  'Calendar': 'caldav icloud fastmail nextcloud events schedule',
+  'Web search': 'brave searxng google internet search engine',
+  'Daily digest': 'quiet hours notifications summary weekly review do not disturb',
+  'Permissions': 'allow ask deny approve rules tools safety always',
+  'Browser': 'playwright chromium saved logins passwords vault',
+  'Tool servers': 'mcp plugins integrations connectors',
+  'Your data': 'export backup download delete privacy',
+}
+
+/** Shows only the settings that match, live as you type: whole groups whose title or note matches, else the rows that do. */
+function useSettingsFilter(q: string) {
+  const ref = useRef<HTMLDivElement>(null)
+  const [none, setNone] = useState(false)
+  useEffect(() => {
+    const root = ref.current
+    if (!root) return
+    const words = q.toLowerCase().split(/\s+/).filter(Boolean)
+    const text = (el: Element) => [el.textContent, ...[...el.querySelectorAll('input, textarea, select, [aria-label]')].map(i => `${i.getAttribute('placeholder') ?? ''} ${i.getAttribute('aria-label') ?? ''}`)].join(' ').toLowerCase()
+    const hits = (t: string) => words.every(w => t.includes(w))
+    const apply = () => {
+      let shown = 0
+      for (const g of root.querySelectorAll<HTMLElement>('section.group-wrap')) {
+        const head = g.querySelector('.group-head')?.textContent ?? ''
+        const own = `${head} ${g.querySelector('.group-note')?.textContent ?? ''} ${SETTING_WORDS[head.trim()] ?? ''}`.toLowerCase()
+        const rows = [...g.querySelectorAll<HTMLElement>('.group > *')]
+        const whole = !words.length || hits(own)
+        let any = whole
+        for (const r of rows) {
+          const show = whole || hits(text(r))
+          r.hidden = !show
+          any ||= show
+        }
+        g.hidden = !any
+        if (any) shown++
+      }
+      setNone(words.length > 0 && shown === 0)
+    }
+    apply()
+    // Settings load as they go (each group fetches its own state): filter what turns up, too.
+    const mo = new MutationObserver(() => { mo.disconnect(); apply(); mo.observe(root, { childList: true, subtree: true }) })
+    mo.observe(root, { childList: true, subtree: true })
+    return () => mo.disconnect()
+  }, [q])
+  return { ref, none }
+}
+
 function SettingsView({ onComputer }: { onComputer: () => void }) {
   // Adding a tool server (or the browser) adds tools: show their permissions straight away.
   const [tools, setTools] = useState(0)
   const toolsChanged = () => setTools(n => n + 1)
+  const [q, setQ] = useState('')
+  const box = useRef<HTMLInputElement>(null)
+  const { ref, none } = useSettingsFilter(q)
+  useEffect(() => {
+    // ⌘F / Ctrl+F (handled with the app's other shortcuts) or / finds a setting; Escape clears the search.
+    const key = (e: KeyboardEvent) => {
+      const typing = e.target instanceof HTMLElement && e.target.closest('input, textarea, select, [contenteditable]')
+      if (e.key === '/' && !typing) { e.preventDefault(); box.current?.focus(); box.current?.select() }
+      else if (e.key === 'Escape' && e.target === box.current) setQ('')
+    }
+    window.addEventListener('keydown', key)
+    return () => window.removeEventListener('keydown', key)
+  }, [])
   return (
     <>
       <div className="page-head"><div><h1 className="display">Settings</h1><p className="lead">How your bots run, what they may do, and where they live.</p></div></div>
+      <label className="search settings-search"><Icon name="search" size={15} />
+        <input ref={box} className="input" type="search" placeholder={`Search settings  ${shortcut('F')}`} aria-label="Search settings" value={q} onChange={e => setQ(e.target.value)} autoFocus={!('ontouchstart' in window)} />
+      </label>
+      {none && <Empty icon="search" title={`Nothing in Settings matches “${q.trim()}”`}>A bot's name, role, AI account, tools and its Telegram, Slack or Discord connection are on its own page: right-click the bot in the sidebar.</Empty>}
+      {!none && /telegram|slack|discord|role|persona|pair|bot token|model/i.test(q) && <p className="hint" style={{ margin: '-12px 0 18px' }}>Each bot's Telegram, Slack and Discord connection, role and AI account are on its own page: right-click the bot in the sidebar.</p>}
+      <div ref={ref}>
       {inDesktop && !remoteServer() && <AppSettings />}
       {inDesktop && <UpdateSettings />}
       <DigestSettings />
@@ -2557,6 +2631,7 @@ function SettingsView({ onComputer }: { onComputer: () => void }) {
       <Permissions key={tools} />
       <DataSettings />
       <ServerSettings />
+      </div>
     </>
   )
 }

@@ -110,6 +110,12 @@ the daily ones. See [Skills](skills.md).
   for you to accept ([Memory](memory.md)).
 - Start a Teams or Zoom call, then **Meetings → Start transcribing** ([Meetings](meetings.md)).
 
+## Finding a setting
+
+The box at the top of **Settings** filters it as you type ("email", "token", "quiet hours"); ⌘F (Ctrl+F) jumps to it
+there, and anywhere else searches your memory. Each bot's own settings (its name, role, AI account, tools, Telegram,
+Slack or Discord) are on its page: right-click the bot in the sidebar.
+
 ## The menu-bar / tray icon
 
 The app keeps running in the menu bar (macOS) or tray (Windows, Linux) when you close the window, so your bots keep

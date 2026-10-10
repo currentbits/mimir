@@ -2,6 +2,12 @@
 
 What changed for people using Mimir. The newest release is at the top; "Unreleased" is what the next one brings.
 
+## Unreleased
+
+- **Search in Settings.** Type in the box at the top of Settings (or press ⌘F / Ctrl+F there) and only the matching
+  settings stay: "email", "token", "brave", "quiet hours". A bot's own settings (its role, AI account, Telegram, Slack
+  or Discord) are on its page, and the search says so.
+
 ## 0.1.0 (the first public release)
 
 The highlights of what went into it, besides what the [docs](docs/README.md) describe.
