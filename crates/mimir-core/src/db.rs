@@ -108,6 +108,8 @@ pub struct Chat {
 }
 
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]
+// Sent by the UI: a misspelled field is an error, not silently dropped.
+#[serde(deny_unknown_fields)]
 pub struct Bot {
     pub id: i64,
     pub name: String,
