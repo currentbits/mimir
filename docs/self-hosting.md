@@ -1,37 +1,104 @@
 # Self-hosting
 
-The desktop app runs your bots while it's open. To keep them online 24/7, run `mimir server` on a machine you own (a
-VPS, a home server, a Raspberry Pi). It runs all your bots, keeps your memory, and serves the same UI on the web.
+The desktop app runs your bots while it's open. To keep them online 24/7, run Mimir on a machine you own: a small VPS
+(any cloud's cheapest Linux server is enough), a home server, or a Raspberry Pi 4 or 5. It runs all your bots, keeps
+your memory, and serves the same app in your browser. You can also point the desktop app at it.
 
-## With Docker
+It comes as a ready-made Docker image (`ghcr.io/currentbits/mimir`, for Intel/AMD and ARM), started with Docker
+Compose. You don't need the source code or to build anything.
+
+## What you need
+
+- A Linux machine that stays on, with about 2 GB of memory and 5 GB of disk. A Mac or Windows PC with Docker Desktop
+  works too.
+- **Docker** with Compose. On Linux the quickest way is Docker's install script
+  (`curl -fsSL https://get.docker.com | sh`, see [docs.docker.com/engine/install](https://docs.docker.com/engine/install/));
+  on a Mac or Windows, [Docker Desktop](https://docs.docker.com/desktop/). Check with `docker compose version`.
+- A terminal on that machine (over SSH for a VPS).
+
+## 1. Get Mimir's compose file
+
+In an empty folder on the server:
 
 ```sh
-echo "MIMIR_COMPUTER_TOKEN=$(openssl rand -hex 24)" >> .env   # once: the key between Mimir and its computer
-docker compose up -d                                   # builds the image; data in the mimir-data volume
-docker compose exec mimir mimir admin-token            # sign in to http://localhost:8080 with this token
+mkdir mimir && cd mimir
+curl -fsSLO https://heymimir.app/docker-compose.yml
+echo "MIMIR_COMPUTER_TOKEN=$(openssl rand -hex 24)" > .env
 ```
 
-- **A new admin token**: `docker compose exec mimir mimir admin-token --new`, then restart (`docker compose restart`).
-  Signed-in browsers and connected apps need the new one.
-- **HTTPS**: uncomment the `caddy` service in `docker-compose.yml` and set your domain (automatic certificates). The
-  server listens on localhost by default; only expose it through TLS.
-- **Back up** the `/data` volume: it holds the database (memories, bots, chats) and, on a server, the secrets.
-- **Two services**: `mimir` (bots, web UI, your data) and `computer` ([the bots' computer](computer.md): screen and
-  Chromium, as its own user, no `/data`). They talk on the compose network only; the computer publishes no ports.
+[`docker-compose.yml`](https://github.com/currentbits/mimir/blob/master/docker-compose.yml) (the same file as in the repository) describes the two
+containers Mimir runs as (below); `.env` holds a random key they use to talk to each other.
 
-### Your AI accounts on the server
+## 2. Start it
 
-The image includes the official `claude`, `codex` and `grok` CLIs. Sign in once:
+```sh
+docker compose up -d                          # downloads the image (about 1.5 GB) and starts Mimir
+docker compose exec mimir mimir admin-token   # prints your admin token: copy it
+```
 
-- Claude: `docker compose exec -it mimir claude` (or set `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token`).
+Mimir now runs at `http://localhost:8080` **on the server**, and starts again after a reboot. On purpose it only
+answers on the server itself, so nobody else can reach it until you choose how (next step).
+
+## 3. Open it in your browser
+
+Pick one:
+
+- **Through an SSH tunnel** (simplest, nothing exposed). On your own computer:
+  `ssh -L 8080:localhost:8080 you@your-server`, then open `http://localhost:8080` and paste the admin token.
+- **With HTTPS on your own domain** (to use it from anywhere, and to connect the desktop app over the internet).
+  Point a DNS name (say `bots.example.com`) at the server, open ports 80 and 443, then in `docker-compose.yml`
+  uncomment the `caddy` service and the `caddy-data` volume and put your name in. `docker compose up -d` again, and
+  Caddy gets a certificate on its own: open `https://bots.example.com`.
+- **At home or on Tailscale.** On a home network, change the port line to `"8080:8080"` and open
+  `http://<the server's address>:8080` from your own devices. With [Tailscale](https://tailscale.com) on both, the
+  server's `100.x` address or `.ts.net` name works the same way, from anywhere.
+
+Then the app is the same as on the desktop: make a bot, connect Telegram, Slack or Discord, and set up email and web
+search in Settings ([Getting started](getting-started.md)).
+
+## 4. Sign in to your AI accounts
+
+The image includes the official `claude` and `codex` apps, so bots can run on your Claude or ChatGPT plan. Sign in once,
+in the server's terminal:
+
+- Claude: `docker compose exec -it mimir claude`, sign in, then `/exit` (or set `CLAUDE_CODE_OAUTH_TOKEN` from
+  `claude setup-token` on any machine).
 - ChatGPT: `docker compose exec -it mimir codex login`.
-- Grok: build the image with `--build-arg GROK_CLI=1` (its installer is a script from x.ai without a fixed version, so
-  it's left out by default), then *Sign in to Grok* in the web UI (a device code).
+- Grok: not in the ready-made image (its installer is a script from x.ai without a fixed version). Build the image
+  yourself with `--build-arg GROK_CLI=1` (below), then *Sign in to Grok* in Settings.
 
-It's your server and your login, the same as on your laptop. API-key bots need nothing extra.
-The Claude and Codex CLIs, the browser tool and the base images are fixed versions, so a rebuild doesn't change what
-runs your bots. `--build-arg AI_CLIS=""` builds a slim image without the CLIs; `--build-arg COMPUTER=` leaves out
-[the bots' computer](computer.md). The compose file drops all Linux capabilities and forbids gaining privileges.
+It's your server and your login, the same as on your laptop. Bots on an API key (OpenRouter, OpenAI, xAI) or a model
+running elsewhere need nothing extra.
+
+## Updating
+
+```sh
+docker compose pull && docker compose up -d
+```
+
+Your data is kept: it's in the `mimir-data` volume, not in the container. To stay on one version, put
+`MIMIR_VERSION=0.1.0` in `.env`. The server doesn't update itself; [releases](https://github.com/currentbits/mimir/releases)
+say what changed.
+
+## Day to day
+
+- **Logs**: `docker compose logs -f mimir`. **Stop**: `docker compose down` (your data stays).
+- **A new admin token**: `docker compose exec mimir mimir admin-token --new`, then `docker compose restart`. Signed-in
+  browsers and connected apps need the new one.
+- **Back up** the `mimir-data` volume: it holds the database (memories, bots, chats) and, on a server, the secrets.
+  For example `docker run --rm -v mimir_mimir-data:/data -v "$PWD":/out busybox tar czf /out/mimir-backup.tgz /data`
+  (the volume's name starts with the folder's name; `docker volume ls` shows it).
+- **Two containers**: `mimir` (bots, web app, your data) and `computer` ([the bots' computer](computer.md): a screen
+  and Chromium, as its own user, without your data). They talk on their own network only; the computer publishes no
+  ports. Both drop all Linux capabilities and can't gain privileges.
+
+## Building the image yourself
+
+In a clone of the source (`git clone https://github.com/currentbits/mimir && cd mimir`), with the `.env` from step 1:
+`docker compose up -d --build`. Build options: `--build-arg GROK_CLI=1` adds Grok, `--build-arg AI_CLIS=""` leaves
+out the Claude and Codex apps, `--build-arg COMPUTER=` leaves out [the bots' computer](computer.md). The AI apps, the
+browser tool and the base images are fixed versions, so a rebuild doesn't change what runs your bots. Update with
+`git pull && docker compose up -d --build`.
 
 ## Without Docker
 
@@ -68,4 +135,4 @@ least 24 characters.
 Email, web search, the file workspaces and the skill library work the same on a server: set them up in the web UI's
 Settings ([Connect your email, calendar and web search](connect.md)). The calendar link is set under Meetings, which
 is in the desktop app only, so a server's bots can't read a calendar yet (add-to-calendar links work everywhere). The
-server doesn't update itself: get the new code and rebuild (`git pull && docker compose up -d --build`).
+server doesn't update itself: see [Updating](#updating).

@@ -1,0 +1,57 @@
+# The server image, ghcr.io/currentbits/mimir, for Intel/AMD and ARM (a Raspberry Pi 4/5, an ARM VPS). A version tag
+# builds it along with the desktop installers; or run it by hand (Actions → image → Run workflow) for a version.
+# Each architecture builds on its own native runner (no emulation: a Rust build under QEMU takes hours), then one job
+# joins them into the tags people pull: the version and latest.
+name: image
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version: { description: 'Version to tag, e.g. 0.1.0 (built from the branch you pick)', required: true }
+permissions:
+  contents: read
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+  VERSION: ${{ inputs.version || github.ref_name }}
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - { arch: amd64, runner: ubuntu-24.04 }
+          - { arch: arm64, runner: ubuntu-24.04-arm }
+    runs-on: ${{ matrix.runner }}
+    permissions: { contents: read, packages: write }
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { persist-credentials: false }
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with: { registry: ghcr.io, username: '${{ github.actor }}', password: '${{ secrets.GITHUB_TOKEN }}' }
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/${{ matrix.arch }}
+          push: true
+          tags: ${{ env.IMAGE }}:${{ env.VERSION }}-${{ matrix.arch }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.description=Mimir: personal AI assistants on your own AI subscription
+            org.opencontainers.image.licenses=AGPL-3.0-only
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+
+  tags:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions: { contents: read, packages: write }
+    steps:
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with: { registry: ghcr.io, username: '${{ github.actor }}', password: '${{ secrets.GITHUB_TOKEN }}' }
+      - name: One tag for both architectures
+        run: |
+          v="${VERSION#v}"
+          docker buildx imagetools create -t "$IMAGE:$v" -t "$IMAGE:latest" "$IMAGE:$VERSION-amd64" "$IMAGE:$VERSION-arm64"
+          docker buildx imagetools inspect "$IMAGE:$v"

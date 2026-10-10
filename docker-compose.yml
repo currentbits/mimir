@@ -1,7 +1,13 @@
-# First:  echo "MIMIR_COMPUTER_TOKEN=$(openssl rand -hex 24)" >> .env
-# docker compose up -d   →   docker compose exec mimir mimir admin-token
+# Mimir on your own server. On any machine with Docker, in an empty folder:
+#   curl -fsSLO https://heymimir.app/docker-compose.yml
+#   echo "MIMIR_COMPUTER_TOKEN=$(openssl rand -hex 24)" > .env
+#   docker compose up -d
+#   docker compose exec mimir mimir admin-token      # sign in to the web app with this
+# Update: docker compose pull && docker compose up -d. In a clone of the source, `docker compose up -d --build` builds
+# the image yourself instead. Step by step: https://heymimir.app/docs/self-hosting/
 services:
   mimir:
+    image: ghcr.io/currentbits/mimir:${MIMIR_VERSION:-latest}
     build: .
     restart: unless-stopped
     volumes:
@@ -23,6 +29,7 @@ services:
   # lands somewhere without your database, secrets or the AI logins. Mimir reaches it on this compose network only
   # (control on 7300 with the token, Chromium's DevTools on 9223); no ports are published.
   computer:
+    image: ghcr.io/currentbits/mimir:${MIMIR_VERSION:-latest}
     build: .
     restart: unless-stopped
     user: computer

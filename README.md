@@ -26,16 +26,24 @@ Installers for macOS (Apple silicon), Windows and Linux are on the [releases pag
 They aren't code-signed yet: on a Mac, right-click the app and choose **Open** the first time; on Windows, choose
 **More info**, then **Run anyway**. After that the app updates itself. Then: [Getting started](docs/getting-started.md).
 
-## Build it yourself
+## On your own server
 
+For bots online 24/7: a ready-made Docker image (`ghcr.io/currentbits/mimir`, Intel/AMD and ARM). In an empty folder:
+
+```sh
+curl -fsSLO https://heymimir.app/docker-compose.yml
+echo "MIMIR_COMPUTER_TOKEN=$(openssl rand -hex 24)" > .env
+docker compose up -d
+docker compose exec mimir mimir admin-token    # sign in to http://localhost:8080 (on the server) with this
+```
+
+How to open it safely, sign in to your AI accounts and update: [Self-hosting](docs/self-hosting.md).
+
+## Build it yourself
 
 ```sh
 cd ui && npm install && npm run tauri dev      # the desktop app (macOS, Windows, Linux)
-```
-
-```sh
-docker compose up -d                           # or bots online 24/7 on your own server
-docker compose exec mimir mimir admin-token    # sign in to http://localhost:8080 with this
+docker compose up -d --build                   # the server image, from this source
 ```
 
 ```sh
