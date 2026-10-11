@@ -930,7 +930,17 @@ impl Core {
     async fn tell_update(&self, chans: &[Chan]) -> Result<()> {
         let Some(latest) = crate::server_update::latest(&self.db).await else { return Ok(()) };
         let Some(msg) = crate::server_update::to_tell(&self.db, &latest) else { return Ok(()) };
-        let mut best: Option<(i64, Chan, String)> = None;
+        if let Some((_, chan, ext)) = self.latest_private(chans)?
+            && crate::server_update::told(&self.db, &latest)
+        {
+            chan.send(&ext, &msg).await;
+        }
+        Ok(())
+    }
+
+    /// Your most recent private chat this bot can reach in a messaging app (not a group, not a guest's).
+    fn latest_private(&self, chans: &[Chan]) -> Result<Option<(i64, Chan, String)>> {
+        let mut best: Option<(i64, i64, Chan, String)> = None;
         for c in self.db.chats()? {
             if c.chat_id == crate::host::LOCAL_CHAT || c.guest || !self.db.chat_private(c.chat_id) {
                 continue;
@@ -938,13 +948,67 @@ impl Core {
             let Some((chan, ext)) = Self::chan_for(chans, c.chat_id, &self.db) else { continue };
             let last = self.db.messages(c.chat_id, 1)?.first().map(|m| m.ts).unwrap_or(0);
             if best.as_ref().is_none_or(|b| last > b.0) {
-                best = Some((last, chan, ext));
+                best = Some((last, c.chat_id, chan, ext));
             }
         }
-        if let Some((_, chan, ext)) = best
-            && crate::server_update::told(&self.db, &latest)
-        {
-            chan.send(&ext, &msg).await;
+        Ok(best.map(|(_, chat, chan, ext)| (chat, chan, ext)))
+    }
+
+    /// Mail tasks (Settings → Email, when on): mail you sent to your +mimir address, or filed in the Mimir folder,
+    /// is a message to this bot, answered in your most recent private chat (or in the app). The bot never reads the
+    /// inbox for this; Mimir looks only at those, and takes only ones from you that DKIM passed (email::task).
+    async fn mail_tasks(&self, chans: &[Chan]) -> Result<()> {
+        let Some(a) = crate::email::account(&self.db) else { return Ok(()) };
+        for (folder, route) in [("INBOX", "to your +mimir address"), (crate::email::TASK_FOLDER, "filed in your Mimir folder")] {
+            let key = format!("mail_task_seen:{folder}");
+            let after = self.db.setting(&key)?.and_then(|v| v.split_once(':').and_then(|(v, u)| Some((v.parse().ok()?, u.parse().ok()?))));
+            let inbox = folder == "INBOX";
+            let (cursor, mails) = match crate::email::new_mail(&a, folder, after, |h| !inbox || crate::email::to_plus(h, &a.user)).await {
+                Ok(r) => r,
+                // No Mimir folder is the usual case.
+                Err(e) => {
+                    if inbox {
+                        eprintln!("mail tasks: {e:#}");
+                    }
+                    continue;
+                }
+            };
+            // Read past before running: a task that crashes or hangs isn't taken again (and done twice).
+            self.db.set_setting(&key, &format!("{}:{}", cursor.0, cursor.1))?;
+            for raw in mails {
+                match crate::email::task(&raw, &a.user, route) {
+                    crate::email::Task::Run { text, outside } => self.mail_task(chans, text, outside).await?,
+                    crate::email::Task::Refused(why) => {
+                        eprintln!("mail tasks: {why}");
+                        let (chat, target) = self.latest_private(chans)?.map_or((crate::host::LOCAL_CHAT, None), |(c, ch, ext)| (c, Some((ch, ext))));
+                        self.db.log(self.bot, chat, "assistant", &why, None)?;
+                        if let Some((c, ext)) = target {
+                            c.send(&ext, &why).await;
+                        }
+                    }
+                    crate::email::Task::Skip => {}
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn mail_task(&self, chans: &[Chan], text: String, outside: bool) -> Result<()> {
+        let (chat, target) = self.latest_private(chans)?.map_or((crate::host::LOCAL_CHAT, None), |(c, ch, ext)| (c, Some((ch, ext))));
+        // What you forwarded is someone else's words: the conversation has read outside content, like a forward in chat.
+        if outside {
+            self.db.conv_taint(self.bot, chat)?;
+        }
+        let _g = self.lock.lock().await;
+        let typing = target.as_ref().and_then(|(c, ext)| c.typing(ext));
+        let (provider, ctx) = (self.provider.clone(), ToolCtx::new(self.db.clone(), self.bot, chat));
+        let out = self.own_task(chat, async move { turn(&provider, &ctx, Trigger::Message(&text)).await }).await;
+        if let Some(t) = typing {
+            t.abort();
+        }
+        let reply = out.unwrap_or_else(|e| crate::friendly_error(&format!("{e:#}")));
+        if let Some((c, ext)) = target {
+            c.send(&ext, &reply).await;
         }
         Ok(())
     }
@@ -1096,8 +1160,16 @@ impl Core {
     async fn scheduler(self: Arc<Self>, chans: Vec<Chan>) -> Result<()> {
         // A routine due before this was Mimir not running; one due since, the computer asleep or a long run.
         let started = crate::db::now();
+        let mut mail_looked = 0;
         loop {
             let now = crate::db::now();
+            // Mail tasks, looked for every two minutes by one bot (the memory bot) for everyone.
+            if now - mail_looked >= 120 && crate::tidy::memory_bot(&self.db) == Some(self.bot) && self.db.setting("email_tasks").ok().flatten().as_deref() == Some("on") {
+                mail_looked = now;
+                if let Err(e) = self.mail_tasks(&chans).await {
+                    eprintln!("mail tasks: {e:#}");
+                }
+            }
             // Routines on hold (a usage limit) wait; the first pass after it ends runs each of them once.
             let bot_hold = format!("hold:{}", self.bot);
             let hold = self.db.hold(&bot_hold).unwrap_or_default();
@@ -1333,6 +1405,40 @@ mod tests {
             lock: Mutex::new(()),
             greeted: Default::default(),
         }
+    }
+
+    /// Against scripts/fake-mail.py: `python3 scripts/fake-mail.py`, then
+    /// `cargo test -p mimir-core fake_mail_tasks -- --ignored`.
+    #[tokio::test]
+    #[ignore]
+    async fn fake_mail_tasks() {
+        let p = std::env::temp_dir().join(format!("mimir-mailtask-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = Db::open(&p).unwrap();
+        for (k, v) in [("email_host", "127.0.0.1"), ("email_port", "1143"), ("email_user", "me@example.com")] {
+            db.set_setting(k, v).unwrap();
+        }
+        crate::host::install_secrets(Arc::new(crate::host::DbSecrets(db.clone())));
+        crate::host::secret_set(crate::email::SECRET, "pw").unwrap();
+        let core = core_on(&db, &fake_ai("200 OK", r#"{"choices":[{"message":{"role":"assistant","content":"Done."}}],"usage":{"prompt_tokens":3,"completion_tokens":2}}"#).await);
+        // Turned on: what's there already isn't a task.
+        core.mail_tasks(&[]).await.unwrap();
+        assert!(db.messages(0, 10).unwrap().is_empty());
+        assert_eq!(db.setting("mail_task_seen:INBOX").unwrap().as_deref(), Some("1:4"));
+        // Mail since: the signed forward runs, the one posing as you is refused, the invoice isn't to +mimir.
+        db.set_setting("mail_task_seen:INBOX", "1:2").unwrap();
+        db.set_setting("mail_task_seen:Mimir", "1:0").unwrap();
+        core.mail_tasks(&[]).await.unwrap();
+        let said: Vec<String> = db.messages(0, 10).unwrap().into_iter().map(|m| format!("{}: {}", m.role, m.content)).collect();
+        assert_eq!(said.len(), 5, "{said:#?}");
+        assert!(said[0].starts_with("user: [By email, to your +mimir address.] Add this to my calendar for the 20th.") && said[0].contains("<document") && said[0].contains("password file"), "{said:#?}");
+        assert!(said[2].starts_with("assistant: An email from your address (“Send the bank details") && said[2].contains("DKIM didn't pass"), "{said:#?}");
+        assert_eq!(said[3], "user: [By email, filed in your Mimir folder.] Remind me to call the dentist at 4");
+        assert!(db.conv_tainted(1, 0).unwrap(), "a forward is outside content");
+        assert_eq!(db.setting("mail_task_seen:INBOX").unwrap().as_deref(), Some("1:4"));
+        // Nothing new: nothing runs again.
+        core.mail_tasks(&[]).await.unwrap();
+        assert_eq!(db.messages(0, 10).unwrap().len(), 5);
     }
 
     #[tokio::test]

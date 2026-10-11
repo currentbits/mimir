@@ -407,6 +407,13 @@ impl Host {
             }
             // The bots' email account (read-only): server, port, address, app password. Saving signs in once first.
             "email_settings" => {
+                // Mail tasks on or off; turned on, mail already there isn't taken (each folder is read from now on).
+                if let Some(on) = arg::<Option<bool>>(a, "tasks")? {
+                    self.db.set_setting("email_tasks", if on { "on" } else { "off" })?;
+                    for f in ["INBOX", crate::email::TASK_FOLDER] {
+                        self.db.set_setting(&format!("mail_task_seen:{f}"), "")?;
+                    }
+                }
                 if let Some(host) = arg::<Option<String>>(a, "host")? {
                     if host.trim().is_empty() {
                         self.db.set_setting("email_host", "")?;
@@ -427,7 +434,7 @@ impl Host {
                     }
                 }
                 ok(match crate::email::account(&self.db) {
-                    Some(acc) => json!({"host": acc.host, "user": acc.user, "smtp": acc.smtp_host, "smtp_port": acc.smtp_port}),
+                    Some(acc) => json!({"host": acc.host, "user": acc.user, "smtp": acc.smtp_host, "smtp_port": acc.smtp_port, "tasks": self.db.setting("email_tasks")?.as_deref() == Some("on")}),
                     None => Value::Null,
                 })
             }
