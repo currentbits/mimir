@@ -108,7 +108,7 @@ static FLOW: Mutex<Option<Flow>> = Mutex::new(None);
 static PENDING: Mutex<Option<JoinHandle<Result<String>>>> = Mutex::new(None);
 static CANCEL: Mutex<Option<tokio::task::AbortHandle>> = Mutex::new(None);
 
-fn challenge(verifier: &str) -> String {
+pub(crate) fn challenge(verifier: &str) -> String {
     URL_SAFE_NO_PAD.encode(<sha2::Sha256 as sha2::Digest>::digest(verifier.as_bytes()))
 }
 
@@ -606,12 +606,12 @@ pub async fn respond(ctx: &ToolCtx, model: Option<&str>, system: &str, history: 
     bail!("gave up after {rounds} tool rounds")
 }
 
-async fn answer(sock: &mut TcpStream, status: &str, html: &str) {
+pub(crate) async fn answer(sock: &mut TcpStream, status: &str, html: &str) {
     let msg = format!("HTTP/1.1 {status}\r\ncontent-type: text/html; charset=utf-8\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{html}", html.len());
     let _ = sock.write_all(msg.as_bytes()).await;
 }
 
-fn page(title: &str, body: &str) -> String {
+pub(crate) fn page(title: &str, body: &str) -> String {
     let esc = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;");
     format!(
         "<!doctype html><meta name=viewport content='width=device-width'><title>{t}</title>\

@@ -486,38 +486,59 @@ impl Host {
                 self.restart_all();
                 ok(())
             }
-            // The bots' email account (read-only): server, port, address, app password. Saving signs in once first.
-            "email_settings" => {
-                // Mail tasks on or off; turned on, mail already there isn't taken (each folder is read from now on).
-                if let Some(on) = arg::<Option<bool>>(a, "tasks")? {
+            // The bots' mailboxes: a list. Saving one signs in once first; the same address again replaces it.
+            "email_accounts" => ok(json!({
+                "accounts": crate::email::accounts(&self.db).into_iter().map(|a| json!({"user": a.user, "host": a.host, "smtp": a.smtp_host, "smtp_port": a.smtp_port, "outlook": a.oauth.is_some()})).collect::<Vec<_>>(),
+                "outlook_client_id": self.db.setting("outlook_client_id")?.unwrap_or_default(),
+                "outlook_tenant": self.db.setting("outlook_tenant")?.unwrap_or_default(),
+            })),
+            "email_account_save" => {
+                let port: u16 = arg::<Option<u16>>(a, "port")?.unwrap_or(993);
+                let mut acc = crate::email::Account::new(&arg::<String>(a, "host")?, port, &arg::<String>(a, "user")?, &arg::<String>(a, "password")?);
+                // Outgoing mail: as given, else worked out from the incoming server; port 465 unless given (587 = STARTTLS).
+                let smtp: String = arg::<Option<String>>(a, "smtp_host")?.unwrap_or_default();
+                let smtp_port = arg::<Option<u16>>(a, "smtp_port")?.unwrap_or(465);
+                if !smtp.trim().is_empty() {
+                    acc.smtp_host = smtp.trim().into();
+                }
+                acc.smtp_port = smtp_port;
+                let n = crate::email::add(&self.db, &acc, &smtp, smtp_port).await?;
+                ok(json!({"user": acc.user, "messages": n}))
+            }
+            "email_account_remove" => ok(crate::email::remove(&self.db, &arg::<String>(a, "user")?)?),
+            // Outlook / Microsoft 365: Microsoft's sign-in with the person's own app. Like ChatGPT's: the desktop app waits
+            // for the browser (`_wait`), a server takes the pasted address (`_paste`). The client ID is kept for next time.
+            "outlook_sign_in" => {
+                let (client_id, tenant): (String, String) = (arg(a, "client_id")?, arg::<Option<String>>(a, "tenant")?.unwrap_or_default());
+                let paste = self.mode == "server";
+                let url = crate::email::outlook_sign_in(&client_id, &tenant, !paste).await?;
+                self.db.set_setting("outlook_client_id", client_id.trim())?;
+                self.db.set_setting("outlook_tenant", tenant.trim())?;
+                ok(json!({"url": url, "paste": paste}))
+            }
+            "outlook_sign_in_wait" | "outlook_sign_in_paste" => {
+                if !crate::email::outlook_signing_in() {
+                    bail!("no Outlook sign-in in progress; start again");
+                }
+                let answer = if cmd == "outlook_sign_in_wait" { crate::oauth::finish().await? } else { crate::oauth::paste(&arg::<String>(a, "url")?).await? };
+                let (user, n) = crate::email::outlook_signed_in(&self.db, &answer).await?;
+                ok(json!({"user": user, "messages": n}))
+            }
+            // Stop whichever sign-in (Outlook, a tool server) is waiting for the browser.
+            "sign_in_cancel" => {
+                crate::oauth::cancel();
+                ok(())
+            }
+            // Mail tasks (forward or cc your bot): on or off. Turned on, mail already there isn't taken (each folder is
+            // read from now on). They use the first mailbox.
+            "email_tasks" => {
+                if let Some(on) = arg::<Option<bool>>(a, "on")? {
                     self.db.set_setting("email_tasks", if on { "on" } else { "off" })?;
                     for f in ["INBOX", crate::email::TASK_FOLDER] {
                         self.db.set_setting(&format!("mail_task_seen:{f}"), "")?;
                     }
                 }
-                if let Some(host) = arg::<Option<String>>(a, "host")? {
-                    if host.trim().is_empty() {
-                        self.db.set_setting("email_host", "")?;
-                        self.secrets.set(crate::email::SECRET, "")?;
-                    } else {
-                        let port: u16 = arg::<Option<u16>>(a, "port")?.unwrap_or(993);
-                        let acc = crate::email::Account::new(&host, port, &arg::<String>(a, "user")?, &arg::<String>(a, "password")?);
-                        let n = crate::email::check(&acc).await?;
-                        self.db.set_setting("email_host", &acc.host)?;
-                        self.db.set_setting("email_port", &port.to_string())?;
-                        self.db.set_setting("email_user", &acc.user)?;
-                        // Outgoing mail: as given, else worked out from the incoming server when it's used; port 465 unless given (587 = STARTTLS).
-                        let smtp: String = arg::<Option<String>>(a, "smtp_host")?.unwrap_or_default();
-                        self.db.set_setting("email_smtp_host", smtp.trim())?;
-                        self.db.set_setting("email_smtp_port", &arg::<Option<u16>>(a, "smtp_port")?.unwrap_or(465).to_string())?;
-                        self.secrets.set(crate::email::SECRET, arg::<String>(a, "password")?.as_str())?;
-                        return ok(json!({"host": acc.host, "user": acc.user, "messages": n}));
-                    }
-                }
-                ok(match crate::email::account(&self.db) {
-                    Some(acc) => json!({"host": acc.host, "user": acc.user, "smtp": acc.smtp_host, "smtp_port": acc.smtp_port, "tasks": self.db.setting("email_tasks")?.as_deref() == Some("on")}),
-                    None => Value::Null,
-                })
+                ok(self.db.setting("email_tasks")?.as_deref() == Some("on"))
             }
             // Adding events to your calendar (calendar_create) over CalDAV: the server, the login and which calendar.
             // Saving signs in and lists the calendars; no password given keeps the saved one (or the email's, same login).
@@ -729,7 +750,7 @@ impl Host {
                     .into_iter()
                     .map(|s| {
                         let keys = |m: std::collections::HashMap<String, String>| m.into_keys().collect::<std::collections::BTreeSet<_>>();
-                        json!({"name": s.name, "preset": s.preset, "command": s.command, "args": s.args, "url": s.url, "env": keys(s.env), "headers": keys(s.headers), "tools": ext::cached_tools(&self.db, &s.name).len()})
+                        json!({"name": s.name, "preset": s.preset, "command": s.command, "args": s.args, "url": s.url, "env": keys(s.env), "headers": keys(s.headers), "tools": ext::cached_tools(&self.db, &s.name).len(), "signed_in": ext::signed_in(&s.name)})
                     })
                     .collect();
                 ok(json!({"servers": servers, "tools": ext::all_tools(&self.db).len()}))
@@ -737,6 +758,19 @@ impl Host {
             // Add or replace one server: {name, command, args, env} or {name, url, headers}. Starts it once; returns its tool count.
             "tool_server_save" => ok(ext::save_server(&self.db, arg(a, "server")?).await?),
             "tool_server_delete" => ok(ext::delete_server(&self.db, &arg::<String>(a, "name")?)?),
+            // A remote server that wants a sign-in (MCP's OAuth): returns the address to open; then `_wait` (desktop) or
+            // `_paste` (a server: the address the browser ended up on) finishes it and saves the server. Returns its tool count.
+            "tool_server_sign_in" => {
+                let paste = self.mode == "server";
+                ok(json!({"url": ext::sign_in(arg(a, "server")?, !paste).await?, "paste": paste}))
+            }
+            "tool_server_sign_in_wait" | "tool_server_sign_in_paste" => {
+                if !ext::signing_in() {
+                    bail!("no tool server sign-in in progress; start again");
+                }
+                if cmd == "tool_server_sign_in_wait" { crate::oauth::finish().await? } else { crate::oauth::paste(&arg::<String>(a, "url")?).await? };
+                ok(ext::signed_in_save(&self.db).await?)
+            }
             // The browser = Playwright's MCP server (needs Node). Enabling starts it once to list its tools.
             "browser_enable" => {
                 let on: bool = arg(a, "enabled")?;
@@ -1025,6 +1059,10 @@ impl Host {
             "set_watch" => ok(self.db.routine_set_watch(arg(a, "chat_id")?, arg(a, "id")?, &arg::<String>(a, "watch")?)?),
             // Only the person sets this (no bot tool does): what the bot read can't widen what comes through.
             "set_urgent" => ok(self.db.routine_set_urgent(arg(a, "chat_id")?, arg(a, "id")?, &arg::<String>(a, "rule")?)?),
+            // Pinned cards: the chat's, and your own edits to them (a tick writes back as yours; bots see it next read).
+            "cards" => ok(self.db.cards(arg(a, "chat_id")?)?),
+            "card_tick" => ok(self.db.card_tick(arg(a, "chat_id")?, arg(a, "id")?, arg(a, "line")?, &arg::<String>(a, "text")?)?),
+            "card_delete" => ok(self.db.card_delete(arg(a, "chat_id")?, arg(a, "id")?)?),
             "set_delivery" => ok(self.db.routine_set_delivery(arg(a, "chat_id")?, arg(a, "id")?, &arg::<String>(a, "delivery")?)?),
             // How full standing memory is (the Memory tab's meter).
             "standing_memory" => {

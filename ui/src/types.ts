@@ -15,7 +15,7 @@ export type Chat = { chat_id: number; title: string; memories: number; channel: 
 
 export type Kind = 'convention' | 'knowledge' | 'task'
 
-export type Delivery = 'now' | 'digest' | 'log'
+export type Delivery = 'now' | 'digest' | 'log' | 'card'
 
 export type Routine = { id: number; bot_id: number; quiet: boolean; paused: boolean; chat_id: number; cron: string; prompt: string; next_fire: number; delivery: Delivery; once?: boolean; watch?: string; urgent?: string }
 
@@ -52,4 +52,4 @@ export type Skill = {
 
 export type LibrarySkill = { slug: string; category: string; name: string; description: string; body: string; needs: string[]; added: number[]; missing: Record<string, string[]>; schedule: { cron: string; label: string; prompt: string } | null }
 
-export type ToolServer = { name: string; preset: string | null; command: string; args: string[]; url: string; env: string[]; headers: string[]; tools: number }
+export type ToolServer = { name: string; preset: string | null; command: string; args: string[]; url: string; env: string[]; headers: string[]; tools: number; signed_in?: boolean }

@@ -109,7 +109,7 @@ impl Db {
         self.c().execute_batch(&format!(
             "DELETE FROM tool_calls WHERE run_id IN (SELECT id FROM runs WHERE bot_id={id});
              DELETE FROM runs WHERE bot_id={id}; DELETE FROM messages WHERE bot_id={id};
-             DELETE FROM signals WHERE bot_id={id}; DELETE FROM cases WHERE bot_id={id}; DELETE FROM digest_items WHERE bot_id={id};
+             DELETE FROM signals WHERE bot_id={id}; DELETE FROM cases WHERE bot_id={id}; DELETE FROM digest_items WHERE bot_id={id}; DELETE FROM cards WHERE bot_id={id};
              DELETE FROM routines WHERE bot_id={id}; DELETE FROM sessions WHERE bot_id={id}; DELETE FROM conv_taint WHERE bot_id={id};
              DELETE FROM settings WHERE key LIKE 'seen:{id}:%' OR key='pause:{id}'; DELETE FROM bots WHERE id={id};"
         ))?;
