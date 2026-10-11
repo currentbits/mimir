@@ -316,7 +316,9 @@ struct Http {
 impl Client {
     async fn start(conf: &ServerConf, db: &Db, bot: i64) -> Result<Self> {
         let (io, secrets_file) = if conf.url.is_empty() {
-            spawn(conf, db, bot)?
+            // Off the async threads: bringing up the bots' computer can take seconds.
+            let (conf, db) = (conf.clone(), db.clone());
+            tokio::task::spawn_blocking(move || spawn(&conf, &db, bot)).await??
         } else {
             let headers = values_of(&conf.name, "header", &conf.headers);
             (Io::Http(Http { client: reqwest::Client::builder().timeout(TIMEOUT).build()?, url: conf.url.clone(), headers, session: None, version: None }), None)

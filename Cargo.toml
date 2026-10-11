@@ -7,6 +7,11 @@ members = ["crates/mimir-core", "crates/mimir", "crates/mimir-desktop"]
 [workspace.package]
 version = "0.1.5"
 
+[profile.release]
+strip = true
+lto = "thin"
+codegen-units = 1
+
 # Shrinking a photo for a model is CPU-heavy; keep it quick in dev builds and tests too.
 [profile.dev.package.image]
 opt-level = 3
