@@ -2847,6 +2847,7 @@ function SettingsView({ onComputer }: { onComputer: () => void }) {
       {inDesktop && !remoteServer() && <AppSettings />}
       {inDesktop && <UpdateSettings />}
       <DigestSettings />
+      <LanguageSettings />
       <LimitsSettings />
       <ApiKeySettings />
       <WebSearchSettings />
@@ -3218,6 +3219,25 @@ function ComputerView({ bots, chats, chatName }: { bots: Bot[]; chats: Chat[]; c
         </div>
       ) : !err && <Empty icon="laptop" title="Starting the computer…">The screen shows up here in a moment.</Empty>}
     </>
+  )
+}
+
+/** The language Mimir itself writes in on Telegram, Slack and Discord (bots answer in yours either way). */
+function LanguageSettings() {
+  const [l, setL] = useState<{ lang: string; system: string; langs: [string, string][] } | null>(null)
+  useEffect(() => { invoke<typeof l>('language').then(setL, () => {}) }, [])
+  if (!l) return null
+  const name = (code: string) => l.langs.find(([c]) => c === code)?.[1] ?? code
+  return (
+    <Group title="Language" note="What Mimir itself says in Telegram, Slack and Discord: pairing, approval cards, errors, the digest and the weekly list. Your bots answer in the language you write in either way.">
+      <Row icon={<Icon name="globe" size={15} />} title="Mimir writes in">
+        <select className="select" style={{ width: 'auto' }} aria-label="Language" value={l.lang}
+          onChange={e => invoke<typeof l>('language', { lang: e.target.value }).then(setL, () => {})}>
+          <option value="">{`System (${name(l.system)})`}</option>
+          {l.langs.map(([c, n]) => <option key={c} value={c}>{n}</option>)}
+        </select>
+      </Row>
+    </Group>
   )
 }
 

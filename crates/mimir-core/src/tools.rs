@@ -1290,8 +1290,8 @@ pub fn always_allow(db: &Db, a: &crate::db::Approval) -> Result<()> {
 /// The button text for "always" on a chat-app card: the whole tool, or the tool on one site.
 pub fn always_label(a: &crate::db::Approval) -> String {
     let s = match a.site.as_deref() {
-        Some(site) => format!("Always on {site}"),
-        None => format!("Always: {}", describe_tool(&a.tool)),
+        Some(site) => crate::say::trf("Always on {site}", &[("site", site)]),
+        None => crate::say::trf("Always: {tool}", &[("tool", &describe_tool(&a.tool))]),
     };
     // Buttons are short on every app (Slack allows 75 characters).
     truncate(&s, 60)

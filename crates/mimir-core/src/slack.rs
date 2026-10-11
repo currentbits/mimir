@@ -293,7 +293,7 @@ impl Slack {
         let who = Sender { id: p["user"]["id"].as_str().unwrap_or(""), dm: channel.starts_with('D') };
         let text = match core.decide(me, channel, who, id, d) {
             Ok(Some(a)) => verdict_for(&a, d),
-            Ok(None) => "This request is no longer pending.".into(),
+            Ok(None) => crate::say::tr("This request is no longer pending.").into(),
             // Someone else in the channel pressed it: tell only them, leave the card as it is.
             Err(e) => {
                 self.api("chat.postEphemeral", &self.bot_token, json!({"channel": channel, "user": who.id, "text": e.to_string()})).await?;

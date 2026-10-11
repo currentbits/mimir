@@ -371,7 +371,7 @@ impl Discord {
         let from = d["member"]["user"]["id"].as_str().or(d["user"]["id"].as_str()).unwrap_or("");
         let body = match core.decide(me, channel, Sender { id: from, dm: d["guild_id"].is_null() }, id, choice) {
             Ok(Some(a)) => json!({"type": 7, "data": {"content": verdict_for(&a, choice), "components": []}}),
-            Ok(None) => json!({"type": 4, "data": {"content": "This request is no longer pending.", "flags": 64}}),
+            Ok(None) => json!({"type": 4, "data": {"content": crate::say::tr("This request is no longer pending."), "flags": 64}}),
             Err(e) => json!({"type": 4, "data": {"content": e.to_string(), "flags": 64}}),
         };
         let path = format!("/interactions/{}/{}/callback", d["id"].as_str().unwrap_or(""), d["token"].as_str().unwrap_or(""));

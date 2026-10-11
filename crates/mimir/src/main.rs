@@ -141,5 +141,6 @@ async fn serve(db: Db, home: PathBuf) -> Result<()> {
         eprintln!("no channel configured (TELEGRAM_BOT_TOKEN / SLACK_BOT_TOKEN+SLACK_APP_TOKEN / DISCORD_BOT_TOKEN); running routines only");
     }
     let provider = Arc::new(Provider::from_env(home)?);
+    mimir_core::say::load(&db);
     runtime::serve(db, cli_bot(), provider, channels, Default::default()).await
 }
