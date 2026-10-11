@@ -2,18 +2,37 @@
 //! bots' email_search and email_read. Mail is only looked at (EXAMINE, BODY.PEEK): nothing is marked read, moved or
 //! deleted. What's in a message is someone else's words, so reading it counts as outside content (see tools.rs).
 //! TLS always, except to this computer (a local bridge such as Proton Mail Bridge listens on 127.0.0.1 without it).
+//! Several mailboxes: a list in settings (`email_accounts`), passwords in the secret store per address. Outlook and
+//! Microsoft 365 sign in with Microsoft (OAuth, oauth.rs) and use XOAUTH2 for IMAP and SMTP, with an app the person
+//! registers themselves (their client ID): Microsoft turned app passwords off for mail.
 
 use anyhow::{Context, Result, bail};
 use async_imap::Session;
 use futures_util::TryStreamExt;
 use mail_parser::MimeHeaders;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio_util::either::Either;
 
-/// The secret-store key for the app password; server, port and address are settings.
-pub const SECRET: &str = "email_password";
+/// Where the one mailbox of older versions kept its app password (moved on first read, see `accounts`).
+const OLD_SECRET: &str = "email_password";
+
+/// A mailbox as saved in settings; its password is in the secret store (`email_password:<address>`), or it signed in
+/// with Microsoft and its tokens are under `oauth`.
+#[derive(Clone, Default, Serialize, Deserialize)]
+struct Saved {
+    host: String,
+    port: u16,
+    user: String,
+    #[serde(default)]
+    smtp_host: String,
+    #[serde(default)]
+    smtp_port: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    oauth: Option<String>,
+}
 
 type Stream = Either<tokio_rustls::client::TlsStream<TcpStream>, TcpStream>;
 
@@ -26,6 +45,8 @@ pub struct Account {
     /// Outgoing mail (SMTP): set in Settings, else worked out from the incoming server (smtp_guess).
     pub smtp_host: String,
     pub smtp_port: u16,
+    /// Signed in with Microsoft: the secret-store key of its tokens (XOAUTH2 instead of the password).
+    pub oauth: Option<String>,
 }
 
 /// The usual outgoing server for an incoming one: imap.gmail.com → smtp.gmail.com, and the odd ones by name.
@@ -37,18 +58,153 @@ pub fn smtp_guess(imap: &str) -> String {
     }
 }
 
-/// The account set up in Settings, if any.
-pub fn account(db: &crate::db::Db) -> Option<Account> {
+fn secret(user: &str) -> String {
+    format!("email_password:{}", user.to_lowercase())
+}
+
+fn saved(db: &crate::db::Db) -> Vec<Saved> {
+    if let Some(list) = db.setting("email_accounts").ok().flatten().filter(|s| !s.is_empty()) {
+        return serde_json::from_str(&list).unwrap_or_default();
+    }
+    // The one mailbox of older versions: becomes the first of the list, its password moves to its address.
     let s = |k: &str| db.setting(k).ok().flatten().filter(|v| !v.is_empty());
-    let host = s("email_host")?;
-    Some(Account {
-        smtp_host: s("email_smtp_host").unwrap_or_else(|| smtp_guess(&host)),
+    let (Some(host), Some(user), Some(pass)) = (s("email_host"), s("email_user"), crate::host::secret_get(OLD_SECRET)) else { return vec![] };
+    let old = Saved {
+        port: s("email_port").and_then(|p| p.parse().ok()).unwrap_or(993),
+        smtp_host: s("email_smtp_host").unwrap_or_default(),
         smtp_port: s("email_smtp_port").and_then(|p| p.parse().ok()).unwrap_or(465),
         host,
-        port: s("email_port").and_then(|p| p.parse().ok()).unwrap_or(993),
-        user: s("email_user")?,
-        pass: crate::host::secret_get(SECRET)?,
+        user,
+        oauth: None,
+    };
+    if crate::host::secret_set(&secret(&old.user), &pass).is_ok() && db.set_setting("email_accounts", &serde_json::to_string(&[&old]).unwrap_or_default()).is_ok() {
+        let _ = crate::host::secret_set(OLD_SECRET, "");
+        let _ = db.set_setting("email_host", "");
+    }
+    vec![old]
+}
+
+fn of(s: Saved) -> Option<Account> {
+    let pass = match &s.oauth {
+        Some(_) => String::new(),
+        None => crate::host::secret_get(&secret(&s.user))?,
+    };
+    Some(Account {
+        smtp_host: if s.smtp_host.is_empty() { smtp_guess(&s.host) } else { s.smtp_host },
+        smtp_port: if s.smtp_port == 0 { 465 } else { s.smtp_port },
+        host: s.host,
+        port: s.port,
+        user: s.user,
+        pass,
+        oauth: s.oauth,
     })
+}
+
+/// Every mailbox set up in Settings, in the order added.
+pub fn accounts(db: &crate::db::Db) -> Vec<Account> {
+    saved(db).into_iter().filter_map(of).collect()
+}
+
+/// The first mailbox, if any.
+pub fn account(db: &crate::db::Db) -> Option<Account> {
+    accounts(db).into_iter().next()
+}
+
+/// The mailbox with this address, or the first when none is asked for.
+pub fn find(db: &crate::db::Db, user: Option<&str>) -> Result<Account> {
+    let all = accounts(db);
+    let Some(u) = user.map(str::trim).filter(|u| !u.is_empty()) else { return all.into_iter().next().context("no email account set up (Settings → Email)") };
+    let names = all.iter().map(|a| a.user.clone()).collect::<Vec<_>>().join(", ");
+    all.into_iter().find(|a| a.user.eq_ignore_ascii_case(u)).with_context(|| format!("no mailbox {u}; the user's are: {names}"))
+}
+
+/// Add a mailbox (or replace the one with the same address). Signs in once first; returns the inbox's message count.
+pub async fn add(db: &crate::db::Db, a: &Account, smtp_host: &str, smtp_port: u16) -> Result<u32> {
+    let n = check(a).await?;
+    match &a.oauth {
+        None => crate::host::secret_set(&secret(&a.user), &a.pass)?,
+        // Signed in again with Microsoft: the new tokens replace the old ones.
+        Some(key) => {
+            if let Some(old) = saved(db).into_iter().find(|s| s.user.eq_ignore_ascii_case(&a.user)).and_then(|s| s.oauth).filter(|k| k != key) {
+                crate::oauth::sign_out(&old)?;
+            }
+            crate::host::secret_set(&secret(&a.user), "")?;
+        }
+    }
+    let mut list = saved(db);
+    let new = Saved { host: a.host.clone(), port: a.port, user: a.user.clone(), smtp_host: smtp_host.trim().into(), smtp_port, oauth: a.oauth.clone() };
+    match list.iter_mut().find(|s| s.user.eq_ignore_ascii_case(&a.user)) {
+        Some(s) => *s = new,
+        None => list.push(new),
+    }
+    db.set_setting("email_accounts", &serde_json::to_string(&list)?)?;
+    Ok(n)
+}
+
+pub fn remove(db: &crate::db::Db, user: &str) -> Result<()> {
+    let mut list = saved(db);
+    for s in list.iter().filter(|s| s.user.eq_ignore_ascii_case(user)) {
+        crate::host::secret_set(&secret(&s.user), "")?;
+        if let Some(k) = &s.oauth {
+            crate::oauth::sign_out(k)?;
+        }
+    }
+    list.retain(|s| !s.user.eq_ignore_ascii_case(user));
+    db.set_setting("email_accounts", &serde_json::to_string(&list)?)
+}
+
+// ---------------- Outlook: Microsoft's sign-in ----------------
+
+const OUTLOOK_SCOPES: &str = "openid email offline_access https://outlook.office.com/IMAP.AccessAsUser.All https://outlook.office.com/SMTP.Send";
+
+fn ms_login() -> String {
+    std::env::var("MIMIR_MS_LOGIN").ok().filter(|s| !s.is_empty()).unwrap_or_else(|| "https://login.microsoftonline.com".into())
+}
+
+/// The Outlook sign-in in progress: where its tokens go, and the app's client id (to check the ID token).
+static OUTLOOK: std::sync::Mutex<Option<(String, String)>> = std::sync::Mutex::new(None);
+
+/// Begin signing in to Outlook / Microsoft 365 with the person's own app (client ID, and their tenant for a work
+/// account whose app only takes its own organisation; else "common"). Returns the address to open.
+pub async fn outlook_sign_in(client_id: &str, tenant: &str, listen: bool) -> Result<String> {
+    let client_id = client_id.trim();
+    let tenant = Some(tenant.trim()).filter(|t| !t.is_empty()).unwrap_or("common");
+    let ok = |s: &str, extra: &str| !s.is_empty() && s.len() < 100 && s.chars().all(|c| c.is_ascii_alphanumeric() || extra.contains(c));
+    if !ok(client_id, "-") {
+        bail!("the client ID is the Application (client) ID from your app's page in Azure, like 3f2c…-…");
+    }
+    if !ok(tenant, "-.") {
+        bail!("the tenant is the Directory (tenant) ID, your domain, or empty");
+    }
+    // `localhost`: Microsoft lets a desktop app register http://localhost, and ignores the port.
+    let redirect = crate::oauth::redirect(listen, "localhost", "").await?;
+    let key = format!("oauth:mail:{}", crate::random_hex(8)?);
+    let base = format!("{}/{tenant}/oauth2/v2.0", ms_login());
+    let saved = crate::oauth::Saved { token_url: format!("{base}/token"), client_id: client_id.into(), scope: Some(OUTLOOK_SCOPES.into()), ..Default::default() };
+    let url = crate::oauth::begin(&key, "Outlook", &format!("{base}/authorize"), saved, redirect, &[("prompt", "select_account")])?;
+    *OUTLOOK.lock().unwrap() = Some((key, client_id.into()));
+    Ok(url)
+}
+
+/// The sign-in in progress is Outlook's (not a tool server's).
+pub fn outlook_signing_in() -> bool {
+    OUTLOOK.lock().unwrap().as_ref().is_some_and(|(k, _)| crate::oauth::pending_key().as_deref() == Some(k))
+}
+
+/// After Microsoft's sign-in (the token endpoint's answer): the address from the ID token, a first look at the inbox,
+/// and the mailbox is saved. Returns (address, messages).
+pub async fn outlook_signed_in(db: &crate::db::Db, answer: &serde_json::Value) -> Result<(String, u32)> {
+    let (key, client_id) = OUTLOOK.lock().unwrap().take().context("no Outlook sign-in in progress")?;
+    let claims = crate::oauth::id_claims(answer["id_token"].as_str().unwrap_or(""), &client_id)?;
+    let user = claims["email"].as_str().or(claims["preferred_username"].as_str()).filter(|u| u.contains('@')).context("Microsoft didn't say which address signed in")?.to_string();
+    let a = Account { host: "outlook.office365.com".into(), port: 993, user: user.clone(), pass: String::new(), smtp_host: "smtp.office365.com".into(), smtp_port: 587, oauth: Some(key.clone()) };
+    match add(db, &a, &a.smtp_host, a.smtp_port).await {
+        Ok(n) => Ok((user, n)),
+        Err(e) => {
+            let _ = crate::oauth::sign_out(&key);
+            Err(e)
+        }
+    }
 }
 
 impl Account {
@@ -58,7 +214,25 @@ impl Account {
     }
 
     pub fn new(host: &str, port: u16, user: &str, pass: &str) -> Self {
-        Account { smtp_host: smtp_guess(host), smtp_port: 465, host: host.trim().into(), port, user: user.trim().into(), pass: pass.into() }
+        Account { smtp_host: smtp_guess(host), smtp_port: 465, host: host.trim().into(), port, user: user.trim().into(), pass: pass.into(), oauth: None }
+    }
+
+    /// The access token of a mailbox signed in with Microsoft.
+    async fn token(&self) -> Result<Option<String>> {
+        match &self.oauth {
+            Some(k) => Ok(Some(crate::oauth::access_token(k, &format!("Outlook ({})", self.user)).await?)),
+            None => Ok(None),
+        }
+    }
+}
+
+/// SASL XOAUTH2: the address and token once, then an empty answer to the server's error details, if any.
+struct Xoauth2(Option<String>);
+
+impl async_imap::Authenticator for Xoauth2 {
+    type Response = String;
+    fn process(&mut self, _: &[u8]) -> String {
+        self.0.take().unwrap_or_default()
     }
 }
 
@@ -80,10 +254,16 @@ async fn session(a: &Account) -> Result<Session<Stream>> {
     };
     let mut client = async_imap::Client::new(stream);
     client.read_response().await?.context("the mail server closed the connection")?;
-    let session = tokio::time::timeout(wait, client.login(&a.user, &a.pass))
-        .await
-        .context("the mail server didn't answer the login")?
-        .map_err(|(e, _)| anyhow::anyhow!("couldn't sign in to your email ({e}); check the address and the app password"))?;
+    let session = match a.token().await? {
+        Some(t) => tokio::time::timeout(wait, client.authenticate("XOAUTH2", Xoauth2(Some(format!("user={}\x01auth=Bearer {t}\x01\x01", a.user)))))
+            .await
+            .context("the mail server didn't answer the sign-in")?
+            .map_err(|(e, _)| anyhow::anyhow!("Outlook didn't take the sign-in for {} ({e}); sign in again in Settings → Email", a.user))?,
+        None => tokio::time::timeout(wait, client.login(&a.user, &a.pass))
+            .await
+            .context("the mail server didn't answer the login")?
+            .map_err(|(e, _)| anyhow::anyhow!("couldn't sign in to {} ({e}); check the address and the app password", a.user))?,
+    };
     Ok(session)
 }
 
@@ -300,15 +480,19 @@ async fn deliver(a: &Account, d: &Draft<'_>) -> Result<(Session<Stream>, String,
     let from: lettre::Address = a.user.parse().context("your email address doesn't look like one")?;
     let to: Vec<lettre::Address> = rcpt.iter().map(|r| r.parse()).collect::<Result<_, _>>().context("a recipient isn't an address")?;
     let envelope = Envelope::new(Some(from), to)?;
-    let creds = Credentials::new(a.user.clone(), a.pass.clone());
-    let mailer = if local(&a.smtp_host) {
-        AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&a.smtp_host).port(a.smtp_port).credentials(creds).build()
+    use lettre::transport::smtp::authentication::Mechanism;
+    let token = a.token().await?;
+    let mechanisms = if token.is_some() { vec![Mechanism::Xoauth2] } else { vec![Mechanism::Plain, Mechanism::Login] };
+    let creds = Credentials::new(a.user.clone(), token.unwrap_or_else(|| a.pass.clone()));
+    let builder = if local(&a.smtp_host) {
+        AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&a.smtp_host).port(a.smtp_port)
     } else if a.smtp_port == 465 {
-        AsyncSmtpTransport::<Tokio1Executor>::relay(&a.smtp_host)?.port(465).credentials(creds).build()
+        AsyncSmtpTransport::<Tokio1Executor>::relay(&a.smtp_host)?.port(465)
     } else {
         // 587 (and 25/2525): plain first, then STARTTLS, which lettre requires before it sends the password.
-        AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&a.smtp_host)?.port(a.smtp_port).credentials(creds).build()
+        AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&a.smtp_host)?.port(a.smtp_port)
     };
+    let mailer = builder.credentials(creds).authentication(mechanisms).build();
     mailer.send_raw(&envelope, msg.as_bytes()).await.map_err(|e| anyhow::anyhow!("couldn't send through {}: {e}", a.smtp_host))?;
     Ok((s, id, msg))
 }
@@ -535,6 +719,53 @@ mod tests {
             let copy = std::fs::read_to_string("/tmp/fake-mail/appended-Sent Messages.eml").unwrap();
             assert!(copy.contains("Paid on Friday.") && copy.contains("In-Reply-To: <inv4411@example.com>"), "{copy}");
         }
+    }
+
+    /// XOAUTH2 against scripts/fake-mail.py (which then only takes the token "tok-1"): reading and sending with a
+    /// Microsoft-style sign-in. `python3 scripts/fake-mail.py`, then `cargo test -p mimir-core fake_mail_xoauth2 -- --ignored`.
+    #[tokio::test]
+    #[ignore]
+    async fn fake_mail_xoauth2() {
+        let p = std::env::temp_dir().join(format!("mimir-xoauth-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = crate::db::Db::open(&p).unwrap();
+        crate::host::install_secrets(std::sync::Arc::new(crate::host::DbSecrets(db.clone())));
+        let saved = crate::oauth::Saved { token_url: "http://127.0.0.1:9/token".into(), client_id: "c".into(), ..Default::default() };
+        crate::host::secret_set("oauth:mail:t", &serde_json::to_string(&saved).unwrap()).unwrap();
+        crate::host::secret_set("oauth:mail:t:access", &serde_json::json!({"token": "tok-1", "expires_at": i64::MAX / 2}).to_string()).unwrap();
+        let mut a = super::Account::new("127.0.0.1", 1143, "me@outlook.com", "");
+        (a.smtp_host, a.smtp_port, a.oauth) = ("127.0.0.1".into(), 1025, Some("oauth:mail:t".into()));
+        assert!(super::add(&db, &a, "127.0.0.1", 1025).await.unwrap() > 0, "signed in with XOAUTH2 and saw the inbox");
+        let a = super::find(&db, Some("ME@outlook.com")).unwrap();
+        assert!(a.oauth.is_some() && a.pass.is_empty());
+        let d = super::Draft { to: "sam@example.com", cc: "", subject: "Hi", body: "From Outlook.", reply_to: None };
+        super::send(&a, &d).await.unwrap();
+        let smtp = std::fs::read_to_string("/tmp/fake-mail/smtp.txt").unwrap();
+        assert!(smtp.contains("AUTH XOAUTH2"), "{smtp}");
+        // A token the server refuses (revoked): the error says to sign in again.
+        crate::oauth::forget_access("oauth:mail:t");
+        crate::host::secret_set("oauth:mail:t:access", &serde_json::json!({"token": "wrong", "expires_at": i64::MAX / 2}).to_string()).unwrap();
+        assert!(format!("{:#}", super::check(&a).await.unwrap_err()).contains("sign in again"));
+        super::remove(&db, "me@outlook.com").unwrap();
+        assert!(super::accounts(&db).is_empty() && crate::oauth::load("oauth:mail:t").is_none());
+    }
+
+    /// The one mailbox of older versions becomes the first of the list, its password moved to its address.
+    #[test]
+    fn the_old_single_mailbox_moves_into_the_list() {
+        let p = std::env::temp_dir().join(format!("mimir-mailbox-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = crate::db::Db::open(&p).unwrap();
+        crate::host::install_secrets(std::sync::Arc::new(crate::host::DbSecrets(db.clone())));
+        for (k, v) in [("email_host", "imap.mail.me.com"), ("email_port", "993"), ("email_user", "old@icloud.com"), ("email_smtp_port", "465")] {
+            db.set_setting(k, v).unwrap();
+        }
+        crate::host::secret_set(super::OLD_SECRET, "pw").unwrap();
+        let a = super::account(&db).unwrap();
+        assert_eq!((a.user.as_str(), a.pass(), a.smtp_host.as_str()), ("old@icloud.com", "pw", "smtp.mail.me.com"));
+        assert!(crate::host::secret_get(super::OLD_SECRET).is_none() && db.setting("email_host").unwrap().unwrap_or_default().is_empty(), "moved once");
+        assert_eq!(super::accounts(&db).len(), 1);
+        assert!(super::find(&db, Some("nope@x.com")).err().unwrap().to_string().contains("old@icloud.com"));
     }
 
     #[test]

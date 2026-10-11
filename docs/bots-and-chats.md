@@ -33,7 +33,9 @@ What's shared and what isn't:
 
 - **This computer** (the built-in chat in the app). Replies stream in, with a line showing what the bot is doing
   ("Searching memory…", "Reading a web page…", "Waiting for your OK…") and, after a few seconds, how long it's been
-  working. **Stop** cuts a reply off; what was written so far stays, marked *Stopped*. A reply still being written in
+  working. You can keep typing while it works: what you send then ("actually, only this week") reaches the reply in
+  progress, which says *Changing course…* and answers with it in mind, instead of finishing the old answer first.
+  **Stop** cuts a reply off; what was written so far stays, marked *Stopped*. A reply still being written in
   Telegram, Slack or Discord can be stopped from the app too: open it under **Activity**. "Start fresh" (or `/new`)
   begins a new conversation. When a reply saved a memory, its "Saved to memory" chip has **Undo**.
   A chat opens on its newest 200 messages; **Show earlier messages** at the top pages back. **Search this chat**
@@ -41,6 +43,10 @@ What's shared and what isn't:
   same.
 - **Quick ask**: ⌥Space (Mac) or Ctrl+Alt+Space (Windows, Linux) opens a Spotlight-style panel from any app. It's the
   same built-in chat, so the exchange is there afterwards.
+- **Push-to-talk** (desktop app): in the chat box or quick ask, hold ⌥ (Mac) or Ctrl (Windows, Linux) on its own and
+  speak; let go and the words appear in the box, ready to edit and send. whisper.cpp transcribes them on your computer
+  (the speech model downloads once, the first time); nothing is sent until you send it. The microphone is the one
+  chosen for meetings.
 - **Telegram, Slack, Discord.** One bot can be on all three at once. Each connects *out* (long-polling, Socket Mode,
   the Gateway), so you don't need a public address. A chat that has been quiet for 12 hours starts a new conversation
   with its next message, opening with a short "where we left off" quoted from Mimir's log. Each reply then re-sends
@@ -114,9 +120,12 @@ asleep) starts with "Sorry for the slow reply". Messages sent while Mimir was of
 up to a day back: Telegram keeps them for it; on Slack your DMs and @-mentions in paired channels (with the
 `channels:history` and `groups:history` scopes; not replies inside threads), on Discord your paired DMs and channels. A failed reply says why in plain words and what to do.
 
-A bot does one thing at a time per chat; its other chats don't wait. A message that arrives while that chat is busy
-(a routine running there, or an earlier reply waiting for your OK) shows typing at once, and after a few seconds one
-note: "Finishing a routine first…" or "Finishing my last reply first…". Its reply follows.
+A bot does one thing at a time per chat; its other chats don't wait. A message sent while it's writing you a reply
+**steers** that reply: the draft says *Changing course…* and one reply answers both. With Claude the message goes into
+the run in progress (the answer so far stays in its session); the other AI accounts can't take a message mid-run, so
+that run stops and starts over with your new message added (anything it already did, like a saved memory, stays done).
+A message that arrives while a routine runs there, or with a photo or file, waits instead: typing at once, and after a
+few seconds one note: "Finishing a routine first…" or "Finishing my last reply first…". Its reply follows.
 
 Chat commands: `/memory`, `/why` (what the last reply used: memories, skills, pages), `/routines`, `/new`, `/stop` (a bare "stop" works too while it's writing), `/undo <n>`
 (take back something it learned; see [Memory](memory.md#learned-this-week)), and `/<skill>` for each of the bot's
@@ -138,7 +147,9 @@ or Dutch so far, by default the computer's language (a server's: its `LANG`). Th
 Send a photo on Telegram, Slack or Discord (up to 4 at once there), or paste or drop one into the app's chat, and the
 bot looks at it with your own AI (big photos are shrunk to what each model accepts). Voice notes (Slack's audio clips,
 Discord's voice messages) are transcribed with your OpenAI-compatible key
-(Settings → AI keys) and echoed back ("🎙️ I heard: …").
+(Settings → AI keys) if you've added one, else by whisper.cpp where the bot runs (built into the desktop app; on a
+server, an installed `whisper-cli`), and echoed back ("🎙️ I heard: …"). Telegram's and Discord's voice notes need
+nothing else; Slack's audio clips need `ffmpeg` installed for whisper.cpp.
 
 Send a **PDF**, a **Word** or **Excel** file (`.docx`, `.xlsx`) or a text file (`.txt`, `.md`, `.csv`, `.json`) on any of the apps, or drop or paste one into the app's
 chat (up to 20 MB), and the bot reads its text; the
@@ -154,6 +165,18 @@ Bots send files back too, with `send_file`: a file from the chat's workspace, or
 upload in Slack (needs the `files:write` scope), an attachment on Discord (invite the bot with Attach Files), and in
 the app's chat, shown in place. In your own direct chat it just goes; in a group, channel or guest's chat it asks you
 first. At most 5 files with one reply.
+
+## Pinned cards
+
+A bot can keep a card pinned at the top of a chat in the app, for things you come back to: a shopping list, bills due,
+a project's state. It's quieter than a message. Ask ("add oat milk to my shopping list") and the bot rewrites the card
+with `card_write`; a routine can update one on each run instead of messaging you (Routines → Send it → *Update a
+card*). In Telegram, Slack or Discord the bot reads the card when you ask what's on it.
+
+Cards hold only text, checklists (`- [ ] item`), tables and links. Mimir refuses HTML in them, and the app never shows
+a card as HTML anyway. Tick an item and it's saved as your edit: the card shows *you* as its last change, and the bot
+sees your ticks the next time it reads or rewrites the card. Each card folds away from its title, and the bin removes
+it. A chat holds up to 20 cards.
 
 ## Incognito
 

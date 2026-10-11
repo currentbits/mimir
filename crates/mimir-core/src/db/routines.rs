@@ -272,8 +272,8 @@ impl Db {
     }
 
     pub fn routine_set_delivery(&self, chat: i64, id: i64, delivery: &str) -> Result<bool> {
-        if !["now", "digest", "log"].contains(&delivery) {
-            bail!("delivery is now, digest or log");
+        if !["now", "digest", "log", "card"].contains(&delivery) {
+            bail!("delivery is now, digest, log or card");
         }
         Ok(self.c().execute("UPDATE routines SET delivery=?3 WHERE id=?1 AND chat_id=?2", params![id, chat, delivery])? > 0)
     }

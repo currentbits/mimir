@@ -3,7 +3,7 @@ import { inDesktop, insecureServer, invoke, saveDownload, localInvoke, probe, re
 import { ago, fullTime } from '../format'
 import { openLink } from '../markdown'
 import { ask, tell, Empty, Group, Icon, Row, Segmented, Switch } from '../ui'
-import { SignInChatGPT, SignInGrok, ConnectOpenRouter } from './accounts'
+import { SignInChatGPT, SignInGrok, ConnectOpenRouter, SignInBrowser } from './accounts'
 import { useLoad, SECRETS_AT, LOCAL } from '../shared'
 import type { Bot, ComputerStatus, Chat, Account, ToolServer } from '../types'
 
@@ -472,32 +472,56 @@ function ApiKeySettings() {
   )
 }
 
-/** Your email for the bots, read-only (email_search, email_read): IMAP with an app password. Saving signs in once. */
+type Mailbox = { user: string; host: string; smtp: string; smtp_port: number; outlook: boolean }
+
+/** Your mailboxes for the bots (email_search, email_read, drafts, sending): IMAP with an app password, or Outlook with
+ *  Microsoft's sign-in through your own app. Saving signs in once. */
 function EmailSettings() {
-  const st = useLoad(() => invoke<{ host: string; user: string; smtp?: string; smtp_port?: number; tasks?: boolean } | null>('email_settings', {}), [])
-  const [d, setD] = useState({ host: '', port: '993', user: '', password: '', smtp: '', smtpPort: '' })
+  const st = useLoad(() => invoke<{ accounts: Mailbox[]; outlook_client_id: string; outlook_tenant: string }>('email_accounts'), [])
+  const tasks = useLoad(() => invoke<boolean>('email_tasks', {}), [])
+  const empty = { host: '', port: '993', user: '', password: '', smtp: '', smtpPort: '' }
+  const [d, setD] = useState(empty)
+  const [adding, setAdding] = useState<'password' | 'outlook' | null>(null)
+  const [ms, setMs] = useState<{ clientId: string; tenant: string } | null>(null)
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
   const [err, setErr] = useState<string | null>(null)
+  const list = st.data?.accounts ?? []
+  const app = ms ?? { clientId: st.data?.outlook_client_id ?? '', tenant: st.data?.outlook_tenant ?? '' }
+  const added = (r: { user: string; messages: number }) => { setMsg(`${r.user} signed in · ${r.messages} messages in the inbox`); setAdding(null); setErr(null); return st.reload() }
   const save = () => {
     setBusy(true); setErr(null)
-    invoke<{ messages: number }>('email_settings', { host: d.host.trim(), port: Number(d.port) || 993, user: d.user.trim(), password: d.password, smtpHost: d.smtp.trim(), smtpPort: Number(d.smtpPort) || undefined })
-      .then(r => { setMsg(`Signed in · ${r.messages} messages in your inbox`); setD({ host: '', port: '993', user: '', password: '', smtp: '', smtpPort: '' }); return st.reload() }, e => setErr(String(e)))
+    invoke<{ user: string; messages: number }>('email_account_save', { host: d.host.trim(), port: Number(d.port) || 993, user: d.user.trim(), password: d.password, smtpHost: d.smtp.trim(), smtpPort: Number(d.smtpPort) || undefined })
+      .then(r => { setD(empty); return added(r) }, e => setErr(String(e)))
       .finally(() => setBusy(false))
   }
-  const remove = () => invoke('email_settings', { host: '' }).then(() => { setMsg(null); return st.reload() }, e => setErr(String(e)))
+  const remove = (u: string) => ask(`Remove ${u}? Your bots can’t read or send from it any more.`, 'Remove', true)
+    .then(yes => { if (yes) void invoke('email_account_remove', { user: u }).then(() => { setMsg(null); return st.reload() }, e => setErr(String(e))) })
+  const mode = adding ?? (list.length ? null : 'password')
   return (
-    <Group title="Email" note={err ? <span className="error">{err}</span> : `Lets your bots search and read your email in a chat with you, never in a group, write drafts, and send an email when you approve it (every one asks you, at most 20 a day). Nothing is marked read, moved or deleted. Emails count as outside content. The password is stored in ${SECRETS_AT}.`}>
-      {st.data ? (
-        <>
-          <Row icon={<Icon name="inbox" size={15} />} title={st.data.user} desc={msg ?? `Read through ${st.data.host}${st.data.smtp ? ` · sent through ${st.data.smtp}${st.data.smtp_port && st.data.smtp_port !== 465 ? `:${st.data.smtp_port}` : ''}` : ''}`}>
-            <button className="btn btn-sm btn-ghost btn-danger" onClick={remove}>Remove</button>
-          </Row>
-          <Row title="Tasks by email" desc={`Mail you send to ${st.data.user.replace('@', '+mimir@')}, or file in a folder called Mimir, goes to your bot as a message; it answers in your latest chat with it. Only mail from your own address that passes DKIM is taken. What you forward is outside content: your note on top is what the bot does.`}>
-            <Switch label="Tasks by email" checked={!!st.data.tasks} onChange={tasks => invoke('email_settings', { tasks }).then(() => st.reload(), e => setErr(String(e)))} />
-          </Row>
-        </>
-      ) : (
+    <Group title="Email" note={err ? <span className="error">{err}</span> : `Lets your bots search and read your email in a chat with you, never in a group, write drafts, and send an email when you approve it (every one asks you, at most 20 a day). Nothing is marked read, moved or deleted. Emails count as outside content. Passwords and sign-ins are stored in ${SECRETS_AT}.`}>
+      {list.map(m => (
+        <Row key={m.user} icon={<Icon name="inbox" size={15} />} title={m.user}
+          desc={m.outlook ? 'Outlook · signed in with Microsoft' : `Read through ${m.host}${m.smtp ? ` · sent through ${m.smtp}${m.smtp_port && m.smtp_port !== 465 ? `:${m.smtp_port}` : ''}` : ''}`}>
+          <button className="btn btn-sm btn-ghost btn-danger" onClick={() => remove(m.user)}>Remove</button>
+        </Row>
+      ))}
+      {list.length > 0 && (
+        <Row title="Tasks by email" desc={`Mail you send to ${list[0].user.replace('@', '+mimir@')}, or file in a folder called Mimir, goes to your bot as a message; it answers in your latest chat with it. Only mail from your own address that passes DKIM is taken. What you forward is outside content: your note on top is what the bot does.${list.length > 1 ? ' Uses your first mailbox.' : ''}`}>
+          <Switch label="Tasks by email" checked={!!tasks.data} onChange={on => invoke('email_tasks', { on }).then(() => tasks.reload(), e => setErr(String(e)))} />
+        </Row>
+      )}
+      {!mode && (
+        <Row icon={<Icon name="plus" size={15} />} title="Add another mailbox" desc={msg ?? 'Bots search all of them, and you say which one to send from.'}>
+          <button className="btn btn-sm" onClick={() => { setAdding('password'); setMsg(null) }}>Add</button>
+        </Row>
+      )}
+      {mode && (
+        <div className="row-block">
+          <Segmented<'password' | 'outlook'> label="How it signs in" size="sm" value={mode} onChange={setAdding} options={[{ id: 'password', label: 'App password' }, { id: 'outlook', label: 'Outlook / Microsoft 365' }]} />
+        </div>
+      )}
+      {mode === 'password' && (
         <form className="row-block" onSubmit={e => { e.preventDefault(); save() }}>
           <div className="editor" style={{ margin: 0 }}>
             <div className="er">
@@ -510,10 +534,26 @@ function EmailSettings() {
               <input className="input" placeholder="Your address" aria-label="Email address" autoComplete="off" value={d.user} onChange={e => setD({ ...d, user: e.target.value })} />
               <input className="input" type="password" placeholder="App password" aria-label="App password" autoComplete="off" value={d.password} onChange={e => setD({ ...d, password: e.target.value })} />
               <button className="btn" disabled={busy || !d.host.trim() || !d.user.trim() || !d.password}>{busy ? 'Signing in…' : 'Save'}</button>
+              {list.length > 0 && <button type="button" className="btn btn-ghost" onClick={() => setAdding(null)}>Cancel</button>}
             </div>
           </div>
-          <span className="hint">Use an app password, not your normal one: Gmail and iCloud make one under your account's security settings (two-step sign-in has to be on). Gmail is imap.gmail.com, iCloud imap.mail.me.com, Fastmail imap.fastmail.com. (Outlook and Microsoft 365 mail need Microsoft's own sign-in, which Mimir doesn't do yet.)</span>
+          <span className="hint">Use an app password, not your normal one: Gmail and iCloud make one under your account's security settings (two-step sign-in has to be on). Gmail is imap.gmail.com, iCloud imap.mail.me.com, Fastmail imap.fastmail.com.</span>
         </form>
+      )}
+      {mode === 'outlook' && (
+        <div className="row-block">
+          <div className="editor" style={{ margin: 0 }}>
+            <div className="er">
+              <input className="input mono" placeholder="Application (client) ID" aria-label="Application (client) ID" autoComplete="off" value={app.clientId} onChange={e => setMs({ ...app, clientId: e.target.value })} />
+              <input className="input mono" style={{ width: 200 }} placeholder="Tenant (optional)" aria-label="Directory (tenant) ID" title="Only for a work app that accepts just your organisation: its Directory (tenant) ID" autoComplete="off" value={app.tenant} onChange={e => setMs({ ...app, tenant: e.target.value })} />
+              <SignInBrowser<{ user: string; messages: number }> label="Sign in with Microsoft" what="Outlook" disabled={!app.clientId.trim()}
+                start={() => invoke('outlook_sign_in', { clientId: app.clientId.trim(), tenant: app.tenant.trim() })}
+                wait="outlook_sign_in_wait" paste="outlook_sign_in_paste" onDone={added} />
+              {list.length > 0 && <button type="button" className="btn btn-ghost" onClick={() => setAdding(null)}>Cancel</button>}
+            </div>
+          </div>
+          <span className="hint">Microsoft turned off app passwords for mail, so Mimir signs in through an app you register once (free): in the <a href="https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade" onClick={openLink}>Azure portal</a>, App registrations → New registration, any account type, redirect <b>Public client/native</b> <code>http://localhost</code>. Paste its Application (client) ID here. <a href="https://github.com/currentbits/mimir/blob/master/docs/connect.md#outlook" onClick={openLink}>Step by step</a></span>
+        </div>
       )}
     </Group>
   )
@@ -717,21 +757,30 @@ function ToolServerSettings({ onChange }: { onChange: () => void }) {
     return { ...f, text, name: f.editing || f.name !== f.guess ? f.name : p.name, guess: p.name, env: p.env.length ? p.env : f.env }
   })
   const setEnv = (i: number, patch: Partial<EnvRow>) => setForm(f => f && { ...f, env: f.env.map((e, j) => j === i ? { ...e, ...patch } : e) })
-  const save = async () => {
-    if (!form || !parsed || typeof parsed === 'string') return
-    setBusy(true); setErr(null)
-    try {
-      const rows = Object.fromEntries(form.env.filter(e => e.key.trim()).map(e => [e.key.trim(), e.value]))
-      const n = await invoke<number>('tool_server_save', { server: { name: form.name.trim(), command: parsed.command, args: parsed.args, url: parsed.url, ...parsed.url ? { headers: rows } : { env: rows } } })
-      setMsg(`${form.name.trim()} is ready with ${n} tool${n === 1 ? '' : 's'}.`); setForm(null); list.reload(); onChange()
-    } catch (e) { setErr(String(e)) } finally { setBusy(false) }
+  const conf = () => {
+    if (!form || !parsed || typeof parsed === 'string') return null
+    const rows = Object.fromEntries(form.env.filter(e => e.key.trim()).map(e => [e.key.trim(), e.value]))
+    return { name: form.name.trim(), command: parsed.command, args: parsed.args, url: parsed.url, ...parsed.url ? { headers: rows } : { env: rows } }
   }
+  const ready = (name: string) => (n: number) => { setMsg(`${name} is ready with ${n} tool${n === 1 ? '' : 's'}.`); setErr(null); setForm(null); list.reload(); onChange() }
+  const save = async () => {
+    const server = conf()
+    if (!server) return
+    setBusy(true); setErr(null)
+    try { ready(server.name)(await invoke<number>('tool_server_save', { server })) } catch (e) { setErr(String(e)) } finally { setBusy(false) }
+  }
+  // A remote server that answered 401 (or whose sign-in ended) offers MCP's sign-in.
+  const server = conf()
+  const wantsSignIn = remote && !!server && !!err && /sign in/.test(err)
+  const signIn = (conf: object, name: string, label = `Sign in to ${name}`) => <SignInBrowser<number> label={label} what={name}
+    start={() => invoke('tool_server_sign_in', { server: conf })} wait="tool_server_sign_in_wait" paste="tool_server_sign_in_paste" onDone={ready(name)} />
   const remove = (s: ToolServer) => ask(`Remove ${s.name}? Your bots lose its tools.`, 'Remove', true).then(ok => { if (ok) void invoke('tool_server_delete', { name: s.name }).then(() => { setMsg(null); list.reload(); onChange() }, e => setErr(String(e))) })
 
   return (
     <Group title="Tool servers" note={<>Give your bots more abilities with <a href="https://github.com/modelcontextprotocol/servers" onClick={openLink}>MCP servers</a> that run on {here} or online: your files, GitHub, a database. Reading is allowed; anything that changes things asks you first (see Permissions). Tokens are stored in {SECRETS_AT}.</>}>
       {servers.map(s => (
         <Row key={s.name} icon={<Icon name="plug" size={15} />} title={s.name} desc={<>{s.tools} tool{s.tools === 1 ? '' : 's'} · <code>{s.url || [s.command, ...s.args].join(' ')}</code></>}>
+          {s.signed_in && signIn({ name: s.name, url: s.url, headers: Object.fromEntries(s.headers.map(k => [k, ''])) }, s.name, 'Sign in again')}
           <button className="btn btn-sm" onClick={() => open(s)}>Edit</button>
           <button className="btn btn-sm btn-ghost btn-danger icon-btn" aria-label={`Remove ${s.name}`} title="Remove" onClick={() => remove(s)}><Icon name="trash" size={14} /></button>
         </Row>
@@ -769,6 +818,7 @@ function ToolServerSettings({ onChange }: { onChange: () => void }) {
             <button className="btn btn-primary" disabled={busy || !parsed || typeof parsed === 'string' || !form.name.trim()}>{busy ? 'Starting…' : form.editing ? 'Save' : 'Add server'}</button>
           </div>
           {err && <p className="error" style={{ margin: 0 }}>{err}</p>}
+          {wantsSignIn && <div className="er">{signIn(server, server.name || 'the server')}<span className="hint">You sign in in your browser; Mimir keeps the sign-in, never your password.</span></div>}
         </form>
       )}
       {err && !form && <div className="row-block"><p className="error" style={{ margin: 0 }}>{err}</p></div>}

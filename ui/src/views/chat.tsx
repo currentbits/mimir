@@ -1,9 +1,10 @@
 import { createContext, Fragment, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { copyText, invoke, platform } from '../api'
+import { copyText, inDesktop, invoke, platform } from '../api'
 import { moodOf, type Mood } from '../face'
 import { ago, ahead, dayLabel, fullTime, IDLE, pigment, schedule } from '../format'
 import { Markdown, SentFile, splitSent } from '../markdown'
-import { ask, tell, Avatar, Empty, Icon } from '../ui'
+import { PinnedCards } from './cards'
+import { ask, tell, Avatar, Empty, Icon, talkLabel, useHoldToTalk } from '../ui'
 import { failure } from './inbox'
 import { Editor } from './memory'
 import { useLoad, Bots, skillSlug, when, INCOGNITO, LOCAL, CHANNEL } from '../shared'
@@ -213,7 +214,7 @@ function RoutineCard({ id, chatId, onChange }: { id: number; chatId: number; onC
       <div className="rc-head">
         <span className={'ri' + (r.quiet ? ' quiet' : '')}><Icon name={r.quiet ? 'moon' : 'clock'} size={15} /></span>
         <div className="rc-main">
-          <div className="rt">{when(r)}{r.quiet && <span className="badge pending">Quiet</span>}{(r.paused || held !== undefined) && <span className="badge">Paused</span>}{r.delivery === 'digest' && <span className="badge">In digest</span>}{r.delivery === 'log' && <span className="badge">Log only</span>}</div>
+          <div className="rt">{when(r)}{r.quiet && <span className="badge pending">Quiet</span>}{(r.paused || held !== undefined) && <span className="badge">Paused</span>}{r.delivery === 'digest' && <span className="badge">In digest</span>}{r.delivery === 'log' && <span className="badge">Log only</span>}{r.delivery === 'card' && <span className="badge">On a card</span>}</div>
           <div className="rp selectable">{r.prompt}</div>
           <div className="rm">{r.paused ? 'Paused' : held !== undefined ? `${pausedText(held)} with its bot` : r.next_fire >= IDLE ? 'Runs when a matching event is on the calendar' : `Next run ${ahead(r.next_fire)}`} · change it any time in Routines</div>
         </div>
@@ -328,6 +329,9 @@ export function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, 
   const replying = chat.chat_id === LOCAL && !incognito && !sentHere ? running.find(w => w.chat_id === LOCAL && w.trigger === 'message' && (!only || w.bot_id === botId))?.bot_id ?? null : null
   useEffect(() => { if (!pending && !running.some(w => w.chat_id === LOCAL && w.trigger === 'message')) setSentHere(false) }, [running, pending])
   const working = !!pending || replying !== null
+  // What you sent while the reply was being written: it changes course to take them in (steering).
+  const [steered, setSteered] = useState<string[]>([])
+  useEffect(() => { if (!working) setSteered([]) }, [working])
   const replier = to ?? replying ?? botId
   // "/" lists the bot's skills: "/book-padel Thursday" asks it to use that one.
   const skillList = useLoad(() => incognito ? Promise.resolve([] as Skill[]) : invoke<Skill[]>('skills', { chatId: chat.chat_id }), [chat.chat_id, incognito], 30000)
@@ -338,6 +342,7 @@ export function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, 
   const [done, setDone] = useState<{ summary: string; ok: boolean; decision: string }[]>([])
   const [err, setErr] = useState<string | null>(null)
   const [failed, setFailed] = useState<string | null>(null)
+  const talk = useHoldToTalk(w => { setText(t => t.trim() ? `${t.trimEnd()} ${w}` : w); box.current?.focus() }, e => setErr(`Couldn't dictate: ${e}`))
   // The bot's face reacts for a moment when a reply ends: pleased, or startled when you stopped it.
   const [react, setReact] = useState<Mood | null>(null)
   const flash = (m: Mood, ms = 1500) => { setReact(m); setTimeout(() => setReact(r => (r === m ? null : r)), ms) }
@@ -465,6 +470,8 @@ export function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, 
   const [photos, setPhotos] = useState<{ url: string; data: string; ext: string }[]>([])
   // A PDF, Word, Excel or text file to send with the message (one at a time); the bot gets its text.
   const [doc, setDoc] = useState<{ name: string; data: string } | null>(null)
+  // Text only, and not incognito (nothing there to take it in): a photo or file waits until the reply is done.
+  const steerable = working && !incognito && !photos.length && !doc
   const [dragging, setDragging] = useState(false)
   const addPhotos = (files: Iterable<File>) => {
     for (const f of files) {
@@ -504,9 +511,17 @@ export function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, 
     return b ? [b, t.slice(1 + b.name.length).replace(/^[\s,:]+/, '')] : null
   }
   const send = async (value = text) => {
+    if (working) {
+      const t = value.trim()
+      if (!t || !steerable) return
+      setText('')
+      // Not taken (it was just finishing): back in the box, to send once it's done.
+      invoke<boolean>('steer', { botId: replier, chatId: cid, text: t }).then(took => took ? setSteered(s => [...s, t]) : setText(x => x || t), e => { setText(x => x || t); setErr(String(e)) })
+      return
+    }
     const at = incognito ? null : mentioned(value.trim())
     const t = at ? at[1].trim() : value.trim()
-    if ((!t && !photos.length && !doc) || working) return
+    if (!t && !photos.length && !doc) return
     if (incognito) return sendIncognito(t)
     // "@Researcher …" goes to that bot (and the picker follows). In one bot's own chat, its thread opens when the reply is in
     // (switching now would drop this view, and the reply with it).
@@ -569,6 +584,7 @@ export function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, 
   return (
     <div className="page view-in" ref={scroller} onScroll={onScroll}>
       <div className="chat">
+        {!incognito && <PinnedCards chatId={chat.chat_id} botId={mine} botName={id => botOf(id).name} />}
         {!incognito && (msgs.length > 0 || hasEarlier) && (
           <div className="chat-search">
             <label className="search"><Icon name="search" size={14} />
@@ -607,6 +623,7 @@ export function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, 
           {working && (
             <>
               {pending && <div className="msg-user msg-in"><Said text={pending} /></div>}
+              {steered.map((t, i) => <div key={i} className="msg-user msg-in"><Said text={t} /></div>)}
               <div className="msg-bot msg-in" style={{ '--pig': pigment(them.id), animationDelay: '120ms' } as React.CSSProperties}>
                 <Avatar id={them.id} name={them.name} size={26} alive mood={moodOf(step, draft)} />
                 <div><div className="msg-head"><b>{them.name}</b>{draft && <time>writing…</time>}
@@ -691,7 +708,7 @@ export function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, 
                 onDrop={e => { e.preventDefault(); setDragging(false); if (!incognito) addPhotos(e.dataTransfer.files) }}>
                 <span className="bot-pick" title={bots.length > 1 ? 'Choose a bot' : me.name}>
                   <Avatar id={me.id} name={me.name} size={28} alive beat={text.length}
-                    mood={working ? moodOf(step, draft) : react ?? (err ? 'sad' : text.trim() ? 'listening' : 'idle')} />
+                    mood={working ? moodOf(step, draft) : react ?? (talk.state !== 'idle' || text.trim() ? 'listening' : err ? 'sad' : 'idle')} />
                   {bots.length > 1 && (
                     <select value={botId} disabled={working} onChange={e => setBotId(Number(e.target.value))} aria-label="Bot to message">
                       {bots.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
@@ -703,9 +720,11 @@ export function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, 
                     <Icon name="settings" size={14} />
                   </button>
                 )}
-                <textarea ref={box} rows={1} placeholder={incognito ? `Message ${me.name} incognito` : `Message ${me.name}`} value={text} onChange={e => setText(e.target.value)} disabled={working} autoFocus
+                <textarea ref={box} rows={1} placeholder={incognito ? `Message ${me.name} incognito` : working ? 'Add to what you asked, or change it' : `Message ${me.name}`} value={text} onChange={e => setText(e.target.value)} disabled={working && !steerable} autoFocus
                   onPaste={e => { if (incognito) return; const imgs = [...e.clipboardData.files].filter(f => f.type.startsWith('image/')); if (imgs.length) { e.preventDefault(); addPhotos(imgs) } }}
+                  onKeyUp={talk.keys.onKeyUp} onBlur={talk.keys.onBlur}
                   onKeyDown={e => {
+                    talk.keys.onKeyDown(e)
                     if (e.key === 'Tab' && skillHits[0]) { e.preventDefault(); setText(`/${skillSlug(skillHits[0].name)} `); return }
                     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send() }
                   }} />
@@ -713,11 +732,13 @@ export function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, 
                   <button type="button" className={'incog-toggle' + (incognito ? ' on' : '')} aria-pressed={incognito} onClick={() => setIncognito(!incognito)}
                     title={incognito ? 'Back to the normal chat' : 'Incognito chat: no memory, nothing saved'}><Icon name="incognito" size={16} /></button>
                 )}
+                {working && steerable && text.trim() && <button className="send" aria-label="Send now: the reply changes course" title="Send now: the reply changes course"><Icon name="send" size={15} /></button>}
                 {working
                   ? <button type="button" className="send stop" aria-label="Stop" title="Stop" onClick={() => invoke('stop', { botId: replier, chatId: cid }).catch(e => setErr(`Couldn't stop it: ${e}`))}><span className="stop-square" /></button>
                   : <button className="send" aria-label="Send" disabled={!text.trim() && !photos.length}><Icon name="send" size={15} /></button>}
               </form>
-              <p className="composer-note">{platform === 'mac' ? 'Return to send · Shift-Return for a new line' : 'Enter to send · Shift+Enter for a new line'}</p>
+              <p className="composer-note">{talk.state === 'listening' ? `Listening… let go of ${talkLabel} to stop` : talk.state === 'writing' ? 'Writing it out…'
+                : (platform === 'mac' ? 'Return to send · Shift-Return for a new line' : 'Enter to send · Shift+Enter for a new line') + (inDesktop ? ` · Hold ${talkLabel} to talk` : '')}</p>
             </>
           ) : (
             <p className="composer-note">Reply from {CHANNEL[chat.channel]?.name ?? 'the app'}; this is a read-only view.</p>

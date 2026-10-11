@@ -12,6 +12,7 @@ use std::time::Duration;
 
 mod approvals;
 mod bots;
+mod cards;
 mod chats;
 mod meetings;
 mod memory;
@@ -24,6 +25,7 @@ mod suggestions;
 
 pub use approvals::*;
 pub use bots::*;
+pub use cards::*;
 pub use chats::*;
 pub use memory::*;
 pub use messages::*;
@@ -47,7 +49,7 @@ PRAGMA secure_delete=ON;
 
 /// The schema version this build writes (`PRAGMA user_version`). A schema change bumps it and adds a step to
 /// `migrate`; each step runs once per database.
-const VERSION: i64 = 6;
+const VERSION: i64 = 7;
 
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS entries(
@@ -200,6 +202,9 @@ fn migrate(c: &Connection) -> Result<()> {
     }
     if v < 6 {
         migrate_v6(c)?;
+    }
+    if v < 7 {
+        migrate_v7(c)?;
     }
     c.execute(
         "INSERT INTO settings(key, value) VALUES ('schema_written_by', ?1) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -410,8 +415,18 @@ fn migrate_v5(c: &Connection) -> Result<()> {
     Ok(())
 }
 
-/// Version 6: what came for a routine started by an event (a matching email, a webhook call), until a run has seen it.
+/// Version 6: pinned cards a bot keeps up to date (a shopping list, bills due), written by a tool or a routine.
 fn migrate_v6(c: &Connection) -> Result<()> {
+    c.execute_batch(
+        "CREATE TABLE IF NOT EXISTS cards(id INTEGER PRIMARY KEY, bot_id INTEGER NOT NULL, chat_id INTEGER NOT NULL, routine_id INTEGER,
+           title TEXT NOT NULL, body TEXT NOT NULL, by_you INTEGER NOT NULL DEFAULT 0, tainted INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL);
+         CREATE INDEX IF NOT EXISTS cards_chat ON cards(chat_id);",
+    )?;
+    Ok(())
+}
+
+/// Version 7: what came for a routine started by an event (a matching email, a webhook call), until a run has seen it.
+fn migrate_v7(c: &Connection) -> Result<()> {
     c.execute_batch("CREATE TABLE IF NOT EXISTS routine_events(id INTEGER PRIMARY KEY, routine_id INTEGER NOT NULL, text TEXT NOT NULL, ts INTEGER NOT NULL)")?;
     Ok(())
 }
@@ -1345,15 +1360,16 @@ mod tests {
         d.pause_set(Some(2), 0).unwrap();
         assert_eq!(d.paused(2, now()).unwrap(), Some(0), "until resumed");
         assert_eq!(d.paused(3, now()).unwrap(), None, "only that bot");
-        // Everyone's pause on top: the later end wins (0 = no end).
-        d.pause_set(None, now() + 600).unwrap();
+        // Everyone's pause on top: the later end wins (0 = no end). One clock read: a slow runner crosses a second.
+        let end = now() + 600;
+        d.pause_set(None, end).unwrap();
         assert_eq!(d.paused(2, now()).unwrap(), Some(0));
-        assert_eq!(d.paused(3, now()).unwrap(), Some(now() + 600));
+        assert_eq!(d.paused(3, now()).unwrap(), Some(end));
         assert_eq!(d.pauses(now()).unwrap().len(), 2);
         // Resumed: the routine moves on to its next time instead of catching up (or showing as missed); the
         // one-off still runs once. The other bot is still held by everyone's pause.
         d.pause_end(Some(2)).unwrap();
-        assert_eq!(d.paused(2, now()).unwrap(), Some(now() + 600));
+        assert_eq!(d.paused(2, now()).unwrap(), Some(end));
         let due: Vec<i64> = d.due(2, now()).unwrap().iter().map(|x| x.id).collect();
         assert_eq!(due, vec![o.id]);
         assert!(d.routines(7).unwrap().iter().any(|x| x.id == r.id && x.next_fire > now()));
@@ -1390,4 +1406,27 @@ mod tests {
         assert_eq!(d.busy().unwrap().len(), 1);
     }
 
+    #[test]
+    fn cards_write_tick_and_routine() {
+        let d = db();
+        assert!(d.card_write(1, 5, "Shopping", "<b>milk</b>", false).is_err(), "no HTML");
+        let k = d.card_write(1, 5, "Shopping", "- [ ] milk\n- [ ] eggs", false).unwrap();
+        // Same title (any case) is the same card, rewritten whole.
+        assert_eq!(d.card_write(1, 5, "shopping", "- [ ] milk\n- [ ] eggs\n- [ ] bread", false).unwrap().id, k.id);
+        let t = d.card_tick(5, k.id, 1, "- [ ] eggs").unwrap();
+        assert!(t.by_you && t.body.contains("- [x] eggs") && t.body.contains("- [ ] milk"));
+        assert!(d.card_tick(5, k.id, 1, "- [ ] eggs").is_err(), "the line changed since");
+        assert!(d.card_tick(5, k.id, 0, "- [ ] milk").is_ok() && d.card_tick(6, k.id, 0, "- [x] milk").is_err(), "another chat's card");
+        assert_eq!(cards::toggle_box("  * [X] done"), Some("  * [ ] done".into()));
+        assert_eq!(cards::toggle_box("plain"), None);
+        // A routine's card: named by its "# " line, then kept, and the bot's rewrite clears "by you".
+        let r = d.routine_create(1, 5, "0 8 * * *", "List bills due this week", false).unwrap();
+        let c = d.card_from_routine(&r, "# Bills due\n| Bill | Due |\n|---|---|\n| Rent | 1 Nov |", true).unwrap();
+        assert_eq!((c.title.as_str(), c.tainted, c.body.starts_with('|')), ("Bills due", true, true));
+        assert_eq!(d.card_from_routine(&r, "Nothing due.", false).unwrap().id, c.id);
+        assert_eq!(d.routine_card(r.id).unwrap().unwrap().title, "Bills due");
+        assert_eq!(d.cards(5).unwrap().len(), 2);
+        d.routine_set_delivery(5, r.id, "card").unwrap();
+        assert!(d.card_delete(5, c.id).unwrap() && d.cards(5).unwrap().len() == 1);
+    }
 }

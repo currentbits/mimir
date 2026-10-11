@@ -217,6 +217,14 @@ async fn api(app: AppHandle, host: State<'_, Host>, cmd: String, args: Value) ->
             _ => Ok(json!(m.status())),
         };
     }
+    // Push-to-talk in the chat and quick ask: always this computer's microphone and whisper.cpp.
+    if cmd == "dictate" {
+        let d = app.state::<meeting::Dictation>();
+        return match args["action"].as_str() {
+            Some("start") => d.start(&host.db).map(|_| Value::Null),
+            _ => d.stop(&host.db).await.map(Value::from),
+        };
+    }
     if cmd == "quick_shortcut" {
         return Ok(json!(*app.state::<QuickKey>().0.lock().unwrap()));
     }
@@ -736,6 +744,7 @@ fn main() {
         .manage(QuickKey(Default::default()))
         .manage(Awake(Default::default()))
         .manage(meeting::Meeting::default())
+        .manage(meeting::Dictation::default())
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, None))
         .manage(host)
         .invoke_handler(tauri::generate_handler![api])

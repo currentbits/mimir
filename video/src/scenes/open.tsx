@@ -45,7 +45,7 @@ export function Cold() {
   )
 }
 
-function Lockup({ id, word, tag, draw, fill, rune, size = 250 }: { id: string; word: number; tag: number; draw: number; fill: number; rune: number[]; size?: number }) {
+export function Lockup({ id, word, tag, draw, fill, rune, size = 250 }: { id: string; word: number; tag: number; draw: number; fill: number; rune: number[]; size?: number }) {
   const t = useBeat()
   const w = p(t, word, 1.4)
   return (
