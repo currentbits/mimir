@@ -198,6 +198,8 @@ export function BotPage({ bot, status, canDelete, onSaved, onDeleted, onChat }: 
         </div>
       </Group>
 
+      {bot && <Fallback bot={bot} onErr={e => { setErr(e); setMsg(null) }} />}
+
       <Group title="Messaging apps" note={`Each bot is its own Telegram, Slack or Discord bot. Tokens are stored in ${SECRETS_AT}.`}>
         <ChannelRow icon="telegram" title="Telegram" st={chan('telegram')} has={has('has_telegram_token')} onRemove={() => save({ ...NO_SECRETS, telegram_token: '' })}
           hint="Message @BotFather, send /newbot, and paste the token it gives you.">
@@ -235,6 +237,41 @@ export function BotPage({ bot, status, canDelete, onSaved, onDeleted, onChat }: 
         <button className="btn btn-primary" disabled={!b.name.trim() || !dirty}>{isNew ? 'Create bot' : 'Save'}</button>
       </div>
     </form>
+  )
+}
+
+/** Logins: a fallback on the bot's own one is at the same limit. */
+const LOGINS = ['claude', 'chatgpt', 'codex', 'grok']
+const PAID = ['openrouter', 'xai', 'openai']
+
+/** Where its routines run while its own AI account is at a usage limit, until that resets. Off by default. */
+function Fallback({ bot, onErr }: { bot: Bot; onErr: (e: string) => void }) {
+  type Fb = { provider: string; model: string }
+  const saved = useLoad(() => invoke<Fb | null>('fallback', { botId: bot.id }), [bot.id])
+  const [draft, setDraft] = useState<Fb | null>(null)
+  const now = saved.data ?? { provider: '', model: '' }
+  const fb = draft ?? now
+  const changed = draft !== null && (draft.provider !== now.provider || draft.model.trim() !== now.model)
+  const use = () => invoke('fallback', { botId: bot.id, provider: fb.provider, model: fb.model }).then(() => { setDraft(null); saved.reload() }, e => onErr(String(e)))
+  return (
+    <Group title="When it hits a usage limit" note={PAID.includes(fb.provider)
+      ? 'This account bills per token: routines that run on it while your plan is at its limit cost money. Daily caps in Settings → Limits still apply.'
+      : 'Routines run on the fallback until your plan’s limit resets, then on the bot’s own account again. The run log says which ran there. Daily caps still apply.'}>
+      <div className="row-block">
+        <div className="editor" style={{ margin: 0 }}>
+          <div className="er" style={{ alignItems: 'flex-start' }}>
+            <label className="field-label" style={{ flex: 1 }}><span>Fallback account</span>
+              <select className="select" value={fb.provider} onChange={e => setDraft({ provider: e.target.value, model: '' })}>
+                <option value="">None: routines wait until the limit resets</option>
+                {PROVIDERS.filter(p => p.id !== bot.provider || !LOGINS.includes(p.id)).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select></label>
+            {fb.provider && <label className="field-label" style={{ flex: 1 }}><span>Model</span>
+              <ModelInput provider={fb.provider} value={fb.model} onChange={model => setDraft({ ...fb, model })} /></label>}
+          </div>
+          {changed && <button type="button" className="btn btn-sm" onClick={use}>{fb.provider ? 'Use this fallback' : 'Turn off the fallback'}</button>}
+        </div>
+      </div>
+    </Group>
   )
 }
 
