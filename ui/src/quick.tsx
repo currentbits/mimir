@@ -2,9 +2,9 @@
 // Same built-in chat as the main window, so every exchange is also there afterwards.
 import { getCurrentWindow, LogicalSize } from '@tauri-apps/api/window'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { invoke, localInvoke } from './api'
+import { inDesktop, invoke, localInvoke } from './api'
 import { Markdown, splitSent } from './markdown'
-import { Avatar, Icon } from './ui'
+import { Avatar, Icon, talkLabel, useHoldToTalk } from './ui'
 import { pigment, setLooks } from './format'
 
 type Bot = { id: number; name: string; look?: string }
@@ -22,6 +22,7 @@ export function QuickAsk() {
   const panel = useRef<HTMLDivElement>(null)
   const input = useRef<HTMLInputElement>(null)
   const win = getCurrentWindow()
+  const talk = useHoldToTalk(w => setText(t => t.trim() ? `${t.trimEnd()} ${w}` : w), setErr)
 
   useEffect(() => {
     // The bots as they are now (renamed, added or deleted in the main window since); the chosen one stays if it's still there.
@@ -71,15 +72,15 @@ export function QuickAsk() {
       <form className="quick-bar" onSubmit={e => { e.preventDefault(); send() }}>
         <span className="bot-pick" title={bots.length > 1 ? 'Choose a bot' : bot.name}>
           <Avatar id={bot.id} name={bot.name} size={30} alive beat={text.length}
-            mood={pending ? (draft ? 'writing' : 'thinking') : err ? 'sad' : text.trim() ? 'listening' : 'idle'} />
+            mood={pending ? (draft ? 'writing' : 'thinking') : talk.state !== 'idle' || text.trim() ? 'listening' : err ? 'sad' : 'idle'} />
           {bots.length > 1 && (
             <select value={botId} onChange={e => setBotId(Number(e.target.value))} disabled={pending} aria-label="Bot to ask">
               {bots.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
             </select>
           )}
         </span>
-        <input ref={input} autoFocus placeholder={pending ? `${bot.name} is answering…` : `Ask ${bot.name}`} value={text} onChange={e => setText(e.target.value)} aria-label={`Ask ${bot.name}`} />
-        {text.trim() ? <kbd>⏎</kbd> : null}
+        <input ref={input} autoFocus placeholder={pending ? `${bot.name} is answering…` : talk.state === 'listening' ? 'Listening…' : `Ask ${bot.name}`} value={text} onChange={e => setText(e.target.value)} aria-label={`Ask ${bot.name}`} {...talk.keys} />
+        {talk.state === 'listening' ? <kbd>listening…</kbd> : talk.state === 'writing' ? <kbd>writing…</kbd> : text.trim() ? <kbd>⏎</kbd> : inDesktop ? <kbd title="Hold to dictate">hold {talkLabel} to talk</kbd> : null}
       </form>
       {(asked || err) && (
         <div className="quick-body">

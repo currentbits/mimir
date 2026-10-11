@@ -701,7 +701,7 @@ impl Core {
     /// one is someone else's words: outside content.
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn incoming_voice(self: &Arc<Self>, chan: &Chan, ext: &str, from: Sender<'_>, bytes: Vec<u8>, name: &str, forwarded: bool, sent: Option<i64>) -> Result<()> {
-        match crate::provider::transcribe(bytes, name).await {
+        match crate::transcribe::voice_note(&self.db, bytes, name).await {
             Some(Ok(text)) if !text.is_empty() => {
                 chan.send(ext, &trf("🎙️ I heard: “{text}”", &[("text", &text)])).await;
                 if forwarded {
@@ -712,7 +712,7 @@ impl Core {
             }
             Some(Ok(_)) => chan.send(ext, tr("I couldn't make out any words in that voice note.")).await,
             Some(Err(e)) => chan.send(ext, &trf("I couldn't transcribe that voice note ({error}). Could you type it?", &[("error", &format!("{e:#}"))])).await,
-            None => chan.send(ext, tr("To understand voice notes I need an OpenAI API key for transcription (Settings → AI keys in Mimir). Until then, could you type it?")).await,
+            None => chan.send(ext, tr("To understand voice notes I need whisper.cpp where Mimir runs, or an OpenAI API key (Settings → AI keys in Mimir). Until then, could you type it?")).await,
         }
         Ok(())
     }

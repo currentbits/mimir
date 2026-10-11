@@ -143,8 +143,8 @@ static NL: &[(&str, &str)] = &[
     ("I couldn't make out any words in that voice note.", "Ik kon geen woorden verstaan in dat spraakbericht."),
     ("I couldn't transcribe that voice note ({error}). Could you type it?", "Ik kon dat spraakbericht niet uitschrijven ({error}). Kun je het typen?"),
     (
-        "To understand voice notes I need an OpenAI API key for transcription (Settings → AI keys in Mimir). Until then, could you type it?",
-        "Om spraakberichten te verstaan heb ik een OpenAI-API-sleutel nodig (Settings → AI keys in Mimir). Kun je het tot die tijd typen?",
+        "To understand voice notes I need whisper.cpp where Mimir runs, or an OpenAI API key (Settings → AI keys in Mimir). Until then, could you type it?",
+        "Om spraakberichten te verstaan heb ik whisper.cpp nodig waar Mimir draait, of een OpenAI-API-sleutel (Settings → AI keys in Mimir). Kun je het tot die tijd typen?",
     ),
     // Approval cards.
     ("Approve", "Goedkeuren"),
