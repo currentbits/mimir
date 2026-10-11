@@ -1326,8 +1326,8 @@ mod tests {
             }
         }
         let (mut missing, mut seen) = (vec![], 0);
-        for f in std::fs::read_dir(root.join("ui/src")).unwrap() {
-            let path = f.unwrap().path();
+        let files = std::fs::read_dir(root.join("ui/src")).unwrap().chain(std::fs::read_dir(root.join("ui/src/views")).unwrap());
+        for path in files.map(|f| f.unwrap().path()).filter(|p| p.is_file()) {
             let src = std::fs::read_to_string(&path).unwrap();
             // invoke('name'…), invoke<T>('name'…), localInvoke('name'…); not api.ts's own tauriInvoke('api', …).
             for (i, _) in src.match_indices("nvoke").filter(|(i, _)| !src[..*i].ends_with("tauriI")) {
