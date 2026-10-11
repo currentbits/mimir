@@ -11,7 +11,7 @@ replies "DONE <tool>: <the tool's result>":
     FORGET <n> → memory_forget(n)    CHOOSE → ask_choice    FILE → file_write    LIST FILES → file_list    DELETE ROUTINE <n> → routine_delete(n)
 
 Anything else gets "OK: <your message>". A message with SLOW in it is answered after 3 seconds (any bot), for
-switching away mid-reply. Each request is logged to stdout.
+switching away mid-reply; "SLOW <n>" waits n seconds. Each request is logged to stdout.
 
 It also stands in for ChatGPT's sign-in and Responses API ("Sign in with ChatGPT"): start the server with
 MIMIR_CHATGPT_AUTH=http://127.0.0.1:8899 MIMIR_CHATGPT_API=http://127.0.0.1:8899/v1. The fake sign-in code is
@@ -71,7 +71,7 @@ class H(BaseHTTPRequestHandler):
         last = msgs[-1] if msgs else {}
         print(f"[{bot}] last={last.get('role')} user={last_user[-80:]!r}", flush=True)
         if "SLOW" in last_user and last.get("role") == "user":
-            time.sleep(3)
+            time.sleep(int((re.search(r"SLOW (\d+)", last_user) or [0, 3])[1]))
         if bot == "Search":
             return self.reply({"role": "assistant", "content": f"SEARCH-ANSWER: the title tag is fine (asked: {last_user[-60:]})"})
         if last.get("role") == "tool":

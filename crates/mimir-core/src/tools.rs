@@ -1973,8 +1973,8 @@ fn html_text(html: &str, lines: bool) -> String {
         if rest.starts_with("<script") || rest.starts_with("<style") {
             let close = if rest.starts_with("<script") { "</script>" } else { "</style>" };
             i += rest.find(close).map(|p| p + close.len()).unwrap_or(rest.len());
-        } else if rest.starts_with('<') {
-            let name: String = rest[1..].trim_start_matches('/').chars().take_while(|c| c.is_ascii_alphanumeric()).collect();
+        } else if let Some(tag) = rest.strip_prefix('<') {
+            let name: String = tag.trim_start_matches('/').chars().take_while(|c| c.is_ascii_alphanumeric()).collect();
             i += rest.find('>').map(|p| p + 1).unwrap_or(rest.len());
             out.push(if lines && BLOCKS.contains(&name.as_str()) { '\n' } else { ' ' });
         } else {
