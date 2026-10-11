@@ -26,6 +26,26 @@ minutes); one added with less notice than the lead time gets no run. Such a rout
 your calendar is private. For "the evening before tomorrow's first meeting", use a plain cron (`0 20 * * *`) and have
 the routine look at tomorrow's calendar.
 
+## Started by something happening
+
+A routine can start when something comes in instead of at a time. In the Routines tab, pick it under **When**:
+
+- **When email arrives**: a rule like `from:acme.com subject:invoice` (`from:` an address or domain, `subject:` a word
+  or "a phrase", and any other words the email must contain, in the subject or the text; case doesn't matter). Mimir
+  looks at new mail every 2 minutes itself and only a matching email starts a run, so mail that doesn't match costs
+  nothing. Mail from before the routine was made doesn't count. The run is told each matching email (who, when, the
+  subject and the start of the text). It watches the first mailbox in Settings → Email, and works only in your own private chat.
+- **When called** (on [`mimir server`](self-hosting.md) only): the routine gets its own address,
+  `https://<your server>/hook/<id>`, and a secret (**Show its address and secret**). A caller sends the secret as
+  `Authorization: Bearer <secret>`, or signs the body with it as `X-Hub-Signature-256: sha256=<HMAC-SHA256 hex>`
+  (how GitHub signs, so a GitHub webhook's secret field works as is). A wrong secret, or an unknown address, gets
+  401; a paused routine 409. The body (up to 256 KB; the run sees the first 4,000 characters) is passed to the run.
+
+What came is someone else's words: the run counts as having read outside content. Several emails or calls that come
+before the run starts go to one run together (up to 20). In chat, "tell me when the invoice from Acme arrives" makes a
+mail one (`cron` is `mail:<rule>`); it ends after the first match unless you say "every time". **Only the first one**
+does the same in the Routines tab. Bots can't make webhooks: the secret is yours to hand out.
+
 The scheduler checks every 30 seconds, so a routine runs within half a minute of its time, as long as Mimir is running.
 On a laptop, **Settings → Keep this computer awake** helps; for 24/7, [self-host](self-hosting.md).
 

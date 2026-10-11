@@ -136,6 +136,17 @@ async fn models(State(app): State<App>, Extension(ChatBot(bot)): Extension<ChatB
     Json(json!({"object": "list", "data": [{"id": name, "object": "model", "created": 0, "owned_by": "mimir"}]})).into_response()
 }
 
+/// A routine's webhook (Routines → When called). No admin token: its own secret, as the bearer token or an HMAC of the
+/// body in X-Hub-Signature-256 (how GitHub signs; X-Signature-256 too).
+async fn hook(State(app): State<App>, Path(id): Path<i64>, headers: HeaderMap, body: axum::body::Bytes) -> Response {
+    let sig = ["x-hub-signature-256", "x-signature-256"].iter().find_map(|h| headers.get(*h)).and_then(|v| v.to_str().ok());
+    match mimir_core::events::webhook(&app.host.db, id, bearer(&headers), sig, &body) {
+        Ok(()) => (StatusCode::ACCEPTED, Json(json!({"ok": true}))).into_response(),
+        Err(mimir_core::events::Refused::Paused) => (StatusCode::CONFLICT, Json(json!({"error": "this routine is paused"}))).into_response(),
+        Err(mimir_core::events::Refused::Secret) => (StatusCode::UNAUTHORIZED, Json(json!({"error": "wrong or missing secret"}))).into_response(),
+    }
+}
+
 async fn api(State(app): State<App>, Path(cmd): Path<String>, body: axum::body::Bytes) -> Response {
     let args: Value = if body.is_empty() {
         json!({})
@@ -198,6 +209,7 @@ pub async fn run(db: Db, home: PathBuf, listen: &str) -> Result<()> {
         )
         .route("/v1/chat/completions", post(chat_completions).route_layer(axum::middleware::from_fn_with_state(state.clone(), require_chat_token)))
         .route("/v1/models", get(models).route_layer(axum::middleware::from_fn_with_state(state.clone(), require_chat_token)))
+        .route("/hook/{id}", post(hook).layer(DefaultBodyLimit::max(256 * 1024)))
         .route("/healthz", get(|| async { "ok" }))
         // Token auth (no cookies), so any origin may call it: the desktop app in remote mode needs this.
         .layer(CorsLayer::new().allow_origin(Any).allow_methods([Method::GET, Method::POST]).allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]))

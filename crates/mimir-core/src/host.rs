@@ -951,13 +951,21 @@ impl Host {
             }
             "routines" => ok(self.db.routines(arg(a, "chat_id")?)?),
             "routine_stats" => ok(self.db.routine_stats(arg(a, "chat_id")?, crate::db::now())?),
-            "add_routine" => ok(self.db.routine_create(
-                arg(a, "bot_id")?,
-                arg(a, "chat_id")?,
-                &arg::<String>(a, "cron")?,
-                &arg::<String>(a, "prompt")?,
-                arg::<Option<bool>>(a, "quiet")?.unwrap_or(false),
-            )?),
+            "add_routine" => {
+                let (chat, cron): (i64, String) = (arg(a, "chat_id")?, arg(a, "cron")?);
+                crate::events::ready(&self.db, chat, &cron)?;
+                let r = self.db.routine_create(arg(a, "bot_id")?, chat, &cron, &arg::<String>(a, "prompt")?, arg::<Option<bool>>(a, "quiet")?.unwrap_or(false))?;
+                if arg::<Option<bool>>(a, "first_only")?.unwrap_or(false) && crate::events::on(&cron)?.is_some() {
+                    self.db.routine_set_once(r.id)?;
+                }
+                ok(r)
+            }
+            // A webhook routine's address (on this server) and the secret its caller signs with.
+            "webhook" => {
+                let (chat, id): (i64, i64) = (arg(a, "chat_id")?, arg(a, "id")?);
+                self.db.routines(chat)?.into_iter().find(|r| r.id == id && r.cron == "webhook").context("no such webhook routine")?;
+                ok(json!({"path": format!("/hook/{id}"), "secret": crate::events::webhook_secret(&self.db, id)?}))
+            }
             // Run a routine now, as a test: the result lands in the chat whatever its delivery setting.
             "run_routine" => {
                 let (chat, id): (i64, i64) = (arg(a, "chat_id")?, arg(a, "id")?);
@@ -1170,14 +1178,14 @@ impl Host {
                 }
                 ok(self.db.setting("weekly_review")?.as_deref() != Some("off"))
             }
-            "update_routine" => ok(self.db.routine_update(
-                arg(a, "chat_id")?,
-                arg(a, "id")?,
-                &arg::<String>(a, "cron")?,
-                &arg::<String>(a, "prompt")?,
-                arg(a, "quiet")?,
-                arg(a, "paused")?,
-            )?),
+            "update_routine" => {
+                let (chat, id, cron): (i64, i64, String) = (arg(a, "chat_id")?, arg(a, "id")?, arg(a, "cron")?);
+                // A new trigger needs what it runs on; pausing one whose mailbox went away still works.
+                if self.db.routine(id)?.is_none_or(|r| r.cron != cron.trim()) {
+                    crate::events::ready(&self.db, chat, &cron)?;
+                }
+                ok(self.db.routine_update(chat, id, &cron, &arg::<String>(a, "prompt")?, arg(a, "quiet")?, arg(a, "paused")?)?)
+            }
             "delete_routine" => ok(self.db.routine_delete(arg(a, "chat_id")?, arg(a, "id")?)?),
             // With bot_id: that bot's own conversation in the chat (a bot opened from the sidebar); without, everyone's.
             // Paging back: before_id, the 200 before it; from_id, everything from it on (a search hit, and what's below).

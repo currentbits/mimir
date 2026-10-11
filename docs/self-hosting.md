@@ -156,7 +156,8 @@ scheduler and approval cards, plus an HTTP API (`POST /api/<command>` with the a
 desktop UI uses) and the web UI. Secrets are stored in its database instead of a keychain; the data folder is
 owner-only (mode 0700). The API checks the token before reading a request; the web UI can't be framed by other sites
 and loads only its own scripts. `GET /healthz` answers `ok` for health checks. A `MIMIR_ADMIN_TOKEN` you set must be at
-least 24 characters.
+least 24 characters. `POST /hook/<id>` is a routine's webhook ([Routines](routines.md#started-by-something-happening)):
+it takes that routine's own secret, never the admin token, so put it on the internet only if callers need to reach it.
 
 Email, web search, the file workspaces and the skill library work the same on a server: set them up in the web UI's
 Settings ([Connect your email, calendar and web search](connect.md)). The calendar link is set under Meetings, which

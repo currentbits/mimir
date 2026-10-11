@@ -1,5 +1,5 @@
 import { useContext, useState } from 'react'
-import { invoke } from '../api'
+import { inDesktop, invoke, remoteServer } from '../api'
 import { ahead, fullDay, fullTime, IDLE, schedule, tok, usd } from '../format'
 import { ask, Avatar, Empty, Icon, Segmented, Switch } from '../ui'
 import { Paused, pausedText } from './chat'
@@ -35,14 +35,16 @@ const CHECKINS = [
 ]
 
 // ---- schedule picker: plain choices in, cron out (anything else stays editable as "Custom") ----
-type WhenMode = 'daily' | 'weekdays' | 'weekly' | 'hours' | 'custom'
+type WhenMode = 'daily' | 'weekdays' | 'weekly' | 'hours' | 'custom' | 'mail' | 'webhook'
 
-type When = { mode: WhenMode; time: string; day: string; hours: number; cron: string }
+type When = { mode: WhenMode; time: string; day: string; hours: number; cron: string; rule: string }
 
 const WEEK = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
 function toWhen(cron: string): When {
-  const base: When = { mode: 'custom', time: '08:00', day: 'Mon', hours: 3, cron }
+  const base: When = { mode: 'custom', time: '08:00', day: 'Mon', hours: 3, cron, rule: '' }
+  if (cron.trim() === 'webhook') return { ...base, mode: 'webhook' }
+  if (cron.trim().startsWith('mail:')) return { ...base, mode: 'mail', rule: cron.trim().slice(5).trim() }
   const f = cron.trim().split(/\s+/)
   if (f.length !== 5) return base
   const [m, h, dom, mon, dow] = f
@@ -61,10 +63,10 @@ function toWhen(cron: string): When {
 function toCron(w: When): string {
   const [h, m] = w.time.split(':').map(Number)
   return w.mode === 'daily' ? `${m} ${h} * * *` : w.mode === 'weekdays' ? `${m} ${h} * * Mon-Fri` : w.mode === 'weekly' ? `${m} ${h} * * ${w.day}`
-    : w.mode === 'hours' ? `0 */${w.hours} * * *` : w.cron
+    : w.mode === 'hours' ? `0 */${w.hours} * * *` : w.mode === 'mail' ? (w.rule.trim() ? `mail:${w.rule.trim()}` : '') : w.mode === 'webhook' ? 'webhook' : w.cron
 }
 
-type RoutineDraft = { prompt: string; botId: number; quiet: boolean; when: When; delivery: Delivery; watch: string; urgent: string }
+type RoutineDraft = { prompt: string; botId: number; quiet: boolean; when: When; delivery: Delivery; watch: string; urgent: string; firstOnly?: boolean }
 
 function RoutineForm({ draft, setDraft, bots, onCancel, onSave, inline, skills = [] }: {
   draft: RoutineDraft; setDraft: (d: RoutineDraft) => void; bots: Bot[]; onCancel: () => void; onSave: () => void; inline?: boolean; skills?: Skill[]
@@ -88,7 +90,7 @@ function RoutineForm({ draft, setDraft, bots, onCancel, onSave, inline, skills =
       )}
       <div className="field-label"><span>When</span>
         <Segmented size="sm" label="How often" value={w.mode} onChange={mode => when(mode === 'custom' ? { mode, cron } : { mode })}
-          options={[{ id: 'daily', label: 'Every day' }, { id: 'weekdays', label: 'Weekdays' }, { id: 'weekly', label: 'Weekly' }, { id: 'hours', label: 'Every few hours' }, { id: 'custom', label: 'Custom' }]} />
+          options={[{ id: 'daily', label: 'Every day' }, { id: 'weekdays', label: 'Weekdays' }, { id: 'weekly', label: 'Weekly' }, { id: 'hours', label: 'Every few hours' }, { id: 'mail', label: 'When email arrives' }, { id: 'webhook', label: 'When called' }, { id: 'custom', label: 'Custom' }]} />
         <div className="er when-row">
           {w.mode === 'weekly' && (
             <select className="select" aria-label="Day" value={w.day} onChange={e => when({ day: e.target.value })}>
@@ -102,7 +104,16 @@ function RoutineForm({ draft, setDraft, bots, onCancel, onSave, inline, skills =
             </select>
           )}
           {w.mode === 'custom' && <input className="input mono" aria-label="Cron schedule" value={w.cron} placeholder="30 8 * * Mon-Fri" onChange={e => when({ cron: e.target.value })} />}
+          {w.mode === 'mail' && <input className="input mono" aria-label="Which email" value={w.rule} placeholder='from:acme.com subject:invoice' onChange={e => when({ rule: e.target.value })} />}
         </div>
+        {w.mode === 'mail' && <span className="hint"><code>from:</code> an address or domain, <code>subject:</code> a word or "a phrase", and any other words the email must contain. Mimir checks new mail every 2 minutes; mail that doesn’t match costs nothing.</span>}
+        {w.mode === 'mail' && draft.firstOnly !== undefined && (
+          <div className="quiet-row">
+            <Switch label="Only the first one" checked={draft.firstOnly} onChange={firstOnly => setDraft({ ...draft, firstOnly })} />
+            <div><b>Only the first one</b><span>Runs for the first matching email, then it’s gone (“tell me when it arrives”).</span></div>
+          </div>
+        )}
+        {w.mode === 'webhook' && <span className="hint">Runs each time its address on your Mimir server is called, with what was sent. After saving, the routine shows the address and its secret.</span>}
         {w.mode === 'custom' && <span className="hint">{readable !== cron ? `Runs: ${readable}` : 'Cron format: minute hour day-of-month month weekday, e.g. 30 8 * * Mon-Fri; or calendar:60:outside for an hour before each meeting with someone outside'}</span>}
       </div>
       <div className="quiet-row">
@@ -138,6 +149,20 @@ function RoutineForm({ draft, setDraft, bots, onCancel, onSave, inline, skills =
   )
 }
 
+/** A webhook routine's address and secret, shown when asked for (the secret is made then). */
+function WebhookAddress({ chatId, id }: { chatId: number; id: number }) {
+  const [hook, setHook] = useState<{ path: string; secret: string } | string | null>(null)
+  if (!hook) return <button type="button" className="linkish" onClick={() => invoke<{ path: string; secret: string }>('webhook', { chatId, id }).then(setHook, e => setHook(String(e)))}>Show its address and secret</button>
+  if (typeof hook === 'string') return <p className="error">{hook}</p>
+  const base = (inDesktop ? remoteServer()?.url ?? '' : location.origin).replace(/\/$/, '')
+  return (
+    <div className="hint selectable">
+      <div>POST <code>{base}{hook.path}</code></div>
+      <div>Secret: <code>{hook.secret}</code>, sent as <code>Authorization: Bearer …</code>, or as an HMAC-SHA256 of the body in <code>X-Hub-Signature-256: sha256=…</code> (GitHub’s webhook secret works as is). What’s sent is treated as outside content.</div>
+    </div>
+  )
+}
+
 export function RoutinesView({ chatId, bots }: { chatId: number; bots: Bot[] }) {
   const rows = useLoad(() => invoke<Routine[]>('routines', { chatId }), [chatId])
   const stats = useLoad(() => invoke<RoutineStats[]>('routine_stats', { chatId }), [chatId], 30000)
@@ -160,8 +185,8 @@ export function RoutinesView({ chatId, bots }: { chatId: number; bots: Bot[] }) 
       .then(() => patch.delivery && patch.delivery !== r.delivery ? deliver(r.id, patch.delivery) : null)
       .then(() => patch.urgent !== undefined && patch.urgent.trim() !== (r.urgent ?? '') ? urgent(r.id, patch.urgent) : null)
       .then(() => { setErr(null); setEditing(null); rows.reload() }, e => setErr(String(e)))
-  const start = (cron: string, prompt: string, quiet: boolean, w = '') => { setErr(null); setDraft({ prompt, quiet, botId: bots[0]?.id ?? 1, when: toWhen(cron), delivery: 'now', watch: w, urgent: '' }) }
-  const add = () => draft && invoke<Routine>('add_routine', { chatId, botId: draft.botId, cron: toCron(draft.when), prompt: draft.prompt, quiet: draft.quiet })
+  const start = (cron: string, prompt: string, quiet: boolean, w = '') => { setErr(null); setDraft({ prompt, quiet, botId: bots[0]?.id ?? 1, when: toWhen(cron), delivery: 'now', watch: w, urgent: '', firstOnly: false }) }
+  const add = () => draft && invoke<Routine>('add_routine', { chatId, botId: draft.botId, cron: toCron(draft.when), prompt: draft.prompt, quiet: draft.quiet, firstOnly: draft.firstOnly })
     .then(async r => { if (draft.quiet && draft.watch.trim()) await watch(r.id, draft.watch); return r })
     .then(async r => { if (draft.urgent.trim()) await urgent(r.id, draft.urgent); return r })
     .then(r => draft.delivery !== 'now' ? deliver(r.id, draft.delivery) : null)
@@ -190,7 +215,8 @@ export function RoutinesView({ chatId, bots }: { chatId: number; bots: Bot[] }) 
                   <div>
                     <div className="rt">{when(r)}{r.quiet && <span className="badge pending" title="Read-only; speaks up only when something needs your attention">Quiet</span>}{(r.paused || held !== undefined) && <span className="badge">Paused</span>}{r.delivery === 'digest' && <span className="badge" title="Collected into your daily digest">In digest</span>}{r.delivery === 'log' && <span className="badge" title="Not sent; see Activity">Log only</span>}{r.delivery === 'card' && <span className="badge" title="Updates a card pinned at the top of the chat; nothing is sent">On a card</span>}{r.urgent && <span className="badge" title={`Comes through right away if: ${r.urgent}`}>Urgent if…</span>}{r.quiet && r.watch && <span className="badge" title="Mimir looks first and only runs the AI when this changed">Watching {r.watch === 'mail' ? 'mail' : (() => { try { return new URL(r.watch).host } catch { return r.watch } })()}</span>}</div>
                     <div className="rp selectable">{r.prompt}</div>
-                    <div className="rm"><Avatar id={b.id} name={b.name} size={16} still /><span>{b.name}</span><span>·</span><span>{r.paused ? 'Won’t run until you turn it back on' : held !== undefined ? `${pausedText(held)} with ${b.name}; ${r.once ? 'it runs once then' : 'runs in between are skipped, not caught up'}` : r.next_fire >= IDLE ? 'No matching event on the calendar this week' : `${r.once ? 'Runs' : 'Next run'} ${ahead(r.next_fire)}${r.once ? ', then it’s gone' : ''}`}</span></div>
+                    <div className="rm"><Avatar id={b.id} name={b.name} size={16} still /><span>{b.name}</span><span>·</span><span>{r.paused ? 'Won’t run until you turn it back on' : held !== undefined ? `${pausedText(held)} with ${b.name}; ${r.once ? 'it runs once then' : 'runs in between are skipped, not caught up'}` : r.next_fire >= IDLE ? `${r.cron === 'webhook' ? 'Waits for a call' : r.cron.startsWith('mail:') ? 'Waits for a matching email' : 'No matching event on the calendar this week'}${r.once ? ', then it’s gone' : ''}` : `${r.once ? 'Runs' : 'Next run'} ${ahead(r.next_fire)}${r.once ? ', then it’s gone' : ''}`}</span></div>
+                    {r.cron === 'webhook' && <WebhookAddress chatId={chatId} id={r.id} />}
                     <RoutineHealth s={stats.data?.find(x => x.id === r.id)} onReset={() => invoke('reset_watch_noise', { chatId, id: r.id }).then(stats.reload, e => setErr(String(e)))} />
                     {rehearsal?.id === r.id && (rehearsal.r ? <RehearsalResult r={rehearsal.r} onClose={() => setRehearsal(null)} /> : <p className="hint">Rehearsing… it runs for real, but anything it would send or change is only described.</p>)}
                   </div>

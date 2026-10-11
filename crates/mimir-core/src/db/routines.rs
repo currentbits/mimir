@@ -81,7 +81,7 @@ pub const IDLE: i64 = 4_102_444_800;
 /// Accepts standard 5-field cron ("0 8 * * Mon-Fri") or the cron crate's 6/7-field form. A calendar trigger
 /// ("calendar:60:outside") waits (IDLE) until the scheduler reads the calendar.
 pub fn next_fire(expr: &str, after: i64) -> Result<i64> {
-    if crate::calendar::trigger(expr)?.is_some() {
+    if crate::calendar::trigger(expr)?.is_some() || crate::events::on(expr)?.is_some() {
         return Ok(IDLE);
     }
     let expr = expr.trim();
@@ -96,8 +96,8 @@ pub fn next_fire(expr: &str, after: i64) -> Result<i64> {
 
 /// The shortest gap between two runs of a schedule over the next couple of days, in minutes.
 pub fn min_gap_minutes(expr: &str) -> Result<i64> {
-    // ponytail: a calendar trigger runs as often as the calendar has events; not counted
-    if crate::calendar::trigger(expr)?.is_some() {
+    // ponytail: a calendar or event trigger runs as often as its events come; not counted
+    if crate::calendar::trigger(expr)?.is_some() || crate::events::on(expr)?.is_some() {
         return Ok(i64::MAX);
     }
     let expr = expr.trim();
@@ -215,10 +215,49 @@ impl Db {
     }
 
     /// Your calendar is private: a routine timed off it (each run is told the event) only in a chat with you alone.
+    /// So is your mail, for a routine started by it.
     fn calendar_private(&self, chat: i64, cron: &str) -> Result<()> {
         if crate::calendar::trigger(cron)?.is_some() && !self.chat_private(chat) {
             bail!("a routine timed off your calendar can only be in a private chat");
         }
+        if matches!(crate::events::on(cron)?, Some(crate::events::On::Mail(_))) && (!self.chat_private(chat) || self.chat_guest(chat)) {
+            bail!("a routine started by your email can only be in your own private chat");
+        }
+        Ok(())
+    }
+
+    /// A bot's routines started by an event of this kind ("mail:%"), not paused.
+    pub fn routines_on(&self, bot: i64, like: &str) -> Result<Vec<Routine>> {
+        self.routines_where("bot_id = ?1 AND cron LIKE ?2 AND paused = 0", params![bot, like])
+    }
+
+    /// An event routine ends after its first run that worked ("tell me when X arrives"), like a one-off.
+    pub fn routine_set_once(&self, id: i64) -> Result<()> {
+        self.c().execute("UPDATE routines SET once=1 WHERE id=?1", [id])?;
+        Ok(())
+    }
+
+    /// Something came for an event routine (a matching email, a webhook call): kept for its run, which is due now.
+    pub fn routine_event_add(&self, id: i64, text: &str) -> Result<()> {
+        let c = self.c();
+        c.execute("INSERT INTO routine_events(routine_id, text, ts) VALUES (?1,?2,?3)", params![id, text, now()])?;
+        // ponytail: the 20 newest; a flood of calls isn't worth more than that to one run
+        c.execute("DELETE FROM routine_events WHERE routine_id=?1 AND id NOT IN (SELECT id FROM routine_events WHERE routine_id=?1 ORDER BY id DESC LIMIT 20)", [id])?;
+        c.execute("UPDATE routines SET next_fire=min(next_fire, ?2) WHERE id=?1", [id, now()])?;
+        Ok(())
+    }
+
+    /// What came for an event routine that no run has seen yet, oldest first: (id, text).
+    pub fn routine_events(&self, id: i64) -> Result<Vec<(i64, String)>> {
+        let c = self.c();
+        let mut st = c.prepare("SELECT id, text FROM routine_events WHERE routine_id=?1 ORDER BY id")?;
+        let v = st.query_map([id], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<Result<_, _>>()?;
+        Ok(v)
+    }
+
+    /// A run has seen these (up to `upto`); anything that came during it waits for the next.
+    pub fn routine_events_clear(&self, id: i64, upto: i64) -> Result<()> {
+        self.c().execute("DELETE FROM routine_events WHERE routine_id=?1 AND id<=?2", [id, upto])?;
         Ok(())
     }
 
@@ -306,6 +345,8 @@ impl Db {
         let c = self.c();
         if r.once {
             c.execute("DELETE FROM routines WHERE id=?1", [r.id])?;
+            c.execute("DELETE FROM routine_events WHERE routine_id=?1", [r.id])?;
+            c.execute("DELETE FROM settings WHERE key=?1", [format!("webhook:{}", r.id)])?;
         } else {
             c.execute("UPDATE routines SET retries=0 WHERE id=?1", [r.id])?;
         }
@@ -574,7 +615,8 @@ impl Db {
     pub fn routine_delete(&self, chat: i64, id: i64) -> Result<bool> {
         let gone = self.c().execute("DELETE FROM routines WHERE id=?1 AND chat_id=?2", params![id, chat])? > 0;
         if gone {
-            self.c().execute("DELETE FROM settings WHERE key=?1", [format!("hold:routine:{id}")])?;
+            self.c().execute("DELETE FROM settings WHERE key IN (?1, ?2)", [format!("hold:routine:{id}"), format!("webhook:{id}")])?;
+            self.c().execute("DELETE FROM routine_events WHERE routine_id=?1", [id])?;
         }
         Ok(gone)
     }
@@ -582,7 +624,8 @@ impl Db {
     /// Advance before running so a crash mid-run can't fire the same slot twice. A one-off stays until its run is done
     /// (routine_done), with an hour's grace: a crash mid-run tries it once more then.
     pub fn routine_advance(&self, r: &Routine) -> Result<()> {
-        if r.once {
+        // One that ends after its first event has no time to try again at: it waits for its events, like any other.
+        if r.once && r.cron.is_empty() {
             self.c().execute("UPDATE routines SET next_fire=?2 WHERE id=?1", params![r.id, now() + 3600])?;
             return Ok(());
         }

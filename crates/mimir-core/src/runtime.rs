@@ -1381,6 +1381,18 @@ impl Core {
             }
         }
         self.db.routine_advance(&r)?;
+        // Started by an event: the run is told what came (someone else's mail or call). Nothing came (it was due for
+        // another reason): no run.
+        let seen_upto = match crate::events::on(&r.cron) {
+            Ok(Some(on)) => {
+                let evs = self.db.routine_events(r.id)?;
+                let Some(&(upto, _)) = evs.last() else { return Ok(()) };
+                r.tainted = true;
+                r.prompt.push_str(&crate::events::note(&on, &evs.into_iter().map(|e| e.1).collect::<Vec<_>>()));
+                Some(upto)
+            }
+            _ => None,
+        };
         // A watched quiet check: Mimir looks first, and only wakes the AI when something changed.
         let seen = match crate::watch::gate(&self.db, &r).await {
             Some(crate::watch::Gate::Same) => {
@@ -1423,6 +1435,9 @@ impl Core {
                 if let Some(seen) = seen {
                     self.db.routine_set_seen(r.id, &seen)?;
                 }
+                if let Some(upto) = seen_upto {
+                    self.db.routine_events_clear(r.id, upto)?;
+                }
                 self.db.routine_done(&r, true)?;
                 text
             }
@@ -1460,6 +1475,9 @@ impl Core {
                 }
                 if again.is_some() {
                     return Ok(());
+                }
+                if let Some(upto) = seen_upto {
+                    self.db.routine_events_clear(r.id, upto)?;
                 }
                 self.db.routine_done(&r, false)?;
                 let text = format!("Routine #{}: {}", r.id, crate::friendly_error(&e));
@@ -1536,7 +1554,7 @@ impl Core {
     async fn scheduler(self: Arc<Self>, chans: Vec<Chan>) -> Result<()> {
         // A routine due before this was Mimir not running; one due since, the computer asleep or a long run.
         let started = crate::db::now();
-        let mut mail_looked = 0;
+        let (mut mail_looked, mut rules_looked) = (0, 0);
         loop {
             let now = crate::db::now();
             // Mail tasks, looked for every two minutes by one bot (the memory bot) for everyone. You sent them, like a
@@ -1560,6 +1578,11 @@ impl Core {
                 let _ = self.db.hold_clear(&bot_hold, false);
             }
             self.calendar_times(now).await;
+            // Mail triggers look at new mail every two minutes; a match makes its routine due in this pass.
+            if now - rules_looked >= 120 {
+                rules_looked = now;
+                crate::events::look_mail(&self.db, self.bot).await;
+            }
             match self.db.due(self.bot, now) {
                 Ok(due) if !held => {
                     for r in due {
@@ -1896,6 +1919,97 @@ mod tests {
         assert!(db.routines(0).unwrap().iter().any(|x| x.id == once.id && x.next_fire > now + 3000));
         ok.run_routine(&[], once.clone()).await.unwrap();
         assert!(!db.routines(0).unwrap().iter().any(|x| x.id == once.id));
+    }
+
+    /// A pretend AI that answers "Seen." and keeps what each request asked.
+    async fn recording_ai() -> (String, Arc<std::sync::Mutex<Vec<String>>>) {
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let (addr, seen) = (l.local_addr().unwrap(), Arc::new(std::sync::Mutex::new(vec![])));
+        let keep = seen.clone();
+        tokio::spawn(async move {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            while let Ok((mut s, _)) = l.accept().await {
+                let mut req = vec![];
+                let mut buf = vec![0u8; 65536];
+                // Until the whole body is in (Content-Length past the headers).
+                while let Ok(n) = s.read(&mut buf).await {
+                    req.extend_from_slice(&buf[..n]);
+                    let t = String::from_utf8_lossy(&req).to_string();
+                    let len = t.lines().find_map(|l| l.to_ascii_lowercase().strip_prefix("content-length:").and_then(|v| v.trim().parse::<usize>().ok()));
+                    if n == 0 || t.find("\r\n\r\n").zip(len).is_some_and(|(h, len)| req.len() >= h + 4 + len) {
+                        break;
+                    }
+                }
+                keep.lock().unwrap().push(String::from_utf8_lossy(&req).to_string());
+                let body = r#"{"choices":[{"message":{"role":"assistant","content":"Seen."}}],"usage":{"prompt_tokens":3,"completion_tokens":2}}"#;
+                let _ = s.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await;
+            }
+        });
+        (format!("http://{addr}/v1"), seen)
+    }
+
+    #[tokio::test]
+    async fn event_routines_run_on_what_came() {
+        let p = std::env::temp_dir().join(format!("mimir-events-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = Db::open(&p).unwrap();
+        let r = db.routine_create(1, 0, "webhook", "say what the build did", false).unwrap();
+        let fresh = |db: &Db| db.routine(r.id).unwrap();
+        // Due with nothing come: no run.
+        let (base, asked) = recording_ai().await;
+        let core = core_on(&db, &base);
+        core.run_routine(&[], r.clone()).await.unwrap();
+        assert!(asked.lock().unwrap().is_empty() && db.runs(Some(0), 5).unwrap().is_empty());
+        // Can't reach the AI: what came waits for the try after.
+        db.routine_event_add(r.id, "{\"build\":\"red\"}").unwrap();
+        core_on(&db, "http://127.0.0.1:9/v1").run_routine(&[], fresh(&db).unwrap()).await.unwrap();
+        assert_eq!(db.routine_events(r.id).unwrap().len(), 1);
+        core.run_routine(&[], fresh(&db).unwrap()).await.unwrap();
+        let req = asked.lock().unwrap().pop().unwrap();
+        assert!(req.contains("its webhook was called") && req.contains("build") && req.contains("red") && req.contains("outside content"), "{req}");
+        assert!(db.routine_events(r.id).unwrap().is_empty(), "seen");
+        assert_eq!(fresh(&db).unwrap().next_fire, crate::db::IDLE, "waits for the next call");
+        assert!(db.runs(Some(0), 1).unwrap()[0].status == "ok");
+        // "Tell me when it arrives": gone after the first run that worked.
+        db.routine_set_once(r.id).unwrap();
+        db.routine_event_add(r.id, "{\"build\":\"green\"}").unwrap();
+        core.run_routine(&[], fresh(&db).unwrap()).await.unwrap();
+        assert!(fresh(&db).is_none());
+    }
+
+    /// Against scripts/fake-mail.py: `python3 scripts/fake-mail.py`, then
+    /// `cargo test -p mimir-core fake_mail_triggers -- --ignored`.
+    #[tokio::test]
+    #[ignore]
+    async fn fake_mail_triggers() {
+        let p = std::env::temp_dir().join(format!("mimir-mailrule-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = Db::open(&p).unwrap();
+        db.set_setting("email_accounts", r#"[{"host":"127.0.0.1","port":1143,"user":"me@example.com"}]"#).unwrap();
+        crate::host::install_secrets(Arc::new(crate::host::DbSecrets(db.clone())));
+        crate::host::secret_set("email_password:me@example.com", "pw").unwrap();
+        crate::events::ready(&db, 0, "mail:from:example.com invoice").unwrap();
+        let r = db.routine_create(1, 0, "mail:from:sam@example.com invoice", "tell me the amount", false).unwrap();
+        let other = db.routine_create(1, 0, "mail:subject:\"account notice\" invoices", "tell me", false).unwrap();
+        let never = db.routine_create(1, 0, "mail:from:nobody.example", "tell me", false).unwrap();
+        // The first look only notes where the inbox ends.
+        crate::events::look_mail(&db, 1).await;
+        assert!(db.routine_events(r.id).unwrap().is_empty());
+        for id in [r.id, other.id, never.id] {
+            db.routine_set_seen(id, "1:0").unwrap();
+        }
+        crate::events::look_mail(&db, 1).await;
+        let evs = db.routine_events(r.id).unwrap();
+        // Sam's invoice, and Sam's mail forwarded by you (from you, so not from Sam): one.
+        assert_eq!(evs.len(), 1, "{evs:?}");
+        assert!(evs[0].1.contains("Subject: Invoice 4411") && evs[0].1.contains("EUR 1,250"), "{evs:?}");
+        assert_eq!(db.routine_events(other.id).unwrap().len(), 1, "the HTML one, matched on its text");
+        assert!(db.routine_events(never.id).unwrap().is_empty());
+        assert_eq!(db.routine_seen(r.id).unwrap().as_deref(), Some("1:4"));
+        assert!(db.due(1, crate::db::now()).unwrap().iter().any(|x| x.id == r.id) && !db.due(1, crate::db::now()).unwrap().iter().any(|x| x.id == never.id));
+        // Nothing new: nothing more.
+        crate::events::look_mail(&db, 1).await;
+        assert_eq!(db.routine_events(r.id).unwrap().len(), 1);
     }
 
     #[tokio::test]

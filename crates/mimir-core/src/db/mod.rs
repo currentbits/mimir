@@ -49,7 +49,7 @@ PRAGMA secure_delete=ON;
 
 /// The schema version this build writes (`PRAGMA user_version`). A schema change bumps it and adds a step to
 /// `migrate`; each step runs once per database.
-const VERSION: i64 = 6;
+const VERSION: i64 = 7;
 
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS entries(
@@ -202,6 +202,9 @@ fn migrate(c: &Connection) -> Result<()> {
     }
     if v < 6 {
         migrate_v6(c)?;
+    }
+    if v < 7 {
+        migrate_v7(c)?;
     }
     c.execute(
         "INSERT INTO settings(key, value) VALUES ('schema_written_by', ?1) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -419,6 +422,12 @@ fn migrate_v6(c: &Connection) -> Result<()> {
            title TEXT NOT NULL, body TEXT NOT NULL, by_you INTEGER NOT NULL DEFAULT 0, tainted INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL);
          CREATE INDEX IF NOT EXISTS cards_chat ON cards(chat_id);",
     )?;
+    Ok(())
+}
+
+/// Version 7: what came for a routine started by an event (a matching email, a webhook call), until a run has seen it.
+fn migrate_v7(c: &Connection) -> Result<()> {
+    c.execute_batch("CREATE TABLE IF NOT EXISTS routine_events(id INTEGER PRIMARY KEY, routine_id INTEGER NOT NULL, text TEXT NOT NULL, ts INTEGER NOT NULL)")?;
     Ok(())
 }
 

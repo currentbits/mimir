@@ -63,7 +63,7 @@ export function RehearsalResult({ r, onClose }: { r: Rehearsed; onClose: () => v
 }
 
 /** When a routine runs, in words: its schedule, or the one time a one-off (a reminder) runs. */
-export const when = (r: Routine) => r.once ? `Once · ${fullTime(r.next_fire)}` : schedule(r.cron)
+export const when = (r: Routine) => r.once && !r.cron ? `Once · ${fullTime(r.next_fire)}` : schedule(r.cron)
 
 export const RUN_DOT: Record<Run['status'], string> = { ok: 'live', error: 'err', missed: 'missed', running: 'wait', unchanged: 'same' }
 
