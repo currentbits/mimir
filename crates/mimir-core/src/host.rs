@@ -970,8 +970,9 @@ impl Host {
                 ok(json!({"reply": reply, "would": would, "looked": looked}))
             }
             // A photo pasted or dropped into the chat: base64 in, a path under <home>/media out.
-            // A PDF or text file dropped into the app's chat: its text, wrapped for the bot as outside content. The
-            // conversation is marked as having read outside content, like a web page.
+            // A PDF, Word, Excel or text file dropped into the app's chat: its text, wrapped for the bot as outside
+            // content. The conversation is marked as having read outside content, like a web page. A scanned PDF
+            // gives {text, images}: its pages saved as photos to send with the message.
             "read_document" => {
                 use base64::Engine;
                 let (bot, chat, name): (i64, i64, String) = (arg(a, "bot_id")?, arg(a, "chat_id")?, arg(a, "name")?);
@@ -979,17 +980,30 @@ impl Host {
                 if bytes.len() > 20 * 1024 * 1024 {
                     bail!("that file is over 20 MB");
                 }
-                let text = match crate::read_document_text(&name, "", bytes).await {
-                    None => bail!("I can read PDFs and text files, not this kind of file yet"),
+                let said = arg::<String>(a, "text").unwrap_or_default();
+                let text = match crate::read_document_text(&name, "", bytes.clone()).await {
+                    None => bail!("I can read PDFs, Word and Excel files and text files, not this kind of file yet"),
                     Some(r) => r?,
                 };
-                if text.split_whitespace().count() < 5 {
+                let pages = if text.split_whitespace().count() < 5 && crate::is_pdf(&name, "") { crate::read_pdf_pages(bytes).await } else { vec![] };
+                if text.split_whitespace().count() < 5 && pages.is_empty() {
                     bail!("that file has no text I can read (a scanned PDF?); send photos of the pages instead");
                 }
                 if chat != crate::INCOGNITO_CHAT {
                     self.db.conv_taint(bot, chat)?;
                 }
-                ok(crate::with_document(&arg::<String>(a, "text").unwrap_or_default(), &name, &text))
+                if pages.is_empty() {
+                    return ok(crate::with_document(&said, &name, &text));
+                }
+                let dir = self.home.join("media");
+                std::fs::create_dir_all(&dir)?;
+                let mut images = vec![];
+                for (i, p) in pages.iter().enumerate() {
+                    let path = dir.join(format!("{}-{}-p{}.jpg", crate::db::now(), p.len(), i + 1));
+                    std::fs::write(&path, p)?;
+                    images.push(path.display().to_string());
+                }
+                ok(json!({"text": crate::with_scan(&said, &name, images.len()), "images": images}))
             }
             "save_media" => {
                 use base64::Engine;

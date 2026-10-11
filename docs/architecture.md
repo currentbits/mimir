@@ -110,7 +110,7 @@ The [Security model](security.md) in terms of where it lives. Keep these when ch
   - The AI CLIs get instructions through private files (`Private`), never the command line: Claude
     `--append-system-prompt-file`, Codex `model_instructions_file`, Grok a rules file in a trusted per-bot-and-chat
     folder (`grok_trust`, `grok_rules`; Windows keeps `--rules`).
-  - PDFs are read by `<binary> read-pdf` (`pdf_helper_main`).
+  - PDFs are read by `<binary> read-pdf` (`pdf_helper_main`); `read-pdf pages` gives a scanned PDF's page pictures.
   - The AI CLIs' transcripts are removed by `Provider::forget_session`.
   - `Host::new` does startup cleanup (`incognito_leftovers`, `prune_old`, `close_interrupted`, `tmp/`, old media). Never put that in
     `Db::open`: the tools server opens the database on every turn.
