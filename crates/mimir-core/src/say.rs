@@ -266,10 +266,16 @@ mod tests {
 
     /// The English strings handed to `tr`/`trf` in the source, as written there.
     fn used() -> Vec<String> {
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        // Every .rs file under src/, subfolders (db/) included.
+        let (mut dirs, mut files) = (vec![std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src")], vec![]);
+        while let Some(dir) = dirs.pop() {
+            for p in std::fs::read_dir(dir).unwrap().flatten().map(|f| f.path()) {
+                if p.is_dir() { dirs.push(p) } else { files.push(p) }
+            }
+        }
         let mut out = vec![];
-        for f in std::fs::read_dir(dir).unwrap().flatten().filter(|f| f.file_name() != "say.rs") {
-            let src = std::fs::read_to_string(f.path()).unwrap();
+        for f in files.iter().filter(|p| !p.ends_with("say.rs")) {
+            let src = std::fs::read_to_string(f).unwrap();
             let calls = src.match_indices("tr(\"").chain(src.match_indices("trf(\"")).filter(|(i, _)| !src[..*i].ends_with(|c: char| c.is_alphanumeric() || c == '_'));
             for (i, m) in calls {
                 let part = &src[i + m.len()..];
