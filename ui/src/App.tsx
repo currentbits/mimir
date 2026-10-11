@@ -1,5 +1,5 @@
 import { copyText, inDesktop, insecureServer, invoke, saveDownload, keystore, localInvoke, platform, probe, remoteServer, setWebToken, connectServer, shortcut, trayName, webToken } from './api'
-import { createContext, Fragment, useCallback, useMemo, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { Component, createContext, Fragment, type ReactNode, useCallback, useMemo, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ask, askText, AskHost, tell, Avatar, Empty, Group, Icon, Row, Segmented, Switch, type Presence } from './ui'
 import { ago, ahead, dayLabel, fullDay, fullTime, pigment, PIGMENTS, schedule, setLooks, tok, usd, type Look } from './format'
 import { Markdown, openLink } from './markdown'
@@ -398,11 +398,21 @@ function SignIn({ onDone }: { onDone: () => void }) {
   )
 }
 
+// One UI bug costs a click, not a dead window.
+class Crashed extends Component<{ children: ReactNode }, { err: string | null }> {
+  state = { err: null as string | null }
+  static getDerivedStateFromError(e: unknown) { return { err: String(e) } }
+  render() {
+    if (!this.state.err) return this.props.children
+    return <div className="empty"><p>Something went wrong on this screen.</p><p className="mono">{this.state.err}</p><button type="button" className="btn btn-primary" onClick={() => location.reload()}>Reload</button></div>
+  }
+}
+
 function App() {
   const [onboarded, setOnboarded] = useState<boolean | null>(null)
   useEffect(() => { invoke<{ onboarded: boolean }>('info').then(i => setOnboarded(i.onboarded), () => setOnboarded(true)) }, [])
   if (onboarded === null) return null
-  return <><AskHost />{onboarded ? <Main /> : <Onboarding onDone={() => setOnboarded(true)} />}</>
+  return <><AskHost />{onboarded ? <Crashed><Main /></Crashed> : <Onboarding onDone={() => setOnboarded(true)} />}</>
 }
 
 // ---------------- onboarding ----------------

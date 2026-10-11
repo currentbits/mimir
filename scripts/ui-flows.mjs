@@ -2,6 +2,7 @@
 // npx playwright install chromium), against a server set up as for scripts/e2e-flows.py, with MIMIR_UI_DIR=ui/dist:
 // node scripts/ui-flows.mjs
 import { createRequire } from 'node:module'
+import { execFileSync } from 'node:child_process'
 const { chromium } = createRequire(new URL('../ui/package.json', import.meta.url))('playwright')
 // Ada and Search on the fake AI (scripts/fake-ai.py on :8899), in a fresh server. Other ports: E2E_SERVER, E2E_AI as there.
 const SERVER = `http://${process.env.E2E_SERVER || '127.0.0.1:8789'}`, AI = `http://${process.env.E2E_AI || '127.0.0.1:8899'}`
@@ -163,6 +164,21 @@ for (const t of ['Memory', 'Skills', 'Routines', 'Activity', 'Chat']) {
   if (await tab(t).count()) { await tab(t).click(); await p.waitForTimeout(500) }
   await bot('Searcher').click(); await p.waitForTimeout(500)
 }
+// A chat past the 200 messages the UI loads (issue #7): replies alternate a lookup (no chip) and a saved memory (a chip),
+// so each exchange shifts which reply sits where. Three more exchanges: no page errors, the window still there.
+const db = `${process.env.MIMIR_HOME || '/tmp/flow-home'}/mimir.db`
+const seed = `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 250),
+  c AS (SELECT chat_id, bot_id FROM messages WHERE content LIKE '%hello Ada%' LIMIT 1)`
+execFileSync('sqlite3', [db, `${seed} INSERT INTO tool_calls(run_id, chat_id, tool, summary, decision, ok, result, ts)
+  SELECT 900000 + i, c.chat_id, CASE i % 4 WHEN 0 THEN 'memory_store' ELSE 'memory_search' END, 'Remember "Seed ' || i || '": x', 'allow', 1, 'stored #1', 0 FROM n, c WHERE i % 2 = 0;
+${seed} INSERT INTO messages(chat_id, bot_id, role, content, ts, run_id)
+  SELECT c.chat_id, c.bot_id, CASE i % 2 WHEN 1 THEN 'user' ELSE 'assistant' END, 'seed ' || i, strftime('%s', 'now'), CASE i % 2 WHEN 0 THEN 900000 + i END FROM n, c;`])
+const before = errs.length
+await bot('Ada').click(); await tab('Chat').click(); await p.waitForTimeout(1000)
+const shown = () => p.locator('.main').innerText({ timeout: 2000 }).catch(() => '')
+for (const k of [1, 2, 3]) { await say(`long chat ${k}`).catch(() => {}); await until(async () => (await shown()).includes(`OK: long chat ${k}`), 8000); await p.waitForTimeout(4500) }
+check('a 250-message chat takes 3 more exchanges', (await shown()).includes('OK: long chat 3') && errs.length === before, errs.slice(before).join(' | '))
+
 await p.screenshot({ path: '/tmp/ss/ui-flows-end.png' })
 console.log(errs.length ? errs.join('\n') : 'no page errors')
 console.log(failed ? `${failed} FAILED` : 'ALL PASS'); await b.close()
