@@ -316,6 +316,9 @@ pub fn specs() -> Vec<(&'static str, &'static str, Value)> {
             "routine_create",
             "Schedule a task: recurring with cron (5-field, the user's local time, e.g. '0 8 * * Mon-Fri'), or once with at \
              ('2026-10-12 15:00', the user's local time) for reminders and anything for later; a one-off is gone after it runs. \
+             For something tied to the user's calendar, cron can be calendar:<minutes before>, optionally :meetings (only \
+             events with someone else invited) or :outside (only ones with someone from another company): \
+             'calendar:60:outside' runs an hour before each meeting with someone outside, and each run is told the event. \
              prompt is what you will be asked to do each time it fires; the result is sent to this chat. \
              Set quiet=true for watches/check-ins (\"keep an eye on…\", \"only tell me if…\"): it runs read-only and \
              messages the user only when something needs their attention. A quiet check about one web page or feed, or \
@@ -1034,8 +1037,25 @@ fn calendar_links(title: &str, start: &str, minutes: i64, location: &str, notes:
     Ok(format!("Google Calendar: {google}\nOutlook: {outlook}\n(Nothing is added until the user opens one and saves it.)"))
 }
 
+/// A routine timed off the calendar needs one linked.
+fn calendar_linked(cron: &str) -> Result<()> {
+    if crate::calendar::trigger(cron)?.is_some() && crate::host::secret_get(crate::calendar::SECRET).is_none() {
+        bail!("no calendar is linked yet: the person adds its link in Mimir's Meetings → Calendar first");
+    }
+    Ok(())
+}
+
+/// When a routine runs next, for the bots: a calendar one may have no matching event coming up.
+fn next_run(r: &crate::db::Routine) -> String {
+    match crate::calendar::trigger(&r.cron) {
+        Ok(Some(t)) if r.next_fire >= crate::db::IDLE => format!("({}; no such event in the next week)", t.words()),
+        Ok(Some(t)) => format!("{} ({})", fmt_ts(r.next_fire), t.words()),
+        _ => fmt_ts(r.next_fire),
+    }
+}
+
 /// Calendar events as the bots read them: one line each, in order.
-fn calendar_lines(events: &[crate::calendar::Event]) -> String {
+pub(crate) fn calendar_lines(events: &[crate::calendar::Event]) -> String {
     if events.is_empty() {
         return "Nothing on the calendar then.".into();
     }
@@ -1106,6 +1126,9 @@ fn precheck(ctx: &ToolCtx, name: &str, args: &Value) -> Result<()> {
             {
                 bail!("routines a bot sets run at most every 15 minutes; pick a slower schedule");
             }
+            if let Some(cron) = args["cron"].as_str() {
+                calendar_linked(cron)?;
+            }
             if let Some(w) = args["watch"].as_str() {
                 crate::watch::valid(w)?;
             }
@@ -1126,7 +1149,7 @@ fn precheck(ctx: &ToolCtx, name: &str, args: &Value) -> Result<()> {
                 None if crate::db::min_gap_minutes(s(args, "cron").map_err(|_| anyhow::anyhow!("give cron for a recurring routine, or at for a one-off"))?)? < 15 => {
                     bail!("routines a bot creates run at most every 15 minutes; pick a slower schedule")
                 }
-                None => {}
+                None => calendar_linked(s(args, "cron")?)?,
             }
             if let Some(w) = args["watch"].as_str().filter(|w| !w.trim().is_empty()) {
                 crate::watch::valid(w)?;
@@ -1740,7 +1763,7 @@ async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
             if let Some(w) = args["watch"].as_str().filter(|w| quiet && !w.trim().is_empty()) {
                 ctx.db.routine_set_watch(ctx.chat_id, r.id, w)?;
             }
-            format!("{} #{} created; {} {}", if quiet { "quiet check" } else if r.once { "one-off" } else { "routine" }, r.id, if r.once { "runs once," } else { "next run" }, fmt_ts(r.next_fire))
+            format!("{} #{} created; {} {}", if quiet { "quiet check" } else if r.once { "one-off" } else { "routine" }, r.id, if r.once { "runs once," } else { "next run" }, next_run(&r))
         }
         "routine_list" => {
             let v = ctx.db.routines(ctx.chat_id)?;
@@ -1748,7 +1771,7 @@ async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
                 "no routines".into()
             } else {
                 v.iter()
-                    .map(|r| format!("#{} [{}]{}{}{} — {}", r.id, if r.once { "once" } else { &r.cron }, if r.quiet { " quiet" } else { "" }, if r.watch.is_empty() { String::new() } else { format!(" watching {}", r.watch) }, if r.paused { " paused".into() } else { format!(" next {}", fmt_ts(r.next_fire)) }, r.prompt))
+                    .map(|r| format!("#{} [{}]{}{}{} — {}", r.id, if r.once { "once" } else { &r.cron }, if r.quiet { " quiet" } else { "" }, if r.watch.is_empty() { String::new() } else { format!(" watching {}", r.watch) }, if r.paused { " paused".into() } else { format!(" next {}", next_run(r)) }, r.prompt))
                     .collect::<Vec<_>>()
                     .join("\n")
             }

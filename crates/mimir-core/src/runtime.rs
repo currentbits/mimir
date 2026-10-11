@@ -1168,6 +1168,18 @@ impl Core {
             }
             return Ok(());
         }
+        // Timed off the calendar: the run is told which event it's for (the invite is someone else's words). An event
+        // gone or moved since is skipped (the scheduler finds its new time), and so is one that's over by now.
+        if let Ok(Some(t)) = crate::calendar::trigger(&r.cron) {
+            let start = r.next_fire + t.before;
+            match crate::calendar::events(start - 1, start + 1).await.ok().and_then(|evs| t.event_at(&evs, r.next_fire)).filter(|e| e.end > crate::db::now()) {
+                Some(ev) => {
+                    r.tainted = true;
+                    r.prompt.push_str(&format!("\n\nThe calendar event this run is for:\n{}", crate::tools::calendar_lines(&[ev])));
+                }
+                None => return self.db.routine_advance(&r),
+            }
+        }
         self.db.routine_advance(&r)?;
         // A watched quiet check: Mimir looks first, and only wakes the AI when something changed.
         let seen = match crate::watch::gate(&self.db, &r).await {
@@ -1296,6 +1308,23 @@ impl Core {
         }
     }
 
+    /// Routines timed off the calendar: each one's next run is its next matching event's start, less the lead time.
+    /// Worked out again on every pass (the calendar is fetched at most every 10 minutes), so a meeting that's added,
+    /// moved or cancelled moves the run too. One the calendar can't be read for keeps the time it has.
+    async fn calendar_times(&self, now: i64) {
+        for r in self.db.calendar_routines(self.bot, now).unwrap_or_default() {
+            let Ok(Some(t)) = crate::calendar::trigger(&r.cron) else { continue };
+            // ponytail: a meeting added after its run time has passed (with less notice than the lead time) gets no run
+            let Ok(events) = crate::calendar::events(now + t.before, now + t.before + 7 * 86_400).await else { return };
+            let next = t.next(&events, now).unwrap_or(crate::db::IDLE);
+            if next != r.next_fire
+                && let Err(e) = self.db.routine_set_next(r.id, next)
+            {
+                eprintln!("routine #{}: {e:#}", r.id);
+            }
+        }
+    }
+
     async fn scheduler(self: Arc<Self>, chans: Vec<Chan>) -> Result<()> {
         // A routine due before this was Mimir not running; one due since, the computer asleep or a long run.
         let started = crate::db::now();
@@ -1308,6 +1337,7 @@ impl Core {
             if hold.is_some() && !held {
                 let _ = self.db.hold_clear(&bot_hold, false);
             }
+            self.calendar_times(now).await;
             match self.db.due(self.bot, now) {
                 Ok(due) if !held => {
                     for r in due {

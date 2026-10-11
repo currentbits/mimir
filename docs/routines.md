@@ -10,6 +10,16 @@ losing it. Schedules are in your local time. A routine a bot creates runs at mos
 becomes a routine that runs once, at that time, and is then gone (the Routines tab shows it as *Once · Fri 16 Oct
 09:00*). It can be paused or deleted like any routine.
 
+**Timed off your calendar.** "An hour before each meeting with someone outside, brief me on who they are" runs off the
+calendar you linked in Meetings → Calendar instead of a clock. Where a cron goes, the schedule is
+`calendar:<minutes before>`, optionally `:meetings` (only events with someone else invited) or `:outside` (only ones
+with someone from another email domain): `calendar:60:outside`. The bot can make one when you ask, or type it in the
+Routines tab under *Custom*. Each run is told the event (its title, time and who's invited), so pair it with the
+Meeting prep skill. A meeting that's added, moved or cancelled moves the run with it (the calendar is read every 10
+minutes); one added with less notice than the lead time gets no run. Such a routine only lives in a private chat, since
+your calendar is private. For "the evening before tomorrow's first meeting", use a plain cron (`0 20 * * *`) and have
+the routine look at tomorrow's calendar.
+
 The scheduler checks every 30 seconds, so a routine runs within half a minute of its time, as long as Mimir is running.
 On a laptop, **Settings → Keep this computer awake** helps; for 24/7, [self-host](self-hosting.md).
 

@@ -17,6 +17,8 @@ pub struct Event {
     pub end: i64,
     /// Invited people, by name (or address when there's no name), the organiser included.
     pub attendees: Vec<String>,
+    /// Their email addresses, lowercase, where the invite has them.
+    pub emails: Vec<String>,
 }
 
 /// The link, cleaned up (webcal:// is https:// in disguise).
@@ -76,10 +78,7 @@ fn expand(props: &[(String, String, String)], from: i64, to: i64, replaced: &std
     let Some(start) = parse_time(start_params, start_value) else { return vec![] };
     let length = get("DTEND").and_then(|p| parse_time(&p.1, &p.2)).map(|end| end - start).or_else(|| get("DURATION").and_then(|p| duration(&p.2))).unwrap_or(3600).clamp(0, 30 * 86_400);
     let title = get("SUMMARY").map(|p| unescape(&p.2)).filter(|t| !t.is_empty()).unwrap_or_else(|| "Meeting".into());
-    let attendees: Vec<String> = props
-        .iter()
-        .filter(|p| p.0 == "ATTENDEE" || p.0 == "ORGANIZER")
-        .filter(|p| !p.1.to_ascii_uppercase().contains("CUTYPE=ROOM") && !p.1.to_ascii_uppercase().contains("CUTYPE=RESOURCE"))
+    let attendees: Vec<String> = people(props)
         .filter_map(|p| {
             let cn = p.1.split(';').find_map(|kv| kv.strip_prefix("CN=")).map(|c| c.trim_matches('"').to_string());
             cn.or_else(|| p.2.strip_prefix("mailto:").or(p.2.strip_prefix("MAILTO:")).map(str::to_string))
@@ -90,6 +89,7 @@ fn expand(props: &[(String, String, String)], from: i64, to: i64, replaced: &std
             }
             v
         });
+    let emails: Vec<String> = people(props).filter_map(|p| p.2.to_ascii_lowercase().strip_prefix("mailto:").map(str::to_string)).collect();
     let starts: Vec<i64> = match get("RRULE") {
         None => vec![start],
         Some(rule) => {
@@ -118,8 +118,83 @@ fn expand(props: &[(String, String, String)], from: i64, to: i64, replaced: &std
         .into_iter()
         .filter(|s| s + length > from && *s < to)
         .filter(|s| !(series && replaced.contains(&(uid.clone(), *s))))
-        .map(|s| Event { title: title.clone(), start: s, end: s + length, attendees: attendees.clone() })
+        .map(|s| Event { title: title.clone(), start: s, end: s + length, attendees: attendees.clone(), emails: emails.clone() })
         .collect()
+}
+
+/// An event's organiser and invitees, rooms left out.
+fn people(props: &[(String, String, String)]) -> impl Iterator<Item = &(String, String, String)> {
+    props
+        .iter()
+        .filter(|p| p.0 == "ATTENDEE" || p.0 == "ORGANIZER")
+        .filter(|p| !p.1.to_ascii_uppercase().contains("CUTYPE=ROOM") && !p.1.to_ascii_uppercase().contains("CUTYPE=RESOURCE"))
+}
+
+/// A routine timed off the calendar, written where a cron goes: "calendar:60" an hour before every timed event,
+/// "calendar:60:meetings" only ones with someone else invited, "calendar:60:outside" only ones with someone from
+/// another email domain (someone outside the company).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Trigger {
+    /// Seconds before the event starts.
+    pub before: i64,
+    pub only: Only,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Only {
+    All,
+    Meetings,
+    Outside,
+}
+
+/// None: not a calendar trigger (a cron, say).
+pub fn trigger(spec: &str) -> Result<Option<Trigger>> {
+    let Some(rest) = spec.trim().strip_prefix("calendar:") else { return Ok(None) };
+    let (mins, only) = rest.split_once(':').unwrap_or((rest, ""));
+    let mins: i64 = mins.trim().parse().ok().filter(|m| (0..=2880).contains(m)).context("calendar:<minutes before, 0 to 2880>[:meetings|:outside], e.g. calendar:60:outside")?;
+    let only = match only.trim() {
+        "" => Only::All,
+        "meetings" => Only::Meetings,
+        "outside" => Only::Outside,
+        o => anyhow::bail!("'{o}' isn't a calendar filter: use meetings or outside"),
+    };
+    Ok(Some(Trigger { before: mins * 60, only }))
+}
+
+impl Trigger {
+    pub fn matches(&self, e: &Event) -> bool {
+        match self.only {
+            Only::All => true,
+            Only::Meetings => e.attendees.len() >= 2,
+            // ponytail: "outside" is more than one email domain on the invite; two people on gmail.com read as colleagues.
+            Only::Outside => {
+                let mut d: Vec<&str> = e.emails.iter().filter_map(|m| m.split_once('@').map(|x| x.1)).filter(|d| !d.ends_with("calendar.google.com")).collect();
+                d.sort();
+                d.dedup();
+                d.len() >= 2
+            }
+        }
+    }
+
+    /// The next time to run after `after`: the first matching event's start, less the lead time.
+    pub fn next(&self, events: &[Event], after: i64) -> Option<i64> {
+        events.iter().filter(|e| e.start - self.before > after && self.matches(e)).map(|e| e.start - self.before).min()
+    }
+
+    /// The event a run at `fire` is for.
+    pub fn event_at(&self, events: &[Event], fire: i64) -> Option<Event> {
+        events.iter().find(|e| e.start == fire + self.before && self.matches(e)).cloned()
+    }
+
+    /// In words, for a run's prompt and the bots' routine list.
+    pub fn words(&self) -> String {
+        let what = match self.only {
+            Only::All => "each calendar event",
+            Only::Meetings => "each meeting with someone else",
+            Only::Outside => "each meeting with someone outside",
+        };
+        format!("{} min before {what}", self.before / 60)
+    }
 }
 
 /// "20261007T090000Z", "TZID=Europe/Amsterdam" + "20261007T090000", or floating local time.
@@ -285,6 +360,28 @@ mod tests {
         let t = crate::db::now();
         let year = events_between(&body, t - 180 * 86_400, t + 180 * 86_400);
         println!("{} timed events in a year; {} lines of iCal", year.len(), body.lines().count());
+    }
+
+    #[test]
+    fn calendar_triggers() {
+        assert_eq!(trigger("0 8 * * *").unwrap(), None);
+        assert!(trigger("calendar:abc").is_err() && trigger("calendar:60:everyone").is_err() && trigger("calendar:9999").is_err());
+        let all = trigger("calendar:60").unwrap().unwrap();
+        let meetings = trigger("calendar:30:meetings").unwrap().unwrap();
+        let outside = trigger(" calendar:60:outside").unwrap().unwrap();
+        let ics = "BEGIN:VCALENDAR\nBEGIN:VEVENT\nSUMMARY:Focus\nDTSTART:20261007T080000Z\nEND:VEVENT\n\
+            BEGIN:VEVENT\nSUMMARY:Team sync\nDTSTART:20261007T090000Z\nORGANIZER;CN=Me:mailto:me@acme.com\nATTENDEE:mailto:Kim@ACME.com\nATTENDEE;CUTYPE=ROOM:mailto:r@other.com\nEND:VEVENT\n\
+            BEGIN:VEVENT\nSUMMARY:Pitch\nDTSTART:20261007T130000Z\nORGANIZER:mailto:me@acme.com\nATTENDEE;CN=Ana:mailto:ana@client.io\nEND:VEVENT\nEND:VCALENDAR\n";
+        let day = events_between(ics, at("2026-10-07T00:00:00Z"), at("2026-10-08T00:00:00Z"));
+        assert_eq!(day[1].emails, vec!["me@acme.com", "kim@acme.com"], "rooms aren't people");
+        let t0 = at("2026-10-07T00:00:00Z");
+        assert_eq!(all.next(&day, t0), Some(at("2026-10-07T07:00:00Z")));
+        assert_eq!(meetings.next(&day, t0), Some(at("2026-10-07T08:30:00Z")), "focus time is no meeting");
+        let fire = outside.next(&day, t0).unwrap();
+        assert_eq!(fire, at("2026-10-07T12:00:00Z"), "colleagues only isn't outside");
+        assert_eq!(outside.event_at(&day, fire).unwrap().title, "Pitch");
+        assert_eq!(outside.next(&day, fire), None, "once it has fired, that event is done");
+        assert_eq!(outside.words(), "60 min before each meeting with someone outside");
     }
 
     #[test]
