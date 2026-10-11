@@ -1,6 +1,6 @@
 import { copyText, inDesktop, insecureServer, invoke, saveDownload, keystore, localInvoke, platform, probe, remoteServer, setWebToken, connectServer, shortcut, trayName, webToken } from './api'
 import { Component, createContext, Fragment, type ReactNode, useCallback, useMemo, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { ask, askText, AskHost, tell, Avatar, Empty, Group, Icon, Row, Segmented, Switch, type Presence } from './ui'
+import { ask, askText, AskHost, tell, Avatar, Empty, Group, Icon, Row, Segmented, Switch, talkLabel, useHoldToTalk, type Presence } from './ui'
 import { ago, ahead, dayLabel, fullDay, fullTime, IDLE, pigment, PIGMENTS, schedule, setLooks, tok, usd, type Look } from './format'
 import { Markdown, openLink } from './markdown'
 import { moodOf, type Mood } from './face'
@@ -1431,6 +1431,7 @@ function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, openBot
   const [done, setDone] = useState<{ summary: string; ok: boolean; decision: string }[]>([])
   const [err, setErr] = useState<string | null>(null)
   const [failed, setFailed] = useState<string | null>(null)
+  const talk = useHoldToTalk(w => { setText(t => t.trim() ? `${t.trimEnd()} ${w}` : w); box.current?.focus() }, e => setErr(`Couldn't dictate: ${e}`))
   // The bot's face reacts for a moment when a reply ends: pleased, or startled when you stopped it.
   const [react, setReact] = useState<Mood | null>(null)
   const flash = (m: Mood, ms = 1500) => { setReact(m); setTimeout(() => setReact(r => (r === m ? null : r)), ms) }
@@ -1772,7 +1773,7 @@ function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, openBot
                 onDrop={e => { e.preventDefault(); setDragging(false); if (!incognito) addPhotos(e.dataTransfer.files) }}>
                 <span className="bot-pick" title={bots.length > 1 ? 'Choose a bot' : me.name}>
                   <Avatar id={me.id} name={me.name} size={28} alive beat={text.length}
-                    mood={working ? moodOf(step, draft) : react ?? (err ? 'sad' : text.trim() ? 'listening' : 'idle')} />
+                    mood={working ? moodOf(step, draft) : react ?? (talk.state !== 'idle' || text.trim() ? 'listening' : err ? 'sad' : 'idle')} />
                   {bots.length > 1 && (
                     <select value={botId} disabled={working} onChange={e => setBotId(Number(e.target.value))} aria-label="Bot to message">
                       {bots.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
@@ -1786,7 +1787,9 @@ function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, openBot
                 )}
                 <textarea ref={box} rows={1} placeholder={incognito ? `Message ${me.name} incognito` : `Message ${me.name}`} value={text} onChange={e => setText(e.target.value)} disabled={working} autoFocus
                   onPaste={e => { if (incognito) return; const imgs = [...e.clipboardData.files].filter(f => f.type.startsWith('image/')); if (imgs.length) { e.preventDefault(); addPhotos(imgs) } }}
+                  onKeyUp={talk.keys.onKeyUp} onBlur={talk.keys.onBlur}
                   onKeyDown={e => {
+                    talk.keys.onKeyDown(e)
                     if (e.key === 'Tab' && skillHits[0]) { e.preventDefault(); setText(`/${skillSlug(skillHits[0].name)} `); return }
                     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send() }
                   }} />
@@ -1798,7 +1801,8 @@ function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, openBot
                   ? <button type="button" className="send stop" aria-label="Stop" title="Stop" onClick={() => invoke('stop', { botId: replier, chatId: cid }).catch(e => setErr(`Couldn't stop it: ${e}`))}><span className="stop-square" /></button>
                   : <button className="send" aria-label="Send" disabled={!text.trim() && !photos.length}><Icon name="send" size={15} /></button>}
               </form>
-              <p className="composer-note">{platform === 'mac' ? 'Return to send · Shift-Return for a new line' : 'Enter to send · Shift+Enter for a new line'}</p>
+              <p className="composer-note">{talk.state === 'listening' ? `Listening… let go of ${talkLabel} to stop` : talk.state === 'writing' ? 'Writing it out…'
+                : (platform === 'mac' ? 'Return to send · Shift-Return for a new line' : 'Enter to send · Shift+Enter for a new line') + (inDesktop ? ` · Hold ${talkLabel} to talk` : '')}</p>
             </>
           ) : (
             <p className="composer-note">Reply from {CHANNEL[chat.channel]?.name ?? 'the app'}; this is a read-only view.</p>

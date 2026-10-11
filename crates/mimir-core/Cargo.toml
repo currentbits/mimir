@@ -29,6 +29,9 @@ futures-util = { version = "0.3.34", default-features = false, features = ["sink
 getrandom = "0.3.4"
 # Photos are shrunk to fit what a model takes inline (Grok's command line, API request sizes).
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
+# Voice notes (Telegram, Discord: Ogg Opus) decoded for the local whisper.cpp, no ffmpeg needed. Pure Rust.
+ogg = "0.9"
+opus-decoder = "0.1"
 # Text of PDFs people send their bots.
 pdf-extract = "0.12.1"
 url = "2"

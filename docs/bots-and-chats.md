@@ -41,6 +41,10 @@ What's shared and what isn't:
   same.
 - **Quick ask**: ⌥Space (Mac) or Ctrl+Alt+Space (Windows, Linux) opens a Spotlight-style panel from any app. It's the
   same built-in chat, so the exchange is there afterwards.
+- **Push-to-talk** (desktop app): in the chat box or quick ask, hold ⌥ (Mac) or Ctrl (Windows, Linux) on its own and
+  speak; let go and the words appear in the box, ready to edit and send. whisper.cpp transcribes them on your computer
+  (the speech model downloads once, the first time); nothing is sent until you send it. The microphone is the one
+  chosen for meetings.
 - **Telegram, Slack, Discord.** One bot can be on all three at once. Each connects *out* (long-polling, Socket Mode,
   the Gateway), so you don't need a public address. A chat that has been quiet for 12 hours starts a new conversation
   with its next message, opening with a short "where we left off" quoted from Mimir's log. Each reply then re-sends
@@ -115,7 +119,9 @@ or Dutch so far, by default the computer's language (a server's: its `LANG`). Th
 Send a photo on Telegram, Slack or Discord (up to 4 at once there), or paste or drop one into the app's chat, and the
 bot looks at it with your own AI (big photos are shrunk to what each model accepts). Voice notes (Slack's audio clips,
 Discord's voice messages) are transcribed with your OpenAI-compatible key
-(Settings → AI keys) and echoed back ("🎙️ I heard: …").
+(Settings → AI keys) if you've added one, else by whisper.cpp where the bot runs (built into the desktop app; on a
+server, an installed `whisper-cli`), and echoed back ("🎙️ I heard: …"). Telegram's and Discord's voice notes need
+nothing else; Slack's audio clips need `ffmpeg` installed for whisper.cpp.
 
 Send a **PDF** or a text file (`.txt`, `.md`, `.csv`, `.json`) on any of the apps, or drop or paste one into the app's
 chat (up to 20 MB), and the bot reads its text; the

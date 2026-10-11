@@ -2,6 +2,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { Face, type Mood } from './face'
 import { pigment, type Look } from './format'
+import { inDesktop, localInvoke, platform } from './api'
 
 // ---------------- icons (24px grid, stroked) ----------------
 
@@ -193,4 +194,43 @@ export function AskHost() {
       </form>
     </div>
   )
+}
+
+// ---------------- push-to-talk ----------------
+
+/** The key to hold for push-to-talk: Option on a Mac, Ctrl elsewhere (Alt alone would open Windows' window menu). */
+const TALK_KEY = platform === 'mac' ? 'Alt' : 'Control'
+export const talkLabel = platform === 'mac' ? '⌥' : 'Ctrl'
+
+/** Push-to-talk (desktop): hold the key on its own and speak; on release, whisper.cpp on this computer writes the words
+ *  into the box. Nothing is sent. The key with another one (⌥E for é, Ctrl+C) types as usual and drops the recording. */
+export function useHoldToTalk(add: (words: string) => void, fail: (e: string) => void) {
+  const [state, setState] = useState<'idle' | 'listening' | 'writing'>('idle')
+  const timer = useRef<number | undefined>(undefined)
+  const started = useRef<Promise<boolean> | null>(null)
+  const stop = (keep: boolean) => {
+    clearTimeout(timer.current)
+    timer.current = undefined
+    const s = started.current
+    if (!s) return
+    started.current = null
+    setState(keep ? 'writing' : 'idle')
+    // After the start has gone through, or the microphone would stay open.
+    s.then(ok => ok ? localInvoke<string>('dictate', { action: 'stop' }) : '')
+      .then(w => { if (keep && w.trim()) add(w.trim()) }, e => { if (keep) fail(String(e)) })
+      .finally(() => setState('idle'))
+  }
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (!inDesktop) return
+    if (e.key !== TALK_KEY) { stop(false); return }
+    if (e.repeat || timer.current || started.current) return
+    // A short hold, so a quick tap or a shortcut doesn't start the microphone.
+    timer.current = window.setTimeout(() => {
+      timer.current = undefined
+      setState('listening')
+      started.current = localInvoke('dictate', { action: 'start' }).then(() => true, err => { fail(String(err)); return false })
+    }, 250)
+  }
+  const onKeyUp = (e: React.KeyboardEvent) => { if (e.key === TALK_KEY) stop(true) }
+  return { state, keys: { onKeyDown, onKeyUp, onBlur: () => stop(false) } }
 }

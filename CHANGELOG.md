@@ -4,6 +4,11 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 
 ## Unreleased
 
+- **Push-to-talk:** in the chat or quick ask, hold ⌥ (Ctrl on Windows and Linux) and speak; let go and the words are
+  in the box, not sent. Transcribed on your computer by the same whisper.cpp as meetings.
+- **Voice notes without an API key:** with no OpenAI key, Telegram and Discord voice notes are transcribed by
+  whisper.cpp on your computer.
+
 - **Email providers that send on port 587 work:** Settings → Email has an *Outgoing port* next to the outgoing server.
   Empty is 465 as before; 587 (or any other port) uses STARTTLS. Saving used to set it back to 465 every time.
 

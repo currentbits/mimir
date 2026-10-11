@@ -27,7 +27,8 @@ to the services you connected.
   and the model's provider, or nowhere for a local model.
 - **The daily tidy-up** reads a chat's recent conversation with all your bots, on the AI account of the bot that does
   the tidy-up (Settings). So a conversation with a bot on a local model reaches that account too, if it's a cloud one.
-- **Voice notes** from Telegram are transcribed with your OpenAI-compatible key.
+- **Voice notes** are transcribed with your OpenAI-compatible key if you added one, else on the computer the bot runs
+  on. **Push-to-talk** in the app always transcribes on your computer.
 - **Messaging apps** carry the messages you exchange there (Telegram, Slack, Discord).
 - **Meetings**: transcription and speaker separation run on your computer. A transcript leaves only when a bot reads it
   (it then goes to that bot's AI account like any other message). Without the built-in engine, the OpenAI-compatible

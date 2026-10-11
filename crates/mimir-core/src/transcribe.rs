@@ -30,13 +30,76 @@ pub fn model_path(home: &Path, name: &str) -> PathBuf {
 
 /// Which engine transcribes here: "local" (whisper.cpp), "api" (the OpenAI-compatible key), or None.
 pub fn engine() -> Option<&'static str> {
-    if cfg!(feature = "local-whisper") || whisper_bin().is_some() {
+    if local() {
         Some("local")
     } else if crate::host::api_key("openai").is_some() {
         Some("api")
     } else {
         None
     }
+}
+
+fn local() -> bool {
+    cfg!(feature = "local-whisper") || whisper_bin().is_some()
+}
+
+/// A voice note's words: with the OpenAI-compatible key when there is one (as before), else whisper.cpp on this
+/// computer. None when there's neither.
+pub async fn voice_note(db: &crate::db::Db, audio: Vec<u8>, name: &str) -> Option<Result<String>> {
+    if crate::host::api_key("openai").is_some() {
+        return crate::provider::transcribe(audio, name).await;
+    }
+    if !local() {
+        return None;
+    }
+    let (home, model) = (db.dir(), model_name(db));
+    Some(
+        async {
+            if !audio.starts_with(b"OggS") {
+                // Slack's clips (mp4, webm) and the rest: ffmpeg, if it's installed.
+                let ext = Path::new(name).extension().and_then(|e| e.to_str()).filter(|e| e.chars().all(char::is_alphanumeric)).unwrap_or("audio");
+                let file = std::env::temp_dir().join(format!("mimir-{}.{ext}", crate::random_hex(6)?));
+                std::fs::write(&file, &audio)?;
+                let text = transcribe_file(&home, &model, &file).await;
+                let _ = std::fs::remove_file(&file);
+                return text;
+            }
+            let samples = tokio::task::spawn_blocking(move || ogg_opus_16k(&audio)).await??;
+            transcribe_samples(&home, &model, &samples).await
+        }
+        .await,
+    )
+}
+
+/// Ogg Opus (Telegram's and Discord's voice notes, WhatsApp's too) → 16 kHz mono samples.
+pub fn ogg_opus_16k(bytes: &[u8]) -> Result<Vec<f32>> {
+    let mut reader = ogg::PacketReader::new(std::io::Cursor::new(bytes));
+    let mut decoder = None;
+    let mut out = vec![];
+    let mut pcm = vec![0f32; 1_920]; // 120 ms at 16 kHz, Opus's longest packet
+    while let Some(p) = reader.read_packet().context("not a readable Ogg file")? {
+        if p.data.starts_with(b"OpusHead") {
+            decoder = Some(opus_decoder::OpusDecoder::new(16_000, 1)?);
+        } else if !p.data.starts_with(b"OpusTags") {
+            let d = decoder.as_mut().context("not an Opus voice note")?;
+            let n = d.decode_float(&p.data, &mut pcm, false)?;
+            out.extend_from_slice(&pcm[..n]);
+        }
+    }
+    decoder.context("not an Opus voice note")?;
+    Ok(out)
+}
+
+/// Transcribe 16 kHz mono samples (push-to-talk, a voice note). Empty text for silence.
+pub async fn transcribe_samples(home: &Path, model: &str, samples: &[f32]) -> Result<String> {
+    if !has_speech(samples) {
+        return Ok(String::new());
+    }
+    let wav = std::env::temp_dir().join(format!("mimir-{}.wav", crate::random_hex(6)?));
+    std::fs::write(&wav, wav_bytes(samples))?;
+    let text = transcribe_wav(home, model, &wav).await;
+    let _ = std::fs::remove_file(&wav);
+    text
 }
 
 /// Download whisper.cpp's model once (from its Hugging Face repo), into Mimir's home. The small voice-activity
@@ -645,6 +708,29 @@ mod tests {
         println!("{:?} turns {turns:?}", t.elapsed());
         let starts: Vec<f64> = turns.iter().map(|t| t.0 + 0.2).collect();
         println!("labels {:?}", super::assign_speakers(&starts, &turns));
+    }
+
+    #[test]
+    fn decodes_an_ogg_opus_voice_note() {
+        // 2.7 s of "Remind me to call the dentist tomorrow at nine." (macOS say → ffmpeg libopus, 12 kb/s).
+        let s = super::ogg_opus_16k(include_bytes!("../testdata/voice-note.ogg")).unwrap();
+        assert!((42_000..46_000).contains(&s.len()), "{} samples", s.len());
+        assert!(super::has_speech(&s));
+        assert!(super::ogg_opus_16k(b"OggS but not really").is_err() && super::ogg_opus_16k(b"ID3 an mp3").is_err());
+    }
+
+    /// MIMIR_TEST_MODEL=… cargo test -p mimir-core --features local-whisper voice_note_real -- --ignored --nocapture
+    #[cfg(feature = "local-whisper")]
+    #[tokio::test]
+    #[ignore]
+    async fn voice_note_real() {
+        let m = std::path::PathBuf::from(std::env::var("MIMIR_TEST_MODEL").unwrap());
+        let (home, name) = (m.parent().unwrap().parent().unwrap(), m.file_stem().unwrap().to_str().unwrap().trim_start_matches("ggml-"));
+        let s = super::ogg_opus_16k(include_bytes!("../testdata/voice-note.ogg")).unwrap();
+        let text = super::transcribe_samples(home, name, &s).await.unwrap();
+        println!("{text}");
+        assert!(text.to_lowercase().contains("dentist"), "{text}");
+        super::unload();
     }
 
     #[test]
