@@ -104,15 +104,18 @@ The [Security model](security.md) in terms of where it lives. Keep these when ch
     folder (`grok_trust`, `grok_rules`; Windows keeps `--rules`).
   - PDFs are read by `<binary> read-pdf` (`pdf_helper_main`).
   - The AI CLIs' transcripts are removed by `Provider::forget_session`.
-  - `Host::new` does startup cleanup (`incognito_leftovers`, `prune_old`, `tmp/`, old media). Never put that in
+  - `Host::new` does startup cleanup (`incognito_leftovers`, `prune_old`, `close_interrupted`, `tmp/`, old media). Never put that in
     `Db::open`: the tools server opens the database on every turn.
 - **Downloads.** `transcribe::download(url, path, min, sha256)` with pinned hashes. Models come from a fixed Hugging
   Face revision.
 
 ## Data
 
-One SQLite file in the data folder (`~/.mimir`, or `MIMIR_HOME`). Schema changes are additive (`add_col` in
-`Db::open`), so an older database opens in a newer build. Installs from before the rename to Mimir (`~/.botpoc`,
+One SQLite file in the data folder (`~/.mimir`, or `MIMIR_HOME`). Its schema version is `PRAGMA user_version`
+(`VERSION` in `db.rs`). A schema change bumps `VERSION` and adds a `migrate_v<n>` step to `migrate`. Each step runs
+once, in one transaction, after `VACUUM INTO mimir.db.before-<n>` (the last 2 are kept). An up-to-date database only
+reads its version. A database with a higher version than the build is refused, and the desktop app shows the error
+and the data folder in a dialog. Installs from before the rename to Mimir (`~/.botpoc`,
 `botpoc.db`) are moved over once on startup.
 
 ## Environment variables
