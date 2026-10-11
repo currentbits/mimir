@@ -1,0 +1,22 @@
+# Builds the server image (without pushing) when a pull request changes what goes into it, so a broken Dockerfile shows
+# up here and not at release time. image.yml builds and pushes the real one on a version tag.
+name: docker
+on:
+  pull_request:
+    paths: [Dockerfile, Cargo.lock, ui/package-lock.json]
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { persist-credentials: false }
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      # Reads the release build's cache (image.yml), doesn't write to it.
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64
+          push: false
+          cache-from: type=gha,scope=amd64

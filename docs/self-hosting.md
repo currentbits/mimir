@@ -81,6 +81,11 @@ docker compose pull && docker compose up -d
 Your data is kept: it's in the `mimir-data` volume, not in the container. To stay on one version, put
 `MIMIR_VERSION=0.1.0` in `.env`.
 
+When a new version changes how the database is laid out, it first copies it aside as `mimir.db.before-<n>` in the
+same folder (the last 2 are kept), so going back means stopping Mimir and putting that copy back as `mimir.db`. An
+older version won't open a database a newer one has upgraded: it stops with "This data was written by Mimir X"
+instead of changing it. The same holds for moving a database between the desktop app and a server.
+
 The server doesn't update itself, but it tells you: twice a day it looks for a newer release, and when there is one it
 says so **once per version** in your most recent private chat with your bots (Telegram, Slack or Discord; never a group
 or a guest's chat), with the commands above, and shows it at the top of **Needs you** until you've updated. Switch it
