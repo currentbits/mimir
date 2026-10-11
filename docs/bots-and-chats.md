@@ -36,6 +36,9 @@ What's shared and what isn't:
   working. **Stop** cuts a reply off; what was written so far stays, marked *Stopped*. A reply still being written in
   Telegram, Slack or Discord can be stopped from the app too: open it under **Activity**. "Start fresh" (or `/new`)
   begins a new conversation. When a reply saved a memory, its "Saved to memory" chip has **Undo**.
+  A chat opens on its newest 200 messages; **Show earlier messages** at the top pages back. **Search this chat**
+  (⌘F / Ctrl+F) finds older messages by their words, and a hit jumps to it. Telegram, Slack and Discord chats have the
+  same.
 - **Quick ask**: ⌥Space (Mac) or Ctrl+Alt+Space (Windows, Linux) opens a Spotlight-style panel from any app. It's the
   same built-in chat, so the exchange is there afterwards.
 - **Telegram, Slack, Discord.** One bot can be on all three at once. Each connects *out* (long-polling, Socket Mode,
@@ -77,6 +80,10 @@ chats use Telegram's own streaming, with a native stop button). A message answer
 asleep) starts with "Sorry for the slow reply". Messages sent while Mimir was off are picked up when it reconnects,
 up to a day back: Telegram keeps them for it; on Slack your DMs and @-mentions in paired channels (with the
 `channels:history` and `groups:history` scopes; not replies inside threads), on Discord your paired DMs and channels. A failed reply says why in plain words and what to do.
+
+A bot does one thing at a time per chat; its other chats don't wait. A message that arrives while that chat is busy
+(a routine running there, or an earlier reply waiting for your OK) shows typing at once, and after a few seconds one
+note: "Finishing a routine first…" or "Finishing my last reply first…". Its reply follows.
 
 Chat commands: `/memory`, `/routines`, `/new`, `/stop` (a bare "stop" works too while it's writing), `/undo <n>`
 (take back something it learned; see [Memory](memory.md#learned-this-week)), and `/<skill>` for each of the bot's
