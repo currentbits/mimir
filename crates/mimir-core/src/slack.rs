@@ -6,7 +6,7 @@
 //! enable Interactivity (for Approve/Deny buttons).
 
 use crate::db::Approval;
-use crate::runtime::{Chan, Core, File, Sender, Slot, card_text, parse_decision, verdict_for};
+use crate::runtime::{Chan, Core, File, Row, Sender, Slot, card_text, parse_decision, verdict_for};
 use anyhow::{Context, Result, bail};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
@@ -76,19 +76,31 @@ impl Slack {
         body
     }
 
-    pub(crate) async fn send(&self, channel: &str, text: &str) -> Result<()> {
-        self.finish(channel, None, text).await
-    }
-
-    /// Final reply in Slack mrkdwn; with a streamed draft, the draft becomes its first part.
-    pub(crate) async fn finish(&self, channel: &str, draft: Option<&str>, text: &str) -> Result<()> {
+    /// Final reply in Slack mrkdwn, with buttons under its last part; with a streamed draft, the draft becomes its first part.
+    pub(crate) async fn finish(&self, channel: &str, draft: Option<&str>, text: &str, rows: &[Row]) -> Result<()> {
         let mrkdwn = crate::fmt::slack(text);
         let chars: Vec<char> = mrkdwn.chars().collect();
-        for (i, chunk) in chars.chunks(3900).enumerate() {
+        // With buttons the text goes in a section block, which holds 3000 characters.
+        let size = if rows.is_empty() { 3900 } else { 2900 };
+        let last = chars.len().saturating_sub(1) / size;
+        for (i, chunk) in chars.chunks(size).enumerate() {
             let text = chunk.iter().collect::<String>();
+            let mut body = json!({"text": text});
+            if i == last && !rows.is_empty() {
+                let buttons: Vec<Value> = rows
+                    .iter()
+                    .flatten()
+                    .map(|(label, data)| json!({"type": "button", "action_id": data.replace(':', "_"), "value": data, "text": {"type": "plain_text", "text": label}}))
+                    .collect();
+                body["blocks"] = json!([{"type": "section", "text": {"type": "mrkdwn", "text": text}}, {"type": "actions", "elements": buttons}]);
+            }
             match draft.filter(|_| i == 0) {
-                Some(ts) => self.api("chat.update", &self.bot_token, json!({"channel": channel, "ts": ts, "text": text})).await?,
-                None => self.api("chat.postMessage", &self.bot_token, self.post(channel, json!({"text": text}))).await?,
+                Some(ts) => {
+                    body["channel"] = json!(channel);
+                    body["ts"] = json!(ts);
+                    self.api("chat.update", &self.bot_token, body).await?
+                }
+                None => self.api("chat.postMessage", &self.bot_token, self.post(channel, body)).await?,
             };
         }
         Ok(())
@@ -284,13 +296,26 @@ impl Slack {
         Ok(r.bytes().await?.to_vec())
     }
 
-    async fn on_button(&self, me: &Chan, core: &Core, p: &Value) -> Result<()> {
+    async fn on_button(&self, me: &Chan, core: &Arc<Core>, p: &Value) -> Result<()> {
         if p["type"] != "block_actions" {
             return Ok(());
         }
-        let Some((id, d)) = parse_decision(p["actions"][0]["value"].as_str().unwrap_or("")) else { return Ok(()) };
+        let data = p["actions"][0]["value"].as_str().unwrap_or("");
         let channel = p["channel"]["id"].as_str().unwrap_or("");
         let who = Sender { id: p["user"]["id"].as_str().unwrap_or(""), dm: channel.starts_with('D') };
+        let Some((id, d)) = parse_decision(data) else {
+            match core.tap(me, channel, who, data).await {
+                // The buttons give way to what the tap did; the message above them stays.
+                Ok(Some(did)) => {
+                    let mut blocks: Vec<Value> = p["message"]["blocks"].as_array().into_iter().flatten().filter(|b| b["type"] != "actions").cloned().collect();
+                    blocks.push(json!({"type": "context", "elements": [{"type": "mrkdwn", "text": crate::fmt::esc(&did)}]}));
+                    self.api("chat.update", &self.bot_token, json!({"channel": channel, "ts": p["message"]["ts"], "text": p["message"]["text"], "blocks": blocks})).await?;
+                }
+                Ok(None) => {}
+                Err(e) => drop(self.api("chat.postEphemeral", &self.bot_token, json!({"channel": channel, "user": who.id, "text": e.to_string()})).await?),
+            }
+            return Ok(());
+        };
         let text = match core.decide(me, channel, who, id, d) {
             Ok(Some(a)) => verdict_for(&a, d),
             Ok(None) => crate::say::tr("This request is no longer pending.").into(),

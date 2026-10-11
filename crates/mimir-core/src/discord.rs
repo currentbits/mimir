@@ -5,7 +5,7 @@
 // ponytail: no RESUME — on any gateway hiccup we reconnect and re-IDENTIFY
 
 use crate::db::Approval;
-use crate::runtime::{Chan, Core, File, Sender, Slot, card_text, parse_decision, verdict_for};
+use crate::runtime::{Chan, Core, File, Row, Sender, Slot, card_text, parse_decision, verdict_for};
 use anyhow::{Context, Result, bail};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
@@ -127,17 +127,21 @@ impl Discord {
         Ok(serde_json::from_str(&text).unwrap_or(Value::Null))
     }
 
-    pub(crate) async fn send(&self, channel: &str, text: &str) -> Result<()> {
-        self.finish(channel, None, text).await
-    }
-
-    /// Final reply (Discord speaks Markdown); with a streamed draft, the draft becomes its first part.
-    pub(crate) async fn finish(&self, channel: &str, draft: Option<&str>, text: &str) -> Result<()> {
+    /// Final reply (Discord speaks Markdown), with buttons under its last part; with a streamed draft, the draft
+    /// becomes its first part.
+    pub(crate) async fn finish(&self, channel: &str, draft: Option<&str>, text: &str, rows: &[Row]) -> Result<()> {
         // Discord caps messages at 2000 chars. The rest follows the draft into its thread, if it's in one.
         let mut to = self.dest(channel);
         let chars: Vec<char> = text.chars().collect();
+        let last = chars.len().saturating_sub(1) / 1900;
         for (i, chunk) in chars.chunks(1900).enumerate() {
-            let body = Some(json!({"content": chunk.iter().collect::<String>()}));
+            let mut body = json!({"content": chunk.iter().collect::<String>()});
+            if i == last && !rows.is_empty() {
+                // A row of grey buttons per row (Discord takes five rows of five, labels up to 80 characters).
+                let row = |r: &Row| json!({"type": 1, "components": r.iter().map(|(l, d)| json!({"type": 2, "style": 2, "label": crate::tools::truncate(l, 80), "custom_id": d})).collect::<Vec<_>>()});
+                body["components"] = json!(rows.iter().take(5).map(row).collect::<Vec<_>>());
+            }
+            let body = Some(body);
             match draft.filter(|_| i == 0) {
                 Some(d) => {
                     let (at, id) = self.at(channel, d);
@@ -363,16 +367,28 @@ impl Discord {
         Ok(self.http.get(u).send().await?.error_for_status()?.bytes().await?.to_vec())
     }
 
-    async fn on_button(&self, me: &Chan, core: &Core, d: &Value) -> Result<()> {
-        let Some((id, choice)) = parse_decision(d["data"]["custom_id"].as_str().unwrap_or("")) else { return Ok(()) };
+    async fn on_button(&self, me: &Chan, core: &Arc<Core>, d: &Value) -> Result<()> {
+        let data = d["data"]["custom_id"].as_str().unwrap_or("");
+        if parse_decision(data).is_none() && !data.starts_with("tp:") {
+            return Ok(());
+        }
         let raw = d["channel_id"].as_str().unwrap_or("");
         let channel = &if d["guild_id"].is_null() { raw.to_string() } else { self.home(me, core, raw).await };
         // 7 = update the message the button is on; 4 + ephemeral flag = private reply.
-        let from = d["member"]["user"]["id"].as_str().or(d["user"]["id"].as_str()).unwrap_or("");
-        let body = match core.decide(me, channel, Sender { id: from, dm: d["guild_id"].is_null() }, id, choice) {
-            Ok(Some(a)) => json!({"type": 7, "data": {"content": verdict_for(&a, choice), "components": []}}),
-            Ok(None) => json!({"type": 4, "data": {"content": crate::say::tr("This request is no longer pending."), "flags": 64}}),
-            Err(e) => json!({"type": 4, "data": {"content": e.to_string(), "flags": 64}}),
+        let from = Sender { id: d["member"]["user"]["id"].as_str().or(d["user"]["id"].as_str()).unwrap_or(""), dm: d["guild_id"].is_null() };
+        let private = |text: String| json!({"type": 4, "data": {"content": text, "flags": 64}});
+        let body = match parse_decision(data) {
+            Some((id, choice)) => match core.decide(me, channel, from, id, choice) {
+                Ok(Some(a)) => json!({"type": 7, "data": {"content": verdict_for(&a, choice), "components": []}}),
+                Ok(None) => private(crate::say::tr("This request is no longer pending.").into()),
+                Err(e) => private(e.to_string()),
+            },
+            // The buttons give way to a small line saying what the tap did; the message above them stays.
+            None => match core.tap(me, channel, from, data).await {
+                Ok(Some(did)) => json!({"type": 7, "data": {"content": format!("{}\n-# {}", d["message"]["content"].as_str().unwrap_or(""), crate::tools::truncate(&did, 90)), "components": []}}),
+                Ok(None) => return Ok(()),
+                Err(e) => private(e.to_string()),
+            },
         };
         let path = format!("/interactions/{}/{}/callback", d["id"].as_str().unwrap_or(""), d["token"].as_str().unwrap_or(""));
         self.api(reqwest::Method::POST, &path, Some(body)).await?;
