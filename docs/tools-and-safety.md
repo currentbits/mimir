@@ -9,6 +9,7 @@ Bots act through **tools**. Every tool call is checked against your rules before
 | `memory_store`, `memory_search` | Save and look up memories ([Memory](memory.md)) | allow |
 | `chat_search` | Search earlier conversations with you (any of your bots) for what was said but not saved | allow |
 | `memory_forget` | Forget a memory | **ask** |
+| `card_read`, `card_write` | Read this chat's pinned cards, and write one whole (a shopping list, bills due): text, checklists, tables and links, never HTML; up to 20 a chat ([Pinned cards](bots-and-chats.md#pinned-cards)). Not in incognito. A card written after reading outside content counts as outside content for whoever reads it next | allow |
 | `routine_create`, `routine_list` | Schedule and list routines, recurring or once (a reminder) ([Routines](routines.md)) | allow |
 | `routine_update` | Change a routine's brief, schedule, quiet or watch (when you reply to its result with what to change); a bot allowed `routine_create` may use it | allow |
 | `routine_delete` | Delete a routine | **ask** |

@@ -70,6 +70,8 @@ pub fn step_label(tool: &str) -> String {
         "file_write" => "Writing a file".into(),
         "file_delete" => "Deleting a file".into(),
         "send_file" => "Sending a file".into(),
+        "card_read" => "Reading the pinned cards".into(),
+        "card_write" => "Updating a pinned card".into(),
         "skill_save" => "Writing it down as a skill".into(),
         "skill_view" => "Reading a skill".into(),
         "plan_propose" => "Waiting for your OK on a plan".into(),

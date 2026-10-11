@@ -359,6 +359,25 @@ a { color: inherit; }
 .md blockquote { margin: 0.3em 0 0.7em; padding-left: 11px; border-left: 2px solid var(--line-strong); color: var(--text-2); }
 .md a { color: var(--pig, var(--text)); text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--pig, var(--text)) 40%, transparent); text-underline-offset: 2px; cursor: pointer; }
 .md a:hover { text-decoration-color: currentColor; }
+.md ul.md-checks { list-style: none; padding-left: 0; }
+.md-check { display: inline-flex; gap: 8px; align-items: baseline; }
+.md-check input { accent-color: var(--pig, var(--text)); margin: 0; transform: translateY(1px); }
+.md-check input:enabled { cursor: pointer; }
+.md-check.done { color: var(--text-3); text-decoration: line-through; text-decoration-color: var(--line-strong); }
+.md-table { overflow-x: auto; margin: 0.3em 0 0.8em; }
+.md table { border-collapse: collapse; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.md th, .md td { text-align: left; padding: 4px 14px 4px 0; border-bottom: 0.5px solid var(--line); vertical-align: top; }
+.md th { color: var(--text-2); font-weight: 600; }
+
+/* Cards a bot keeps up to date, pinned above the chat. */
+.pinned-cards { max-width: 720px; width: 100%; margin: 0 auto; padding: 14px 32px 0; display: grid; gap: 8px; }
+.pinned-card { border: 0.5px solid var(--line-strong); border-left: 2px solid var(--pig); border-radius: 9px; background: var(--surface); padding: 8px 12px; }
+.pinned-card summary { display: flex; align-items: center; gap: 7px; cursor: pointer; list-style: none; color: var(--text-2); }
+.pinned-card summary::-webkit-details-marker { display: none; }
+.pinned-card .pinned-title { font-family: var(--serif); color: var(--text); font-size: 14px; flex: 1; }
+.pinned-card .hint { font-size: 11px; }
+.pinned-card[open] summary { margin-bottom: 6px; }
+.pinned-card .md { max-height: 260px; overflow-y: auto; }
 .caret { display: inline-block; width: 7px; height: 1.05em; margin-left: 2px; vertical-align: -0.15em; border-radius: 2px; background: var(--pig, var(--text)); animation: blink 1s steps(2, start) infinite; }
 @keyframes blink { to { visibility: hidden; } }
 @media (prefers-reduced-motion: reduce) { .caret { animation: none; opacity: .6; } }

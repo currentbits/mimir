@@ -956,6 +956,10 @@ impl Host {
             "set_watch" => ok(self.db.routine_set_watch(arg(a, "chat_id")?, arg(a, "id")?, &arg::<String>(a, "watch")?)?),
             // Only the person sets this (no bot tool does): what the bot read can't widen what comes through.
             "set_urgent" => ok(self.db.routine_set_urgent(arg(a, "chat_id")?, arg(a, "id")?, &arg::<String>(a, "rule")?)?),
+            // Pinned cards: the chat's, and your own edits to them (a tick writes back as yours; bots see it next read).
+            "cards" => ok(self.db.cards(arg(a, "chat_id")?)?),
+            "card_tick" => ok(self.db.card_tick(arg(a, "chat_id")?, arg(a, "id")?, arg(a, "line")?, &arg::<String>(a, "text")?)?),
+            "card_delete" => ok(self.db.card_delete(arg(a, "chat_id")?, arg(a, "id")?)?),
             "set_delivery" => ok(self.db.routine_set_delivery(arg(a, "chat_id")?, arg(a, "id")?, &arg::<String>(a, "delivery")?)?),
             // How full standing memory is (the Memory tab's meter).
             "standing_memory" => {

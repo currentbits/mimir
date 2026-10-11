@@ -1463,6 +1463,7 @@ impl Core {
         let how = match (if urgent { "now" } else { r.delivery.as_str() }, &target) {
             ("digest", _) => "in the digest".to_string(),
             ("log", _) => "only in the log".to_string(),
+            ("card", _) => if worked { "on its card" } else { "only in the log" }.to_string(),
             (_, None) => "in the app".to_string(),
             (_, Some((c, ext))) => {
                 // A result gets one-tap feedback (a reminder, Done or Snooze); a failure doesn't.

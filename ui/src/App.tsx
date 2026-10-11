@@ -3,6 +3,7 @@ import { Component, createContext, Fragment, type ReactNode, useCallback, useMem
 import { ask, askText, AskHost, tell, Avatar, Empty, Group, Icon, Row, Segmented, Switch, type Presence } from './ui'
 import { ago, ahead, dayLabel, fullDay, fullTime, IDLE, pigment, PIGMENTS, schedule, setLooks, tok, usd, type Look } from './format'
 import { Markdown, openLink, SentFile, splitSent } from './markdown'
+import { PinnedCards } from './cards'
 import { moodOf, type Mood } from './face'
 import { EXTRAS, EYES, SHAPES, traits } from './face-core'
 
@@ -273,7 +274,7 @@ function RoutineCard({ id, chatId, onChange }: { id: number; chatId: number; onC
       <div className="rc-head">
         <span className={'ri' + (r.quiet ? ' quiet' : '')}><Icon name={r.quiet ? 'moon' : 'clock'} size={15} /></span>
         <div className="rc-main">
-          <div className="rt">{when(r)}{r.quiet && <span className="badge pending">Quiet</span>}{(r.paused || held !== undefined) && <span className="badge">Paused</span>}{r.delivery === 'digest' && <span className="badge">In digest</span>}{r.delivery === 'log' && <span className="badge">Log only</span>}</div>
+          <div className="rt">{when(r)}{r.quiet && <span className="badge pending">Quiet</span>}{(r.paused || held !== undefined) && <span className="badge">Paused</span>}{r.delivery === 'digest' && <span className="badge">In digest</span>}{r.delivery === 'log' && <span className="badge">Log only</span>}{r.delivery === 'card' && <span className="badge">On a card</span>}</div>
           <div className="rp selectable">{r.prompt}</div>
           <div className="rm">{r.paused ? 'Paused' : held !== undefined ? `${pausedText(held)} with its bot` : r.next_fire >= IDLE ? 'Runs when a matching event is on the calendar' : `Next run ${ahead(r.next_fire)}`} · change it any time in Routines</div>
         </div>
@@ -297,7 +298,7 @@ type EntryRow = {
   /** Kept by one bot only (0: all bots). */
   for_bot?: number
 }
-type Delivery = 'now' | 'digest' | 'log'
+type Delivery = 'now' | 'digest' | 'log' | 'card'
 type Routine = { id: number; bot_id: number; quiet: boolean; paused: boolean; chat_id: number; cron: string; prompt: string; next_fire: number; delivery: Delivery; once?: boolean; watch?: string; urgent?: string }
 /** When a routine runs, in words: its schedule, or the one time a one-off (a reminder) runs. */
 const when = (r: Routine) => r.once ? `Once · ${fullTime(r.next_fire)}` : schedule(r.cron)
@@ -1776,6 +1777,7 @@ function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, openBot
   return (
     <div className="page view-in" ref={scroller} onScroll={onScroll}>
       <div className="chat">
+        {!incognito && <PinnedCards chatId={chat.chat_id} botId={mine} botName={id => botOf(id).name} />}
         {!incognito && (msgs.length > 0 || hasEarlier) && (
           <div className="chat-search">
             <label className="search"><Icon name="search" size={14} />
@@ -2655,8 +2657,8 @@ function RoutineForm({ draft, setDraft, bots, onCancel, onSave, inline, skills =
       )}
       <div className="field-label"><span>Send it</span>
         <Segmented size="sm" label="Send it" value={draft.delivery} onChange={delivery => setDraft({ ...draft, delivery })}
-          options={[{ id: 'now', label: 'Right away' }, { id: 'digest', label: 'In my daily digest' }, { id: 'log', label: 'Just log it' }]} />
-        <span className="hint">{draft.delivery === 'now' ? 'A message (and a notification) as soon as it runs.' : draft.delivery === 'digest' ? 'Collected into one message a day, at the time set in Settings.' : 'Nothing is sent; see what it found in Activity.'}</span>
+          options={[{ id: 'now', label: 'Right away' }, { id: 'digest', label: 'In my daily digest' }, { id: 'card', label: 'Update a card' }, { id: 'log', label: 'Just log it' }]} />
+        <span className="hint">{draft.delivery === 'now' ? 'A message (and a notification) as soon as it runs.' : draft.delivery === 'digest' ? 'Collected into one message a day, at the time set in Settings.' : draft.delivery === 'card' ? 'Nothing is sent: it rewrites a card pinned at the top of the chat (a list, bills due). Tick items there yourself.' : 'Nothing is sent; see what it found in Activity.'}</span>
       </div>
       <label className="field-label"><span>Come through right away if (optional)</span>
         <input className="input" value={draft.urgent} maxLength={200} placeholder="e.g. my flight is delayed or cancelled" onChange={e => setDraft({ ...draft, urgent: e.target.value })} />
@@ -2726,7 +2728,7 @@ function RoutinesView({ chatId, bots }: { chatId: number; bots: Bot[] }) {
                 <div className={'routine' + (r.paused || held !== undefined ? ' paused' : '')} key={r.id}>
                   <span className={'ri' + (r.quiet ? ' quiet' : '')}><Icon name={r.quiet ? 'moon' : 'clock'} /></span>
                   <div>
-                    <div className="rt">{when(r)}{r.quiet && <span className="badge pending" title="Read-only; speaks up only when something needs your attention">Quiet</span>}{(r.paused || held !== undefined) && <span className="badge">Paused</span>}{r.delivery === 'digest' && <span className="badge" title="Collected into your daily digest">In digest</span>}{r.delivery === 'log' && <span className="badge" title="Not sent; see Activity">Log only</span>}{r.urgent && <span className="badge" title={`Comes through right away if: ${r.urgent}`}>Urgent if…</span>}{r.quiet && r.watch && <span className="badge" title="Mimir looks first and only runs the AI when this changed">Watching {r.watch === 'mail' ? 'mail' : (() => { try { return new URL(r.watch).host } catch { return r.watch } })()}</span>}</div>
+                    <div className="rt">{when(r)}{r.quiet && <span className="badge pending" title="Read-only; speaks up only when something needs your attention">Quiet</span>}{(r.paused || held !== undefined) && <span className="badge">Paused</span>}{r.delivery === 'digest' && <span className="badge" title="Collected into your daily digest">In digest</span>}{r.delivery === 'log' && <span className="badge" title="Not sent; see Activity">Log only</span>}{r.delivery === 'card' && <span className="badge" title="Updates a card pinned at the top of the chat; nothing is sent">On a card</span>}{r.urgent && <span className="badge" title={`Comes through right away if: ${r.urgent}`}>Urgent if…</span>}{r.quiet && r.watch && <span className="badge" title="Mimir looks first and only runs the AI when this changed">Watching {r.watch === 'mail' ? 'mail' : (() => { try { return new URL(r.watch).host } catch { return r.watch } })()}</span>}</div>
                     <div className="rp selectable">{r.prompt}</div>
                     <div className="rm"><Avatar id={b.id} name={b.name} size={16} still /><span>{b.name}</span><span>·</span><span>{r.paused ? 'Won’t run until you turn it back on' : held !== undefined ? `${pausedText(held)} with ${b.name}; ${r.once ? 'it runs once then' : 'runs in between are skipped, not caught up'}` : r.next_fire >= IDLE ? 'No matching event on the calendar this week' : `${r.once ? 'Runs' : 'Next run'} ${ahead(r.next_fire)}${r.once ? ', then it’s gone' : ''}`}</span></div>
                     <RoutineHealth s={stats.data?.find(x => x.id === r.id)} onReset={() => invoke('reset_watch_noise', { chatId, id: r.id }).then(stats.reload, e => setErr(String(e)))} />

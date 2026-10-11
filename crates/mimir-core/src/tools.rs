@@ -348,6 +348,15 @@ pub fn specs() -> Vec<(&'static str, &'static str, Value)> {
             json!({"type":"object","properties":{"cron":{"type":"string"},"at":{"type":"string","description":"YYYY-MM-DD HH:MM, for a one-off instead of cron"},"prompt":{"type":"string"},"quiet":{"type":"boolean"},"watch":{"type":"string","description":"quiet checks only: a page or feed URL, or \"mail\""},"for":{"type":"string","description":"a household member's name, to send it to their chat instead of this one"}},"required":["prompt"]}),
         ),
         ("routine_list", "List this chat's routines.", json!({"type":"object","properties":{}})),
+        ("card_read", "Read this chat's pinned cards (a shopping list, bills due, a project's state): each one's title and what it says now, including items the person ticked.", json!({"type":"object","properties":{}})),
+        (
+            "card_write",
+            "Write a card pinned in this chat, whole: the one with this title, or a new one. Use it for a list or state the \
+             person keeps coming back to (\"add oat milk to my shopping list\"): it's quieter than a message. card_read \
+             first, and keep what's there (and the person's ticks) unless they asked otherwise. Markdown only: text, \
+             checklists (- [ ] item / - [x] item), tables and links; never HTML. Up to 6,000 characters.",
+            json!({"type":"object","properties":{"title":{"type":"string"},"body":{"type":"string"}},"required":["title","body"]}),
+        ),
         (
             "routine_update",
             "Change one of this chat's routines: what it does (prompt), when (cron), quiet, or watch. Use it when the person \
@@ -519,9 +528,9 @@ fn is_read_only(db: &Db, tool: &str) -> bool {
 /// What a bot may do in a guest's chat: their own memory, routines, files and skills, the web, and calendar links.
 /// Nothing of yours (email, calendar, meetings, saved logins and the browser, tool servers, the computer), and no new
 /// bots in your app.
-const GUEST_TOOLS: [&str; 21] = [
+const GUEST_TOOLS: [&str; 23] = [
     "memory_store", "memory_search", "memory_forget", "chat_search", "routine_create", "routine_update", "routine_list", "routine_delete", "web_fetch", "web_search",
-    "file_list", "file_read", "file_write", "file_delete", "skill_view", "skill_save", "calendar_add", "plan_propose", "ask_bot", "ask_choice", "send_file",
+    "file_list", "file_read", "file_write", "file_delete", "skill_view", "skill_save", "calendar_add", "plan_propose", "ask_bot", "ask_choice", "send_file", "card_read", "card_write",
 ];
 
 fn usable(ctx: &ToolCtx, tool: &str) -> bool {
@@ -554,7 +563,7 @@ fn usable(ctx: &ToolCtx, tool: &str) -> bool {
         // Adding to it, once one is connected for that (CalDAV), likewise.
         && (tool != "calendar_create" || (crate::caldav::account(&ctx.db).is_some() && ctx.db.chat_private(ctx.chat_id)))
         // The browser keeps a profile (history, cookies) on disk, so it's out too.
-        && !(ctx.incognito() && (tool.starts_with("memory_") || tool.starts_with("meeting_") || tool.starts_with("email_") || tool.starts_with("calendar_create") || tool == "calendar_list" || tool == "chat_search" || tool == "skill_save" || tool.starts_with("routine_") || tool == "ask_bot" || tool.starts_with("browser__")))
+        && !(ctx.incognito() && (tool.starts_with("memory_") || tool.starts_with("meeting_") || tool.starts_with("email_") || tool.starts_with("calendar_create") || tool == "calendar_list" || tool == "chat_search" || tool == "skill_save" || tool.starts_with("routine_") || tool.starts_with("card_") || tool == "ask_bot" || tool.starts_with("browser__")))
 }
 
 /// chat_search results for the model: "[Mon 5 Oct 2026 14:02] You: …" / "Ada: …", flagging replies that came from
@@ -664,9 +673,9 @@ fn lines(v: &[Entry]) -> String {
 // ---------------- policy ----------------
 
 /// Tools that only read; they never need approval, even after untrusted content.
-pub const READ_ONLY: [&str; 14] = [
+pub const READ_ONLY: [&str; 15] = [
     "memory_search", "chat_search", "meeting_search", "meeting_read", "calendar_list", "calendar_add", "email_search", "email_read", "file_list", "file_read",
-    "routine_list", "skill_view", "web_fetch", "web_search",
+    "routine_list", "card_read", "skill_view", "web_fetch", "web_search",
 ];
 
 /// Built-in rule when the user hasn't set one: destructive actions ask, everything else is allowed.
@@ -881,6 +890,8 @@ fn describe(ctx: &ToolCtx, name: &str, args: &Value) -> String {
             args["notes"].as_str().filter(|n| !n.trim().is_empty()).map(|n| format!(" — {n}")).unwrap_or_default()
         ),
         "routine_list" => "List routines".into(),
+        "card_read" => "Read the pinned cards".into(),
+        "card_write" => format!("Update the card \"{}\"", args["title"].as_str().unwrap_or("")),
         "ask_choice" => format!("Ask \"{}\" with buttons", truncate(args["question"].as_str().unwrap_or(""), 120)),
         "skill_view" => format!("Read skill \"{}\"", args["name"].as_str().unwrap_or("")),
         "skill_save" => format!("Save as a skill: {}", args["title"].as_str().unwrap_or("")),
@@ -1903,6 +1914,22 @@ async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
                     .join("\n")
             }
         }
+        "card_read" => {
+            let v = ctx.db.cards(ctx.chat_id)?;
+            // A card a page-reading run wrote holds someone else's words.
+            if v.iter().any(|k| k.tainted) {
+                ctx.taint();
+            }
+            if v.is_empty() {
+                "no cards".into()
+            } else {
+                v.iter().map(|k| format!("## {}\n({}, {})\n{}", k.title, if k.by_you { "last changed by the person" } else { "last written by a bot" }, fmt_ts(k.updated_at), k.body)).collect::<Vec<_>>().join("\n\n")
+            }
+        }
+        "card_write" => {
+            let k = ctx.db.card_write(ctx.bot_id, ctx.chat_id, s(args, "title")?, s(args, "body")?, ctx.is_tainted())?;
+            format!("card \"{}\" updated; the person sees it pinned in this chat", k.title)
+        }
         "routine_delete" => {
             if ctx.db.routine_delete(ctx.chat_id, i(args, "id")?)? { "deleted".into() } else { "no such routine".into() }
         }
@@ -2896,6 +2923,25 @@ mod tests {
         assert!(call(&bare, "memory_store", &json!({"type": "knowledge", "title": "Gym", "body": "Mondays", "source": "x"})).await.unwrap().starts_with("REHEARSAL"));
         let from_args = crate::mcp::ctx_from_args(db.clone(), &ctx.mcp_args()).unwrap();
         assert!(from_args.rehearsal);
+    }
+
+    #[tokio::test]
+    async fn cards_are_written_whole_and_carry_their_source() {
+        let p = std::env::temp_dir().join(format!("mimir-cards-tool-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let ctx = ToolCtx::new(Db::open(&p).unwrap(), 1, 9);
+        assert_eq!(call(&ctx, "card_read", &json!({})).await.unwrap(), "no cards");
+        call(&ctx, "card_write", &json!({"title": "Shopping", "body": "- [ ] oat milk"})).await.unwrap();
+        let k = ctx.db.cards(9).unwrap().remove(0);
+        ctx.db.card_tick(9, k.id, 0, "- [ ] oat milk").unwrap();
+        let out = call(&ctx, "card_read", &json!({})).await.unwrap();
+        assert!(out.contains("## Shopping") && out.contains("- [x] oat milk") && out.contains("changed by the person"), "{out}");
+        assert!(!ctx.is_tainted());
+        // Written after reading a page: whoever reads it next has read that page too.
+        ctx.db.card_write(1, 9, "News", "- a headline", true).unwrap();
+        call(&ctx, "card_read", &json!({})).await.unwrap();
+        assert!(ctx.is_tainted());
+        assert!(!usable(&ToolCtx::new(ctx.db.clone(), 1, crate::INCOGNITO_CHAT), "card_write"), "incognito keeps nothing");
     }
 
     #[tokio::test]
