@@ -329,6 +329,14 @@ a { color: inherit; }
 
 .chat { display: flex; flex-direction: column; min-height: 100%; }
 .thread { flex: 1; max-width: 720px; width: 100%; margin: 0 auto; padding: 28px 32px 12px; display: flex; flex-direction: column; gap: 18px; }
+.chat-search { position: sticky; top: 0; z-index: 3; max-width: 720px; width: 100%; margin: 0 auto; padding: 10px 32px 0; background: linear-gradient(to top, transparent, var(--bg) 30%); }
+.chat-search .search { display: block; max-width: 240px; margin-left: auto; }
+.chat-search .input { height: 28px; font-size: 12.5px; }
+.chat-search .transcript { margin: 6px 0 0; max-height: 320px; box-shadow: var(--shadow-md); }
+.chat-search .tl { grid-template-columns: 84px 86px 1fr; }
+.chat-search .tl .mono { white-space: nowrap; }
+.show-earlier { align-self: center; }
+.msg-hit { outline: 2px solid var(--pending); outline-offset: 4px; border-radius: 10px; transition: outline-color 600ms; }
 .msg-user { align-self: flex-end; max-width: 78%; padding: 8px 13px; border-radius: 16px 16px 5px 16px; background: var(--sunken); font-size: 14px; line-height: 1.5; white-space: pre-wrap; word-wrap: break-word; }
 .msg-bot { display: grid; grid-template-columns: 26px 1fr; gap: 11px; }
 .msg-head { display: flex; align-items: baseline; gap: 8px; margin: 3px 0 3px; }
