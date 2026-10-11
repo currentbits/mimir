@@ -96,7 +96,7 @@ check('forgotten memory leaves the list', await until(async () => (await p.getBy
 // Skills: add one from the library
 await tab('Skills').click(); await p.waitForTimeout(1200)
 const add = p.getByRole('button', { name: /^Add/ }).first()
-check('library Add button', (await add.count()) > 0)
+check('library Add button', (await add.count()) > 0, (await main()).replace(/\s+/g, ' ').slice(0, 600))
 if (await add.count()) { await add.click(); await p.waitForTimeout(1200) }
 check('skill added', (await main()).match(/Morning briefing|Inbox triage|added/i) !== null)
 
