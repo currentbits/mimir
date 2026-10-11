@@ -7,6 +7,7 @@ The bot's name comes from its instructions ("Your name is …"). A bot named Sea
 task. Any other bot looks at your latest message for a word in capitals and calls the tool it stands for, then
 replies "DONE <tool>: <the tool's result>":
 
+    REMIND SAM → routine_create for Sam    HOUSEHOLD → memory_store to the household
     ASK SEARCH → ask_bot    MAKE BOT → bot_create    ROUTINE → routine_create    REMEMBER → memory_store
     FORGET <n> → memory_forget(n)    CHOOSE → ask_choice    FILE → file_write    LIST FILES → file_list    DELETE ROUTINE <n> → routine_delete(n)
 
@@ -24,6 +25,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8899
 SCRIPT = [
+    ("REMIND SAM", "routine_create", lambda m: {"at": time.strftime("%Y-%m-%d 18:00", time.localtime(time.time() + 86400)), "prompt": "Remind Sam to take the bins out", "for": "Sam"}),
+    ("HOUSEHOLD", "memory_store", lambda m: {"type": "task", "title": "Shopping list", "body": "milk, bread", "household": True}),
     ("ASK SEARCH", "ask_bot", lambda m: {"bot": "Search", "task": "Check the title tag of heymimir.app"}),
     ("MAKE BOT", "bot_create", lambda m: {"name": "Scout", "role": "You watch prices and only speak up when one drops."}),
     ("DELETE ROUTINE", "routine_delete", lambda m: {"id": int(re.search(r"DELETE ROUTINE (\d+)", m).group(1))}),

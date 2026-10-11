@@ -116,6 +116,9 @@ fn block(tag: &str, entries: &[Entry]) -> String {
 /// The app's incognito chat: no memory in or out, no chat history, no run log, no saved CLI session.
 /// Its messages live only in the window; each turn gets them back as `history`.
 pub const INCOGNITO_CHAT: i64 = -1;
+/// The household's memories: shared by you and the guests you add (see `Db::in_household`).
+pub const HOUSEHOLD_CHAT: i64 = -2;
+pub const HOUSEHOLD: &str = "chat:-2";
 
 /// Hours a messaging chat can sit idle before its next message starts a new CLI session (setting `fresh_after_hours`, 0 = never).
 pub const FRESH_AFTER_HOURS: i64 = 12;
@@ -682,16 +685,34 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
     } else {
         ""
     };
+    let family = if ctx.db.chat_family(ctx.chat_id) {
+        "\n\nThis is a family group: several people of the household talk to you here, and each message starts with who \
+         wrote it (\"Sam: …\"). Answer that person."
+    } else {
+        ""
+    };
+    // The household: memories and lists shared with the people the person who runs you chose (a shopping list).
+    let household = if ctx.db.in_household(ctx.chat_id) {
+        let name = ctx.db.chat_title(HOUSEHOLD_CHAT).unwrap_or_default();
+        format!(
+            "\n<household name=\"{}\">\nShared by everyone in the household (lists, plans, who does what). To add to or change one of \
+             these, use memory_store with household: true (and supersedes to update a list).\n{}</household>\n",
+            name.replace(['"', '<', '>'], ""),
+            ctx.db.bootstrap(HOUSEHOLD, ctx.bot_id)?.iter().map(|e| e.line() + "\n").collect::<String>()
+        )
+    } else {
+        String::new()
+    };
     let system = format!(
-        "Your name is {}. {PERSONA}{role}{guest}{}{team}{logins}{plans}{skills}\n\nCurrent local time: {}.\n{}",
+        "Your name is {}. {PERSONA}{role}{guest}{family}{}{team}{logins}{plans}{skills}\n\nCurrent local time: {}.\n{}{household}",
         bot.name,
         if quiet { QUIET } else { "" },
         chrono::Local::now().format("%A %Y-%m-%d %H:%M %Z"),
-        block("standing_memory", &ctx.db.bootstrap(&scope)?)
+        block("standing_memory", &ctx.db.bootstrap(&scope, ctx.bot_id)?)
     );
     // Standing memory and this automatic recall hold only confirmed memories (a word in common with an unconfirmed one
     // shouldn't mark the whole reply); the bot can still look one up with memory_search, which marks it then.
-    let recall: Vec<_> = ctx.db.search(&scope, &text, 6)?.into_iter().filter(|e| !e.tainted).collect();
+    let recall: Vec<_> = ctx.db.search(&scope, ctx.bot_id, &text, 6)?.into_iter().filter(|e| !e.tainted).collect();
     if let Some(run) = ctx.run_id {
         ctx.db.run_recalled(run, &recall.iter().map(|e| e.id).collect::<Vec<_>>())?;
     }
