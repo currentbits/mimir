@@ -62,7 +62,8 @@ out:
   computer), however short: a link like `evil.example/v/483920` could carry a sign-in code out;
 - a web search whose query holds one of your memories.
 
-Those ask too. "Start fresh" (or `/new`) ends it. Requests made after reading outside content, and any use of a saved
+Those ask too. "Start fresh" (or `/new`) ends it, and so does a messaging chat's fresh start after a quiet spell
+(unless the outside content is in the "where we left off" it quotes). Requests made after reading outside content, and any use of a saved
 login, never become "always". Approval cards show where an action goes (recipient, address, path) first, so a long
 message body can't push it off the card.
 

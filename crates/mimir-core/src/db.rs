@@ -2838,6 +2838,11 @@ impl Db {
         Ok(v)
     }
 
+    /// When a bot and a chat last said anything to each other.
+    pub fn last_said(&self, bot: i64, chat: i64) -> Result<Option<i64>> {
+        Ok(self.c().query_row("SELECT max(ts) FROM messages WHERE bot_id=?1 AND chat_id=?2", [bot, chat], |r| r.get(0))?)
+    }
+
     /// All bots' messages with a chat, oldest first (UI).
     /// Whether the last `n` messages a bot would be given as history hold outside content: a file's or forward's
     /// text, or a reply from a run that had read some.
@@ -3804,6 +3809,8 @@ mod tests {
         assert_eq!(d.last_outside_session(2, 11).unwrap(), None, "another bot's");
         d.log(1, 11, "assistant", "☀️ Your digest", None).unwrap();
         assert_eq!(d.last_outside_session(1, 11).unwrap(), Some(("message", "☀️ Your digest".into())));
+        assert!(d.last_said(1, 11).unwrap().is_some_and(|t| now() - t < 5));
+        assert_eq!(d.last_said(2, 11).unwrap(), None, "another bot's");
     }
 
     #[test]
