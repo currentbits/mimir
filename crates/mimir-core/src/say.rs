@@ -92,7 +92,7 @@ static NL: &[(&str, &str)] = &[
         "Paired ✅ as a guest: I keep your own memory and reminders here, and I can search the web for you. I can't see the email, calendar or meetings of the person who runs me. Commands: /memory, /routines, /new, /stop",
         "Gekoppeld ✅ als gast: ik bewaar hier je eigen geheugen en herinneringen, en ik kan voor je op het web zoeken. De e-mail, agenda en vergaderingen van degene die mij beheert zie ik niet. Commando's: /memory, /routines, /new, /stop",
     ),
-    ("Paired ✅ Talk to me normally. Commands: /memory, /routines, /new, /stop, /undo", "Gekoppeld ✅ Praat gewoon met me. Commando's: /memory, /routines, /new, /stop, /undo"),
+    ("Paired ✅ Talk to me normally. Commands: /memory, /routines, /new, /stop, /undo, /why", "Gekoppeld ✅ Praat gewoon met me. Commando's: /memory, /routines, /new, /stop, /undo, /why"),
     ("Wrong pairing code. Too many tries: try again in an hour.", "Verkeerde koppelcode. Te vaak geprobeerd: probeer het over een uur opnieuw."),
     ("Wrong pairing code.", "Verkeerde koppelcode."),
     ("this bot", "deze bot"),
@@ -107,11 +107,20 @@ static NL: &[(&str, &str)] = &[
     // Commands.
     ("Nothing to stop: I'm not writing anything right now.", "Niets te stoppen: ik ben nu niets aan het schrijven."),
     (
-        "Hi! Just talk to me. /memory shows what I remember, /routines lists schedules, /new starts a fresh conversation, /stop cuts off a reply I'm writing, /undo N takes back something from my weekly list of what I learned.",
-        "Hoi! Praat gewoon met me. /memory laat zien wat ik onthoud, /routines toont wat ik volgens schema doe, /new begint een nieuw gesprek, /stop breekt een antwoord af dat ik aan het schrijven ben, /undo N neemt iets terug uit mijn wekelijkse lijst van wat ik heb geleerd.",
+        "Hi! Just talk to me. /memory shows what I remember, /routines lists schedules, /why shows what my last reply used, /new starts a fresh conversation, /stop cuts off a reply I'm writing, /undo N takes back something from my weekly list of what I learned.",
+        "Hoi! Praat gewoon met me. /memory laat zien wat ik onthoud, /routines toont wat ik volgens schema doe, /why laat zien wat mijn laatste antwoord gebruikte, /new begint een nieuw gesprek, /stop breekt een antwoord af dat ik aan het schrijven ben, /undo N neemt iets terug uit mijn wekelijkse lijst van wat ik heb geleerd.",
     ),
     ("Not confirmed yet (saved after reading outside content; check them in the app):", "Nog niet bevestigd (opgeslagen na het lezen van inhoud van buitenaf; bekijk ze in de app):"),
     ("Nothing remembered yet.", "Nog niets onthouden."),
+    ("My last reply didn't use any memories, skills or pages.", "Mijn laatste antwoord gebruikte geen herinneringen, skills of pagina's."),
+    ("My last reply used:", "Mijn laatste antwoord gebruikte:"),
+    (" (forgotten since)", " (inmiddels vergeten)"),
+    (" (corrected since)", " (inmiddels aangepast)"),
+    ("• skill: {name}", "• skill: {name}"),
+    (
+        "\nIf a memory is wrong, tell me (\"forget #{id}\", or what's true now), or fix it in the app under Memory.",
+        "\nKlopt een herinnering niet? Zeg het me (\"vergeet #{id}\", of wat nu klopt), of pas het aan in de app onder Memory.",
+    ),
     ("Fresh conversation started (memories kept).", "Nieuw gesprek begonnen (herinneringen blijven bewaard)."),
     ("_Stopped before replying._", "_Gestopt voordat ik antwoordde._"),
     ("_Stopped._", "_Gestopt._"),
@@ -166,6 +175,7 @@ static NL: &[(&str, &str)] = &[
     // Telegram's "/" menu.
     ("What I remember about you", "Wat ik over je onthoud"),
     ("What I do on a schedule", "Wat ik volgens schema doe"),
+    ("What my last reply used", "Wat mijn laatste antwoord gebruikte"),
     ("Start a fresh conversation (memories kept)", "Begin een nieuw gesprek (herinneringen blijven bewaard)"),
     ("Stop the reply I'm writing", "Stop het antwoord dat ik schrijf"),
     // Errors.

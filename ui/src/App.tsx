@@ -56,7 +56,9 @@ type Secrets = { telegram_token: string | null; slack_bot_token: string | null; 
 type Action = { tool: string; summary: string; decision: string; ok: boolean; result?: string }
 /** The note under a reply that promised a reminder and set none (receipts.rs NO_REMINDER): it gets a Set it button. */
 const NO_REMINDER = "I said I'd remind you, but no reminder was set."
-type Message = { id: number; bot_id: number; role: string; content: string; ts: number; actions?: Action[]; run_id?: number }
+type UsedMemory = { id: number; kind: Kind; title: string; body: string; status: 'active' | 'superseded' | 'forgotten' }
+type Used = { memories: UsedMemory[]; skills: [number, string][]; pages: string[] }
+type Message = { id: number; bot_id: number; role: string; content: string; ts: number; actions?: Action[]; run_id?: number; used?: Used }
 
 /** What a reply did, in a few words: ["memory", "Saved to memory · Dentist"]. Lookups and listings aren't worth a line. */
 function actionLine(a: Action): [string, string] | null {
@@ -124,6 +126,50 @@ function Actions({ actions, chatId, runId, onChange }: { actions: Action[]; chat
       {open && <RoutineCard id={open} chatId={chatId} onChange={onChange} />}
       {skillOpen && <SkillCard id={skillOpen} chatId={chatId} />}
       {handoff && runId && <HandoffCard runId={runId} />}
+    </>
+  )
+}
+
+const count = (n: number, one: string, many = one + 's') => `${n} ${n === 1 ? one : many}`
+
+/** What a reply drew on, as one quiet line; open, each memory can be corrected or forgotten right here. */
+function UsedLine({ used, chatId, onChange }: { used: Used; chatId: number; onChange: () => void }) {
+  const [open, setOpen] = useState(false)
+  const [editing, setEditing] = useState<number | null>(null)
+  const act = (p: Promise<unknown>) => p.then(onChange, e => tell(String(e)))
+  const parts = [
+    used.memories.length && count(used.memories.length, 'memory', 'memories'),
+    used.skills.length && count(used.skills.length, 'skill'),
+    used.pages.length && `read ${count(used.pages.length, 'page')}`,
+  ].filter(Boolean)
+  return (
+    <>
+      <button type="button" className={'msg-used' + (open ? ' on' : '')} aria-expanded={open} onClick={() => setOpen(o => !o)}>
+        {parts.join(' · ')}<Icon name="chevron" size={10} className="chev" />
+      </button>
+      {open && (
+        <div className="routine-card used-card">
+          {used.memories.map(m => (
+            <div key={m.id} className={'used-mem' + (m.status === 'active' ? '' : ' gone')}>
+              <div className="used-head">
+                <span className="mem-title">{m.title}</span>
+                {m.status === 'active' ? editing !== m.id && (
+                  <span className="used-acts">
+                    <button className="btn btn-ghost btn-sm" onClick={() => setEditing(m.id)}>Edit</button>
+                    <button className="btn btn-ghost btn-danger btn-sm" onClick={() => act(invoke('forget', { chatId, id: m.id }))}>Forget</button>
+                  </span>
+                ) : <small>{m.status === 'forgotten' ? 'forgotten since' : 'corrected since'}</small>}
+              </div>
+              {editing === m.id
+                ? <Editor initial={m} submit="Save correction" onCancel={() => setEditing(null)}
+                    onSave={(kind, title, body) => act(invoke('remember', { chatId, kind, title, body, supersedes: m.id })).then(() => setEditing(null))} />
+                : <p className="mem-body">{m.body}</p>}
+            </div>
+          ))}
+          {used.skills.map(([id, name]) => <div key={'s' + id} className="used-row"><Icon name="bolt" size={12} />Skill · {name}</div>)}
+          {used.pages.map((p, i) => <div key={'p' + i} className="used-row"><Icon name="globe" size={12} />{p}</div>)}
+        </div>
+      )}
     </>
   )
 }
@@ -1545,6 +1591,7 @@ function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, openBot
           {/* Only under the latest message: once anything follows, it's been answered one way or another. */}
           {m.content.includes(NO_REMINDER) && m === msgs[msgs.length - 1] && <button type="button" className="btn btn-sm" onClick={() => send(`@${b.name} Set the reminder you said you would.`)} disabled={working}>Set it</button>}
           {m.actions && <Actions actions={m.actions} chatId={chat.chat_id} runId={m.run_id} onChange={() => { log.reload(); onTurn() }} />}
+          {m.used && <UsedLine used={m.used} chatId={chat.chat_id} onChange={() => log.reload()} />}
         </div>
       </div>
     )
