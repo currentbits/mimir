@@ -116,6 +116,9 @@ fn block(tag: &str, entries: &[Entry]) -> String {
 /// The app's incognito chat: no memory in or out, no chat history, no run log, no saved CLI session.
 /// Its messages live only in the window; each turn gets them back as `history`.
 pub const INCOGNITO_CHAT: i64 = -1;
+/// The household's memories: shared by you and the guests you add (see `Db::in_household`).
+pub const HOUSEHOLD_CHAT: i64 = -2;
+pub const HOUSEHOLD: &str = "chat:-2";
 
 /// Hours a messaging chat can sit idle before its next message starts a new CLI session (setting `fresh_after_hours`, 0 = never).
 pub const FRESH_AFTER_HOURS: i64 = 12;
@@ -220,7 +223,7 @@ pub async fn turn(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) -> R
     // A conversation remembers having read untrusted content; routines and handed-over tasks start clean
     // (their own fresh sessions), though a delegate inherits its caller's taint in ask_bot.
     ctx.sticky = ctx.stream;
-    if ctx.sticky && ctx.db.conv_tainted(ctx.bot_id, ctx.chat_id)? {
+    if ctx.sticky && ctx.db.conv_tainted(ctx.bot_id, ctx.conv)? {
         ctx.pre_taint();
     }
     // A routine a bot made after reading outside content: its prompt may be someone else's words, every time it runs.
@@ -565,7 +568,7 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
         _ => None,
     };
     // A reply to one of the bot's messages quotes it: if a recent reply was written after reading a page, it may be that.
-    if matches!(&trigger, Trigger::Message(t) if own_part(t).len() != t.len()) && ctx.db.recent_outside(ctx.bot_id, ctx.chat_id, 20)? {
+    if matches!(&trigger, Trigger::Message(t) if own_part(t).len() != t.len()) && ctx.db.recent_outside(ctx.bot_id, ctx.conv, 20)? {
         ctx.pre_taint();
     }
     // Pushing back on the last reply is the strongest hint of how the person wants things done.
@@ -573,19 +576,19 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
     if let Some(t) = own
         && is_correction(t)
         && own_words(t)
-        && let recent = ctx.db.recent(ctx.bot_id, ctx.chat_id, 2)?
+        && let recent = ctx.db.recent(ctx.bot_id, ctx.conv, 2)?
         && let [.., (role, last)] = recent.as_slice()
         && role == "assistant"
     {
         // The reply they pushed back on may have been written after reading a page: labelled, like in the tidy-up's
         // conversation, so its text can't pass for theirs. A routine's result says which routine, so a fix can be for it.
-        let outside = if ctx.db.recent_outside(ctx.bot_id, ctx.chat_id, 1)? { " [outside content: not the person's words]" } else { "" };
+        let outside = if ctx.db.recent_outside(ctx.bot_id, ctx.conv, 1)? { " [outside content: not the person's words]" } else { "" };
         let routine = match recent.as_slice() {
             [(r, asked), _] if r == "user" && asked.starts_with("[Scheduled ") => format!("On a routine's result ({}): ", tools::truncate(asked, 140)),
             _ => String::new(),
         };
         ctx.db.signal_add(ctx.bot_id, ctx.chat_id, "correction", &format!("{routine}You said{outside}: {} → They replied: {t}", tools::truncate(last, 240)))?;
-        ctx.db.blame_last_reply(ctx.bot_id, ctx.chat_id, t)?;
+        ctx.db.blame_last_reply(ctx.bot_id, ctx.chat_id, ctx.conv, t)?;
         // A whole case needs the message that reply answered (a weekly review or routine result has none).
         if let [(asked_role, asked), _] = recent.as_slice()
             && asked_role == "user"
@@ -601,7 +604,7 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
     } else if let Some(t) = own
         && !t.starts_with('/')
         && own_words(t)
-        && let [.., asked, last] = ctx.db.messages(ctx.chat_id, 2)?.as_slice()
+        && let [.., asked, last] = ctx.db.messages(ctx.conv, 2)?.as_slice()
         && asked.role == "user" && asked.bot_id == ctx.bot_id
         && last.role == "assistant"
         && last.bot_id == ctx.bot_id
@@ -682,16 +685,34 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
     } else {
         ""
     };
+    let family = if ctx.db.chat_family(ctx.chat_id) {
+        "\n\nThis is a family group: several people of the household talk to you here, and each message starts with who \
+         wrote it (\"Sam: …\"). Answer that person."
+    } else {
+        ""
+    };
+    // The household: memories and lists shared with the people the person who runs you chose (a shopping list).
+    let household = if ctx.db.in_household(ctx.chat_id) {
+        let name = ctx.db.chat_title(HOUSEHOLD_CHAT).unwrap_or_default();
+        format!(
+            "\n<household name=\"{}\">\nShared by everyone in the household (lists, plans, who does what). To add to or change one of \
+             these, use memory_store with household: true (and supersedes to update a list).\n{}</household>\n",
+            name.replace(['"', '<', '>'], ""),
+            ctx.db.bootstrap(HOUSEHOLD, ctx.bot_id)?.iter().map(|e| e.line() + "\n").collect::<String>()
+        )
+    } else {
+        String::new()
+    };
     let system = format!(
-        "Your name is {}. {PERSONA}{role}{guest}{}{team}{logins}{plans}{skills}\n\nCurrent local time: {}.\n{}",
+        "Your name is {}. {PERSONA}{role}{guest}{family}{}{team}{logins}{plans}{skills}\n\nCurrent local time: {}.\n{}{household}",
         bot.name,
         if quiet { QUIET } else { "" },
         chrono::Local::now().format("%A %Y-%m-%d %H:%M %Z"),
-        block("standing_memory", &ctx.db.bootstrap(&scope)?)
+        block("standing_memory", &ctx.db.bootstrap(&scope, ctx.bot_id)?)
     );
     // Standing memory and this automatic recall hold only confirmed memories (a word in common with an unconfirmed one
     // shouldn't mark the whole reply); the bot can still look one up with memory_search, which marks it then.
-    let recall: Vec<_> = ctx.db.search(&scope, &text, 6)?.into_iter().filter(|e| !e.tainted).collect();
+    let recall: Vec<_> = ctx.db.search(&scope, ctx.bot_id, &text, 6)?.into_iter().filter(|e| !e.tainted).collect();
     if let Some(run) = ctx.run_id {
         ctx.db.run_recalled(run, &recall.iter().map(|e| e.id).collect::<Vec<_>>())?;
     }
@@ -712,16 +733,16 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
     if matches!(trigger, Trigger::Message(_))
         && ctx.chat_id > host::LOCAL_CHAT
         && idle_hours > 0
-        && let Some(old) = ctx.db.session(ctx.bot_id, ctx.chat_id)?
-        && ctx.db.last_said(ctx.bot_id, ctx.chat_id)?.is_some_and(|t| db::now() - t >= idle_hours * 3600)
+        && let Some(old) = ctx.db.session(ctx.bot_id, ctx.conv)?
+        && ctx.db.last_said(ctx.bot_id, ctx.conv)?.is_some_and(|t| db::now() - t >= idle_hours * 3600)
     {
-        let tail = ctx.db.recent(ctx.bot_id, ctx.chat_id, 10)?;
+        let tail = ctx.db.recent(ctx.bot_id, ctx.conv, 10)?;
         // What's quoted may hold outside content; then this turn has read it too.
-        if ctx.db.recent_outside(ctx.bot_id, ctx.chat_id, 10)? {
+        if ctx.db.recent_outside(ctx.bot_id, ctx.conv, 10)? {
             ctx.pre_taint();
         }
         provider.forget_session(&old);
-        ctx.db.set_session(ctx.bot_id, ctx.chat_id, None)?;
+        ctx.db.set_session(ctx.bot_id, ctx.conv, None)?;
         if !tail.is_empty() {
             left_off = format!(
                 "<where_we_left_off>\nIt's been a while since you last talked, so this is a new session. The end of the last one, from Mimir's log:\n{}\n</where_we_left_off>\n\n",
@@ -734,11 +755,11 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
     let mut last = String::new();
     if matches!(trigger, Trigger::Message(_))
         && !provider.uses_history()
-        && let Some((kind, said)) = ctx.db.last_outside_session(ctx.bot_id, ctx.chat_id)?
+        && let Some((kind, said)) = ctx.db.last_outside_session(ctx.bot_id, ctx.conv)?
     {
         // One from no run (a digest of routine results, the weekly review quoting learned memories, a note on what an
         // approved action returned) can't be shown clean, so it counts as outside content, like in chat_search.
-        if kind == "message" || ctx.db.recent_outside(ctx.bot_id, ctx.chat_id, 1)? {
+        if kind == "message" || ctx.db.recent_outside(ctx.bot_id, ctx.conv, 1)? {
             ctx.pre_taint();
         }
         let said = tools::truncate(&said, 4000).replace('<', "‹").replace('>', "›");
@@ -746,13 +767,13 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
     }
     let user = format!("{}{past}{left_off}{last}{text}", block("memory", &recall));
 
-    let history = if provider.uses_history() { ctx.db.recent(ctx.bot_id, ctx.chat_id, 20)? } else { vec![] };
+    let history = if provider.uses_history() { ctx.db.recent(ctx.bot_id, ctx.conv, 20)? } else { vec![] };
     // Accounts that are handed the history again: if it holds outside content, so does this turn.
-    if !history.is_empty() && ctx.db.recent_outside(ctx.bot_id, ctx.chat_id, 20)? {
+    if !history.is_empty() && ctx.db.recent_outside(ctx.bot_id, ctx.conv, 20)? {
         ctx.pre_taint();
     }
     // Routines run in a fresh session so they don't derail the live conversation.
-    let session = if is_routine { None } else { ctx.db.session(ctx.bot_id, ctx.chat_id)? };
+    let session = if is_routine { None } else { ctx.db.session(ctx.bot_id, ctx.conv)? };
 
     let had_session = session.is_some();
     let mut reply = match provider.run(ctx, &system, &history, &user, session).await {
@@ -760,8 +781,8 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
         // changed accounts): a new one starts with the chat so far, from Mimir's own log, so it isn't a blank page.
         Err(e) if had_session && !provider::is_usage_limit(&e) => {
             eprintln!("resume failed ({e:#}); starting a new session with the chat so far");
-            let so_far = so_far(&ctx.db.recent(ctx.bot_id, ctx.chat_id, 60)?, 30_000);
-            if ctx.db.recent_outside(ctx.bot_id, ctx.chat_id, 60)? {
+            let so_far = so_far(&ctx.db.recent(ctx.bot_id, ctx.conv, 60)?, 30_000);
+            if ctx.db.recent_outside(ctx.bot_id, ctx.conv, 60)? {
                 ctx.pre_taint();
             }
             let user = format!("<conversation_so_far>\nYour earlier session with this person couldn't be reopened. This is the last part of it, from Mimir's log:\n{so_far}\n</conversation_so_far>\n\n{user}");
@@ -780,7 +801,7 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
         reply.usage.estimated = true;
     }
     if !is_routine && reply.session.is_some() {
-        ctx.db.set_session(ctx.bot_id, ctx.chat_id, reply.session.as_deref())?;
+        ctx.db.set_session(ctx.bot_id, ctx.conv, reply.session.as_deref())?;
     }
     // A quiet check that found nothing stays silent: no message, no conversation entry (the run log has it).
     if quiet && is_nothing(&reply.text) {
@@ -804,7 +825,7 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
             ctx.db.digest_add(ctx.bot_id, ctx.chat_id, r.id, &reply.text, ctx.is_tainted())?;
             // What it found came from outside: the conversation it lands in has read it too.
             if ctx.is_tainted() {
-                ctx.db.conv_taint(ctx.bot_id, ctx.chat_id)?;
+                ctx.db.conv_taint(ctx.bot_id, ctx.conv)?;
             }
         }
         Trigger::Routine(r) if r.delivery == "log" => {}
@@ -820,10 +841,10 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
             }
             // What the person typed ("/book-padel Thursday"), not the instruction it became.
             let said = if let Trigger::Message(t) = &trigger { t.to_string() } else { text.clone() };
-            ctx.db.log(ctx.bot_id, ctx.chat_id, "user", &said, None)?;
-            ctx.db.log(ctx.bot_id, ctx.chat_id, "assistant", &reply.text, ctx.run_id)?;
+            ctx.db.log(ctx.bot_id, ctx.conv, "user", &said, None)?;
+            ctx.db.log(ctx.bot_id, ctx.conv, "assistant", &reply.text, ctx.run_id)?;
             if is_routine && ctx.is_tainted() {
-                ctx.db.conv_taint(ctx.bot_id, ctx.chat_id)?;
+                ctx.db.conv_taint(ctx.bot_id, ctx.conv)?;
             }
         }
     }

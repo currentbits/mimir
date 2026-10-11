@@ -38,6 +38,13 @@ impl Tg {
         if matches!(method, "sendMessage" | "editMessageText") && body.get("link_preview_options").is_none() {
             body["link_preview_options"] = json!({"is_disabled": true});
         }
+        // "chat:topic" (a topic in a private chat, see `listen`): the chat, and the topic new messages go to.
+        if let Some((chat, topic)) = body["chat_id"].as_str().and_then(|c| c.split_once(':')).map(|(c, t)| (c.to_string(), t.parse::<i64>().unwrap_or(0))) {
+            body["chat_id"] = json!(chat);
+            if matches!(method, "sendMessage" | "sendMessageDraft" | "sendChatAction") {
+                body["message_thread_id"] = json!(topic);
+            }
+        }
         // The token is in the URL: errors drop it (they reach logs and the bot's status in the app).
         let v: Value = self.http.post(format!("{}/{method}", self.base)).json(&body).send().await.map_err(|e| e.without_url())?.json().await.map_err(|e| e.without_url())?;
         if v["ok"].as_bool() != Some(true) {
@@ -92,7 +99,7 @@ impl Tg {
     /// reply is then sent as a new message (`finish` sees "draft:N" isn't a message id). Groups, and any
     /// error, fall back to posting a message and editing it.
     pub(crate) async fn draft_post(&self, chat: &str, text: &str) -> Option<String> {
-        if chat.parse::<i64>().is_ok_and(|c| c > 0) {
+        if crate::db::tg_chat(chat).parse::<i64>().is_ok_and(|c| c > 0) {
             let id = crate::random_hex(4).ok().and_then(|h| u32::from_str_radix(&h, 16).ok()).map_or(1, |n| (n & 0x7fff_ffff).max(1));
             if self.draft(chat, id, text).await {
                 return Some(format!("draft:{id}"));
@@ -194,7 +201,8 @@ impl Tg {
                     // The stop button on a streaming draft: same as /stop.
                     let chat = chat.to_string();
                     core.stop(me, &chat, Sender { id: &chat, dm: true }).map(drop)
-                } else if let (Some(chat), Some(text)) = (u["message"]["chat"]["id"].as_i64(), u["message"]["text"].as_str()) {
+                } else if let (Some(_), Some(text)) = (u["message"]["chat"]["id"].as_i64(), u["message"]["text"].as_str()) {
+                    let chat = address(&u["message"], core.topics());
                     let c = &u["message"]["chat"];
                     let title = c["title"].as_str().or(c["username"].as_str()).or(c["first_name"].as_str()).unwrap_or("");
                     let from = u["message"]["from"]["id"].as_i64().map(|i| i.to_string()).unwrap_or_default();
@@ -202,14 +210,14 @@ impl Tg {
                     if u["message"]["forward_origin"].is_object() {
                         // A forwarded message is someone else's words: outside content, like a file.
                         let said = crate::with_document("(I forwarded you a message.)", "a forwarded message", text);
-                        core.incoming_outside(me, &chat.to_string(), who, title, &said, u["message"]["date"].as_i64()).await
+                        core.incoming_outside(me, &chat, who, title, &said, u["message"]["date"].as_i64()).await
                     } else if let Some(quoted) = replied_to(&u["message"], me_id) {
-                        core.incoming(me, &chat.to_string(), who, title, &crate::with_reply(text, &quoted), u["message"]["date"].as_i64()).await
+                        core.incoming(me, &chat, who, title, &crate::with_reply(text, &quoted), u["message"]["date"].as_i64()).await
                     } else {
-                        core.incoming(me, &chat.to_string(), who, title, text, u["message"]["date"].as_i64()).await
+                        core.incoming(me, &chat, who, title, text, u["message"]["date"].as_i64()).await
                     }
-                } else if let Some(chat) = u["message"]["chat"]["id"].as_i64().filter(|_| u["message"]["chat"]["type"] == "private") {
-                    self.on_media(me, &core, &chat.to_string(), &u["message"]).await
+                } else if u["message"]["chat"]["id"].is_i64() && u["message"]["chat"]["type"] == "private" {
+                    self.on_media(me, &core, &address(&u["message"], core.topics()), &u["message"]).await
                 } else {
                     Ok(())
                 };
@@ -272,7 +280,8 @@ impl Tg {
     }
 
     async fn on_button(&self, me: &Chan, core: &Arc<Core>, q: &Value) -> Result<()> {
-        let chat = q["message"]["chat"]["id"].as_i64().map(|c| c.to_string()).unwrap_or_default();
+        // A button in a topic: its answer (a tapped choice, say) belongs to that topic's conversation.
+        let chat = address(&q["message"], core.topics());
         let from = q["from"]["id"].as_i64().map(|i| i.to_string()).unwrap_or_default();
         let who = Sender { id: &from, dm: q["message"]["chat"]["type"] == "private" };
         let data = q["data"].as_str().unwrap_or("");
@@ -305,6 +314,16 @@ impl Tg {
     }
 }
 
+/// Where a message came from: its chat, or with topics on, "chat:topic" for a message in a private chat's topic (Bot
+/// API 9.3), so each topic is its own conversation and replies go back into it.
+fn address(m: &Value, topics: bool) -> String {
+    let chat = m["chat"]["id"].as_i64().unwrap_or(0);
+    match m["message_thread_id"].as_i64().filter(|_| topics && m["is_topic_message"] == true && m["chat"]["type"] == "private") {
+        Some(topic) => format!("{chat}:{topic}"),
+        None => chat.to_string(),
+    }
+}
+
 fn keyboard(rows: &[Row]) -> Value {
     json!({"inline_keyboard": rows.iter().map(|row| row.iter().map(|(text, data)| json!({"text": text, "callback_data": data})).collect::<Vec<_>>()).collect::<Vec<_>>()})
 }
@@ -322,6 +341,17 @@ fn replied_to(m: &Value, me_id: Option<i64>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use serde_json::json;
+
+    #[test]
+    fn a_topic_in_a_private_chat_is_its_own_address_when_on() {
+        let m = json!({"chat": {"id": 5, "type": "private"}, "message_thread_id": 9, "is_topic_message": true});
+        assert_eq!(super::address(&m, true), "5:9");
+        assert_eq!(super::address(&m, false), "5", "opt-in");
+        assert_eq!(super::address(&json!({"chat": {"id": 5, "type": "private"}}), true), "5", "no topic");
+        let group = json!({"chat": {"id": -100, "type": "supergroup"}, "message_thread_id": 9, "is_topic_message": true});
+        assert_eq!(super::address(&group, true), "-100", "private chats only");
+        assert_eq!(crate::db::tg_chat("5:9"), "5");
+    }
 
     #[test]
     fn a_reply_says_which_of_the_bots_messages() {

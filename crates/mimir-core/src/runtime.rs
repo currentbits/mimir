@@ -227,6 +227,8 @@ pub(crate) struct Core {
     /// Wrong pairing codes per chat in the last hour; after a few, that chat's tries are ignored until the hour is up.
     misses: std::sync::Mutex<std::collections::HashMap<String, (u32, i64)>>,
     /// One reply or routine at a time per chat (keeps its CLI --resume session serial); other chats don't wait.
+    /// Telegram topics share their chat's lock, which is why live drafts, TURNS and runs stay keyed by chat while a
+    /// topic has its own conversation.
     locks: std::sync::Mutex<std::collections::HashMap<i64, Arc<Mutex<()>>>>,
     /// Unpaired chats already told how to pair (once each per run, so a stranger can't make it chatty).
     greeted: std::sync::Mutex<std::collections::HashSet<String>>,
@@ -596,7 +598,7 @@ impl Core {
                 Ok(())
             }
             Some(Ok(t)) => {
-                self.db.conv_taint(self.bot, chat)?;
+                self.db.conv_taint(self.bot, self.conv(chan, ext, chat)?)?;
                 self.incoming_with(chan, ext, from, "", &crate::with_document(said, name, &t), vec![], sent).await
             }
         }
@@ -701,6 +703,19 @@ impl Core {
         self.db.chat_lookup(chan.kind(), ext).ok().flatten().is_some_and(|chat| self.db.chat_owner(chat).is_ok_and(|o| !o.is_empty() && o == from))
     }
 
+    /// Whether each topic in a private Telegram chat is its own conversation (opt-in: the Bot API for it still shifts).
+    pub(crate) fn topics(&self) -> bool {
+        self.db.setting(&format!("telegram_topics:{}", self.bot)).ok().flatten().as_deref() == Some("on")
+    }
+
+    /// The conversation a message is in: the chat's own, or (Telegram "chat:topic") the topic's.
+    fn conv(&self, chan: &Chan, ext: &str, chat: i64) -> Result<i64> {
+        match ext.split_once(':').filter(|_| chan.kind() == "telegram").and_then(|(_, t)| t.parse().ok()) {
+            Some(topic) => self.db.topic_conv(chat, topic),
+            None => Ok(chat),
+        }
+    }
+
     pub(crate) fn is_paired(&self, chan: &Chan, ext: &str) -> Result<bool> {
         Ok(self.db.chat_lookup(chan.kind(), ext)?.is_some())
     }
@@ -731,12 +746,13 @@ impl Core {
         if let Some(chat) = self.db.chat_lookup(chan.kind(), ext)?
             && self.sender_ok(chat, from)? == Some(true)
         {
-            self.db.conv_taint(self.bot, chat)?;
+            self.db.conv_taint(self.bot, self.conv(chan, ext, chat)?)?;
         }
         self.incoming_with(chan, ext, from, title, text, images, sent).await
     }
 
-    /// Whether this person may talk to the bot in this paired chat, or press its buttons: the person who paired it. In
+    /// Whether this person may talk to the bot in this paired chat: the person who paired it, and in a family group
+    /// everyone in the household (only the person who paired it presses its buttons: see `decide`). In
     /// a group, channel or server everyone else is ignored. A chat paired before Mimir kept who paired it has no owner:
     /// in a direct chat the person writing is the owner; elsewhere (None) it has to be paired again.
     fn sender_ok(&self, chat: i64, from: Sender<'_>) -> Result<Option<bool>> {
@@ -749,7 +765,7 @@ impl Core {
             self.db.chat_set_dm(chat, true)?;
             return Ok(Some(true));
         }
-        Ok(Some(owner == from.id))
+        Ok(Some(owner == from.id || self.db.family_member(chat, from.id)?))
     }
 
     /// A message, possibly with images (photos the person sent).
@@ -835,6 +851,7 @@ impl Core {
                 return Ok(());
             }
         }
+        let conv = self.conv(chan, ext, chat)?;
         let mut command = parse_command(text);
         if let Command::Stop(asked) = command {
             if self.stop(chan, ext, from)? {
@@ -851,8 +868,8 @@ impl Core {
             Command::Memory => {
                 // What bots keep in mind, then what's waiting for you to confirm (bots don't keep those in mind).
                 let scope = format!("chat:{chat}");
-                let mut lines: Vec<String> = self.db.bootstrap(&scope)?.iter().map(|e| e.line()).collect();
-                let unconfirmed: Vec<String> = self.db.search_unconfirmed(&scope)?.iter().map(|e| e.line()).collect();
+                let mut lines: Vec<String> = self.db.bootstrap(&scope, self.bot)?.iter().map(|e| e.line()).collect();
+                let unconfirmed: Vec<String> = self.db.search_unconfirmed(&scope, self.bot)?.iter().map(|e| e.line()).collect();
                 if !unconfirmed.is_empty() {
                     lines.push(format!("\n{}\n{}", tr("Not confirmed yet (saved after reading outside content; check them in the app):"), unconfirmed.join("\n")));
                 }
@@ -864,10 +881,10 @@ impl Core {
                 chan.send(ext, &out).await;
             }
             Command::New => {
-                if let Some(s) = self.db.session(self.bot, chat)? {
+                if let Some(s) = self.db.session(self.bot, conv)? {
                     self.provider.forget_session(&s);
                 }
-                self.db.set_session(self.bot, chat, None)?;
+                self.db.set_session(self.bot, conv, None)?;
                 chan.send(ext, tr("Fresh conversation started (memories kept).")).await;
             }
             Command::Undo(n) => chan.send(ext, &crate::tidy::undo_learned(&self.db, chat, n)?).await,
@@ -880,7 +897,12 @@ impl Core {
                 }
                 // Measured on arrival, so a long reply (say, waiting for an approval) doesn't count as being offline.
                 let late = late_note(sent, crate::db::now());
-                let (core, chan, ext, text) = (self.clone(), chan.clone(), ext.to_string(), text.trim().to_string());
+                // In a family group the bot is told who wrote each message.
+                let text = match self.db.family_speaker(chat, from.id)? {
+                    Some(who) => format!("{who}: {}", text.trim()),
+                    None => text.trim().to_string(),
+                };
+                let (core, chan, ext) = (self.clone(), chan.clone(), ext.to_string());
                 tokio::spawn(async move {
                     // Typing at once, even when this chat is still busy; a wait past a few seconds says why, once.
                     let typing = chan.typing(&ext);
@@ -897,6 +919,7 @@ impl Core {
                     // The reply shows up as it's written: one message, edited as it grows, then formatted.
                     let follower = chan.follow(core.bot, chat, &ext);
                     let mut ctx = ToolCtx::new(core.db.clone(), core.bot, chat);
+                    ctx.conv = conv;
                     ctx.images = images;
                     let (provider, asked) = (core.provider.clone(), text.clone());
                     let task = tokio::spawn(async move { turn(&provider, &ctx, Trigger::Message(&asked)).await });
@@ -924,7 +947,7 @@ impl Core {
                             let partial = crate::live::get(core.bot, chat).unwrap_or_default();
                             crate::live::end(core.bot, chat);
                             let note = if partial.trim().is_empty() { tr("_Stopped before replying._").to_string() } else { format!("{}\n\n{}", partial.trim_end(), tr("_Stopped._")) };
-                            let logged = core.db.run_stop(core.bot, chat, &text).and_then(|_| core.db.log(core.bot, chat, "user", &text, None)).and_then(|_| core.db.log(core.bot, chat, "assistant", &note, None));
+                            let logged = core.db.run_stop(core.bot, chat, &text).and_then(|_| core.db.log(core.bot, conv, "user", &text, None)).and_then(|_| core.db.log(core.bot, conv, "assistant", &note, None));
                             if let Err(e) = logged {
                                 eprintln!("stop: {e:#}");
                             }
@@ -961,7 +984,7 @@ impl Core {
         let approve = d != Decision::Deny;
         match self.db.chat_lookup(chan.kind(), ext)? {
             Some(chat) => {
-                if self.sender_ok(chat, from)? != Some(true) {
+                if self.sender_ok(chat, from)? != Some(true) || self.db.chat_owner(chat)? != from.id {
                     anyhow::bail!(tr("Only the person who paired me here can answer this."));
                 }
                 if d == Decision::RestOfRun {

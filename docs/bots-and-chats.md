@@ -70,6 +70,22 @@ logins, browser, tool servers or the bots' computer, and they can't make new bot
 sidebar. The **Guest** / **Yours** button at the top of a chat changes it (say, for your own second account, or a chat
 someone else paired before Mimir told guests apart).
 
+### The household and family groups
+
+The **Household** (in the sidebar once it's used) is a set of memories and lists you share with people you choose: a
+shopping list, plans, who does what. Bots in your own direct chats and the built-in chat read it and can add to it
+(`memory_store` with `household`). A guest reads it once you press **Add to household** at the top of their chat. What a
+guest adds doesn't change anything yet: it's a suggestion in your **Needs you** ("Sam wants to add this to the
+household"), which you accept or dismiss. Your own additions go straight in. The household has a Memory tab like any
+chat (edit, pin, forget, history), but no conversation of its own.
+
+**Family group.** In a group chat you paired (say a Telegram group with your partner and kids), **Make family group**
+lets everyone in your household talk to the bots there, not just you. People outside the household are still ignored,
+and only you can press Approve / Deny. Each message reaches the bot with who wrote it ("Sam: …"). A family group is a
+guest's chat whoever paired it (several people read it), so bots there get none of your email, calendar, meetings or
+logins. Your household is you plus each guest whose direct chat you added on the same app. (On Telegram, a bot
+in a group only sees every message if its privacy mode is off in @BotFather; otherwise talk to it with an @-mention.)
+
 ### Pairing a messaging app
 
 Only chats you've paired can talk to your bot. Send it `pair <CODE>` (the code is on the bot's page, or printed by
@@ -105,6 +121,13 @@ note: "Finishing a routine first…" or "Finishing my last reply first…". Its 
 Chat commands: `/memory`, `/why` (what the last reply used: memories, skills, pages), `/routines`, `/new`, `/stop` (a bare "stop" works too while it's writing), `/undo <n>`
 (take back something it learned; see [Memory](memory.md#learned-this-week)), and `/<skill>` for each of the bot's
 skills (see [Skills](skills.md)). Everything else is plain language.
+
+**Telegram topics** (opt-in): with topics turned on in your private chat with the bot, switch on "Each topic is its
+own conversation" under Telegram on the bot's page. Each topic then has its own conversation, its own "read outside
+content" state and its own `/new`, and replies land in the topic you wrote in. Memories, routines and pairing stay
+shared by the whole chat, and routine results and approval cards arrive in the main thread. The app's chat view shows
+only the main thread. One reply is written at a time per chat, so `/stop` stops it whichever topic it's in. This is
+opt-in because Telegram is still changing the feature.
 
 Bots answer in the language you write in. What Mimir itself says in the chat apps (pairing, approval cards and their
 buttons, errors, the digest, the weekly "what I learned", the Telegram "/" menu) follows Settings → Language: English

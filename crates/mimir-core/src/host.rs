@@ -490,6 +490,9 @@ impl Host {
                 ok(json!({"brave": api_key("brave").is_some(), "searxng_url": self.db.setting("searxng_url")?.unwrap_or_default()}))
             }
             "chats" => ok(self.db.chats()?),
+            // Each topic in a private Telegram chat its own conversation (read per message, so no restart).
+            "telegram_topics" => ok(self.db.setting(&format!("telegram_topics:{}", arg::<i64>(a, "bot_id")?))?.as_deref() == Some("on")),
+            "set_telegram_topics" => ok(self.db.set_setting(&format!("telegram_topics:{}", arg::<i64>(a, "bot_id")?), if arg(a, "on")? { "on" } else { "off" })?),
             // Has this conversation read untrusted content (so changes ask first)? And: start a fresh one.
             "conversation" => ok(json!({"tainted": self.db.conv_tainted(arg(a, "bot_id")?, arg(a, "chat_id")?)?})),
             "new_conversation" => {
@@ -514,8 +517,13 @@ impl Host {
             "export_all" => ok(self.db.export_all()?),
             // Someone else's chat (a guest: nothing of yours there), or yours.
             "chat_guest" => ok(self.db.chat_set_guest(arg(a, "chat_id")?, arg(a, "guest")?)?),
+            // A guest's chat or a group reads (and adds to) the household's memories; a family group lets everyone in it talk.
+            "chat_household" => ok(self.db.chat_set_household(arg(a, "chat_id")?, arg(a, "on")?)?),
+            "chat_family" => ok(self.db.chat_set_family(arg(a, "chat_id")?, arg(a, "on")?)?),
+            // One bot keeps a memory to itself, or all bots share it again (bot_id 0).
+            "memory_for_bot" => ok(self.db.set_for_bot(&scope(a)?, arg(a, "id")?, arg(a, "bot_id")?)?),
             "entries" => ok(self.db.entries(&scope(a)?)?),
-            "search" => ok(self.db.search(&scope(a)?, &arg::<String>(a, "query")?, 50)?),
+            "search" => ok(self.db.search(&scope(a)?, 0, &arg::<String>(a, "query")?, 50)?),
             "forget" => ok(self.db.forget(&scope(a)?, arg(a, "id")?)?),
             "pin" => ok(self.db.pin(&scope(a)?, arg(a, "id")?, arg(a, "pinned")?)?),
             "background" => ok(self.db.background(&scope(a)?, arg(a, "id")?, arg(a, "on")?)?),
