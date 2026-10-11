@@ -3815,7 +3815,7 @@ function ApiKeySettings() {
 
 /** Your email for the bots, read-only (email_search, email_read): IMAP with an app password. Saving signs in once. */
 function EmailSettings() {
-  const st = useLoad(() => invoke<{ host: string; user: string; smtp?: string; smtp_port?: number } | null>('email_settings', {}), [])
+  const st = useLoad(() => invoke<{ host: string; user: string; smtp?: string; smtp_port?: number; tasks?: boolean } | null>('email_settings', {}), [])
   const [d, setD] = useState({ host: '', port: '993', user: '', password: '', smtp: '', smtpPort: '' })
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
@@ -3830,9 +3830,14 @@ function EmailSettings() {
   return (
     <Group title="Email" note={err ? <span className="error">{err}</span> : `Lets your bots search and read your email in a chat with you, never in a group, write drafts, and send an email when you approve it (every one asks you, at most 20 a day). Nothing is marked read, moved or deleted. Emails count as outside content. The password is stored in ${SECRETS_AT}.`}>
       {st.data ? (
-        <Row icon={<Icon name="inbox" size={15} />} title={st.data.user} desc={msg ?? `Read through ${st.data.host}${st.data.smtp ? ` · sent through ${st.data.smtp}${st.data.smtp_port && st.data.smtp_port !== 465 ? `:${st.data.smtp_port}` : ''}` : ''}`}>
-          <button className="btn btn-sm btn-ghost btn-danger" onClick={remove}>Remove</button>
-        </Row>
+        <>
+          <Row icon={<Icon name="inbox" size={15} />} title={st.data.user} desc={msg ?? `Read through ${st.data.host}${st.data.smtp ? ` · sent through ${st.data.smtp}${st.data.smtp_port && st.data.smtp_port !== 465 ? `:${st.data.smtp_port}` : ''}` : ''}`}>
+            <button className="btn btn-sm btn-ghost btn-danger" onClick={remove}>Remove</button>
+          </Row>
+          <Row title="Tasks by email" desc={`Mail you send to ${st.data.user.replace('@', '+mimir@')}, or file in a folder called Mimir, goes to your bot as a message; it answers in your latest chat with it. Only mail from your own address that passes DKIM is taken. What you forward is outside content: your note on top is what the bot does.`}>
+            <Switch label="Tasks by email" checked={!!st.data.tasks} onChange={tasks => invoke('email_settings', { tasks }).then(() => st.reload(), e => setErr(String(e)))} />
+          </Row>
+        </>
       ) : (
         <form className="row-block" onSubmit={e => { e.preventDefault(); save() }}>
           <div className="editor" style={{ margin: 0 }}>
