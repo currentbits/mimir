@@ -145,6 +145,39 @@ fn ok<T: Serialize>(v: T) -> Result<Value> {
     Ok(serde_json::to_value(v)?)
 }
 
+/// A token for the server's chat API (`/v1/chat/completions`): it reaches one bot and nothing else. Only its hash is
+/// kept, so the token is shown once.
+#[derive(Serialize, serde::Deserialize)]
+struct ChatToken {
+    id: String,
+    name: String,
+    bot_id: i64,
+    created: i64,
+    #[serde(skip_serializing_if = "String::is_empty", default)]
+    hash: String,
+}
+// ponytail: one JSON setting, read-modify-write; fine for the handful of tokens one admin makes by hand
+const CHAT_TOKENS: &str = "chat_api_tokens";
+
+fn token_hash(token: &str) -> String {
+    format!("{:x}", <sha2::Sha256 as sha2::Digest>::digest(token.as_bytes()))
+}
+
+fn chat_tokens(db: &Db) -> Result<Vec<ChatToken>> {
+    Ok(db.setting(CHAT_TOKENS)?.map(|s| serde_json::from_str(&s)).transpose()?.unwrap_or_default())
+}
+
+fn set_chat_tokens(db: &Db, t: &[ChatToken]) -> Result<()> {
+    db.set_setting(CHAT_TOKENS, &serde_json::to_string(t)?)
+}
+
+/// The bot a chat API token reaches, if it's one of ours (and the bot still exists).
+pub fn chat_token_bot(db: &Db, token: &str) -> Option<i64> {
+    let h = token_hash(token);
+    let bot = chat_tokens(db).ok()?.into_iter().find(|t| t.hash == h)?.bot_id;
+    db.bot(bot).ok().map(|_| bot)
+}
+
 impl Host {
     pub fn new(db: Db, home: PathBuf, secrets: Arc<dyn SecretStore>, rt: tokio::runtime::Handle, mode: &'static str) -> Self {
         let _ = MODE.set(mode);
@@ -385,6 +418,28 @@ impl Host {
                 self.db.bot_delete(id)?;
                 self.stop(id);
                 CHANNEL_SECRETS.iter().try_for_each(|n| self.secrets.set(&key(id, n), ""))?;
+                // Its chat API tokens too, so a later bot given the same id can't be reached with them.
+                set_chat_tokens(&self.db, &chat_tokens(&self.db)?.into_iter().filter(|t| t.bot_id != id).collect::<Vec<_>>())?;
+                ok(())
+            }
+            // Chat API tokens (server): list them, make one (its token is in the answer, once), or delete one.
+            "chat_tokens" => ok(chat_tokens(&self.db)?.into_iter().map(|t| ChatToken { hash: String::new(), ..t }).collect::<Vec<_>>()),
+            "chat_token_add" => {
+                let (bot_id, name): (i64, String) = (arg(a, "bot_id")?, arg(a, "name")?);
+                let name = name.trim().to_string();
+                if name.is_empty() || name.chars().count() > 60 {
+                    bail!("give it a name of up to 60 characters, like the app that will use it");
+                }
+                self.db.bot(bot_id).context("no such bot")?;
+                let token = format!("mimir_{}", crate::random_hex(24)?);
+                let mut all = chat_tokens(&self.db)?;
+                all.push(ChatToken { id: crate::random_hex(6)?, name, bot_id, created: crate::db::now(), hash: token_hash(&token) });
+                set_chat_tokens(&self.db, &all)?;
+                ok(token)
+            }
+            "chat_token_delete" => {
+                let id: String = arg(a, "id")?;
+                set_chat_tokens(&self.db, &chat_tokens(&self.db)?.into_iter().filter(|t| t.id != id).collect::<Vec<_>>())?;
                 ok(())
             }
             // Which API keys are saved, by account kind.
@@ -1395,8 +1450,27 @@ mod tests {
         assert!(host.call("set_rule", &json!({"tool":"rm -rf","action":"allow"})).await.is_err());
         assert!(host.call("nope", &json!({})).await.is_err());
 
+        // A chat API token reaches its bot and only that; the list never shows it; it goes with its bot.
+        let bot = id.as_i64().unwrap();
+        assert!(host.call("chat_token_add", &json!({"bot_id": bot, "name": " "})).await.is_err());
+        assert!(host.call("chat_token_add", &json!({"bot_id": 999, "name": "Shortcuts"})).await.is_err());
+        let token = host.call("chat_token_add", &json!({"bot_id": bot, "name": "Shortcuts"})).await.unwrap();
+        let token = token.as_str().unwrap();
+        assert_eq!(chat_token_bot(&host.db, token), Some(bot));
+        assert_eq!(chat_token_bot(&host.db, &token[..token.len() - 1]), None);
+        let list = host.call("chat_tokens", &json!({})).await.unwrap();
+        assert_eq!((list[0]["name"].as_str(), list[0]["bot_id"].as_i64(), list[0].get("hash")), (Some("Shortcuts"), Some(bot), None));
+        assert!(!list.to_string().contains(token));
+        let other = host.call("chat_token_add", &json!({"bot_id": 1, "name": "HA"})).await.unwrap();
+        host.call("chat_token_delete", &json!({"id": list[0]["id"]})).await.unwrap();
+        assert_eq!(chat_token_bot(&host.db, token), None);
+        host.call("chat_token_add", &json!({"bot_id": bot, "name": "Again"})).await.unwrap();
+
         host.call("delete_bot", &json!({"id": id})).await.unwrap();
         assert_eq!(host.call("bots", &json!({})).await.unwrap().as_array().unwrap().len(), 1);
+        let list = host.call("chat_tokens", &json!({})).await.unwrap();
+        assert_eq!(list.as_array().unwrap().len(), 1, "the deleted bot's token went with it");
+        assert_eq!(chat_token_bot(&host.db, other.as_str().unwrap()), Some(1));
         host.stop_all();
     }
 }
