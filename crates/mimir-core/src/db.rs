@@ -370,6 +370,10 @@ pub struct GoodRun {
 /// take minutes.
 pub const MISSED_AFTER: i64 = 15 * 60;
 
+/// Routine results that may come through right away on the person's own rule, a day, all bots together: the rule is
+/// theirs, but whether it holds is the AI's call on what it read, so a page can't flood them.
+pub const URGENT_PER_DAY: i64 = 3;
+
 #[derive(Debug, Clone, Serialize)]
 pub struct RunMark {
     pub status: String,
@@ -418,6 +422,10 @@ pub struct Routine {
     /// Tries since the last run that worked, after failures that may pass (the network, the setup).
     #[serde(default)]
     pub retries: i64,
+    /// The person's own rule for coming through right away when it would otherwise wait ("" = never). Only set from
+    /// the app, never by a bot, so nothing the bot read can widen it.
+    #[serde(default)]
+    pub urgent: String,
 }
 
 /// Routines waiting: until a usage limit resets, or a daily cap's day is over. `why` finishes "Missed 3 runs, …: ".
@@ -732,6 +740,9 @@ impl Db {
         add_col("routines", "watch_noise", "TEXT NOT NULL DEFAULT ''")?;
         add_col("routines", "retries", "INTEGER NOT NULL DEFAULT 0")?;
         add_col("runs", "delivered", "TEXT")?;
+        // The person's "come through right away if …" for a routine that would otherwise wait, and the runs it let through.
+        add_col("routines", "urgent", "TEXT NOT NULL DEFAULT ''")?;
+        add_col("runs", "urgent", "INTEGER NOT NULL DEFAULT 0")?;
         add_col("runs", "cache_read", "INTEGER NOT NULL DEFAULT 0")?;
         add_col("runs", "estimated", "INTEGER NOT NULL DEFAULT 0")?;
         c.execute(
@@ -2734,7 +2745,7 @@ impl Db {
             "INSERT INTO routines(bot_id, chat_id, cron, prompt, next_fire, quiet) VALUES (?1,?2,?3,?4,?5,?6)",
             params![bot, chat, cron.trim(), prompt.trim(), next, quiet],
         )?;
-        Ok(Routine { id: c.last_insert_rowid(), bot_id: bot, chat_id: chat, cron: cron.trim().into(), prompt: prompt.trim().into(), next_fire: next, quiet, paused: false, delivery: "now".into(), tainted: false, once: false, watch: String::new(), retries: 0 })
+        Ok(Routine { id: c.last_insert_rowid(), bot_id: bot, chat_id: chat, cron: cron.trim().into(), prompt: prompt.trim().into(), next_fire: next, quiet, paused: false, delivery: "now".into(), tainted: false, once: false, watch: String::new(), retries: 0, urgent: String::new() })
     }
 
     /// A one-off at `at` (unix seconds): a reminder, or a task for later. It's deleted once it has run.
@@ -2750,7 +2761,7 @@ impl Db {
             "INSERT INTO routines(bot_id, chat_id, cron, prompt, next_fire, quiet, once) VALUES (?1,?2,'',?3,?4,?5,1)",
             params![bot, chat, prompt.trim(), at, quiet],
         )?;
-        Ok(Routine { id: c.last_insert_rowid(), bot_id: bot, chat_id: chat, cron: String::new(), prompt: prompt.trim().into(), next_fire: at, quiet, paused: false, delivery: "now".into(), tainted: false, once: true, watch: String::new(), retries: 0 })
+        Ok(Routine { id: c.last_insert_rowid(), bot_id: bot, chat_id: chat, cron: String::new(), prompt: prompt.trim().into(), next_fire: at, quiet, paused: false, delivery: "now".into(), tainted: false, once: true, watch: String::new(), retries: 0, urgent: String::new() })
     }
 
     /// A routine a bot made after reading outside content: its prompt may carry someone else's words.
@@ -2761,7 +2772,7 @@ impl Db {
 
     fn routines_where(&self, sql: &str, p: impl rusqlite::Params) -> Result<Vec<Routine>> {
         let c = self.c();
-        let mut st = c.prepare(&format!("SELECT id, chat_id, cron, prompt, next_fire, bot_id, quiet, paused, delivery, tainted, once, watch, retries FROM routines WHERE {sql} ORDER BY id"))?;
+        let mut st = c.prepare(&format!("SELECT id, chat_id, cron, prompt, next_fire, bot_id, quiet, paused, delivery, tainted, once, watch, retries, urgent FROM routines WHERE {sql} ORDER BY id"))?;
         let v = st
             .query_map(p, |r| {
                 Ok(Routine {
@@ -2778,6 +2789,7 @@ impl Db {
                     once: r.get(10)?,
                     watch: r.get(11)?,
                     retries: r.get(12)?,
+                    urgent: r.get(13)?,
                 })
             })?
             .collect::<Result<_, _>>()?;
@@ -2815,6 +2827,15 @@ impl Db {
             bail!("delivery is now, digest or log");
         }
         Ok(self.c().execute("UPDATE routines SET delivery=?3 WHERE id=?1 AND chat_id=?2", params![id, chat, delivery])? > 0)
+    }
+
+    /// The person's "come through right away if …" ("" = never): one line, no angle brackets (it goes into the prompt).
+    pub fn routine_set_urgent(&self, chat: i64, id: i64, rule: &str) -> Result<bool> {
+        let rule = rule.split_whitespace().collect::<Vec<_>>().join(" ").replace(['<', '>'], "");
+        if rule.chars().count() > 200 {
+            bail!("keep it under 200 characters");
+        }
+        Ok(self.c().execute("UPDATE routines SET urgent=?3 WHERE id=?1 AND chat_id=?2", params![id, chat, rule])? > 0)
     }
 
     /// What a quiet check watches ("" for nothing, a page's address, or "mail"). A new target starts from a fresh look.
@@ -2917,6 +2938,19 @@ impl Db {
     pub fn run_delivered(&self, run: i64, how: &str) -> Result<()> {
         self.c().execute("UPDATE runs SET delivered=?2 WHERE id=?1", params![run, how])?;
         Ok(())
+    }
+
+    /// Let this run come through right away, unless URGENT_PER_DAY runs (all bots together) already did since
+    /// `day_start`. One statement, so two bots finishing at once can't both take the last one.
+    pub fn run_take_urgent(&self, run: i64, day_start: i64) -> Result<bool> {
+        Ok(self.c().execute(
+            "UPDATE runs SET urgent=1 WHERE id=?1 AND (SELECT count(*) FROM runs WHERE urgent=1 AND started_at >= ?2) < ?3",
+            params![run, day_start, URGENT_PER_DAY],
+        )? > 0)
+    }
+
+    pub fn run_urgent(&self, run: i64) -> Result<bool> {
+        Ok(self.c().query_row("SELECT urgent FROM runs WHERE id=?1", [run], |r| r.get(0))?)
     }
 
     /// What happens next, after a failed run's error ("Trying again at 10:35.").
@@ -3715,6 +3749,24 @@ mod tests {
         d.hold_set(&format!("hold:routine:{}", r.id), &Hold { until: now() + 60, why: "cap".into(), waive: None }).unwrap();
         d.routine_delete(8, r.id).unwrap();
         assert!(d.hold(&format!("hold:routine:{}", r.id)).unwrap().is_none());
+    }
+
+    #[test]
+    fn urgent_rule_and_daily_cap() {
+        let d = db();
+        let r = d.routine_create(1, 8, "0 * * * *", "check my flight", true).unwrap();
+        assert!(d.routine_set_urgent(8, r.id, "  the flight\n is <b>delayed</b> ").unwrap());
+        assert_eq!(d.routines(8).unwrap()[0].urgent, "the flight is bdelayed/b", "one line, no tags");
+        assert!(d.routine_set_urgent(8, r.id, &"x".repeat(201)).is_err());
+        assert!(!d.routine_set_urgent(9, r.id, "x").unwrap(), "another chat's routine");
+        let runs: Vec<i64> = (0..=URGENT_PER_DAY).map(|_| d.run_start(1, 8, "routine", Some(r.id), "claude -p").unwrap()).collect();
+        let day = now() - 60;
+        for &run in &runs[..URGENT_PER_DAY as usize] {
+            assert!(d.run_take_urgent(run, day).unwrap() && d.run_urgent(run).unwrap());
+        }
+        let last = *runs.last().unwrap();
+        assert!(!d.run_take_urgent(last, day).unwrap() && !d.run_urgent(last).unwrap(), "over the day's cap");
+        assert!(d.run_take_urgent(last, now() + 60).unwrap(), "a new day");
     }
 
     #[test]

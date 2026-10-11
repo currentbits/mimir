@@ -10,6 +10,7 @@ replies "DONE <tool>: <the tool's result>":
     ASK SEARCH → ask_bot    MAKE BOT → bot_create    ROUTINE → routine_create    REMEMBER → memory_store
     FORGET <n> → memory_forget(n)    FILE → file_write    LIST FILES → file_list    DELETE ROUTINE <n> → routine_delete(n)
 
+A routine asked to say URGENT when the person's rule holds, about something DELAYED, says so.
 Anything else gets "OK: <your message>". A message with SLOW in it is answered after 3 seconds (any bot), for
 switching away mid-reply. Each request is logged to stdout.
 
@@ -77,6 +78,8 @@ class H(BaseHTTPRequestHandler):
             # What the tool said, back to the person.
             name = next((c["function"]["name"] for m in reversed(msgs) if m.get("role") == "assistant" for c in m.get("tool_calls") or []), "?")
             return self.reply({"role": "assistant", "content": f"DONE {name}: {text_of(last.get('content'))[:300]}"})
+        if "DELAYED" in last_user and "own rule holds now" in last_user:
+            return self.reply({"role": "assistant", "content": "URGENT\nYour flight is DELAYED by 3 hours."})
         for word, tool, args in SCRIPT:
             if word in last_user:
                 return self.reply({"role": "assistant", "content": None, "tool_calls": [

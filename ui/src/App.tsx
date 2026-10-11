@@ -244,7 +244,7 @@ type EntryRow = {
   origin?: '' | 'you' | 'bot' | 'tidy' | 'import'; bot_id?: number | null; tainted?: boolean; missteps?: number; valid_until?: number | null; asked?: string | null
 }
 type Delivery = 'now' | 'digest' | 'log'
-type Routine = { id: number; bot_id: number; quiet: boolean; paused: boolean; chat_id: number; cron: string; prompt: string; next_fire: number; delivery: Delivery; once?: boolean; watch?: string }
+type Routine = { id: number; bot_id: number; quiet: boolean; paused: boolean; chat_id: number; cron: string; prompt: string; next_fire: number; delivery: Delivery; once?: boolean; watch?: string; urgent?: string }
 /** When a routine runs, in words: its schedule, or the one time a one-off (a reminder) runs. */
 const when = (r: Routine) => r.once ? `Once · ${fullTime(r.next_fire)}` : schedule(r.cron)
 type Tab = 'chat' | 'memory' | 'skills' | 'routines' | 'activity'
@@ -2247,7 +2247,7 @@ function toCron(w: When): string {
     : w.mode === 'hours' ? `0 */${w.hours} * * *` : w.cron
 }
 
-type RoutineDraft = { prompt: string; botId: number; quiet: boolean; when: When; delivery: Delivery; watch: string }
+type RoutineDraft = { prompt: string; botId: number; quiet: boolean; when: When; delivery: Delivery; watch: string; urgent: string }
 
 function RoutineForm({ draft, setDraft, bots, onCancel, onSave, inline, skills = [] }: {
   draft: RoutineDraft; setDraft: (d: RoutineDraft) => void; bots: Bot[]; onCancel: () => void; onSave: () => void; inline?: boolean; skills?: Skill[]
@@ -2303,6 +2303,10 @@ function RoutineForm({ draft, setDraft, bots, onCancel, onSave, inline, skills =
           options={[{ id: 'now', label: 'Right away' }, { id: 'digest', label: 'In my daily digest' }, { id: 'log', label: 'Just log it' }]} />
         <span className="hint">{draft.delivery === 'now' ? 'A message (and a notification) as soon as it runs.' : draft.delivery === 'digest' ? 'Collected into one message a day, at the time set in Settings.' : 'Nothing is sent; see what it found in Activity.'}</span>
       </div>
+      <label className="field-label"><span>Come through right away if (optional)</span>
+        <input className="input" value={draft.urgent} maxLength={200} placeholder="e.g. my flight is delayed or cancelled" onChange={e => setDraft({ ...draft, urgent: e.target.value })} />
+        <span className="hint">When it would otherwise wait (in the digest, log only, or quiet hours). The message says it came through because of this. At most 3 a day, all bots together.</span>
+      </label>
       <div className="er" style={{ alignItems: 'center' }}>
         {bots.length > 1 && !inline && (
           <select className="select" aria-label="Bot" style={{ width: 180 }} value={draft.botId} onChange={e => setDraft({ ...draft, botId: Number(e.target.value) })}>
@@ -2331,14 +2335,17 @@ function RoutinesView({ chatId, bots }: { chatId: number; bots: Bot[] }) {
   const list = rows.data ?? []
   const deliver = (id: number, delivery: Delivery) => invoke('set_delivery', { chatId, id, delivery })
   const watch = (id: number, w: string) => invoke('set_watch', { chatId, id, watch: w.trim() })
-  const update = (r: Routine, patch: { cron?: string; prompt?: string; quiet?: boolean; paused?: boolean; delivery?: Delivery; watch?: string }) =>
+  const urgent = (id: number, rule: string) => invoke('set_urgent', { chatId, id, rule })
+  const update = (r: Routine, patch: { cron?: string; prompt?: string; quiet?: boolean; paused?: boolean; delivery?: Delivery; watch?: string; urgent?: string }) =>
     invoke('update_routine', { chatId, id: r.id, cron: r.cron, prompt: r.prompt, quiet: r.quiet, paused: r.paused, ...patch })
       .then(() => patch.watch !== undefined && patch.watch.trim() !== (r.watch ?? '') ? watch(r.id, patch.watch) : null)
       .then(() => patch.delivery && patch.delivery !== r.delivery ? deliver(r.id, patch.delivery) : null)
+      .then(() => patch.urgent !== undefined && patch.urgent.trim() !== (r.urgent ?? '') ? urgent(r.id, patch.urgent) : null)
       .then(() => { setErr(null); setEditing(null); rows.reload() }, e => setErr(String(e)))
-  const start = (cron: string, prompt: string, quiet: boolean, w = '') => { setErr(null); setDraft({ prompt, quiet, botId: bots[0]?.id ?? 1, when: toWhen(cron), delivery: 'now', watch: w }) }
+  const start = (cron: string, prompt: string, quiet: boolean, w = '') => { setErr(null); setDraft({ prompt, quiet, botId: bots[0]?.id ?? 1, when: toWhen(cron), delivery: 'now', watch: w, urgent: '' }) }
   const add = () => draft && invoke<Routine>('add_routine', { chatId, botId: draft.botId, cron: toCron(draft.when), prompt: draft.prompt, quiet: draft.quiet })
     .then(async r => { if (draft.quiet && draft.watch.trim()) await watch(r.id, draft.watch); return r })
+    .then(async r => { if (draft.urgent.trim()) await urgent(r.id, draft.urgent); return r })
     .then(r => draft.delivery !== 'now' ? deliver(r.id, draft.delivery) : null)
     .then(() => { setDraft(null); setErr(null); rows.reload() }, e => setErr(String(e)))
   return (
@@ -2356,13 +2363,13 @@ function RoutinesView({ chatId, bots }: { chatId: number; bots: Bot[] }) {
               const b = botOf(r.bot_id)
               if (editing?.id === r.id) return (
                 <RoutineForm key={r.id} inline skills={skillRows.data ?? []} draft={editing.draft} setDraft={d => setEditing({ id: r.id, draft: d })} bots={bots} onCancel={() => setEditing(null)}
-                  onSave={() => update(r, { cron: toCron(editing.draft.when), prompt: editing.draft.prompt, quiet: editing.draft.quiet, delivery: editing.draft.delivery, watch: editing.draft.quiet ? editing.draft.watch : '' })} />
+                  onSave={() => update(r, { cron: toCron(editing.draft.when), prompt: editing.draft.prompt, quiet: editing.draft.quiet, delivery: editing.draft.delivery, watch: editing.draft.quiet ? editing.draft.watch : '', urgent: editing.draft.urgent })} />
               )
               return (
                 <div className={'routine' + (r.paused ? ' paused' : '')} key={r.id}>
                   <span className={'ri' + (r.quiet ? ' quiet' : '')}><Icon name={r.quiet ? 'moon' : 'clock'} /></span>
                   <div>
-                    <div className="rt">{when(r)}{r.quiet && <span className="badge pending" title="Read-only; speaks up only when something needs your attention">Quiet</span>}{r.paused && <span className="badge">Paused</span>}{r.delivery === 'digest' && <span className="badge" title="Collected into your daily digest">In digest</span>}{r.delivery === 'log' && <span className="badge" title="Not sent; see Activity">Log only</span>}{r.quiet && r.watch && <span className="badge" title="Mimir looks first and only runs the AI when this changed">Watching {r.watch === 'mail' ? 'mail' : (() => { try { return new URL(r.watch).host } catch { return r.watch } })()}</span>}</div>
+                    <div className="rt">{when(r)}{r.quiet && <span className="badge pending" title="Read-only; speaks up only when something needs your attention">Quiet</span>}{r.paused && <span className="badge">Paused</span>}{r.delivery === 'digest' && <span className="badge" title="Collected into your daily digest">In digest</span>}{r.delivery === 'log' && <span className="badge" title="Not sent; see Activity">Log only</span>}{r.urgent && <span className="badge" title={`Comes through right away if: ${r.urgent}`}>Urgent if…</span>}{r.quiet && r.watch && <span className="badge" title="Mimir looks first and only runs the AI when this changed">Watching {r.watch === 'mail' ? 'mail' : (() => { try { return new URL(r.watch).host } catch { return r.watch } })()}</span>}</div>
                     <div className="rp selectable">{r.prompt}</div>
                     <div className="rm"><Avatar id={b.id} name={b.name} size={16} still /><span>{b.name}</span><span>·</span><span>{r.paused ? 'Won’t run until you turn it back on' : `${r.once ? 'Runs' : 'Next run'} ${ahead(r.next_fire)}${r.once ? ', then it’s gone' : ''}`}</span></div>
                     <RoutineHealth s={stats.data?.find(x => x.id === r.id)} onReset={() => invoke('reset_watch_noise', { chatId, id: r.id }).then(stats.reload, e => setErr(String(e)))} />
@@ -2377,7 +2384,7 @@ function RoutinesView({ chatId, bots }: { chatId: number; bots: Bot[] }) {
                     <button className="btn btn-ghost btn-sm" disabled={rehearsal?.id === r.id && !rehearsal.r} title="Run it once without sending or changing anything: see what it would do"
                       onClick={() => rehearse(r.id)}>Rehearse</button>
                     {/* A one-off has no schedule to edit: change its words by asking the bot, or delete it. */}
-                    {!r.once && <button className="btn btn-ghost btn-sm" onClick={() => setEditing({ id: r.id, draft: { prompt: r.prompt, quiet: r.quiet, botId: r.bot_id, when: toWhen(r.cron), delivery: r.delivery ?? 'now', watch: r.watch ?? '' } })}>Edit</button>}
+                    {!r.once && <button className="btn btn-ghost btn-sm" onClick={() => setEditing({ id: r.id, draft: { prompt: r.prompt, quiet: r.quiet, botId: r.bot_id, when: toWhen(r.cron), delivery: r.delivery ?? 'now', watch: r.watch ?? '', urgent: r.urgent ?? '' } })}>Edit</button>}
                     <button className="btn btn-ghost btn-danger btn-sm icon-btn" title="Delete" aria-label="Delete routine" onClick={() => ask('Delete this routine?', 'Delete', true).then(ok => { if (ok) void invoke('delete_routine', { chatId, id: r.id }).then(rows.reload, e => setErr(String(e))) })}><Icon name="trash" size={14} /></button>
                   </div>
                 </div>
@@ -3247,7 +3254,7 @@ function DigestSettings() {
         {at !== null && <input className="input" type="time" aria-label="Digest time" style={{ width: 'auto' }} value={at} onChange={e => e.target.value && save(e.target.value)} />}
       </Row>
       <Row icon={<Icon name="moon" size={15} />} title="Quiet hours"
-        desc={quiet ? 'Routines that would message you wait for your digest, and asks from routines wait until morning. Replies to your own messages still come.' : 'Off: routines message you whenever they run.'}>
+        desc={quiet ? 'Routines that would message you wait for your digest, and asks from routines wait until morning. Replies to your own messages still come, and so does a routine whose “Come through right away if” rule matches (up to 3 a day).' : 'Off: routines message you whenever they run.'}>
         {quiet !== null && <>
           {quiet && <>
             <input className="input" type="time" aria-label="Quiet from" style={{ width: 'auto' }} value={qFrom} onChange={e => e.target.value && saveQuiet(`${e.target.value}-${qTo}`)} />

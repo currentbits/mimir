@@ -523,6 +523,25 @@ pub(crate) fn is_nothing(reply: &str) -> bool {
     reply.trim().trim_matches(|c: char| !c.is_alphanumeric()).eq_ignore_ascii_case(NOTHING)
 }
 
+/// Midnight today, local time.
+pub(crate) fn day_start() -> i64 {
+    let t = chrono::Local::now().date_naive().and_hms_opt(0, 0, 0);
+    t.and_then(|t| chrono::TimeZone::from_local_datetime(&chrono::Local, &t).earliest()).map_or(0, |t| t.timestamp())
+}
+
+/// The person's rule for coming through right away, when this run's result would otherwise wait (the digest, the
+/// log, or quiet hours, which turn "now" into the digest). A rehearsal doesn't use up the day's.
+fn urgent_rule<'a>(r: &'a db::Routine, ctx: &ToolCtx) -> Option<&'a str> {
+    (!r.urgent.is_empty() && r.delivery != "now" && !ctx.rehearsal).then_some(r.urgent.as_str())
+}
+
+/// A reply whose first line is URGENT: the rest of it.
+fn urgent_body(reply: &str) -> Option<&str> {
+    let reply = reply.trim_start();
+    let (first, rest) = reply.split_once('\n').unwrap_or((reply, ""));
+    first.trim_matches(|c: char| !c.is_alphanumeric()).eq_ignore_ascii_case("URGENT").then(|| rest.trim())
+}
+
 async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) -> Result<(String, db::Usage)> {
     let scope = ctx.scope();
     let (text, is_routine, quiet) = match &trigger {
@@ -534,7 +553,8 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
         Trigger::Routine(r) => {
             // A routine can just run a skill: its prompt is "/skill-name …".
             let prompt = skill_command(&ctx.db, &scope, ctx.bot_id, &r.prompt).unwrap_or_else(|| r.prompt.clone());
-            (format!("[Scheduled {} #{} \"{}\"{}] {prompt}", if r.quiet { "quiet check" } else { "routine" }, r.id, r.cron, late(r.next_fire, db::now())), true, r.quiet)
+            let urgent = urgent_rule(r, ctx).map(|u| format!("\n\n[This result waits to be sent, unless the person's own rule holds now: \"{u}\". Only if it does, make the first line of your reply exactly URGENT.]")).unwrap_or_default();
+            (format!("[Scheduled {} #{} \"{}\"{}] {prompt}{urgent}", if r.quiet { "quiet check" } else { "routine" }, r.id, r.cron, late(r.next_fire, db::now())), true, r.quiet)
         }
     };
     // "/skill-name …" from the person: use that skill (the message is kept as they wrote it).
@@ -743,17 +763,36 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
     if quiet && is_nothing(&reply.text) {
         return Ok((String::new(), reply.usage));
     }
+    // A result that matched the person's rule comes through now, within the day's cap (the run is marked, so the
+    // scheduler sends it); over the cap it waits as usual, saying so.
+    let mut lane = match &trigger {
+        Trigger::Routine(r) => r.delivery.as_str(),
+        _ => "",
+    };
+    if let Trigger::Routine(r) = &trigger
+        && let Some(rule) = urgent_rule(r, ctx)
+        && let Some(body) = urgent_body(&reply.text).map(str::to_string)
+    {
+        if let Some(run) = ctx.run_id
+            && ctx.db.run_take_urgent(run, day_start())?
+        {
+            reply.text = format!("🔔 _Came through because: {rule}_\n\n{body}");
+            lane = "now";
+        } else {
+            reply.text = format!("{body}\n\n_This matched \"{rule}\", but {} already came through today._", db::URGENT_PER_DAY);
+        }
+    }
     match &trigger {
         Trigger::Delegated { .. } => {}
         // Routines in the digest or log-only lane don't land in the chat as they run.
-        Trigger::Routine(r) if r.delivery == "digest" => {
+        Trigger::Routine(r) if lane == "digest" => {
             ctx.db.digest_add(ctx.bot_id, ctx.chat_id, r.id, &reply.text, ctx.is_tainted())?;
             // What it found came from outside: the conversation it lands in has read it too.
             if ctx.is_tainted() {
                 ctx.db.conv_taint(ctx.bot_id, ctx.chat_id)?;
             }
         }
-        Trigger::Routine(r) if r.delivery == "log" => {}
+        Trigger::Routine(_) if lane == "log" => {}
         _ => {
             // A new routine's first results ask what to trim, so the brief gets tuned by a reply rather than left as
             // first written (the bot changes it with routine_update).
@@ -778,6 +817,13 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn urgent_first_line() {
+        assert_eq!(super::urgent_body("URGENT\nFlight BA12 is delayed 3h."), Some("Flight BA12 is delayed 3h."));
+        assert_eq!(super::urgent_body("\n**Urgent:**\nx"), Some("x"));
+        assert_eq!(super::urgent_body("Nothing urgent today.\nURGENT"), None, "only the first line counts");
+    }
 
     #[test]
     fn a_late_run_is_told() {
