@@ -3,6 +3,7 @@
 import React, { type CSSProperties, type ReactNode } from 'react'
 import { AbsoluteFill, Easing, interpolate, random, Sequence, useCurrentFrame, useVideoConfig } from 'remotion'
 import T from './timeline.json'
+import G from './guide.json'
 import { traits, type Mood } from '../../ui/src/face-core'
 import { pigment } from '../../ui/src/format'
 import { Icon } from '../../ui/src/ui'
@@ -27,8 +28,11 @@ export const BOT = { ada: 1, researcher: 2, briefer: 3, reviewer: 4, watcher: 6 
 
 // ---------------- the beat clock ----------------
 
+// The film and the guide share one clock: same tempo, and scene ids that don't clash.
+const SCENES = { ...T.scenes, ...G.scenes }
+if (G.bpm !== T.bpm || Object.keys(G.scenes).some((k) => k in T.scenes)) throw new Error('guide.json: same bpm as timeline.json, and its own scene ids')
 export const BPM = T.bpm
-export type SceneId = keyof typeof T.scenes
+export type SceneId = keyof typeof SCENES
 export const fpb = (fps: number) => (fps * 60) / BPM
 /** Beats since the current Sequence began (fractional). */
 export function useBeat() {
@@ -36,11 +40,11 @@ export function useBeat() {
   const { fps } = useVideoConfig()
   return frame / fpb(fps)
 }
-/** A scene's cue beats by name (timeline.json, shared with the score). */
+/** A scene's cue beats by name (timeline.json or guide.json, shared with the score). */
 export function cues(id: SceneId) {
-  return Object.fromEntries(Object.entries(T.scenes[id].cues).map(([k, v]) => [k, (v as unknown[])[0] as number])) as Record<string, number>
+  return Object.fromEntries(Object.entries(SCENES[id].cues).map(([k, v]) => [k, (v as unknown[])[0] as number])) as Record<string, number>
 }
-export const sceneBeats = (id: SceneId) => T.scenes[id].len * 4
+export const sceneBeats = (id: SceneId) => SCENES[id].len * 4
 
 export const ease = {
   out: Easing.bezier(0.16, 1, 0.3, 1),
@@ -66,7 +70,7 @@ export const glide = (t: number, at: number, dur: number, from: [number, number]
 /** A scene on its bars. It drifts in slowly the whole time it's up, and sinks out over its last `exit` beats. */
 export function Scene({ id, exit = 0.5, drift = 0.025, children }: { id: SceneId; exit?: number; drift?: number; children: ReactNode }) {
   const { fps } = useVideoConfig()
-  const s = T.scenes[id]
+  const s = SCENES[id]
   return (
     <Sequence from={Math.round(s.at * 4 * fpb(fps))} durationInFrames={Math.round(s.len * 4 * fpb(fps))} name={id}>
       <Sink len={s.len * 4} exit={exit} drift={drift}>{children}</Sink>
