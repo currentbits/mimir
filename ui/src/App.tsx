@@ -837,6 +837,10 @@ function Main() {
   const talkTo = (id: number) => { setChatBot(id); setChatId(LOCAL); setIncognito(false); setViaBot(true); setView('chat'); setMenu(null) }
   const botChat = viaBot && view === 'chat' && chat.chat_id === LOCAL
   const [menu, setMenu] = useState<{ x: number; y: number; id: number } | null>(null)
+  // On a phone the sidebar is a full screen of its own, opened from the tab bar's Chats.
+  const [phoneList, setPhoneList] = useState(false)
+  const phoneTab = phoneList || view === 'chat' ? 'chats' : view
+  const go = (v: View) => { setPhoneList(false); setView(v) }
 
   // ⌘F: on the Settings page it searches settings; anywhere else, memory.
   const findIt = () => {
@@ -879,8 +883,9 @@ function Main() {
 
   return (
     <Bots.Provider value={botOf}>
-    <div className="app">
-      <aside className="rail" aria-label="Bots and chats">
+    <div className={'app' + (phoneList ? ' list' : '')}>
+      <aside className="rail" aria-label="Bots and chats"
+        onClick={e => { if ((e.target as Element).closest('.rail-item, .rail-label button')) setPhoneList(false) }}>
         <div className="rail-top" data-tauri-drag-region />
         <div className="rail-scroll" ref={railRef}>
           <span className="rail-glide" aria-hidden="true" />
@@ -1014,6 +1019,15 @@ function Main() {
           </div>
         )}
       </main>
+      <nav className="tabbar" aria-label="Sections">
+        {([['chats', 'Chats', 'chat'], ['inbox', 'Needs you', 'inbox'], ['memory', 'Memory', 'memory'], ['routines', 'Routines', 'clock']] as const).map(([id, label, icon]) => (
+          <button key={id} className={phoneTab === id ? 'on' : ''} aria-current={phoneTab === id ? 'page' : undefined}
+            onClick={() => id === 'chats' ? setPhoneList(true) : go(id)}>
+            <Icon name={icon} size={20} />{label}
+            {id === 'inbox' && needs > 0 && <span className="badge count">{needs}</span>}
+          </button>
+        ))}
+      </nav>
       {menu && <BotMenu at={menu} name={botOf(menu.id).name} onChat={() => talkTo(menu.id)} onSettings={() => openBot(menu.id)} onClose={() => setMenu(null)} />}
     </div>
     </Bots.Provider>

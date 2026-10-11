@@ -1151,6 +1151,11 @@ impl Db {
         Ok(self.c().query_row("SELECT value FROM settings WHERE key=?1", [key], |r| r.get(0)).optional()?)
     }
 
+    /// Read a setting and delete it in one step: only one of two callers racing for it gets it.
+    pub fn setting_take(&self, key: &str) -> Result<Option<String>> {
+        Ok(self.c().query_row("DELETE FROM settings WHERE key=?1 RETURNING value", [key], |r| r.get(0)).optional()?)
+    }
+
     /// Take or renew the computer for `who` ("run:<id>" or "you") for `secs`. Free, expired or already ours: it's
     /// ours. Otherwise returns who holds it ({who, name}). Atomic, so bots in separate processes can't both get it.
     pub fn computer_lease(&self, who: &str, name: &str, secs: i64) -> Result<Option<(String, String)>> {
@@ -1441,6 +1446,8 @@ impl Db {
         c.execute("DELETE FROM cases WHERE ts < ?1", [before])?;
         c.execute("DELETE FROM signals WHERE ts < ?1", [before])?;
         c.execute("DELETE FROM digest_items WHERE sent_at IS NOT NULL AND sent_at < ?1", [before])?;
+        // Buttons nobody tapped in a month (runtime::Tap): they'd only say "already done" by then anyway.
+        c.execute("DELETE FROM settings WHERE key LIKE 'tap:%' AND CAST(json_extract(value, '$.at') AS INTEGER) < ?1", [now() - 30 * 86400])?;
         Ok(())
     }
 
@@ -1980,7 +1987,7 @@ impl Db {
         let mut steps = vec![];
         for id in ids.into_iter().rev() {
             for c in self.tool_calls(id)? {
-                let bookkeeping = c.tool.starts_with("memory_") || c.tool.starts_with("skill_") || c.tool.ends_with("_search") || c.tool == "plan_propose";
+                let bookkeeping = c.tool.starts_with("memory_") || c.tool.starts_with("skill_") || c.tool.ends_with("_search") || c.tool == "plan_propose" || c.tool == "ask_choice";
                 if c.ok && c.decision != "deny" && !bookkeeping {
                     steps.push(c.summary);
                 }
