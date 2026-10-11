@@ -36,10 +36,29 @@ What's shared and what isn't:
   working. **Stop** cuts a reply off; what was written so far stays, marked *Stopped*. A reply still being written in
   Telegram, Slack or Discord can be stopped from the app too: open it under **Activity**. "Start fresh" (or `/new`)
   begins a new conversation. When a reply saved a memory, its "Saved to memory" chip has **Undo**.
+  A chat opens on its newest 200 messages; **Show earlier messages** at the top pages back. **Search this chat**
+  (⌘F / Ctrl+F) finds older messages by their words, and a hit jumps to it. Telegram, Slack and Discord chats have the
+  same.
 - **Quick ask**: ⌥Space (Mac) or Ctrl+Alt+Space (Windows, Linux) opens a Spotlight-style panel from any app. It's the
   same built-in chat, so the exchange is there afterwards.
 - **Telegram, Slack, Discord.** One bot can be on all three at once. Each connects *out* (long-polling, Socket Mode,
-  the Gateway), so you don't need a public address.
+  the Gateway), so you don't need a public address. A chat that has been quiet for 12 hours starts a new conversation
+  with its next message, opening with a short "where we left off" quoted from Mimir's log. Each reply then re-sends
+  less, and anything outside the bot read earlier stops counting (unless it's in the quoted part). Set the hours, or 0
+  for never, under **Settings → Limits**.
+
+### What a reply did, from the log
+
+Every reply is checked against its own run log. No model and no network requests are involved, and the reply itself is never changed.
+
+- **Receipts and sources.** In Telegram, Slack and Discord, lines like "✓ Sent an email to ana@…", "✓ Added Tue 14 Oct
+  15:00, "Dentist"" or "✓ Reminder set for …" follow the reply. A "Sources:" line lists the pages it read and the
+  searches it ran. The app shows the same things as chips under the reply.
+- **Claims with nothing behind them.** A reply that says it sent, booked or will remind you, when no matching action
+  succeeded in that run, gets a note: *Not done in this reply: …*. An action that is still waiting for your OK doesn't
+  count. If it promised a reminder, the app shows a **Set it** button. In a messaging app, reply "set it".
+- **Links.** A link that the run never opened or found in a search is listed as unchecked. Links you sent yourself are
+  not. Routine results get the same checks.
 
 ### Guests
 
@@ -50,6 +69,22 @@ and can read the web, search and make calendar links. They get none of yours: no
 logins, browser, tool servers or the bots' computer, and they can't make new bots. Guest chats say *guest* in the
 sidebar. The **Guest** / **Yours** button at the top of a chat changes it (say, for your own second account, or a chat
 someone else paired before Mimir told guests apart).
+
+### The household and family groups
+
+The **Household** (in the sidebar once it's used) is a set of memories and lists you share with people you choose: a
+shopping list, plans, who does what. Bots in your own direct chats and the built-in chat read it and can add to it
+(`memory_store` with `household`). A guest reads it once you press **Add to household** at the top of their chat. What a
+guest adds doesn't change anything yet: it's a suggestion in your **Needs you** ("Sam wants to add this to the
+household"), which you accept or dismiss. Your own additions go straight in. The household has a Memory tab like any
+chat (edit, pin, forget, history), but no conversation of its own.
+
+**Family group.** In a group chat you paired (say a Telegram group with your partner and kids), **Make family group**
+lets everyone in your household talk to the bots there, not just you. People outside the household are still ignored,
+and only you can press Approve / Deny. Each message reaches the bot with who wrote it ("Sam: …"). A family group is a
+guest's chat whoever paired it (several people read it), so bots there get none of your email, calendar, meetings or
+logins. Your household is you plus each guest whose direct chat you added on the same app. (On Telegram, a bot
+in a group only sees every message if its privacy mode is off in @BotFather; otherwise talk to it with an @-mention.)
 
 ### Pairing a messaging app
 
@@ -70,7 +105,8 @@ Other people's replies in the thread are still ignored. (Mentions in a thread wh
 
 **Replying to one of its messages** (swipe to reply on Telegram, Reply on Discord) tells the bot which message you mean,
 so "move this one to Friday" under item 3 of a briefing works. On Telegram, select part of the message first to quote
-just that part.
+just that part. In a Slack thread the bot is told the message that started the thread (this needs the history scopes:
+`im:history`, `channels:history`, `groups:history`); if someone other than you wrote it, it's read as outside content.
 
 Replies stream on all three: a message appears as soon as the bot starts and is edited as it grows (Telegram private
 chats use Telegram's own streaming, with a native stop button). A message answered 10+ minutes late (the computer was
@@ -78,9 +114,24 @@ asleep) starts with "Sorry for the slow reply". Messages sent while Mimir was of
 up to a day back: Telegram keeps them for it; on Slack your DMs and @-mentions in paired channels (with the
 `channels:history` and `groups:history` scopes; not replies inside threads), on Discord your paired DMs and channels. A failed reply says why in plain words and what to do.
 
-Chat commands: `/memory`, `/routines`, `/new`, `/stop` (a bare "stop" works too while it's writing), `/undo <n>`
+A bot does one thing at a time per chat; its other chats don't wait. A message that arrives while that chat is busy
+(a routine running there, or an earlier reply waiting for your OK) shows typing at once, and after a few seconds one
+note: "Finishing a routine first…" or "Finishing my last reply first…". Its reply follows.
+
+Chat commands: `/memory`, `/why` (what the last reply used: memories, skills, pages), `/routines`, `/new`, `/stop` (a bare "stop" works too while it's writing), `/undo <n>`
 (take back something it learned; see [Memory](memory.md#learned-this-week)), and `/<skill>` for each of the bot's
 skills (see [Skills](skills.md)). Everything else is plain language.
+
+**Telegram topics** (opt-in): with topics turned on in your private chat with the bot, switch on "Each topic is its
+own conversation" under Telegram on the bot's page. Each topic then has its own conversation, its own "read outside
+content" state and its own `/new`, and replies land in the topic you wrote in. Memories, routines and pairing stay
+shared by the whole chat, and routine results and approval cards arrive in the main thread. The app's chat view shows
+only the main thread. One reply is written at a time per chat, so `/stop` stops it whichever topic it's in. This is
+opt-in because Telegram is still changing the feature.
+
+Bots answer in the language you write in. What Mimir itself says in the chat apps (pairing, approval cards and their
+buttons, errors, the digest, the weekly "what I learned", the Telegram "/" menu) follows Settings → Language: English
+or Dutch so far, by default the computer's language (a server's: its `LANG`). The app itself is still English.
 
 ## Photos, voice notes and files
 

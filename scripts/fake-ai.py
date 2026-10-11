@@ -7,12 +7,13 @@ The bot's name comes from its instructions ("Your name is …"). A bot named Sea
 task. Any other bot looks at your latest message for a word in capitals and calls the tool it stands for, then
 replies "DONE <tool>: <the tool's result>":
 
+    REMIND SAM → routine_create for Sam    HOUSEHOLD → memory_store to the household
     ASK SEARCH → ask_bot    MAKE BOT → bot_create    ROUTINE → routine_create    REMEMBER → memory_store
-    FORGET <n> → memory_forget(n)    FILE → file_write    LIST FILES → file_list    DELETE ROUTINE <n> → routine_delete(n)
+    FORGET <n> → memory_forget(n)    CHOOSE → ask_choice    FILE → file_write    LIST FILES → file_list    DELETE ROUTINE <n> → routine_delete(n)
 
 A routine asked to say URGENT when the person's rule holds, about something DELAYED, says so.
 Anything else gets "OK: <your message>". A message with SLOW in it is answered after 3 seconds (any bot), for
-switching away mid-reply. Each request is logged to stdout.
+switching away mid-reply; "SLOW <n>" waits n seconds. Each request is logged to stdout.
 
 It also stands in for ChatGPT's sign-in and Responses API ("Sign in with ChatGPT"): start the server with
 MIMIR_CHATGPT_AUTH=http://127.0.0.1:8899 MIMIR_CHATGPT_API=http://127.0.0.1:8899/v1. The fake sign-in code is
@@ -25,12 +26,15 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8899
 SCRIPT = [
+    ("REMIND SAM", "routine_create", lambda m: {"at": time.strftime("%Y-%m-%d 18:00", time.localtime(time.time() + 86400)), "prompt": "Remind Sam to take the bins out", "for": "Sam"}),
+    ("HOUSEHOLD", "memory_store", lambda m: {"type": "task", "title": "Shopping list", "body": "milk, bread", "household": True}),
     ("ASK SEARCH", "ask_bot", lambda m: {"bot": "Search", "task": "Check the title tag of heymimir.app"}),
     ("MAKE BOT", "bot_create", lambda m: {"name": "Scout", "role": "You watch prices and only speak up when one drops."}),
     ("DELETE ROUTINE", "routine_delete", lambda m: {"id": int(re.search(r"DELETE ROUTINE (\d+)", m).group(1))}),
     ("ROUTINE", "routine_create", lambda m: {"cron": "0 8 * * *", "prompt": "Brief me on tech news"}),
     ("REMEMBER", "memory_store", lambda m: {"type": "knowledge", "title": "Dentist", "body": "Dr. Lee in Stellenbosch", "source": "user said"}),
     ("FORGET", "memory_forget", lambda m: {"id": int(re.search(r"FORGET (\d+)", m).group(1))}),
+    ("CHOOSE", "ask_choice", lambda m: {"question": "Which day?", "options": ["Thursday", "Friday"]}),
     ("LIST FILES", "file_list", lambda m: {}),
     ("FILE", "file_write", lambda m: {"path": "notes/trip.md", "content": "- passport\n", "mode": "create"}),
 ]
@@ -71,7 +75,7 @@ class H(BaseHTTPRequestHandler):
         last = msgs[-1] if msgs else {}
         print(f"[{bot}] last={last.get('role')} user={last_user[-80:]!r}", flush=True)
         if "SLOW" in last_user and last.get("role") == "user":
-            time.sleep(3)
+            time.sleep(int((re.search(r"SLOW (\d+)", last_user) or [0, 3])[1]))
         if bot == "Search":
             return self.reply({"role": "assistant", "content": f"SEARCH-ANSWER: the title tag is fine (asked: {last_user[-60:]})"})
         if last.get("role") == "tool":

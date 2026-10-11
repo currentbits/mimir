@@ -10,8 +10,36 @@ losing it. Schedules are in your local time. A routine a bot creates runs at mos
 becomes a routine that runs once, at that time, and is then gone (the Routines tab shows it as *Once · Fri 16 Oct
 09:00*). It can be paused or deleted like any routine.
 
+**Reminders for someone else.** "Remind Sam at 6 to take the bins out" goes to Sam's own chat, if Sam is in your
+[household](bots-and-chats.md#the-household-and-family-groups) (matched by the name of their chat, first name is
+enough). The first time for each person you're asked (its own kind of approval, never "always"); after that it's set up
+straight away. It shows under Sam's chat's Routines. Guests can't set reminders for others. The bot that sets it is the
+one that sends it, so it has to be one Sam paired with.
+
+**Timed off your calendar.** "An hour before each meeting with someone outside, brief me on who they are" runs off the
+calendar you linked in Meetings → Calendar instead of a clock. Where a cron goes, the schedule is
+`calendar:<minutes before>`, optionally `:meetings` (only events with someone else invited) or `:outside` (only ones
+with someone from another email domain): `calendar:60:outside`. The bot can make one when you ask, or type it in the
+Routines tab under *Custom*. Each run is told the event (its title, time and who's invited), so pair it with the
+Meeting prep skill. A meeting that's added, moved or cancelled moves the run with it (the calendar is read every 10
+minutes); one added with less notice than the lead time gets no run. Such a routine only lives in a private chat, since
+your calendar is private. For "the evening before tomorrow's first meeting", use a plain cron (`0 20 * * *`) and have
+the routine look at tomorrow's calendar.
+
 The scheduler checks every 30 seconds, so a routine runs within half a minute of its time, as long as Mimir is running.
 On a laptop, **Settings → Keep this computer awake** helps; for 24/7, [self-host](self-hosting.md).
+
+## Pause everything
+
+The pause button by **Bots** in the sidebar pauses all bots; a bot's right-click menu pauses just that one. Either
+lasts until you resume, for an hour, until tomorrow 8:00 or until Monday 8:00. While paused, nothing runs on its own
+(routines, the digest, the weekly review, the memory tidy-up), other bots can't hand it tasks, and in Telegram, Slack
+or Discord it answers "I'm paused" instead of replying (/memory, /routines and /stop still work). The Built-in chat
+and **Run now** still work: those are you asking directly.
+
+Its routines show as *Paused*, not missed. When the pause ends (you resume, or its time comes), each routine moves on
+to its next time instead of catching up on the runs in between, so there's no burst of runs. A one-off reminder that
+fell inside the pause still runs, once.
 
 ## Rehearse before it runs for real
 
@@ -122,6 +150,19 @@ You can reply to what a routine sent ("skip the crypto stuff"), and the same goe
 A new routine's first three results end by asking "Anything here you didn't need, or something missing?": reply, and
 the bot rewrites the routine's brief to match (`routine_update`), keeping what you didn't ask to change. You can ask
 for changes any time after that too ("move the news to 9", "make it shorter").
+
+In Telegram, Slack and Discord a result also comes with buttons, so you can tap instead of typing. Mimir handles taps
+itself, with no AI turn:
+
+- **A one-off** (a reminder): **Done**, **Snooze 1h** (it comes again in an hour) or **Tomorrow** (same time
+  tomorrow).
+- **A routine**: **👍**, **👎**, **Less like this**, **Pause** (pauses the routine), **For tomorrow…** (asks what to
+  change; your reply goes to the bot like any other reply).
+
+👍, 👎 and Less like this never edit the routine. They are evidence for the memory tidy-up, which proposes changes for
+you to accept, the same as when you correct a reply ([Memory](memory.md)). Each message's buttons work once, and in a
+group only the person who paired the chat can press them. Results that go into the digest, and failures, have no
+buttons.
 A routine runs in its own session, so on Claude, Codex and Grok the bot's next turn gets that last message with your
 reply. If the routine had read a web page, that turn counts as having read it too; so does a reply to the digest or the
 weekly review, which are put together from routine results and learned memories.
