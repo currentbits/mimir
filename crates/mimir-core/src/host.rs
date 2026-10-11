@@ -1051,6 +1051,22 @@ impl Host {
                 }
                 ok(self.db.hold_clear(&key, true)?)
             }
+            // Pause all bots (no bot_id) or one, until a time (or until resumed); on: false resumes. Without `on`, what's paused.
+            "pause" => {
+                let bot: Option<i64> = arg(a, "bot_id")?;
+                match arg::<Option<bool>>(a, "on")? {
+                    Some(true) => {
+                        let until: i64 = arg::<Option<i64>>(a, "until")?.unwrap_or(0);
+                        if until != 0 && until <= crate::db::now() {
+                            bail!("that time has already passed");
+                        }
+                        self.db.pause_set(bot, until)?
+                    }
+                    Some(false) => self.db.pause_end(bot)?,
+                    None => {}
+                }
+                ok(self.db.pauses(crate::db::now())?.into_iter().map(|(bot, until)| json!({"bot_id": bot, "until": until})).collect::<Vec<_>>())
+            }
             // Daily token caps (get without values, set with them; 0 or null = no cap).
             "caps" => {
                 for (k, name) in crate::db::CAPS.iter().zip(["routine", "bot", "day"]) {

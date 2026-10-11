@@ -419,6 +419,14 @@ pub(crate) fn late_note(sent: Option<i64>, now: i64) -> Option<String> {
     Some(format!("Sorry for the slow reply: I was offline when you wrote {ago}."))
 }
 
+/// What a paused bot answers in a messaging app.
+pub(crate) fn paused_note(until: i64) -> String {
+    match chrono::TimeZone::timestamp_opt(&chrono::Local, until, 0).single().filter(|_| until > 0) {
+        Some(t) => format!("⏸ I'm paused until {}, so I can't answer now. Send it again after that.", t.format("%a %-d %b %H:%M")),
+        None => "⏸ I'm paused, so I can't answer now. Send it again once I'm back on in the Mimir app.".into(),
+    }
+}
+
 /// `quiet_now` at the current local time.
 pub fn quiet(db: &Db) -> bool {
     quiet_now(db, chrono::Local::now())
@@ -764,6 +772,11 @@ impl Core {
             Command::Undo(n) => chan.send(ext, &crate::tidy::undo_learned(&self.db, chat, n)?).await,
             Command::Stop(_) => unreachable!("handled above"),
             Command::Pair(_) | Command::Chat => {
+                // Paused by you: it says so instead of answering (the commands above still work).
+                if let Some(until) = self.db.paused(self.bot, crate::db::now())? {
+                    chan.send(ext, &paused_note(until)).await;
+                    return Ok(());
+                }
                 // Measured on arrival, so a long reply (say, waiting for an approval) doesn't count as being offline.
                 let late = late_note(sent, crate::db::now());
                 let (core, chan, ext, text) = (self.clone(), chan.clone(), ext.to_string(), text.trim().to_string());
@@ -1098,6 +1111,11 @@ impl Core {
         let started = crate::db::now();
         loop {
             let now = crate::db::now();
+            // Paused by you: nothing runs on its own (routines, digest, weekly review, tidy-up) until it ends.
+            if self.db.paused(self.bot, now).unwrap_or_else(|e| { eprintln!("pause: {e:#}"); None }).is_some() {
+                tokio::time::sleep(Duration::from_secs(30)).await;
+                continue;
+            }
             // Routines on hold (a usage limit) wait; the first pass after it ends runs each of them once.
             let bot_hold = format!("hold:{}", self.bot);
             let hold = self.db.hold(&bot_hold).unwrap_or_default();

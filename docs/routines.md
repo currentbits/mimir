@@ -13,6 +13,18 @@ becomes a routine that runs once, at that time, and is then gone (the Routines t
 The scheduler checks every 30 seconds, so a routine runs within half a minute of its time, as long as Mimir is running.
 On a laptop, **Settings → Keep this computer awake** helps; for 24/7, [self-host](self-hosting.md).
 
+## Pause everything
+
+The pause button by **Bots** in the sidebar pauses all bots; a bot's right-click menu pauses just that one. Either
+lasts until you resume, for an hour, until tomorrow 8:00 or until Monday 8:00. While paused, nothing runs on its own
+(routines, the digest, the weekly review, the memory tidy-up), other bots can't hand it tasks, and in Telegram, Slack
+or Discord it answers "I'm paused" instead of replying (/memory, /routines and /stop still work). The Built-in chat
+and **Run now** still work: those are you asking directly.
+
+Its routines show as *Paused*, not missed. When the pause ends (you resume, or its time comes), each routine moves on
+to its next time instead of catching up on the runs in between, so there's no burst of runs. A one-off reminder that
+fell inside the pause still runs, once.
+
 ## Rehearse before it runs for real
 
 **Rehearse** on a routine (or on a skill, in the Skills tab) runs it once for real, except that every step that would
