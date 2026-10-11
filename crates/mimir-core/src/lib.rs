@@ -75,7 +75,9 @@ mod telegram;
 pub mod tidy;
 pub mod mcp;
 pub mod provider;
+pub mod receipts;
 pub mod runtime;
+pub mod say;
 pub mod server_update;
 pub mod tools;
 pub mod watch;
@@ -487,24 +489,21 @@ pub fn friendly_error(e: &str) -> String {
     let has = |words: &[&str]| words.iter().any(|w| l.contains(w));
     // Anthropic bills some use of a Claude plan outside its own apps as paid "extra usage" (since April 2026).
     let (what, fix) = if has(&["extra usage"]) {
-        (
-            "My Claude plan won't cover this: Anthropic is counting it as paid extra usage, and there's none left.",
-            "Turn on or top up extra usage in your Claude account, or give me another AI account in Mimir (ChatGPT, or an API key).",
-        )
+        (say::tr("My Claude plan won't cover this: Anthropic is counting it as paid extra usage, and there's none left."), say::tr("Turn on or top up extra usage in your Claude account, or give me another AI account in Mimir (ChatGPT, or an API key)."))
     } else if has(QUOTA) {
-        ("I've hit the AI plan's usage limit.", "Try again later, or give me another AI account or model in Mimir.")
+        (say::tr("I've hit the AI plan's usage limit."), say::tr("Try again later, or give me another AI account or model in Mimir."))
     } else if has(SIGNED_OUT) {
-        ("My AI account isn't signed in, or its key was rejected.", "Open Mimir and check my AI account (Settings, or my page).")
+        (say::tr("My AI account isn't signed in, or its key was rejected."), say::tr("Open Mimir and check my AI account (Settings, or my page)."))
     } else if has(NOT_STARTED) {
-        ("I couldn't start my AI.", "Open Mimir and check that my AI account is installed and signed in.")
+        (say::tr("I couldn't start my AI."), say::tr("Open Mimir and check that my AI account is installed and signed in."))
     } else if has(NETWORK) {
-        ("I couldn't reach my AI.", "If it's a local model, check it's running; otherwise try again in a minute.")
+        (say::tr("I couldn't reach my AI."), say::tr("If it's a local model, check it's running; otherwise try again in a minute."))
     } else if has(&["pick a model"]) {
-        ("I don't have a model chosen.", "Open my page in Mimir and pick one.")
+        (say::tr("I don't have a model chosen."), say::tr("Open my page in Mimir and pick one."))
     } else if has(&["timed out", "timeout"]) {
-        ("That took too long, so I stopped.", "Try again, maybe with a smaller ask.")
+        (say::tr("That took too long, so I stopped."), say::tr("Try again, maybe with a smaller ask."))
     } else {
-        ("Something went wrong with that reply.", "Try again; if it keeps happening, the details are in Mimir's Needs you list.")
+        (say::tr("Something went wrong with that reply."), say::tr("Try again; if it keeps happening, the details are in Mimir's Needs you list."))
     };
     format!("⚠️ {what} {fix}\n\n_{}_", tools::truncate(e.lines().next().unwrap_or(e), 160))
 }
@@ -742,6 +741,17 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
     // A quiet check that found nothing stays silent: no message, no conversation entry (the run log has it).
     if quiet && is_nothing(&reply.text) {
         return Ok((String::new(), reply.usage));
+    }
+    // What the reply says, against what the run did: receipts, sources and notes under it (the asking bot checks a
+    // handed-over task's reply as its own; a rehearsal did nothing by design).
+    if !matches!(trigger, Trigger::Delegated { .. })
+        && !ctx.rehearsal
+        && let Some(run) = ctx.run_id
+    {
+        let lines = receipts::footer(&receipts::calls_of(&ctx.db, run)?, &text, &reply.text, ctx.chat_id != host::LOCAL_CHAT);
+        if !lines.is_empty() {
+            reply.text = format!("{}\n\n{lines}", reply.text.trim_end());
+        }
     }
     match &trigger {
         Trigger::Delegated { .. } => {}

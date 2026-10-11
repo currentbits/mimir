@@ -44,6 +44,19 @@ What's shared and what isn't:
 - **Telegram, Slack, Discord.** One bot can be on all three at once. Each connects *out* (long-polling, Socket Mode,
   the Gateway), so you don't need a public address.
 
+### What a reply did, from the log
+
+Every reply is checked against its own run log. No model and no network requests are involved, and the reply itself is never changed.
+
+- **Receipts and sources.** In Telegram, Slack and Discord, lines like "✓ Sent an email to ana@…", "✓ Added Tue 14 Oct
+  15:00, "Dentist"" or "✓ Reminder set for …" follow the reply. A "Sources:" line lists the pages it read and the
+  searches it ran. The app shows the same things as chips under the reply.
+- **Claims with nothing behind them.** A reply that says it sent, booked or will remind you, when no matching action
+  succeeded in that run, gets a note: *Not done in this reply: …*. An action that is still waiting for your OK doesn't
+  count. If it promised a reminder, the app shows a **Set it** button. In a messaging app, reply "set it".
+- **Links.** A link that the run never opened or found in a search is listed as unchecked. Links you sent yourself are
+  not. Routine results get the same checks.
+
 ### Guests
 
 You can let someone else talk to your bots (a partner, a housemate): give them a pairing code and they pair their own
@@ -88,6 +101,10 @@ note: "Finishing a routine first…" or "Finishing my last reply first…". Its 
 Chat commands: `/memory`, `/why` (what the last reply used: memories, skills, pages), `/routines`, `/new`, `/stop` (a bare "stop" works too while it's writing), `/undo <n>`
 (take back something it learned; see [Memory](memory.md#learned-this-week)), and `/<skill>` for each of the bot's
 skills (see [Skills](skills.md)). Everything else is plain language.
+
+Bots answer in the language you write in. What Mimir itself says in the chat apps (pairing, approval cards and their
+buttons, errors, the digest, the weekly "what I learned", the Telegram "/" menu) follows Settings → Language: English
+or Dutch so far, by default the computer's language (a server's: its `LANG`). The app itself is still English.
 
 ## Photos, voice notes and files
 

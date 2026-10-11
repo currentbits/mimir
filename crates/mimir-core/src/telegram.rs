@@ -3,6 +3,7 @@
 
 use crate::db::Approval;
 use crate::runtime::{Chan, Core, Row, Sender, Slot, card_text, parse_decision, verdict_for};
+use crate::say::tr;
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -145,11 +146,11 @@ impl Tg {
         slot.connected(format!("@{}", bot["username"].as_str().unwrap_or("?")));
         // The "/" menu in Telegram shows these.
         let base = json!([
-            {"command": "memory", "description": "What I remember about you"},
-            {"command": "routines", "description": "What I do on a schedule"},
-            {"command": "why", "description": "What my last reply used"},
-            {"command": "new", "description": "Start a fresh conversation (memories kept)"},
-            {"command": "stop", "description": "Stop the reply I'm writing"}
+            {"command": "memory", "description": tr("What I remember about you")},
+            {"command": "routines", "description": tr("What I do on a schedule")},
+            {"command": "why", "description": tr("What my last reply used")},
+            {"command": "new", "description": tr("Start a fresh conversation (memories kept)")},
+            {"command": "stop", "description": tr("Stop the reply I'm writing")}
         ]);
         let _ = self.call("setMyCommands", json!({"commands": base})).await;
         // Each chat's menu also lists the bot's skills there ("/book_padel"), refreshed every 10 minutes when it changed.
@@ -258,7 +259,7 @@ impl Tg {
         if let Some(id) = m["document"]["file_id"].as_str() {
             // Telegram's bots can download files up to 20 MB.
             if m["document"]["file_size"].as_i64().unwrap_or(0) > 20_000_000 {
-                me.send(chat, "That file is over 20 MB, more than Telegram lets me download. Could you send a smaller one?").await;
+                me.send(chat, tr("That file is over 20 MB, more than Telegram lets me download. Could you send a smaller one?")).await;
                 return Ok(());
             }
             let (name, mime) = (m["document"]["file_name"].as_str().unwrap_or("file"), m["document"]["mime_type"].as_str().unwrap_or(""));
@@ -283,9 +284,9 @@ impl Tg {
                     if let Some(mid) = mid {
                         let _ = self.call("editMessageText", json!({"chat_id": chat, "message_id": mid, "text": verdict_for(&a, d)})).await;
                     }
-                    (if a.status == "approved" { "✅ Approved" } else { "❌ Denied" }).into()
+                    (if a.status == "approved" { tr("✅ Approved") } else { tr("❌ Denied") }).into()
                 }
-                Ok(None) => "This request is no longer pending.".into(),
+                Ok(None) => tr("This request is no longer pending.").into(),
             },
             None => match core.tap(me, &chat, who, data).await {
                 Err(e) => e.to_string(),
@@ -296,7 +297,7 @@ impl Tg {
                     }
                     did
                 }
-                Ok(None) => "Unknown button.".into(),
+                Ok(None) => tr("Unknown button.").into(),
             },
         };
         self.call("answerCallbackQuery", json!({"callback_query_id": q["id"], "text": crate::tools::truncate(&reply, 190)})).await?;
