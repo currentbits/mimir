@@ -1,7 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Mimir",
-  "version": "0.1.5",
   "identifier": "app.heymimir",
   "build": {
     "frontendDist": "../../ui/dist",

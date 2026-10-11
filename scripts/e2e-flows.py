@@ -6,11 +6,13 @@
     python3 scripts/e2e-flows.py
 
 Sets up the bots itself (Ada and Search on the fake AI) in a fresh MIMIR_HOME; checks the database after each step.
+Other ports (another checkout's test server on these): E2E_SERVER=127.0.0.1:<port> E2E_AI=127.0.0.1:<port>.
 """
 import json, sqlite3, threading, time, urllib.parse, urllib.request
 
-API = "http://127.0.0.1:8789/api/"
 import os
+API = f"http://{os.environ.get('E2E_SERVER', '127.0.0.1:8789')}/api/"
+AI = f"http://{os.environ.get('E2E_AI', '127.0.0.1:8899')}"
 DB = os.path.join(os.environ.get("MIMIR_HOME", "/tmp/flow-home"), "mimir.db")
 ok_all = True
 
@@ -52,7 +54,7 @@ def send(bot, text, approve=None):
     return api("send_local", {"botId": bot, "text": text})
 
 
-fake = {"provider": "openai", "model": "fake", "base_url": "http://127.0.0.1:8899/v1", "tools": "", "look": ""}
+fake = {"provider": "openai", "model": "fake", "base_url": f"{AI}/v1", "tools": "", "look": ""}
 api("onboarding_done")
 api("set_api_key", {"kind": "openai", "key": "test-key"})
 api("save_bot", {"bot": {"id": 1, "name": "Ada", "persona": "", **fake}})
@@ -110,8 +112,8 @@ check("clear_history", not q("SELECT id FROM messages WHERE chat_id=0"), (n, q("
 # Sign in with ChatGPT, against the fake one (the server started with MIMIR_CHATGPT_AUTH / MIMIR_CHATGPT_API: see fake-ai.py)
 start = api("chatgpt_sign_in")
 qs = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(start["url"]).query))
-if not start["url"].startswith("http://127.0.0.1:8899/"):
-    print("SKIP Sign in with ChatGPT: start the server with MIMIR_CHATGPT_AUTH=http://127.0.0.1:8899 MIMIR_CHATGPT_API=http://127.0.0.1:8899/v1")
+if not start["url"].startswith(f"{AI}/"):
+    print(f"SKIP Sign in with ChatGPT: start the server with MIMIR_CHATGPT_AUTH={AI} MIMIR_CHATGPT_API={AI}/v1")
 else:
     check("chatgpt: the sign-in asks to use the plan", "chatgpt.tokens.use.direct" in qs["scope"] and qs["client_id"] == "dynamic_agent_client"
           and qs["ext_agent_host_id"].startswith("urn:uuid:") and qs["code_challenge_method"] == "S256" and start["paste"], qs)
@@ -142,3 +144,4 @@ else:
     api("delete_bot", {"id": gpt})
 
 print("ALL PASS" if ok_all else "SOME FAILED")
+raise SystemExit(0 if ok_all else 1)

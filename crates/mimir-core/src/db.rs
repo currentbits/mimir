@@ -94,6 +94,8 @@ pub struct EntryRow {
     /// What the person wrote that the run saving it answered (bot-written memories), so a claim made firmer than
     /// they said it shows.
     pub asked: Option<String>,
+    /// Kept for one bot only (the others don't see it); 0 = all bots.
+    pub for_bot: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -105,9 +107,17 @@ pub struct Chat {
     pub memories: i64,
     /// Paired by someone other than you (their own memory and routines; none of your email, calendar, meetings…).
     pub guest: bool,
+    /// Reads (and adds to) the household's memories: your own direct chats always, a guest's or a group when you say so.
+    pub household: bool,
+    /// A group where every household member can talk to the bots (it's a guest's chat, so none of your private things).
+    pub family: bool,
+    /// A direct chat (only one person in it), not a group.
+    pub private: bool,
 }
 
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]
+// Sent by the UI: a misspelled field is an error, not silently dropped.
+#[serde(deny_unknown_fields)]
 pub struct Bot {
     pub id: i64,
     pub name: String,
@@ -165,6 +175,35 @@ pub struct Message {
     /// Replies: the run that wrote it (to open what another bot did for it).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub run_id: Option<i64>,
+    /// Replies: what the reply drew on ("2 memories · 1 skill · read 3 pages").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub used: Option<Used>,
+}
+
+/// What one run drew on: the memories recalled for it, the skills it read, the pages it opened.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct Used {
+    pub memories: Vec<UsedMemory>,
+    /// (id, name)
+    pub skills: Vec<(i64, String)>,
+    /// What each page read says ("Read https://…").
+    pub pages: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct UsedMemory {
+    pub id: i64,
+    pub kind: String,
+    pub title: String,
+    pub body: String,
+    /// "active", or "superseded"/"forgotten" since the reply.
+    pub status: &'static str,
+}
+
+impl Used {
+    pub fn is_empty(&self) -> bool {
+        self.memories.is_empty() && self.skills.is_empty() && self.pages.is_empty()
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -433,10 +472,18 @@ pub struct Hold {
 /// Daily token caps (none when unset): each routine, each bot, all bots together.
 pub const CAPS: [&str; 3] = ["cap_routine", "cap_bot", "cap_day"];
 
-const SCHEMA: &str = "
+/// Set on every open (outside the migration's transaction, where journal_mode can't change).
+const PRAGMAS: &str = "
 PRAGMA journal_mode=WAL;
 -- Deleted rows are overwritten, not left in free pages (what incognito chats asked, erased memories).
 PRAGMA secure_delete=ON;
+";
+
+/// The schema version this build writes (`PRAGMA user_version`). A schema change bumps it and adds a step to
+/// `migrate`; each step runs once per database.
+const VERSION: i64 = 3;
+
+const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS entries(
   id INTEGER PRIMARY KEY,
   scope TEXT NOT NULL,
@@ -496,6 +543,11 @@ CREATE TABLE IF NOT EXISTS routines(
 );
 ";
 
+/// The chat part of a Telegram address ("chat" or "chat:topic").
+pub(crate) fn tg_chat(external: &str) -> &str {
+    external.split(':').next().unwrap_or(external)
+}
+
 pub fn now() -> i64 {
     Local::now().timestamp()
 }
@@ -504,8 +556,15 @@ fn importance(kind: &str) -> i64 {
     if kind == "convention" { 5 } else { 3 }
 }
 
-/// Accepts standard 5-field cron ("0 8 * * Mon-Fri") or the cron crate's 6/7-field form.
+/// A calendar routine's next_fire while no matching event is coming up (2100-01-01): the scheduler sets the real one.
+pub const IDLE: i64 = 4_102_444_800;
+
+/// Accepts standard 5-field cron ("0 8 * * Mon-Fri") or the cron crate's 6/7-field form. A calendar trigger
+/// ("calendar:60:outside") waits (IDLE) until the scheduler reads the calendar.
 pub fn next_fire(expr: &str, after: i64) -> Result<i64> {
+    if crate::calendar::trigger(expr)?.is_some() {
+        return Ok(IDLE);
+    }
     let expr = expr.trim();
     let full = if expr.split_whitespace().count() == 5 { format!("0 {expr}") } else { expr.to_string() };
     let schedule = cron::Schedule::from_str(&full).map_err(|e| anyhow::anyhow!("bad cron '{expr}': {e}"))?;
@@ -518,6 +577,10 @@ pub fn next_fire(expr: &str, after: i64) -> Result<i64> {
 
 /// The shortest gap between two runs of a schedule over the next couple of days, in minutes.
 pub fn min_gap_minutes(expr: &str) -> Result<i64> {
+    // ponytail: a calendar trigger runs as often as the calendar has events; not counted
+    if crate::calendar::trigger(expr)?.is_some() {
+        return Ok(i64::MAX);
+    }
     let expr = expr.trim();
     let full = if expr.split_whitespace().count() == 5 { format!("0 {expr}") } else { expr.to_string() };
     let schedule = cron::Schedule::from_str(&full).map_err(|e| anyhow::anyhow!("bad cron '{expr}': {e}"))?;
@@ -556,6 +619,7 @@ pub type SkillMenu = (i64, Vec<(String, String)>);
 /// A past message found by chat_search.
 #[derive(Debug, Clone)]
 pub struct ChatHit {
+    pub id: i64,
     pub ts: i64,
     pub bot_id: i64,
     pub role: String,
@@ -586,172 +650,277 @@ const BOOTSTRAP_RECENT: usize = 10;
 
 /// (id, chat, routine, text) of an unsent digest item.
 /// (id, chat, routine, text, from a run that read outside content)
+/// A hold that hasn't ended: (its key, the bot, the routine if it's one routine's, the hold).
+pub type HoldRow = (String, i64, Option<i64>, Hold);
 pub type DigestItem = (i64, i64, Option<i64>, String, bool);
 
+fn user_version(c: &Connection) -> Result<i64> {
+    Ok(c.query_row("PRAGMA user_version", [], |r| r.get(0))?)
+}
+
+/// A database a newer Mimir wrote: refused whole, never half-migrated by an older build.
+fn check_not_newer(c: &Connection) -> Result<()> {
+    if user_version(c)? > VERSION {
+        let by: Option<String> =
+            c.query_row("SELECT value FROM settings WHERE key='schema_written_by'", [], |r| r.get(0)).optional().ok().flatten();
+        let by = by.map(|v| format!("Mimir {v}")).unwrap_or_else(|| "a newer Mimir".into());
+        bail!("This data was written by {by}, and this app is Mimir {}. Update the app to open it.", env!("CARGO_PKG_VERSION"));
+    }
+    Ok(())
+}
+
+/// Copies the database aside before it's migrated (`mimir.db.before-<version>`), keeping the last 2.
+fn backup_before(c: &Connection, path: &Path) -> Result<()> {
+    let dir = path.parent().unwrap_or(Path::new("."));
+    let prefix = format!("{}.before-", path.file_name().and_then(|n| n.to_str()).unwrap_or("mimir.db"));
+    let target = dir.join(format!("{prefix}{VERSION}"));
+    // An existing copy is the older one: a second process racing this upgrade would copy the upgraded file over it.
+    if !target.exists() {
+        c.execute("VACUUM INTO ?1", [target.to_string_lossy()]).context("copying the database aside before upgrading it")?;
+    }
+    let mut old: Vec<(i64, std::path::PathBuf)> = std::fs::read_dir(dir)?
+        .flatten()
+        .filter_map(|e| Some((e.file_name().to_str()?.strip_prefix(&prefix)?.parse().ok()?, e.path())))
+        .collect();
+    old.sort();
+    for (_, p) in old.iter().rev().skip(2) {
+        let _ = std::fs::remove_file(p);
+    }
+    Ok(())
+}
+
+/// Brings a database up to `VERSION`, one step per version it's behind. Runs inside one transaction.
+fn migrate(c: &Connection) -> Result<()> {
+    // Another process may have migrated it while this one waited for the lock.
+    check_not_newer(c)?;
+    let v = user_version(c)?;
+    if v < 1 {
+        migrate_v1(c)?;
+    }
+    if v < 2 {
+        migrate_v2(c)?;
+    }
+    if v < 3 {
+        migrate_v3(c)?;
+    }
+    c.execute(
+        "INSERT INTO settings(key, value) VALUES ('schema_written_by', ?1) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        [env!("CARGO_PKG_VERSION")],
+    )?;
+    c.execute_batch(&format!("PRAGMA user_version = {VERSION}"))?;
+    Ok(())
+}
+
+/// Version 1: the schema as of Mimir 0.1.5, from an empty file or any older build (they kept no version and
+/// checked every column on each open).
+fn migrate_v1(c: &Connection) -> Result<()> {
+    c.execute_batch(SCHEMA)?;
+    // Additive columns on DBs created by older builds.
+    let add_col = |table: &str, col: &str, decl: &str| -> Result<()> {
+        if !c.prepare(&format!("SELECT 1 FROM pragma_table_info('{table}') WHERE name='{col}'"))?.exists([])? {
+            c.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {col} {decl}"))?;
+        }
+        Ok(())
+    };
+    add_col("chats", "title", "TEXT NOT NULL DEFAULT ''")?;
+    add_col("bots", "look", "TEXT NOT NULL DEFAULT ''")?;
+    add_col("chats", "owner", "TEXT NOT NULL DEFAULT ''")?;
+    add_col("suggestions", "tainted", "INTEGER NOT NULL DEFAULT 0")?;
+    add_col("chats", "dm", "INTEGER NOT NULL DEFAULT 0")?;
+    add_col("chats", "guest", "INTEGER NOT NULL DEFAULT 0")?;
+    // Chats paired by one of Telegram's shared senders (an anonymous admin, a channel) would answer everyone
+    // behind that id: they need pairing again by a person.
+    c.execute("UPDATE chats SET owner='' WHERE owner IN ('1087968824', '136817688', '777000')", [])?;
+    add_col("approvals", "tainted", "INTEGER NOT NULL DEFAULT 0")?;
+    add_col("routines", "paused", "INTEGER NOT NULL DEFAULT 0")?;
+    add_col("routines", "tainted", "INTEGER NOT NULL DEFAULT 0")?;
+    add_col("messages", "run_id", "INTEGER")?;
+    // Full-text search over past conversations (chat_search). Built once from existing messages.
+    let fresh = !c.prepare("SELECT 1 FROM sqlite_master WHERE name='messages_fts'")?.exists([])?;
+    c.execute_batch(
+        "CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(content, content='messages', content_rowid='id');
+         CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
+           INSERT INTO messages_fts(rowid, content) VALUES (new.id, new.content);
+         END;
+         CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
+           INSERT INTO messages_fts(messages_fts, rowid, content) VALUES ('delete', old.id, old.content);
+         END;",
+    )?;
+    if fresh {
+        c.execute_batch("INSERT INTO messages_fts(messages_fts) VALUES('rebuild')")?;
+    }
+    // Deleted text leaves the search indexes at once (not only when their segments merge later).
+    let _ = c.execute_batch("INSERT INTO entries_fts(entries_fts, rank) VALUES('secure-delete', 1); INSERT INTO messages_fts(messages_fts, rank) VALUES('secure-delete', 1);");
+    // The approval card's message on its channel (Telegram message id, Slack ts, Discord id), to close it later.
+    add_col("approvals", "card_ref", "TEXT")?;
+    add_col("entries", "pinned", "INTEGER NOT NULL DEFAULT 0")?;
+    add_col("entries", "origin", "TEXT NOT NULL DEFAULT ''")?;
+    add_col("entries", "bot_id", "INTEGER")?;
+    add_col("entries", "run_id", "INTEGER")?;
+    add_col("entries", "tainted", "INTEGER NOT NULL DEFAULT 0")?;
+    add_col("runs", "tainted", "INTEGER NOT NULL DEFAULT 0")?;
+    add_col("approvals", "kind", "TEXT NOT NULL DEFAULT 'rule'")?;
+    add_col("approvals", "site", "TEXT")?;
+    add_col("approvals", "parked_args", "TEXT")?;
+    add_col("runs", "reply", "TEXT")?;
+    // Memories search pulled into the turn ("3,17"), so a correction of the reply can count against them.
+    add_col("runs", "recalled", "TEXT")?;
+    add_col("entries", "missteps", "INTEGER NOT NULL DEFAULT 0")?;
+    add_col("routines", "delivery", "TEXT NOT NULL DEFAULT 'now'")?;
+    add_col("entries", "background", "INTEGER NOT NULL DEFAULT 0")?;
+    c.execute_batch(
+        "CREATE TABLE IF NOT EXISTS skills(id INTEGER PRIMARY KEY, scope TEXT NOT NULL, bot_id INTEGER NOT NULL, name TEXT NOT NULL,
+           description TEXT NOT NULL, body TEXT NOT NULL, run_id INTEGER, created_at INTEGER NOT NULL,
+           status TEXT NOT NULL DEFAULT 'proposed' CHECK(status IN ('proposed','active','dismissed','removed')))",
+    )?;
+    // Skills that improve with use: why a proposal was made, what kind it is, what it replaces; and every use.
+    add_col("skills", "reason", "TEXT NOT NULL DEFAULT ''")?;
+    add_col("skills", "kind", "TEXT NOT NULL DEFAULT 'learned'")?;
+    add_col("skills", "replaces", "TEXT NOT NULL DEFAULT ''")?;
+    c.execute_batch("CREATE TABLE IF NOT EXISTS skill_uses(skill_id INTEGER NOT NULL, run_id INTEGER, ts INTEGER NOT NULL)")?;
+    // When search last brought a memory up (memories nobody looks up any more can leave standing memory).
+    add_col("entries", "last_recalled", "INTEGER")?;
+    // When a memory stops being true ("away until Friday"): past it, it leaves standing memory; search still finds it.
+    add_col("entries", "valid_until", "INTEGER")?;
+    // When something learned was taken back (Undo): how often learning gets it wrong.
+    add_col("entries", "undone_at", "INTEGER")?;
+    // What the person wrote that started the run (chat messages only), so a tool can tell their own words apart.
+    add_col("runs", "asked", "TEXT")?;
+    add_col("suggestions", "check_note", "TEXT")?;
+    // The run an approval belongs to, so "allow all like this" can cover the rest of that reply.
+    add_col("approvals", "run_id", "INTEGER")?;
+    // Meetings and calls you transcribed: who said what (you = your microphone, others = the call's sound).
+    c.execute_batch(
+        "CREATE TABLE IF NOT EXISTS meetings(id INTEGER PRIMARY KEY, title TEXT NOT NULL, started_at INTEGER NOT NULL, ended_at INTEGER NOT NULL);
+         CREATE TABLE IF NOT EXISTS meeting_lines(id INTEGER PRIMARY KEY, meeting_id INTEGER NOT NULL, ts INTEGER NOT NULL, who TEXT NOT NULL, text TEXT NOT NULL);",
+    )?;
+    // What the person jotted down during the call.
+    add_col("meetings", "notes", "TEXT NOT NULL DEFAULT ''")?;
+    // Names for the speakers told apart ({"others:2": "Sam"}).
+    add_col("meetings", "speakers", "TEXT NOT NULL DEFAULT '{}'")?;
+    // Who was invited (from the calendar), a JSON list of names.
+    add_col("meetings", "attendees", "TEXT NOT NULL DEFAULT '[]'")?;
+    // The notes a bot wrote after the call (summary, decisions, action items).
+    add_col("meetings", "summary", "TEXT NOT NULL DEFAULT ''")?;
+    // A task handed to another bot (ask_bot): the run that asked, so the hand-off can be followed.
+    add_col("runs", "parent_run", "INTEGER")?;
+    // A correction, kept whole so a proposed preference can be replayed against it: what was asked, the reply
+    // the person pushed back on, and what they said.
+    c.execute_batch(
+        "CREATE TABLE IF NOT EXISTS cases(id INTEGER PRIMARY KEY, bot_id INTEGER NOT NULL, chat_id INTEGER NOT NULL,
+           asked TEXT NOT NULL, bad TEXT NOT NULL, correction TEXT NOT NULL, ts INTEGER NOT NULL)",
+    )?;
+    // 'demote' joined the suggestion actions; SQLite can't alter a CHECK, so older DBs rebuild the table once.
+    let sugg: String = c.query_row("SELECT sql FROM sqlite_master WHERE name='suggestions'", [], |r| r.get(0))?;
+    if !sugg.contains("'demote'") {
+        let new = sugg.replace("'forget')", "'forget','demote')");
+        c.execute_batch(&format!(
+            "ALTER TABLE suggestions RENAME TO suggestions_old; {new}; INSERT INTO suggestions SELECT * FROM suggestions_old; DROP TABLE suggestions_old;"
+        ))?;
+    }
+    c.execute_batch(
+        "CREATE TABLE IF NOT EXISTS digest_items(id INTEGER PRIMARY KEY, bot_id INTEGER NOT NULL, chat_id INTEGER NOT NULL,
+           routine_id INTEGER, text TEXT NOT NULL, ts INTEGER NOT NULL, sent_at INTEGER)",
+    )?;
+    add_col("digest_items", "tainted", "INTEGER NOT NULL DEFAULT 0")?;
+    c.execute_batch("CREATE TABLE IF NOT EXISTS inbox_dismissed(kind TEXT NOT NULL, ref INTEGER NOT NULL, PRIMARY KEY(kind, ref))")?;
+    // Files in a chat's workspace that Mimir wrote, and whether each holds outside content.
+    c.execute_batch("CREATE TABLE IF NOT EXISTS files(chat_id INTEGER NOT NULL, path TEXT NOT NULL, tainted INTEGER NOT NULL, PRIMARY KEY(chat_id, path))")?;
+    // The file's modification time when Mimir last wrote it: changed since (by hand, or deleted and made again) means
+    // it isn't only what Mimir wrote.
+    add_col("files", "mtime", "INTEGER NOT NULL DEFAULT 0")?;
+    // What the person did that says how they want things done: `correction` (pushed back on a reply),
+    // `stopped` (cut a reply off), `denied` (said no to an action).
+    c.execute_batch(
+        "CREATE TABLE IF NOT EXISTS signals(id INTEGER PRIMARY KEY, bot_id INTEGER NOT NULL, chat_id INTEGER NOT NULL,
+           kind TEXT NOT NULL, detail TEXT NOT NULL, ts INTEGER NOT NULL)",
+    )?;
+    c.execute_batch("CREATE TABLE IF NOT EXISTS site_rules(tool TEXT NOT NULL, host TEXT NOT NULL, action TEXT NOT NULL CHECK(action IN ('allow','ask','deny')), PRIMARY KEY(tool, host))")?;
+    // Chats from non-Telegram channels: (channel, external id) → allocated chat_id. Telegram rows keep their native id.
+    add_col("chats", "channel", "TEXT NOT NULL DEFAULT 'telegram'")?;
+    add_col("chats", "external", "TEXT")?;
+    c.execute_batch("CREATE UNIQUE INDEX IF NOT EXISTS chats_external ON chats(channel, external) WHERE external IS NOT NULL")?;
+    // Multi-bot: rows from single-bot builds belong to bot 1.
+    for t in ["routines", "runs", "approvals", "messages"] {
+        add_col(t, "bot_id", "INTEGER NOT NULL DEFAULT 1")?;
+    }
+    add_col("routines", "quiet", "INTEGER NOT NULL DEFAULT 0")?;
+    // A one-off (a reminder): runs at next_fire, then it's gone.
+    add_col("routines", "once", "INTEGER NOT NULL DEFAULT 0")?;
+    // The change gate: what a quiet check watches, and how it looked when last checked (watch.rs).
+    add_col("routines", "watch", "TEXT NOT NULL DEFAULT ''")?;
+    add_col("routines", "watch_seen", "TEXT")?;
+    // Shapes of a watched page's lines that change on every load (watch.rs), one per line.
+    add_col("routines", "watch_noise", "TEXT NOT NULL DEFAULT ''")?;
+    add_col("routines", "retries", "INTEGER NOT NULL DEFAULT 0")?;
+    add_col("runs", "delivered", "TEXT")?;
+    add_col("runs", "cache_read", "INTEGER NOT NULL DEFAULT 0")?;
+    add_col("runs", "estimated", "INTEGER NOT NULL DEFAULT 0")?;
+    c.execute(
+        "INSERT OR IGNORE INTO bots(id, name, provider, model, base_url, created_at) VALUES (1, 'Mimir',
+           coalesce((SELECT value FROM settings WHERE key='provider'), 'claude'),
+           coalesce((SELECT value FROM settings WHERE key='model'), ''),
+           coalesce((SELECT value FROM settings WHERE key='base_url'), ''), ?1)",
+        [now()],
+    )?;
+    c.execute_batch(
+        "INSERT OR IGNORE INTO sessions(bot_id, chat_id, session) SELECT 1, chat_id, claude_session FROM chats WHERE claude_session IS NOT NULL;
+         UPDATE chats SET claude_session = NULL WHERE claude_session IS NOT NULL;",
+    )?;
+    Ok(())
+}
+
+/// Version 2: indexes for the messages poll (a chat's actions since a run) and a chat's latest messages.
+fn migrate_v2(c: &Connection) -> Result<()> {
+    c.execute_batch(
+        "CREATE INDEX IF NOT EXISTS tool_calls_chat ON tool_calls(chat_id, run_id);
+         CREATE INDEX IF NOT EXISTS messages_chat ON messages(chat_id, id);",
+    )?;
+    Ok(())
+}
+
+/// Version 3: memories one bot keeps to itself (0: all bots, like skills); the household (memories you and chosen
+/// guests share) and family groups any household member can talk in.
+fn migrate_v3(c: &Connection) -> Result<()> {
+    // A database a branch build already gave these columns (or a re-run ladder) keeps them.
+    for (table, col) in [("entries", "for_bot"), ("chats", "household"), ("chats", "family")] {
+        if !c.prepare(&format!("SELECT 1 FROM pragma_table_info('{table}') WHERE name='{col}'"))?.exists([])? {
+            c.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {col} INTEGER NOT NULL DEFAULT 0"))?;
+        }
+    }
+    Ok(())
+}
+
 impl Db {
+    /// Opens the database, migrating it first if an older Mimir wrote it. An up-to-date database only reads its
+    /// version: the tools process opens it on every turn, and mustn't compete with the app for the write lock.
     pub fn open(path: &Path) -> Result<Self> {
         let c = Connection::open(path)?;
         c.busy_timeout(Duration::from_secs(5))?;
-        c.execute_batch(SCHEMA)?;
-        // Migrations: additive columns on DBs created by older builds.
-        let add_col = |table: &str, col: &str, decl: &str| -> Result<()> {
-            if !c.prepare(&format!("SELECT 1 FROM pragma_table_info('{table}') WHERE name='{col}'"))?.exists([])? {
-                c.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {col} {decl}"))?;
+        c.execute_batch(PRAGMAS)?;
+        check_not_newer(&c)?;
+        if user_version(&c)? < VERSION {
+            if c.prepare("SELECT 1 FROM sqlite_master WHERE name='entries'")?.exists([])? {
+                backup_before(&c, path)?;
             }
-            Ok(())
-        };
-        add_col("chats", "title", "TEXT NOT NULL DEFAULT ''")?;
-        add_col("bots", "look", "TEXT NOT NULL DEFAULT ''")?;
-        add_col("chats", "owner", "TEXT NOT NULL DEFAULT ''")?;
-        add_col("suggestions", "tainted", "INTEGER NOT NULL DEFAULT 0")?;
-        add_col("chats", "dm", "INTEGER NOT NULL DEFAULT 0")?;
-        add_col("chats", "guest", "INTEGER NOT NULL DEFAULT 0")?;
-        // Chats paired by one of Telegram's shared senders (an anonymous admin, a channel) would answer everyone
-        // behind that id: they need pairing again by a person.
-        c.execute("UPDATE chats SET owner='' WHERE owner IN ('1087968824', '136817688', '777000')", [])?;
-        add_col("approvals", "tainted", "INTEGER NOT NULL DEFAULT 0")?;
-        add_col("routines", "paused", "INTEGER NOT NULL DEFAULT 0")?;
-        add_col("routines", "tainted", "INTEGER NOT NULL DEFAULT 0")?;
-        add_col("messages", "run_id", "INTEGER")?;
-        // Full-text search over past conversations (chat_search). Built once from existing messages.
-        let fresh = !c.prepare("SELECT 1 FROM sqlite_master WHERE name='messages_fts'")?.exists([])?;
-        c.execute_batch(
-            "CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(content, content='messages', content_rowid='id');
-             CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
-               INSERT INTO messages_fts(rowid, content) VALUES (new.id, new.content);
-             END;
-             CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
-               INSERT INTO messages_fts(messages_fts, rowid, content) VALUES ('delete', old.id, old.content);
-             END;",
-        )?;
-        if fresh {
-            c.execute_batch("INSERT INTO messages_fts(messages_fts) VALUES('rebuild')")?;
+            c.execute_batch("BEGIN IMMEDIATE")?;
+            if let Err(e) = migrate(&c) {
+                let _ = c.execute_batch("ROLLBACK");
+                return Err(e.context(format!("upgrading the database {}", path.display())));
+            }
+            c.execute_batch("COMMIT")?;
         }
-        // Deleted text leaves the search indexes at once (not only when their segments merge later).
-        let _ = c.execute_batch("INSERT INTO entries_fts(entries_fts, rank) VALUES('secure-delete', 1); INSERT INTO messages_fts(messages_fts, rank) VALUES('secure-delete', 1);");
-        // The approval card's message on its channel (Telegram message id, Slack ts, Discord id), to close it later.
-        add_col("approvals", "card_ref", "TEXT")?;
-        add_col("entries", "pinned", "INTEGER NOT NULL DEFAULT 0")?;
-        add_col("entries", "origin", "TEXT NOT NULL DEFAULT ''")?;
-        add_col("entries", "bot_id", "INTEGER")?;
-        add_col("entries", "run_id", "INTEGER")?;
-        add_col("entries", "tainted", "INTEGER NOT NULL DEFAULT 0")?;
-        add_col("runs", "tainted", "INTEGER NOT NULL DEFAULT 0")?;
-        add_col("approvals", "kind", "TEXT NOT NULL DEFAULT 'rule'")?;
-        add_col("approvals", "site", "TEXT")?;
-        add_col("approvals", "parked_args", "TEXT")?;
-        add_col("runs", "reply", "TEXT")?;
-        // Memories search pulled into the turn ("3,17"), so a correction of the reply can count against them.
-        add_col("runs", "recalled", "TEXT")?;
-        add_col("entries", "missteps", "INTEGER NOT NULL DEFAULT 0")?;
-        add_col("routines", "delivery", "TEXT NOT NULL DEFAULT 'now'")?;
-        add_col("entries", "background", "INTEGER NOT NULL DEFAULT 0")?;
-        c.execute_batch(
-            "CREATE TABLE IF NOT EXISTS skills(id INTEGER PRIMARY KEY, scope TEXT NOT NULL, bot_id INTEGER NOT NULL, name TEXT NOT NULL,
-               description TEXT NOT NULL, body TEXT NOT NULL, run_id INTEGER, created_at INTEGER NOT NULL,
-               status TEXT NOT NULL DEFAULT 'proposed' CHECK(status IN ('proposed','active','dismissed','removed')))",
-        )?;
-        // Skills that improve with use: why a proposal was made, what kind it is, what it replaces; and every use.
-        add_col("skills", "reason", "TEXT NOT NULL DEFAULT ''")?;
-        add_col("skills", "kind", "TEXT NOT NULL DEFAULT 'learned'")?;
-        add_col("skills", "replaces", "TEXT NOT NULL DEFAULT ''")?;
-        c.execute_batch("CREATE TABLE IF NOT EXISTS skill_uses(skill_id INTEGER NOT NULL, run_id INTEGER, ts INTEGER NOT NULL)")?;
-        // When search last brought a memory up (memories nobody looks up any more can leave standing memory).
-        add_col("entries", "last_recalled", "INTEGER")?;
-        // When a memory stops being true ("away until Friday"): past it, it leaves standing memory; search still finds it.
-        add_col("entries", "valid_until", "INTEGER")?;
-        // When something learned was taken back (Undo): how often learning gets it wrong.
-        add_col("entries", "undone_at", "INTEGER")?;
-        // What the person wrote that started the run (chat messages only), so a tool can tell their own words apart.
-        add_col("runs", "asked", "TEXT")?;
-        add_col("suggestions", "check_note", "TEXT")?;
-        // The run an approval belongs to, so "allow all like this" can cover the rest of that reply.
-        add_col("approvals", "run_id", "INTEGER")?;
-        // Meetings and calls you transcribed: who said what (you = your microphone, others = the call's sound).
-        c.execute_batch(
-            "CREATE TABLE IF NOT EXISTS meetings(id INTEGER PRIMARY KEY, title TEXT NOT NULL, started_at INTEGER NOT NULL, ended_at INTEGER NOT NULL);
-             CREATE TABLE IF NOT EXISTS meeting_lines(id INTEGER PRIMARY KEY, meeting_id INTEGER NOT NULL, ts INTEGER NOT NULL, who TEXT NOT NULL, text TEXT NOT NULL);",
-        )?;
-        // What the person jotted down during the call.
-        add_col("meetings", "notes", "TEXT NOT NULL DEFAULT ''")?;
-        // Names for the speakers told apart ({"others:2": "Sam"}).
-        add_col("meetings", "speakers", "TEXT NOT NULL DEFAULT '{}'")?;
-        // Who was invited (from the calendar), a JSON list of names.
-        add_col("meetings", "attendees", "TEXT NOT NULL DEFAULT '[]'")?;
-        // The notes a bot wrote after the call (summary, decisions, action items).
-        add_col("meetings", "summary", "TEXT NOT NULL DEFAULT ''")?;
-        // A task handed to another bot (ask_bot): the run that asked, so the hand-off can be followed.
-        add_col("runs", "parent_run", "INTEGER")?;
-        // A correction, kept whole so a proposed preference can be replayed against it: what was asked, the reply
-        // the person pushed back on, and what they said.
-        c.execute_batch(
-            "CREATE TABLE IF NOT EXISTS cases(id INTEGER PRIMARY KEY, bot_id INTEGER NOT NULL, chat_id INTEGER NOT NULL,
-               asked TEXT NOT NULL, bad TEXT NOT NULL, correction TEXT NOT NULL, ts INTEGER NOT NULL)",
-        )?;
-        // 'demote' joined the suggestion actions; SQLite can't alter a CHECK, so older DBs rebuild the table once.
-        let sugg: String = c.query_row("SELECT sql FROM sqlite_master WHERE name='suggestions'", [], |r| r.get(0))?;
-        if !sugg.contains("'demote'") {
-            let new = sugg.replace("'forget')", "'forget','demote')");
-            c.execute_batch(&format!(
-                "BEGIN; ALTER TABLE suggestions RENAME TO suggestions_old; {new}; INSERT INTO suggestions SELECT * FROM suggestions_old; DROP TABLE suggestions_old; COMMIT;"
-            ))?;
-        }
-        c.execute_batch(
-            "CREATE TABLE IF NOT EXISTS digest_items(id INTEGER PRIMARY KEY, bot_id INTEGER NOT NULL, chat_id INTEGER NOT NULL,
-               routine_id INTEGER, text TEXT NOT NULL, ts INTEGER NOT NULL, sent_at INTEGER)",
-        )?;
-        add_col("digest_items", "tainted", "INTEGER NOT NULL DEFAULT 0")?;
-        c.execute_batch("CREATE TABLE IF NOT EXISTS inbox_dismissed(kind TEXT NOT NULL, ref INTEGER NOT NULL, PRIMARY KEY(kind, ref))")?;
-        // Files in a chat's workspace that Mimir wrote, and whether each holds outside content.
-        c.execute_batch("CREATE TABLE IF NOT EXISTS files(chat_id INTEGER NOT NULL, path TEXT NOT NULL, tainted INTEGER NOT NULL, PRIMARY KEY(chat_id, path))")?;
-        // The file's modification time when Mimir last wrote it: changed since (by hand, or deleted and made again) means
-        // it isn't only what Mimir wrote.
-        add_col("files", "mtime", "INTEGER NOT NULL DEFAULT 0")?;
-        // What the person did that says how they want things done: `correction` (pushed back on a reply),
-        // `stopped` (cut a reply off), `denied` (said no to an action).
-        c.execute_batch(
-            "CREATE TABLE IF NOT EXISTS signals(id INTEGER PRIMARY KEY, bot_id INTEGER NOT NULL, chat_id INTEGER NOT NULL,
-               kind TEXT NOT NULL, detail TEXT NOT NULL, ts INTEGER NOT NULL)",
-        )?;
-        c.execute_batch("CREATE TABLE IF NOT EXISTS site_rules(tool TEXT NOT NULL, host TEXT NOT NULL, action TEXT NOT NULL CHECK(action IN ('allow','ask','deny')), PRIMARY KEY(tool, host))")?;
-        // Chats from non-Telegram channels: (channel, external id) → allocated chat_id. Telegram rows keep their native id.
-        add_col("chats", "channel", "TEXT NOT NULL DEFAULT 'telegram'")?;
-        add_col("chats", "external", "TEXT")?;
-        c.execute_batch("CREATE UNIQUE INDEX IF NOT EXISTS chats_external ON chats(channel, external) WHERE external IS NOT NULL")?;
-        // Multi-bot: rows from single-bot builds belong to bot 1.
-        for t in ["routines", "runs", "approvals", "messages"] {
-            add_col(t, "bot_id", "INTEGER NOT NULL DEFAULT 1")?;
-        }
-        add_col("routines", "quiet", "INTEGER NOT NULL DEFAULT 0")?;
-        // A one-off (a reminder): runs at next_fire, then it's gone.
-        add_col("routines", "once", "INTEGER NOT NULL DEFAULT 0")?;
-        // The change gate: what a quiet check watches, and how it looked when last checked (watch.rs).
-        add_col("routines", "watch", "TEXT NOT NULL DEFAULT ''")?;
-        add_col("routines", "watch_seen", "TEXT")?;
-        // Shapes of a watched page's lines that change on every load (watch.rs), one per line.
-        add_col("routines", "watch_noise", "TEXT NOT NULL DEFAULT ''")?;
-        add_col("routines", "retries", "INTEGER NOT NULL DEFAULT 0")?;
-        add_col("runs", "delivered", "TEXT")?;
-        add_col("runs", "cache_read", "INTEGER NOT NULL DEFAULT 0")?;
-        add_col("runs", "estimated", "INTEGER NOT NULL DEFAULT 0")?;
-        c.execute(
-            "INSERT OR IGNORE INTO bots(id, name, provider, model, base_url, created_at) VALUES (1, 'Mimir',
-               coalesce((SELECT value FROM settings WHERE key='provider'), 'claude'),
-               coalesce((SELECT value FROM settings WHERE key='model'), ''),
-               coalesce((SELECT value FROM settings WHERE key='base_url'), ''), ?1)",
-            [now()],
-        )?;
-        c.execute_batch(
-            "INSERT OR IGNORE INTO sessions(bot_id, chat_id, session) SELECT 1, chat_id, claude_session FROM chats WHERE claude_session IS NOT NULL;
-             UPDATE chats SET claude_session = NULL WHERE claude_session IS NOT NULL;",
-        )?;
-        // Runs left 'running' by a crash (older than the max turn length) are closed out.
-        c.execute(
+        let dir = path.parent().map(Path::to_path_buf).unwrap_or_else(|| ".".into());
+        Ok(Db(Arc::new(Mutex::new(c)), Arc::new(dir)))
+    }
+
+    /// Closes out runs a crash left 'running' (older than the max turn length). Once at startup, not on every open.
+    pub fn close_interrupted(&self) -> Result<()> {
+        self.c().execute(
             "UPDATE runs SET status='error', error='interrupted', ended_at=started_at WHERE status='running' AND started_at < ?1",
             [now() - 900],
         )?;
-        let dir = path.parent().map(Path::to_path_buf).unwrap_or_else(|| ".".into());
-        Ok(Db(Arc::new(Mutex::new(c)), Arc::new(dir)))
+        Ok(())
     }
 
     /// The data directory (MIMIR_HOME) this database lives in.
@@ -826,7 +995,7 @@ impl Db {
             // A correction keeps the pin (or the background) and the end date; an unconfirmed one doesn't get the pin,
             // which would put it in every prompt.
             tx.execute(
-                "UPDATE entries SET (pinned, background, valid_until)=(SELECT pinned AND NOT ?3, background, valid_until FROM entries WHERE id=?2) WHERE id=?1",
+                "UPDATE entries SET (pinned, background, valid_until, for_bot)=(SELECT pinned AND NOT ?3, background, valid_until, for_bot FROM entries WHERE id=?2) WHERE id=?1",
                 params![id, old, prov.tainted],
             )?;
         }
@@ -866,6 +1035,11 @@ impl Db {
     /// Give a memory an end date (unix seconds), or take it away (None).
     pub fn set_until(&self, scope: &str, id: i64, until: Option<i64>) -> Result<bool> {
         Ok(self.c().execute("UPDATE entries SET valid_until=?3 WHERE id=?1 AND scope=?2 AND superseded_by IS NULL AND invalid=0", params![id, scope, until])? > 0)
+    }
+
+    /// Keep a memory for one bot only, or for all bots again (0).
+    pub fn set_for_bot(&self, scope: &str, id: i64, bot: i64) -> Result<bool> {
+        Ok(self.c().execute("UPDATE entries SET for_bot=?3 WHERE id=?1 AND scope=?2 AND superseded_by IS NULL AND invalid=0", params![id, scope, bot])? > 0)
     }
 
     pub fn background(&self, scope: &str, id: i64, on: bool) -> Result<bool> {
@@ -908,18 +1082,19 @@ impl Db {
     }
 
     /// bm25 × importance × recency decay (0.995/day, floor 0.05); drops hits under 20% of the top score.
-    pub fn search(&self, scope: &str, query: &str, limit: usize) -> Result<Vec<Entry>> {
+    /// `bot`: leave out the memories other bots keep to themselves (0: all of them).
+    pub fn search(&self, scope: &str, bot: i64, query: &str, limit: usize) -> Result<Vec<Entry>> {
         let Some(q) = fts_query(query) else { return Ok(vec![]) };
         let c = self.c();
         let mut st = c.prepare(
             "SELECT e.id, e.type, e.title, e.body, e.source, e.importance, e.created_at, bm25(entries_fts), e.tainted, e.valid_until
              FROM entries_fts JOIN entries e ON e.id = entries_fts.rowid
-             WHERE entries_fts MATCH ?1 AND e.scope = ?2 AND e.superseded_by IS NULL AND e.invalid = 0
+             WHERE entries_fts MATCH ?1 AND e.scope = ?2 AND e.superseded_by IS NULL AND e.invalid = 0 AND (?3 = 0 OR e.for_bot IN (0, ?3))
              ORDER BY bm25(entries_fts) LIMIT 50",
         )?;
         let t = now();
         let mut hits: Vec<(f64, Entry)> = st
-            .query_map(params![q, scope], |r| {
+            .query_map(params![q, scope, bot], |r| {
                 let imp: i64 = r.get(5)?;
                 let created: i64 = r.get(6)?;
                 let bm25: f64 = r.get(7)?;
@@ -939,15 +1114,17 @@ impl Db {
 
     /// Standing context injected every turn: pinned memories (always), then preferences, then the most recent
     /// facts and tasks, within a size budget. Everything else is still found by search when a message needs it.
-    pub fn bootstrap(&self, scope: &str) -> Result<Vec<Entry>> {
+    /// `bot`: as in `search`.
+    pub fn bootstrap(&self, scope: &str, bot: i64) -> Result<Vec<Entry>> {
         let c = self.c();
         let mut st = c.prepare(
             "SELECT id, type, title, body, source, pinned, tainted, created_at, valid_until FROM entries
              WHERE scope=?1 AND superseded_by IS NULL AND invalid=0 AND background=0 AND tainted=0 AND (valid_until IS NULL OR valid_until > ?2)
+               AND (?3 = 0 OR for_bot IN (0, ?3))
              ORDER BY pinned DESC, (type='convention') DESC, created_at DESC, id DESC LIMIT 300",
         )?;
         let rows: Vec<(bool, Entry)> = st
-            .query_map(params![scope, now()], |r| Ok((r.get(5)?, Entry { id: r.get(0)?, kind: r.get(1)?, title: r.get(2)?, body: r.get(3)?, source: r.get(4)?, tainted: r.get(6)?, created_at: r.get(7)?, valid_until: r.get(8)? })))?
+            .query_map(params![scope, now(), bot], |r| Ok((r.get(5)?, Entry { id: r.get(0)?, kind: r.get(1)?, title: r.get(2)?, body: r.get(3)?, source: r.get(4)?, tainted: r.get(6)?, created_at: r.get(7)?, valid_until: r.get(8)? })))?
             .collect::<Result<_, _>>()?;
         let (mut used, mut recent, mut out) = (0, 0, vec![]);
         for (pinned, e) in rows {
@@ -964,16 +1141,16 @@ impl Db {
     }
 
     /// Memories saved after reading outside content and not confirmed yet (for showing, never for prompts).
-    pub fn search_unconfirmed(&self, scope: &str) -> Result<Vec<Entry>> {
+    pub fn search_unconfirmed(&self, scope: &str, bot: i64) -> Result<Vec<Entry>> {
         let c = self.c();
-        let mut st = c.prepare("SELECT id, type, title, body, source, tainted, created_at, valid_until FROM entries WHERE scope=?1 AND superseded_by IS NULL AND invalid=0 AND tainted=1 ORDER BY id DESC LIMIT 30")?;
-        let v = st.query_map([scope], |r| Ok(Entry { id: r.get(0)?, kind: r.get(1)?, title: r.get(2)?, body: r.get(3)?, source: r.get(4)?, tainted: r.get(5)?, created_at: r.get(6)?, valid_until: r.get(7)? }))?.collect::<Result<_, _>>()?;
+        let mut st = c.prepare("SELECT id, type, title, body, source, tainted, created_at, valid_until FROM entries WHERE scope=?1 AND superseded_by IS NULL AND invalid=0 AND tainted=1 AND (?2 = 0 OR for_bot IN (0, ?2)) ORDER BY id DESC LIMIT 30")?;
+        let v = st.query_map(params![scope, bot], |r| Ok(Entry { id: r.get(0)?, kind: r.get(1)?, title: r.get(2)?, body: r.get(3)?, source: r.get(4)?, tainted: r.get(5)?, created_at: r.get(6)?, valid_until: r.get(7)? }))?.collect::<Result<_, _>>()?;
         Ok(v)
     }
 
     /// How full standing memory is: (characters used, the budget, memories in it). Pinned ones can push it past 100%.
     pub fn standing_usage(&self, scope: &str) -> Result<(usize, usize, usize)> {
-        let b = self.bootstrap(scope)?;
+        let b = self.bootstrap(scope, 0)?;
         Ok((b.iter().map(|e| e.line().len()).sum(), BOOTSTRAP_CHARS, b.len()))
     }
 
@@ -982,7 +1159,7 @@ impl Db {
         let c = self.c();
         let mut st = c.prepare(
             "SELECT id, type, title, body, source, created_at, superseded_by, invalid, access_count, pinned, origin, bot_id, run_id, tainted, missteps, background, valid_until,
-               (SELECT asked FROM runs WHERE runs.id = entries.run_id)
+               (SELECT asked FROM runs WHERE runs.id = entries.run_id), for_bot
              FROM entries WHERE scope=?1 ORDER BY id DESC LIMIT 1000",
         )?;
         let v = st
@@ -1009,6 +1186,7 @@ impl Db {
                     valid_until: r.get(16)?,
                     // What they typed, without a file's text after it.
                     asked: r.get::<_, Option<String>>(17)?.map(|a| a.split("\n\n[Attached:").next().unwrap_or("").to_string()),
+                    for_bot: r.get(18)?,
                 })
             })?
             .collect::<Result<_, _>>()?;
@@ -1019,6 +1197,11 @@ impl Db {
 
     pub fn setting(&self, key: &str) -> Result<Option<String>> {
         Ok(self.c().query_row("SELECT value FROM settings WHERE key=?1", [key], |r| r.get(0)).optional()?)
+    }
+
+    /// Read a setting and delete it in one step: only one of two callers racing for it gets it.
+    pub fn setting_take(&self, key: &str) -> Result<Option<String>> {
+        Ok(self.c().query_row("DELETE FROM settings WHERE key=?1 RETURNING value", [key], |r| r.get(0)).optional()?)
     }
 
     /// Take or renew the computer for `who` ("run:<id>" or "you") for `secs`. Free, expired or already ours: it's
@@ -1237,7 +1420,7 @@ impl Db {
              DELETE FROM runs WHERE bot_id={id}; DELETE FROM messages WHERE bot_id={id};
              DELETE FROM signals WHERE bot_id={id}; DELETE FROM cases WHERE bot_id={id}; DELETE FROM digest_items WHERE bot_id={id};
              DELETE FROM routines WHERE bot_id={id}; DELETE FROM sessions WHERE bot_id={id}; DELETE FROM conv_taint WHERE bot_id={id};
-             DELETE FROM settings WHERE key LIKE 'seen:{id}:%'; DELETE FROM bots WHERE id={id};"
+             DELETE FROM settings WHERE key LIKE 'seen:{id}:%' OR key='pause:{id}'; DELETE FROM bots WHERE id={id};"
         ))?;
         self.wipe_free_space();
         Ok(())
@@ -1311,6 +1494,8 @@ impl Db {
         c.execute("DELETE FROM cases WHERE ts < ?1", [before])?;
         c.execute("DELETE FROM signals WHERE ts < ?1", [before])?;
         c.execute("DELETE FROM digest_items WHERE sent_at IS NOT NULL AND sent_at < ?1", [before])?;
+        // Buttons nobody tapped in a month (runtime::Tap): they'd only say "already done" by then anyway.
+        c.execute("DELETE FROM settings WHERE key LIKE 'tap:%' AND CAST(json_extract(value, '$.at') AS INTEGER) < ?1", [now() - 30 * 86400])?;
         Ok(())
     }
 
@@ -1384,16 +1569,56 @@ impl Db {
         Ok(())
     }
 
+    /// What a run drew on (under each reply in the app, and `/why` in the messaging apps).
+    pub fn run_used(&self, run: i64) -> Result<Used> {
+        let c = self.c();
+        let (chat, recalled): (i64, Option<String>) = c.query_row("SELECT chat_id, recalled FROM runs WHERE id=?1", [run], |r| Ok((r.get(0)?, r.get(1)?))).optional()?.unwrap_or((0, None));
+        let mut memories = vec![];
+        // Only the run's own chat's (as when blaming a reply).
+        let mut st = c.prepare("SELECT id, type, title, body, superseded_by IS NOT NULL, invalid FROM entries WHERE id=?1 AND scope=?2")?;
+        for id in recalled.unwrap_or_default().split(',').filter_map(|s| s.parse::<i64>().ok()) {
+            if let Some(m) = st
+                .query_row(params![id, format!("chat:{chat}")], |r| {
+                    let status = if r.get::<_, bool>(5)? { "forgotten" } else if r.get::<_, bool>(4)? { "superseded" } else { "active" };
+                    Ok(UsedMemory { id: r.get(0)?, kind: r.get(1)?, title: r.get(2)?, body: r.get(3)?, status })
+                })
+                .optional()?
+            {
+                memories.push(m);
+            }
+        }
+        let skills = c
+            .prepare("SELECT DISTINCT s.id, s.name FROM skill_uses u JOIN skills s ON s.id = u.skill_id WHERE u.run_id=?1 ORDER BY s.id")?
+            .query_map([run], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<Result<_, _>>()?;
+        let pages = c
+            .prepare("SELECT summary FROM tool_calls WHERE run_id=?1 AND ok=1 AND tool IN ('web_fetch', 'browser__browser_navigate', 'computer_open') ORDER BY id")?
+            .query_map([run], |r| r.get(0))?
+            .collect::<Result<_, _>>()?;
+        Ok(Used { memories, skills, pages })
+    }
+
+    /// `/why`: what this bot's last reply in the chat drew on.
+    pub fn last_reply_used(&self, bot: i64, chat: i64) -> Result<Option<Used>> {
+        let run: Option<i64> = self
+            .c()
+            .query_row("SELECT run_id FROM messages WHERE bot_id=?1 AND chat_id=?2 AND role='assistant' ORDER BY id DESC LIMIT 1", [bot, chat], |r| r.get(0))
+            .optional()?
+            .flatten();
+        run.map(|r| self.run_used(r)).transpose()
+    }
+
     /// The person corrected the bot's last reply here: count it against the memories that reply recalled.
     /// `said`: the correction itself. Besides the memories recalled for the reply, preferences in the standing
     /// instructions that it's about (they shape every reply, so they never show up as "recalled") get a misstep too.
-    pub fn blame_last_reply(&self, bot: i64, chat: i64, said: &str) -> Result<usize> {
+    /// `conv`: the conversation the reply was in (`ToolCtx::conv`).
+    pub fn blame_last_reply(&self, bot: i64, chat: i64, conv: i64, said: &str) -> Result<usize> {
         let c = self.c();
         let recalled: Option<String> = c
             .query_row(
                 "SELECT r.recalled FROM messages m JOIN runs r ON r.id = m.run_id
                  WHERE m.bot_id=?1 AND m.chat_id=?2 AND m.role='assistant' ORDER BY m.id DESC LIMIT 1",
-                [bot, chat],
+                [bot, conv],
                 |r| r.get(0),
             )
             .optional()?
@@ -1811,7 +2036,7 @@ impl Db {
         let mut steps = vec![];
         for id in ids.into_iter().rev() {
             for c in self.tool_calls(id)? {
-                let bookkeeping = c.tool.starts_with("memory_") || c.tool.starts_with("skill_") || c.tool.ends_with("_search") || c.tool == "plan_propose";
+                let bookkeeping = c.tool.starts_with("memory_") || c.tool.starts_with("skill_") || c.tool.ends_with("_search") || c.tool == "plan_propose" || c.tool == "ask_choice";
                 if c.ok && c.decision != "deny" && !bookkeeping {
                     steps.push(c.summary);
                 }
@@ -1906,7 +2131,7 @@ impl Db {
     /// Facts (not preferences or tasks) in standing memory that search hasn't brought up in `days` days.
     pub fn memories_unrecalled(&self, scope: &str, days: i64) -> Result<Vec<(i64, String)>> {
         // Only ones in standing memory: demoting the rest would change nothing.
-        let standing: std::collections::HashSet<i64> = self.bootstrap(scope)?.iter().map(|e| e.id).collect();
+        let standing: std::collections::HashSet<i64> = self.bootstrap(scope, 0)?.iter().map(|e| e.id).collect();
         let c = self.c();
         let mut st = c.prepare(
             "SELECT id, title FROM entries WHERE scope=?1 AND type='knowledge' AND superseded_by IS NULL AND invalid=0 AND pinned=0
@@ -2429,19 +2654,128 @@ impl Db {
         let mut st = c.prepare(
             "SELECT c.chat_id, c.title,
                (SELECT count(*) FROM entries e WHERE e.scope = 'chat:' || c.chat_id AND e.superseded_by IS NULL AND e.invalid = 0),
-               CASE WHEN c.chat_id = 0 THEN 'local' ELSE c.channel END, c.guest
+               CASE WHEN c.chat_id = 0 THEN 'local' ELSE c.channel END, c.guest, c.family
              FROM chats c ORDER BY c.chat_id",
         )?;
-        let v = st
-            .query_map([], |r| Ok(Chat { chat_id: r.get(0)?, title: r.get(1)?, memories: r.get(2)?, channel: r.get(3)?, guest: r.get(4)? }))?
+        let rows: Vec<Chat> = st
+            .query_map([], |r| Ok(Chat { chat_id: r.get(0)?, title: r.get(1)?, memories: r.get(2)?, channel: r.get(3)?, guest: r.get(4)?, household: false, family: r.get(5)?, private: false }))?
             .collect::<Result<_, _>>()?;
-        Ok(v)
+        drop(st);
+        drop(c);
+        Ok(rows.into_iter().map(|c| Chat { household: self.in_household(c.chat_id), private: self.chat_private(c.chat_id), ..c }).collect())
     }
 
-    /// The chat id for an inbound message, if that chat was paired. Telegram ids are used as-is.
+    // ---------- the household ----------
+
+    /// Whether a chat reads the household's memories (and can add to them): the app's own chat and your direct chats
+    /// always; a guest's chat or a group once you add it. Never the household itself or an incognito chat.
+    pub fn in_household(&self, chat: i64) -> bool {
+        if chat == crate::INCOGNITO_CHAT || chat == crate::HOUSEHOLD_CHAT {
+            return false;
+        }
+        let added = self.c().query_row("SELECT household FROM chats WHERE chat_id=?1", [chat], |r| r.get::<_, bool>(0)).unwrap_or(false);
+        added || (!self.chat_guest(chat) && self.chat_private(chat))
+    }
+
+    /// The household's memories live in a chat of their own (`HOUSEHOLD_CHAT`), so the Memory tab, suggestions and
+    /// Needs you work for it as for any chat. Made the first time it's needed.
+    pub fn household_ensure(&self) -> Result<()> {
+        self.c().execute(
+            "INSERT OR IGNORE INTO chats(chat_id, title, channel) VALUES (?1, 'Household', 'household')",
+            [crate::HOUSEHOLD_CHAT],
+        )?;
+        Ok(())
+    }
+
+    /// Add a guest's chat or a group to the household, or take it out. Your own direct chats are always in it.
+    pub fn chat_set_household(&self, chat: i64, on: bool) -> Result<bool> {
+        if chat == crate::HOUSEHOLD_CHAT || chat == crate::INCOGNITO_CHAT {
+            return Ok(false);
+        }
+        let n = self.c().execute("UPDATE chats SET household=?2, family=family AND ?2 WHERE chat_id=?1", params![chat, on])?;
+        if n > 0 && on {
+            self.household_ensure()?;
+        }
+        Ok(n > 0)
+    }
+
+    /// A family group: any household member can talk in it. It's in the household, and a guest's chat (several people
+    /// are in it, so none of your email, calendar or logins), whoever paired it.
+    pub fn chat_set_family(&self, chat: i64, on: bool) -> Result<bool> {
+        if self.chat_private(chat) || chat == crate::HOUSEHOLD_CHAT {
+            bail!("only a group chat can be a family group");
+        }
+        let sql = if on { "UPDATE chats SET family=1, household=1, guest=1 WHERE chat_id=?1" } else { "UPDATE chats SET family=0 WHERE chat_id=?1" };
+        let n = self.c().execute(sql, [chat])?;
+        if n > 0 && on {
+            self.household_ensure()?;
+        }
+        Ok(n > 0)
+    }
+
+    /// Someone in the household writing in a family group (not the person who paired it, who's let in anyway).
+    pub fn family_member(&self, chat: i64, person: &str) -> Result<bool> {
+        if person.is_empty() || !self.chat_family(chat) {
+            return Ok(false);
+        }
+        let channel: String = self.c().query_row("SELECT coalesce(channel, 'telegram') FROM chats WHERE chat_id=?1", [chat], |r| r.get(0))?;
+        Ok(self.household_people(&channel)?.iter().any(|p| p.0 == person))
+    }
+
+    /// Who wrote in a family group, for the bot: the title of their own chat ("Sam"); None outside family groups.
+    pub fn family_speaker(&self, chat: i64, person: &str) -> Result<Option<String>> {
+        if !self.chat_family(chat) {
+            return Ok(None);
+        }
+        let channel: String = self.c().query_row("SELECT coalesce(channel, 'telegram') FROM chats WHERE chat_id=?1", [chat], |r| r.get(0))?;
+        let name = self.household_people(&channel)?.into_iter().find(|p| p.0 == person).map(|p| p.2).filter(|t| !t.trim().is_empty());
+        // ‹›: a name can't pass for a block of the prompt.
+        Ok(Some(name.unwrap_or_else(|| "Someone".into()).replace('<', "‹").replace('>', "›").replace(':', "")))
+    }
+
+    pub fn chat_family(&self, chat: i64) -> bool {
+        self.c().query_row("SELECT family FROM chats WHERE chat_id=?1", [chat], |r| r.get::<_, bool>(0)).unwrap_or(false)
+    }
+
+    /// The household's people on one app: (their id there, their direct chat, its title). You, and each guest whose
+    /// direct chat you added to the household.
+    pub fn household_people(&self, channel: &str) -> Result<Vec<(String, i64, String)>> {
+        let rows: Vec<(String, i64, String)> = {
+            let c = self.c();
+            let mut st = c.prepare("SELECT owner, chat_id, title FROM chats WHERE coalesce(channel, 'telegram')=?1 AND owner != '' AND family=0 ORDER BY chat_id")?;
+            st.query_map([channel], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<Result<_, _>>()?
+        };
+        Ok(rows.into_iter().filter(|(_, chat, _)| self.chat_private(*chat) && self.in_household(*chat)).collect())
+    }
+
+    /// The direct chat of the household member called `name` (their chat's title, ignoring case; a first name will do),
+    /// other than `not` (the chat asking). Err names who there is when nobody, or more than one, matches.
+    pub fn household_member(&self, name: &str, not: i64) -> Result<(i64, String)> {
+        let want = name.trim().to_lowercase();
+        let mut all: Vec<(i64, String)> = vec![];
+        for channel in ["telegram", "slack", "discord"] {
+            all.extend(self.household_people(channel)?.into_iter().map(|(_, chat, title)| (chat, title)).filter(|(chat, _)| *chat != not));
+        }
+        let first = |t: &str| t.split_whitespace().next().unwrap_or("").to_lowercase();
+        let hits: Vec<_> = all.iter().filter(|(_, t)| t.to_lowercase() == want || first(t) == want).collect();
+        match hits.as_slice() {
+            [one] => Ok((*one).clone()),
+            _ => {
+                let names = all.iter().map(|(_, t)| t.as_str()).collect::<Vec<_>>().join(", ");
+                bail!(
+                    "{} household member called {name}. In the household: {}",
+                    if hits.is_empty() { "no" } else { "more than one" },
+                    if names.is_empty() { "nobody yet (add a guest's chat to the household in the app)" } else { &names }
+                )
+            }
+        }
+    }
+
+    /// The chat id for an inbound message, if that chat was paired. Telegram ids are used as-is ("chat:topic" is
+    /// that chat: a topic is its own conversation, see `topic_conv`, in the same chat).
     pub fn chat_lookup(&self, channel: &str, external: &str) -> Result<Option<i64>> {
         if channel == "telegram" {
-            let id: i64 = external.parse()?;
+            let id: i64 = tg_chat(external).parse()?;
             return Ok(self.is_paired(id)?.then_some(id));
         }
         Ok(self
@@ -2461,6 +2795,10 @@ impl Db {
     /// Pair a chat from any channel; returns its chat id. Non-Telegram chats get ids from a range
     /// (9e15+) above Telegram's, so no external id can collide with another.
     /// The person (their id in the messaging app) who paired this chat; "" for chats paired before it was kept.
+    pub fn chat_title(&self, chat: i64) -> Result<String> {
+        Ok(self.c().query_row("SELECT title FROM chats WHERE chat_id=?1", [chat], |r| r.get(0)).optional()?.unwrap_or_default())
+    }
+
     pub fn chat_owner(&self, chat: i64) -> Result<String> {
         Ok(self.c().query_row("SELECT owner FROM chats WHERE chat_id=?1", [chat], |r| r.get(0)).optional()?.unwrap_or_default())
     }
@@ -2492,6 +2830,10 @@ impl Db {
     }
 
     pub fn chat_set_guest(&self, chat: i64, guest: bool) -> Result<bool> {
+        // Everyone in the household talks in a family group: it can't have your email, calendar or logins.
+        if !guest && self.chat_family(chat) {
+            bail!("a family group is always a guest's chat; turn off Family group first");
+        }
         Ok(chat != crate::host::LOCAL_CHAT && self.c().execute("UPDATE chats SET guest=?2 WHERE chat_id=?1", params![chat, guest])? > 0)
     }
 
@@ -2511,7 +2853,7 @@ impl Db {
 
     pub fn pair_external(&self, channel: &str, external: &str, title: &str) -> Result<i64> {
         if channel == "telegram" {
-            let id: i64 = external.parse()?;
+            let id: i64 = tg_chat(external).parse()?;
             self.pair(id, title)?;
             return Ok(id);
         }
@@ -2524,6 +2866,19 @@ impl Db {
         let id: i64 = c.query_row("SELECT max(?1, coalesce(max(chat_id) + 1, ?1)) FROM chats WHERE chat_id >= ?1", [BASE], |r| r.get(0))?;
         c.execute("INSERT INTO chats(chat_id, title, channel, external) VALUES (?1,?2,?3,?4)", params![id, title, channel, external])?;
         Ok(id)
+    }
+
+    /// A Telegram topic's own conversation (session, taint, history; memory and routines stay the chat's): an id
+    /// from a range no chat uses (Telegram's are below 2^52, other apps' from 9e15), made when the topic is first used.
+    pub fn topic_conv(&self, chat: i64, topic: i64) -> Result<i64> {
+        const BASE: i64 = 8_000_000_000_000_000;
+        let c = self.c();
+        let key = format!("topic:{chat}:{topic}");
+        c.execute(
+            "INSERT OR IGNORE INTO settings(key, value) SELECT ?1, max(?2, coalesce(max(CAST(value AS INTEGER)) + 1, ?2)) FROM settings WHERE key LIKE 'topic:%'",
+            params![key, BASE],
+        )?;
+        Ok(c.query_row("SELECT CAST(value AS INTEGER) FROM settings WHERE key=?1", [key], |r| r.get(0))?)
     }
 
     /// Where to send messages for a chat: (channel, external id). None for the local chat.
@@ -2627,13 +2982,13 @@ impl Db {
         let c = self.c();
         let mut st = c.prepare(
             "SELECT m.ts, m.bot_id, m.role, snippet(messages_fts, 0, '', '', '…', 40), (m.role = 'assistant' AND coalesce(r.tainted, 1)) OR (m.role = 'user' AND m.content LIKE '%<document name=%'),
-               m.role = 'user' AND m.content LIKE '[Scheduled%'
+               m.role = 'user' AND m.content LIKE '[Scheduled%', m.id
              FROM messages_fts JOIN messages m ON m.id = messages_fts.rowid LEFT JOIN runs r ON r.id = m.run_id
              WHERE messages_fts MATCH ?1 AND m.chat_id = ?2 AND (?3 IS NULL OR m.run_id IS NOT ?3) AND m.ts BETWEEN ?5 AND ?6
              ORDER BY bm25(messages_fts) LIMIT ?4",
         )?;
         let v = st
-            .query_map(params![q, chat, exclude_run, limit as i64, range.0, range.1], |r| Ok(ChatHit { ts: r.get(0)?, bot_id: r.get(1)?, role: r.get(2)?, excerpt: r.get(3)?, tainted: r.get(4)?, routine: r.get(5)? }))?
+            .query_map(params![q, chat, exclude_run, limit as i64, range.0, range.1], |r| Ok(ChatHit { id: r.get(6)?, ts: r.get(0)?, bot_id: r.get(1)?, role: r.get(2)?, excerpt: r.get(3)?, tainted: r.get(4)?, routine: r.get(5)? }))?
             .collect::<Result<_, _>>()?;
         Ok(v)
     }
@@ -2649,6 +3004,11 @@ impl Db {
         let mut v: Vec<(String, String)> = st.query_map(params![bot, chat, n as i64], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<Result<_, _>>()?;
         v.reverse();
         Ok(v)
+    }
+
+    /// When a bot and a chat last said anything to each other.
+    pub fn last_said(&self, bot: i64, chat: i64) -> Result<Option<i64>> {
+        Ok(self.c().query_row("SELECT max(ts) FROM messages WHERE bot_id=?1 AND chat_id=?2", [bot, chat], |r| r.get(0))?)
     }
 
     /// All bots' messages with a chat, oldest first (UI).
@@ -2691,23 +3051,27 @@ impl Db {
     }
 
     pub fn messages(&self, chat: i64, n: usize) -> Result<Vec<Message>> {
-        self.messages_of(chat, None, n)
+        self.messages_of(chat, None, None, 0, n)
     }
 
     /// The last `n` messages of a chat, oldest first; with `bot`, only that bot's conversation in it (what you said to
-    /// it and what it said), as when you open a bot from the sidebar.
-    pub fn messages_of(&self, chat: i64, bot: Option<i64>, n: usize) -> Result<Vec<Message>> {
+    /// it and what it said), as when you open a bot from the sidebar. Paging: only ids below `before`, and none below `from`.
+    pub fn messages_of(&self, chat: i64, bot: Option<i64>, before: Option<i64>, from: i64, n: usize) -> Result<Vec<Message>> {
         let c = self.c();
-        let mut st = c.prepare("SELECT bot_id, role, content, ts, run_id, id FROM messages WHERE chat_id=?1 AND (?3 IS NULL OR bot_id=?3) ORDER BY id DESC LIMIT ?2")?;
+        let mut st = c.prepare(
+            "SELECT bot_id, role, content, ts, run_id, id FROM messages WHERE chat_id=?1 AND (?3 IS NULL OR bot_id=?3)
+               AND (?4 IS NULL OR id < ?4) AND id >= ?5 ORDER BY id DESC LIMIT ?2",
+        )?;
         let mut v: Vec<(Message, Option<i64>)> = st
-            .query_map(params![chat, n as i64, bot], |r| Ok((Message { id: r.get(5)?, bot_id: r.get(0)?, role: r.get(1)?, content: r.get(2)?, ts: r.get(3)?, actions: vec![], run_id: None }, r.get(4)?)))?
+            .query_map(params![chat, n as i64, bot, before, from], |r| Ok((Message { id: r.get(5)?, bot_id: r.get(0)?, role: r.get(1)?, content: r.get(2)?, ts: r.get(3)?, actions: vec![], run_id: None, used: None }, r.get(4)?)))?
             .collect::<Result<_, _>>()?;
         v.reverse();
         // One query for every reply's actions.
         let first = v.iter().filter_map(|(_, r)| *r).min().unwrap_or(i64::MAX);
-        let mut acts = c.prepare("SELECT run_id, tool, summary, decision, ok, substr(result, 1, 200) FROM tool_calls WHERE chat_id=?1 AND run_id >= ?2 ORDER BY id")?;
+        let last = v.iter().filter_map(|(_, r)| *r).max().unwrap_or(0);
+        let mut acts = c.prepare("SELECT run_id, tool, summary, decision, ok, substr(result, 1, 200) FROM tool_calls WHERE chat_id=?1 AND run_id BETWEEN ?2 AND ?3 ORDER BY id")?;
         let mut by_run: std::collections::HashMap<i64, Vec<Action>> = Default::default();
-        for row in acts.query_map(params![chat, first], |r| Ok((r.get::<_, i64>(0)?, Action { tool: r.get(1)?, summary: r.get(2)?, decision: r.get(3)?, ok: r.get(4)?, result: r.get(5)? })))? {
+        for row in acts.query_map(params![chat, first, last], |r| Ok((r.get::<_, i64>(0)?, Action { tool: r.get(1)?, summary: r.get(2)?, decision: r.get(3)?, ok: r.get(4)?, result: r.get(5)? })))? {
             let (run, a) = row?;
             by_run.entry(run).or_default().push(a);
         }
@@ -2717,6 +3081,15 @@ impl Db {
             }
             if let Some(a) = run.filter(|_| m.role == "assistant").and_then(|r| by_run.remove(&r)) {
                 m.actions = a;
+            }
+        }
+        drop(acts);
+        drop(st);
+        drop(c);
+        // ponytail: three small queries per reply; one joined query if long chats load slowly.
+        for (m, _) in v.iter_mut() {
+            if let Some(run) = m.run_id {
+                m.used = Some(self.run_used(run)?).filter(|u| !u.is_empty());
             }
         }
         Ok(v.into_iter().map(|(m, _)| m).collect())
@@ -2729,6 +3102,7 @@ impl Db {
             bail!("a routine needs a prompt");
         }
         let next = next_fire(cron, now())?;
+        self.calendar_private(chat, cron)?;
         let c = self.c();
         c.execute(
             "INSERT INTO routines(bot_id, chat_id, cron, prompt, next_fire, quiet) VALUES (?1,?2,?3,?4,?5,?6)",
@@ -2804,10 +3178,29 @@ impl Db {
             return Ok(self.c().execute("UPDATE routines SET prompt=?3, quiet=?4, paused=?5 WHERE id=?1 AND chat_id=?2", params![id, chat, prompt.trim(), quiet, paused])? > 0);
         }
         let next = next_fire(cron, now())?;
+        self.calendar_private(chat, cron)?;
         Ok(self.c().execute(
             "UPDATE routines SET cron=?3, prompt=?4, quiet=?5, paused=?6, next_fire=?7 WHERE id=?1 AND chat_id=?2",
             params![id, chat, cron.trim(), prompt.trim(), quiet, paused, next],
         )? > 0)
+    }
+
+    /// Your calendar is private: a routine timed off it (each run is told the event) only in a chat with you alone.
+    fn calendar_private(&self, chat: i64, cron: &str) -> Result<()> {
+        if crate::calendar::trigger(cron)?.is_some() && !self.chat_private(chat) {
+            bail!("a routine timed off your calendar can only be in a private chat");
+        }
+        Ok(())
+    }
+
+    /// A bot's calendar routines whose next run the scheduler may move: not due, paused, or being tried again.
+    pub fn calendar_routines(&self, bot: i64, t: i64) -> Result<Vec<Routine>> {
+        self.routines_where("bot_id = ?1 AND cron LIKE 'calendar:%' AND next_fire > ?2 AND paused = 0 AND retries = 0", [bot, t])
+    }
+
+    pub fn routine_set_next(&self, id: i64, t: i64) -> Result<()> {
+        self.c().execute("UPDATE routines SET next_fire=?2 WHERE id=?1", [id, t])?;
+        Ok(())
     }
 
     pub fn routine_set_delivery(&self, chat: i64, id: i64, delivery: &str) -> Result<bool> {
@@ -2975,7 +3368,7 @@ impl Db {
     }
 
     /// Every hold that hasn't ended, for Needs you: (its key, the bot, the routine if it's one routine's, the hold).
-    pub fn holds(&self, now: i64) -> Result<Vec<(String, i64, Option<i64>, Hold)>> {
+    pub fn holds(&self, now: i64) -> Result<Vec<HoldRow>> {
         let v: Vec<(String, String)> = {
             let c = self.c();
             let mut st = c.prepare("SELECT key, value FROM settings WHERE key LIKE 'hold:%'")?;
@@ -3146,6 +3539,61 @@ impl Db {
         self.c().execute("UPDATE routines SET next_fire=?2 WHERE id=?1", params![r.id, next])?;
         Ok(())
     }
+
+    // ---------- pause ----------
+
+    /// The person paused all bots (None) or one, until a time or (0) until they resume. While paused nothing runs on
+    /// its own, and messaging apps are told so.
+    pub fn pause_set(&self, bot: Option<i64>, until: i64) -> Result<()> {
+        self.set_setting(&pause_key(bot), &until.to_string())
+    }
+
+    /// End a pause (resumed, or its time came). Routines that came due meanwhile move on to their next time, as if
+    /// they'd run: no rush of catch-up runs, and nothing shows as missed. A one-off (a reminder) still runs once.
+    // ponytail: a slot due after a timed pause ended, while the computer slept, is skipped too, not run late
+    pub fn pause_end(&self, bot: Option<i64>) -> Result<()> {
+        let t = now();
+        for r in self.routines_where("(?1 IS NULL OR bot_id = ?1) AND next_fire <= ?2 AND once = 0", params![bot, t])? {
+            self.c().execute("UPDATE routines SET next_fire=?2, retries=0 WHERE id=?1", params![r.id, next_fire(&r.cron, t)?])?;
+        }
+        // Moved on first, then unpaused: a scheduler pass in between still sees the pause.
+        self.c().execute("DELETE FROM settings WHERE key=?1", [pause_key(bot)])?;
+        Ok(())
+    }
+
+    /// Pauses that haven't ended: (the bot, or None for all; until, 0 for until resumed).
+    pub fn pauses(&self, now: i64) -> Result<Vec<(Option<i64>, i64)>> {
+        let c = self.c();
+        let mut st = c.prepare("SELECT key, value FROM settings WHERE key LIKE 'pause:%'")?;
+        let v: Vec<(String, String)> = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<Result<_, _>>()?;
+        Ok(v.into_iter()
+            .filter_map(|(k, v)| Some((k.strip_prefix("pause:")?.parse().ok(), v.parse::<i64>().ok()?)))
+            .filter(|&(_, until)| until == 0 || until > now)
+            .collect())
+    }
+
+    /// Whether this bot is paused (its own pause or everyone's): Some(until), 0 for until resumed; the later end wins.
+    /// A pause whose time has come is ended here.
+    pub fn paused(&self, bot: i64, now: i64) -> Result<Option<i64>> {
+        let mut out: Option<i64> = None;
+        for who in [None, Some(bot)] {
+            let Some(until) = self.setting(&pause_key(who))?.and_then(|v| v.parse::<i64>().ok()) else { continue };
+            if until != 0 && until <= now {
+                self.pause_end(who)?;
+            } else {
+                out = Some(match out {
+                    Some(0) => 0,
+                    Some(o) if until != 0 => o.max(until),
+                    _ => until,
+                });
+            }
+        }
+        Ok(out)
+    }
+}
+
+fn pause_key(bot: Option<i64>) -> String {
+    bot.map_or("pause:all".into(), |b| format!("pause:{b}"))
 }
 
 #[cfg(test)]
@@ -3162,6 +3610,55 @@ mod tests {
     }
 
     #[test]
+    fn schema_version_ladder() {
+        let dir = std::env::temp_dir().join(format!("mimir-ladder-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("mimir.db");
+        // A database as 0.1.4 left it: no version, a column it didn't have yet.
+        drop(Db::open(&p).unwrap());
+        Connection::open(&p).unwrap().execute_batch("PRAGMA user_version = 0; ALTER TABLE runs DROP COLUMN estimated; DELETE FROM settings;").unwrap();
+
+        let d = Db::open(&p).unwrap();
+        assert_eq!(user_version(&d.c()).unwrap(), VERSION);
+        assert!(d.c().prepare("SELECT estimated FROM runs").is_ok(), "migrated");
+        assert!(dir.join(format!("mimir.db.before-{VERSION}")).exists(), "copied aside first");
+        drop(d);
+
+        // Up to date: opens while another process holds the write lock, so it wrote nothing.
+        let other = Connection::open(&p).unwrap();
+        other.execute_batch("BEGIN IMMEDIATE").unwrap();
+        let t = std::time::Instant::now();
+        drop(Db::open(&p).unwrap());
+        assert!(t.elapsed() < Duration::from_secs(1), "waited for the write lock");
+        other.execute_batch("ROLLBACK").unwrap();
+
+        // Only the last 2 copies are kept.
+        for v in [-3, -2, -1] {
+            std::fs::write(dir.join(format!("mimir.db.before-{v}")), "").unwrap();
+        }
+        Connection::open(&p).unwrap().execute_batch("PRAGMA user_version = 0").unwrap();
+        drop(Db::open(&p).unwrap());
+        let mut kept: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().filter_map(|e| e.file_name().into_string().ok()).filter(|n| n.contains(".before-")).collect();
+        kept.sort();
+        assert_eq!(kept, vec!["mimir.db.before--1".to_string(), format!("mimir.db.before-{VERSION}")]);
+
+        // Version 1 → 2 adds the indexes.
+        Connection::open(&p).unwrap().execute_batch("DROP INDEX tool_calls_chat; DROP INDEX messages_chat; PRAGMA user_version = 1").unwrap();
+        let d = Db::open(&p).unwrap();
+        let n: i64 = d.c().query_row("SELECT count(*) FROM sqlite_master WHERE name IN ('tool_calls_chat', 'messages_chat')", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 2);
+        drop(d);
+
+        // Written by a newer Mimir: refused, untouched.
+        Connection::open(&p).unwrap().execute_batch("PRAGMA user_version = 99; UPDATE settings SET value='9.9.9' WHERE key='schema_written_by'").unwrap();
+        let err = Db::open(&p).err().unwrap().to_string();
+        assert!(err.contains("Mimir 9.9.9") && err.contains("Update the app"), "{err}");
+        assert_eq!(user_version(&Connection::open(&p).unwrap()).unwrap(), 99);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn memory_roundtrip_supersede_forget_and_scope() {
         let d = db();
         let a = d.store("chat:1", "convention", "Coffee", "User drinks oat flat whites", "message", None).unwrap();
@@ -3170,19 +3667,19 @@ mod tests {
         assert_eq!(d.store("chat:1", "convention", "Coffee", "User drinks oat flat whites", "x", None).unwrap(), a, "dedup");
         assert!(d.store("chat:1", "bogus", "t", "b", "", None).is_err());
 
-        let hits = d.search("chat:1", "who is my dentist?", 5).unwrap();
+        let hits = d.search("chat:1", 0, "who is my dentist?", 5).unwrap();
         assert_eq!(hits.len(), 1, "scoped + relevance gated");
         assert!(hits[0].body.contains("Dr. Lee"));
 
         let b = d.store("chat:1", "convention", "Coffee", "User switched to black coffee", "message", Some(a)).unwrap();
-        let hits = d.search("chat:1", "coffee", 5).unwrap();
+        let hits = d.search("chat:1", 0, "coffee", 5).unwrap();
         assert_eq!(hits.iter().map(|e| e.id).collect::<Vec<_>>(), vec![b], "superseded entry hidden");
         assert!(d.store("chat:1", "knowledge", "x", "y", "", Some(a)).is_err(), "can't supersede twice");
 
         assert!(d.forget("chat:1", b).unwrap());
-        assert!(d.search("chat:1", "coffee", 5).unwrap().is_empty());
-        assert!(d.search("chat:1", "\"); DROP TABLE entries; --", 5).is_ok(), "FTS input is sanitized");
-        assert_eq!(d.bootstrap("chat:1").unwrap().len(), 1);
+        assert!(d.search("chat:1", 0, "coffee", 5).unwrap().is_empty());
+        assert!(d.search("chat:1", 0, "\"); DROP TABLE entries; --", 5).is_ok(), "FTS input is sanitized");
+        assert_eq!(d.bootstrap("chat:1", 0).unwrap().len(), 1);
         let hist: Vec<_> = d.entries("chat:1").unwrap().into_iter().map(|e| (e.id, e.status)).collect();
         assert_eq!(hist, vec![(b, "forgotten"), (2, "active"), (a, "superseded")]);
 
@@ -3204,9 +3701,9 @@ mod tests {
         for i in 0..40 {
             d.store(s, "knowledge", &format!("Fact {i}"), "x", "", None).unwrap();
         }
-        assert!(!d.bootstrap(s).unwrap().iter().any(|e| e.id == old));
+        assert!(!d.bootstrap(s, 0).unwrap().iter().any(|e| e.id == old));
         assert!(d.pin(s, old, true).unwrap());
-        assert_eq!(d.bootstrap(s).unwrap()[0].id, old, "pinned comes first");
+        assert_eq!(d.bootstrap(s, 0).unwrap()[0].id, old, "pinned comes first");
         let fixed = d.store(s, "knowledge", "Blood type", "O positive", "", Some(old)).unwrap();
         assert!(d.entries(s).unwrap().iter().any(|e| e.id == fixed && e.pinned), "a correction keeps the pin");
         assert!(!d.pin("chat:2", fixed, false).unwrap(), "other scope");
@@ -3219,7 +3716,7 @@ mod tests {
         assert_eq!(d.erase(s, fixed).unwrap(), 2);
         let ids: Vec<i64> = d.entries(s).unwrap().iter().map(|e| e.id).collect();
         assert!(ids.contains(&third) && !ids.contains(&fixed) && !ids.contains(&old));
-        assert!(d.search(s, "negative", 5).unwrap().is_empty());
+        assert!(d.search(s, 0, "negative", 5).unwrap().is_empty());
         assert_eq!(d.erase("chat:2", third).unwrap(), 0, "other scope");
     }
 
@@ -3231,13 +3728,13 @@ mod tests {
         let sug = |action: &str| Suggestion { id: 0, action: action.into(), entry_id: Some(id), kind: "knowledge".into(), title: String::new(), body: String::new(), reason: "rarely matters".into(), check: None, tainted: false };
         let q = d.suggestion_add(s, &sug("demote")).unwrap().unwrap();
         assert_eq!(d.suggestion_decide(s, q, true).unwrap(), format!("#{id} moved to background"));
-        assert!(d.bootstrap(s).unwrap().is_empty(), "out of standing memory");
-        assert_eq!(d.search(s, "Observatory", 5).unwrap()[0].id, id, "still found by search");
+        assert!(d.bootstrap(s, 0).unwrap().is_empty(), "out of standing memory");
+        assert_eq!(d.search(s, 0, "Observatory", 5).unwrap()[0].id, id, "still found by search");
         assert!(d.suggestion_add(s, &sug("demote")).is_err(), "already in the background");
         let fixed = d.store(s, "knowledge", "Old flat", "Lived in Woodstock in 2019", "", Some(id)).unwrap();
         assert!(d.entries(s).unwrap().iter().any(|e| e.id == fixed && e.background), "a correction stays in the background");
         assert!(d.pin(s, fixed, true).unwrap());
-        assert_eq!(d.bootstrap(s).unwrap()[0].id, fixed, "pinning brings it back");
+        assert_eq!(d.bootstrap(s, 0).unwrap()[0].id, fixed, "pinning brings it back");
         assert!(d.suggestion_add(s, &Suggestion { entry_id: Some(fixed), ..sug("demote") }).is_err(), "pins aren't demoted");
         // Queued before the pin, accepted after: dismissed, and the pin stays.
         assert!(d.pin(s, fixed, false).unwrap());
@@ -3418,7 +3915,7 @@ mod tests {
         let e = d.store(s, "knowledge", "Old wifi hint", "the cat is called Bob", "user said", None).unwrap();
         d.c().execute("UPDATE entries SET created_at = created_at - 100 * 86400 WHERE id=?1", [e]).unwrap();
         assert_eq!(d.memories_unrecalled(s, 90).unwrap().iter().map(|m| m.0).collect::<Vec<_>>(), vec![e]);
-        d.search(s, "wifi hint", 5).unwrap();
+        d.search(s, 0, "wifi hint", 5).unwrap();
         assert!(d.memories_unrecalled(s, 90).unwrap().is_empty(), "recalled just now");
     }
 
@@ -3452,6 +3949,21 @@ mod tests {
     }
 
     #[test]
+    fn earlier_messages_page_back() {
+        let d = db();
+        for i in 0..5 {
+            d.log(1, 7, "user", &format!("m{i}"), None).unwrap();
+        }
+        let text = |v: Vec<Message>| v.into_iter().map(|m| m.content).collect::<Vec<_>>().join(" ");
+        let last = d.messages_of(7, None, None, 0, 2).unwrap();
+        assert_eq!(text(last.clone()), "m3 m4");
+        assert_eq!(text(d.messages_of(7, None, Some(last[0].id), 0, 2).unwrap()), "m1 m2", "the page before");
+        // A search hit's id: everything from it on.
+        let hit = d.chat_search(7, "m1", None, (0, i64::MAX), 1).unwrap()[0].id;
+        assert_eq!(text(d.messages_of(7, None, None, hit, 100).unwrap()), "m1 m2 m3 m4");
+    }
+
+    #[test]
     fn messages_outside_the_session_are_found() {
         let d = db();
         let m = d.run_start(1, 11, "message", None, "claude").unwrap();
@@ -3465,6 +3977,8 @@ mod tests {
         assert_eq!(d.last_outside_session(2, 11).unwrap(), None, "another bot's");
         d.log(1, 11, "assistant", "☀️ Your digest", None).unwrap();
         assert_eq!(d.last_outside_session(1, 11).unwrap(), Some(("message", "☀️ Your digest".into())));
+        assert!(d.last_said(1, 11).unwrap().is_some_and(|t| now() - t < 5));
+        assert_eq!(d.last_said(2, 11).unwrap(), None, "another bot's");
     }
 
     #[test]
@@ -3567,21 +4081,31 @@ mod tests {
         let d = db();
         let used = d.store("chat:7", "knowledge", "Office", "Office is in Paarl", "", None).unwrap();
         let other = d.store("chat:8", "knowledge", "Office", "Office is in Paarl", "", None).unwrap();
-        assert_eq!(d.blame_last_reply(1, 7, "no").unwrap(), 0, "no reply yet");
+        assert_eq!(d.blame_last_reply(1, 7, 7, "no").unwrap(), 0, "no reply yet");
         let run = d.run_start(1, 7, "message", None, "test").unwrap();
         d.run_recalled(run, &[used, other]).unwrap();
         d.log(1, 7, "assistant", "See you at the Paarl office", Some(run)).unwrap();
-        assert_eq!(d.blame_last_reply(1, 7, "no, wrong").unwrap(), 1, "only this chat's memory");
+        assert_eq!(d.blame_last_reply(1, 7, 7, "no, wrong").unwrap(), 1, "only this chat's memory");
         let count = |scope: &str, id| d.entries(scope).unwrap().into_iter().find(|e| e.id == id).unwrap().missteps;
         assert_eq!((count("chat:7", used), count("chat:8", other)), (1, 0));
+        // What the reply used, under it and for /why: this chat's memory only, and what happened to it since.
+        let skill = d.skill_propose("chat:7", 1, "Book padel", "When booking padel", "1. Open the site", None).unwrap().unwrap();
+        d.skill_used(skill, Some(run)).unwrap();
+        d.tool_call_log(Some(run), 7, "web_fetch", "Read https://paarl.example", "allow", true, "ok").unwrap();
+        d.tool_call_log(Some(run), 7, "web_fetch", "Read https://down.example", "allow", false, "404").unwrap();
+        let u = d.messages(7, 1).unwrap().pop().unwrap().used.unwrap();
+        assert_eq!((u.memories.len(), u.memories[0].id, u.skills.len(), u.pages.clone()), (1, used, 1, vec!["Read https://paarl.example".to_string()]));
+        d.forget("chat:7", used).unwrap();
+        assert_eq!(d.last_reply_used(1, 7).unwrap().unwrap().memories[0].status, "forgotten");
+        assert!(d.last_reply_used(2, 7).unwrap().is_none(), "another bot's reply");
         // A standing preference the correction is about gets one too (it's in every reply, never "recalled").
         let bullets = d.store("chat:7", "convention", "News format", "Give tech news as three bullet points", "", None).unwrap();
         let tone = d.store("chat:7", "convention", "Tone", "Keep it friendly", "", None).unwrap();
-        assert_eq!(d.blame_last_reply(1, 7, "Please, no bullet points for this").unwrap(), 2, "the recalled memory and the bullets rule");
+        assert_eq!(d.blame_last_reply(1, 7, 7, "Please, no bullet points for this").unwrap(), 2, "the recalled memory and the bullets rule");
         assert_eq!((count("chat:7", bullets), count("chat:7", tone)), (1, 0));
         // Lines in a prompt carry the date they were saved.
         let today = chrono::Local::now().format("%Y-%m-%d").to_string();
-        assert!(d.bootstrap("chat:7").unwrap().iter().all(|e| e.line().contains(&format!(", saved {today}]"))));
+        assert!(d.bootstrap("chat:7", 0).unwrap().iter().all(|e| e.line().contains(&format!(", saved {today}]"))));
     }
 
     #[test]
@@ -3595,7 +4119,7 @@ mod tests {
             d.store(s, "convention", &format!("Rule {i}"), &long, "", None).unwrap();
         }
         let short = d.store(s, "convention", "Tone", "Be brief", "", None).unwrap();
-        let b = d.bootstrap(s).unwrap();
+        let b = d.bootstrap(s, 0).unwrap();
         let size: usize = b.iter().map(|e| e.line().len()).sum();
         assert_eq!(b[0].id, pin, "pinned first, always");
         assert!(size <= BOOTSTRAP_CHARS, "{size}");
@@ -3899,6 +4423,47 @@ mod tests {
         assert!(d.routine_update(7, r.id, "nonsense", "x", false, false).is_err());
         assert!(!d.routine_delete(8, r.id).unwrap(), "other chat can't delete");
         assert!(d.routine_delete(7, r.id).unwrap());
+        // Timed off the calendar: it waits until the scheduler has read the calendar, and only where it's private.
+        assert!(d.routine_create(2, 7, "calendar:60:outside", "brief me", false).unwrap_err().to_string().contains("private"));
+        let c = d.routine_create(2, crate::host::LOCAL_CHAT, "calendar:60:outside", "brief me", false).unwrap();
+        assert_eq!(c.next_fire, IDLE);
+        assert!(d.routine_create(2, crate::host::LOCAL_CHAT, "calendar:60:all", "x", false).is_err());
+        assert_eq!(d.calendar_routines(2, now()).unwrap().len(), 1);
+        d.routine_set_next(c.id, now() + 60).unwrap();
+        assert!(d.due(2, now() + 60).unwrap().iter().any(|r| r.id == c.id));
+        d.routine_advance(&d.routines(crate::host::LOCAL_CHAT).unwrap()[0]).unwrap();
+        assert_eq!(d.routines(crate::host::LOCAL_CHAT).unwrap()[0].next_fire, IDLE, "the next event is the scheduler's to find");
+    }
+
+    #[test]
+    fn pause_and_resume() {
+        let d = db();
+        let r = d.routine_create(2, 7, "0 9 * * *", "brief", false).unwrap();
+        let o = d.routine_once(2, 7, now() + 600, "call mum", false).unwrap();
+        let other = d.routine_create(3, 7, "0 9 * * *", "news", false).unwrap();
+        // Slots came due while it was paused.
+        d.c().execute("UPDATE routines SET next_fire=?1", [now() - 3 * 86400]).unwrap();
+        d.pause_set(Some(2), 0).unwrap();
+        assert_eq!(d.paused(2, now()).unwrap(), Some(0), "until resumed");
+        assert_eq!(d.paused(3, now()).unwrap(), None, "only that bot");
+        // Everyone's pause on top: the later end wins (0 = no end).
+        d.pause_set(None, now() + 600).unwrap();
+        assert_eq!(d.paused(2, now()).unwrap(), Some(0));
+        assert_eq!(d.paused(3, now()).unwrap(), Some(now() + 600));
+        assert_eq!(d.pauses(now()).unwrap().len(), 2);
+        // Resumed: the routine moves on to its next time instead of catching up (or showing as missed); the
+        // one-off still runs once. The other bot is still held by everyone's pause.
+        d.pause_end(Some(2)).unwrap();
+        assert_eq!(d.paused(2, now()).unwrap(), Some(now() + 600));
+        let due: Vec<i64> = d.due(2, now()).unwrap().iter().map(|x| x.id).collect();
+        assert_eq!(due, vec![o.id]);
+        assert!(d.routines(7).unwrap().iter().any(|x| x.id == r.id && x.next_fire > now()));
+        assert!(d.routine_missed(&d.routines(7).unwrap().into_iter().find(|x| x.id == r.id).unwrap(), now(), ASLEEP).unwrap().is_none());
+        // A timed pause whose time has come ends by itself, the same way.
+        d.pause_set(None, now() - 1).unwrap();
+        assert_eq!(d.paused(3, now()).unwrap(), None);
+        assert!(d.pauses(now()).unwrap().is_empty());
+        assert!(d.routines(7).unwrap().iter().any(|x| x.id == other.id && x.next_fire > now()));
     }
 
     #[test]

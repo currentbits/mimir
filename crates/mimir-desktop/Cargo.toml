@@ -1,6 +1,6 @@
 [package]
 name = "mimir-desktop"
-version = "0.1.5"
+version.workspace = true
 edition = "2024"
 license = "AGPL-3.0-only"
 
@@ -9,10 +9,12 @@ license = "AGPL-3.0-only"
 arboard = { version = "3", default-features = false }
 dirs = "6"
 anyhow = "1.0.104"
-mimir-core = { version = "0.1.5", path = "../mimir-core", features = ["local-whisper"] }
+mimir-core = { path = "../mimir-core", features = ["local-whisper"] }
 # Meeting transcription: the microphone (everywhere) and, on macOS, the computer's own sound.
 cpal = "0.18"
 serde = { version = "1", features = ["derive"] }
+# A database that can't open is shown in a dialog before Tauri starts (GTK on Linux, which Tauri already uses).
+rfd = { version = "0.17", default-features = false, features = ["gtk3"] }
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 serde_json = "1.0.151"
 tauri = { version = "2", features = ["image-png", "macos-private-api", "tray-icon"] }
@@ -27,7 +29,7 @@ tauri-plugin-updater = "2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Apple GPU for whisper.cpp.
-mimir-core = { version = "0.1.5", path = "../mimir-core", features = ["local-whisper", "metal", "diarize"] }
+mimir-core = { path = "../mimir-core", features = ["local-whisper", "metal", "diarize"] }
 screencapturekit = "11"
 libc = "0.2"
 objc2-core-audio = { version = "0.3", default-features = false, features = ["std", "AudioHardware", "objc2", "objc2-foundation", "objc2-core-audio-types"] }
@@ -42,9 +44,9 @@ tauri-build = { version = "2", features = [] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Telling speakers apart on Linux: sherpa-onnx's shared libraries, downloaded on first use (it has no static Linux build).
-mimir-core = { version = "0.1.5", path = "../mimir-core", features = ["local-whisper", "diarize-dl"] }
+mimir-core = { path = "../mimir-core", features = ["local-whisper", "diarize-dl"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-registry = "0.6"
 # Telling speakers apart (sherpa-onnx, linked in).
-mimir-core = { version = "0.1.5", path = "../mimir-core", features = ["local-whisper", "diarize"] }
+mimir-core = { path = "../mimir-core", features = ["local-whisper", "diarize"] }
