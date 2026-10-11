@@ -1,6 +1,6 @@
 # Mimir
 
-A free app that runs AI assistants for you, on **your own** AI subscription (Claude, ChatGPT/Codex, Grok, or any API
+A free app that runs AI assistants for you, on **your own** AI subscription (Claude, ChatGPT, Grok, or any API
 key). You message them in Telegram, Slack, Discord or the desktop app; they remember you, work on a schedule, use your
 email, calendar and the web, and ask before they act. Mimir has no AI and no servers of its own. Website:
 [heymimir.app](https://heymimir.app).

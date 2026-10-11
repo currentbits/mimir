@@ -347,6 +347,17 @@ pub fn specs() -> Vec<(&'static str, &'static str, Value)> {
             },"required":["steps","actions"]}),
         ),
         (
+            "ask_choice",
+            "Ask the person one question with 2 to 4 short answers they can tap instead of typing (which time, which \
+             option, yes or no). The question and its buttons show under your reply, with \"Something else\" for anything \
+             else, and their tap comes back as their next message. So end your reply after this, without repeating the \
+             question or the options. It's not an OK for an action: a tool that needs one asks with its own card.",
+            json!({"type":"object","properties":{
+                "question":{"type":"string"},
+                "options":{"type":"array","items":{"type":"string"},"minItems":2,"maxItems":4,"description":"short answers, a few words each"}
+            },"required":["question","options"]}),
+        ),
+        (
             "skill_save",
             concat!(
                 "Save how you just did a task as a reusable skill, when the person asks you to (\"save that as a skill\", \
@@ -445,6 +456,11 @@ pub fn specs() -> Vec<(&'static str, &'static str, Value)> {
     ]
 }
 
+/// Where ask_choice leaves its question for the reply being written in this chat.
+pub(crate) fn choice_key(bot: i64, chat: i64) -> String {
+    format!("choice:{bot}:{chat}")
+}
+
 /// How long a bot waits for the person to take over its computer.
 const HANDOFF_SECS: i64 = 600;
 
@@ -479,9 +495,9 @@ fn is_read_only(db: &Db, tool: &str) -> bool {
 /// What a bot may do in a guest's chat: their own memory, routines, files and skills, the web, and calendar links.
 /// Nothing of yours (email, calendar, meetings, saved logins and the browser, tool servers, the computer), and no new
 /// bots in your app.
-const GUEST_TOOLS: [&str; 19] = [
+const GUEST_TOOLS: [&str; 20] = [
     "memory_store", "memory_search", "memory_forget", "chat_search", "routine_create", "routine_update", "routine_list", "routine_delete", "web_fetch", "web_search",
-    "file_list", "file_read", "file_write", "file_delete", "skill_view", "skill_save", "calendar_add", "plan_propose", "ask_bot",
+    "file_list", "file_read", "file_write", "file_delete", "skill_view", "skill_save", "calendar_add", "plan_propose", "ask_bot", "ask_choice",
 ];
 
 fn usable(ctx: &ToolCtx, tool: &str) -> bool {
@@ -495,6 +511,8 @@ fn usable(ctx: &ToolCtx, tool: &str) -> bool {
         // Bots are made only in a conversation with the person (not by a bot working on another's task, nor incognito,
         // where nothing it makes may last).
         && (tool != "bot_create" || (ctx.depth == 0 && !ctx.incognito()))
+        // Buttons need someone to tap them in a messaging app: not a routine, not another bot's task, not the app's chat.
+        && (tool != "ask_choice" || (!ctx.unattended && ctx.depth == 0 && ctx.db.chat_address(ctx.chat_id).ok().flatten().is_some()))
         // Meetings only once there are some (this computer's, or the server's).
         // Meetings are private to you: not in a group, channel or server, where the reply goes to everyone there.
         && (!tool.starts_with("meeting_") || (ctx.db.has_meetings() && ctx.db.chat_private(ctx.chat_id)))
@@ -662,7 +680,8 @@ fn gate(db: &Db, tool: &str, site: Option<&str>, tainted: bool) -> Result<(Strin
     // The browser's and the computer's own actions read pages by nature: they're gated per site, not guarded.
     let browser = crate::ext::split(tool).is_some_and(|(s, _)| s == crate::ext::BROWSER) || tool.starts_with("computer_");
     // plan_propose only ever asks (and refuses on its own after outside content), so asking first would be a double ask.
-    Ok(if action == "allow" && tainted && !is_read_only(db, tool) && !browser && !matches!(tool, "plan_propose" | "skill_save") { ("ask".into(), "guarded") } else { (action, "rule") })
+    // ask_choice only shows the person buttons; what they tap is theirs to pick.
+    Ok(if action == "allow" && tainted && !is_read_only(db, tool) && !browser && !matches!(tool, "plan_propose" | "skill_save" | "ask_choice") { ("ask".into(), "guarded") } else { (action, "rule") })
 }
 
 /// After outside content, a few calls that only look like reading can carry your data out; those ask:
@@ -828,6 +847,7 @@ fn describe(ctx: &ToolCtx, name: &str, args: &Value) -> String {
             args["notes"].as_str().filter(|n| !n.trim().is_empty()).map(|n| format!(" — {n}")).unwrap_or_default()
         ),
         "routine_list" => "List routines".into(),
+        "ask_choice" => format!("Ask \"{}\" with buttons", truncate(args["question"].as_str().unwrap_or(""), 120)),
         "skill_view" => format!("Read skill \"{}\"", args["name"].as_str().unwrap_or("")),
         "skill_save" => format!("Save as a skill: {}", args["title"].as_str().unwrap_or("")),
         "computer_screenshot" => "Look at the computer's screen".into(),
@@ -1591,6 +1611,16 @@ async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
             meetings_tool(&ctx.db, name, args)?
         }
         "plan_propose" => propose_plan(ctx, args).await?,
+        "ask_choice" => {
+            let question = truncate(s(args, "question")?.trim(), 300);
+            let options: Vec<String> = args["options"].as_array().into_iter().flatten().filter_map(Value::as_str).map(|o| truncate(o.trim(), 60)).filter(|o| !o.is_empty()).collect();
+            if question.is_empty() || !(2..=4).contains(&options.len()) {
+                bail!("give a question and 2 to 4 short options");
+            }
+            // The reply's channel shows it once the reply is written (runtime::Core::choice_rows), whichever process this runs in.
+            ctx.db.set_setting(&choice_key(ctx.bot_id, ctx.chat_id), &json!({"question": question, "options": options}).to_string())?;
+            "Shown under your reply as buttons. End your reply now; their answer comes as their next message.".into()
+        }
         "computer_handoff" => {
             let reason = s(args, "reason")?.trim().to_string();
             // Let go of the computer first, so the person's clicks make it theirs.

@@ -28,6 +28,7 @@ Bots act through **tools**. Every tool call is checked against your rules before
 | `skill_view` | Read the steps of an accepted skill | allow |
 | `skill_save` | Propose a skill from what the conversation did, when you ask; you press Save ([Skills](skills.md)) | allow |
 | `plan_propose` | Propose a plan you approve once (below) | allow |
+| `ask_choice` | Ask you one question with 2 to 4 answers to tap, plus "Something else". The buttons go under the reply, and your tap is your next message. Only in Telegram, Slack and Discord chats, never in routines or another bot's task. A tap is never an approval | allow |
 | `computer_*` | Use the bots' computer, self-hosted only ([The bots' computer](computer.md)) | allow; `computer_open` **asks** |
 | `browser__*` | The headless browser, when switched on (below) | opening a page **asks** |
 | *tool servers* | Tools from MCP servers you added (below) | read-only allow, the rest **ask** |
