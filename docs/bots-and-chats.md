@@ -155,6 +155,18 @@ upload in Slack (needs the `files:write` scope), an attachment on Discord (invit
 the app's chat, shown in place. In your own direct chat it just goes; in a group, channel or guest's chat it asks you
 first. At most 5 files with one reply.
 
+## Pinned cards
+
+A bot can keep a card pinned at the top of a chat in the app, for things you come back to: a shopping list, bills due,
+a project's state. It's quieter than a message. Ask ("add oat milk to my shopping list") and the bot rewrites the card
+with `card_write`; a routine can update one on each run instead of messaging you (Routines → Send it → *Update a
+card*). In Telegram, Slack or Discord the bot reads the card when you ask what's on it.
+
+Cards hold only text, checklists (`- [ ] item`), tables and links. Mimir refuses HTML in them, and the app never shows
+a card as HTML anyway. Tick an item and it's saved as your edit: the card shows *you* as its last change, and the bot
+sees your ticks the next time it reads or rewrites the card. Each card folds away from its title, and the bin removes
+it. A chat holds up to 20 cards.
+
 ## Incognito
 
 The mask button in the app's chat starts an incognito chat: the bot can't see or save memories, routines or meetings,

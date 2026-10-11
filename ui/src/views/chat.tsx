@@ -3,6 +3,7 @@ import { copyText, invoke, platform } from '../api'
 import { moodOf, type Mood } from '../face'
 import { ago, ahead, dayLabel, fullTime, IDLE, pigment, schedule } from '../format'
 import { Markdown, SentFile, splitSent } from '../markdown'
+import { PinnedCards } from './cards'
 import { ask, tell, Avatar, Empty, Icon } from '../ui'
 import { failure } from './inbox'
 import { Editor } from './memory'
@@ -213,7 +214,7 @@ function RoutineCard({ id, chatId, onChange }: { id: number; chatId: number; onC
       <div className="rc-head">
         <span className={'ri' + (r.quiet ? ' quiet' : '')}><Icon name={r.quiet ? 'moon' : 'clock'} size={15} /></span>
         <div className="rc-main">
-          <div className="rt">{when(r)}{r.quiet && <span className="badge pending">Quiet</span>}{(r.paused || held !== undefined) && <span className="badge">Paused</span>}{r.delivery === 'digest' && <span className="badge">In digest</span>}{r.delivery === 'log' && <span className="badge">Log only</span>}</div>
+          <div className="rt">{when(r)}{r.quiet && <span className="badge pending">Quiet</span>}{(r.paused || held !== undefined) && <span className="badge">Paused</span>}{r.delivery === 'digest' && <span className="badge">In digest</span>}{r.delivery === 'log' && <span className="badge">Log only</span>}{r.delivery === 'card' && <span className="badge">On a card</span>}</div>
           <div className="rp selectable">{r.prompt}</div>
           <div className="rm">{r.paused ? 'Paused' : held !== undefined ? `${pausedText(held)} with its bot` : r.next_fire >= IDLE ? 'Runs when a matching event is on the calendar' : `Next run ${ahead(r.next_fire)}`} · change it any time in Routines</div>
         </div>
@@ -569,6 +570,7 @@ export function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, 
   return (
     <div className="page view-in" ref={scroller} onScroll={onScroll}>
       <div className="chat">
+        {!incognito && <PinnedCards chatId={chat.chat_id} botId={mine} botName={id => botOf(id).name} />}
         {!incognito && (msgs.length > 0 || hasEarlier) && (
           <div className="chat-search">
             <label className="search"><Icon name="search" size={14} />
