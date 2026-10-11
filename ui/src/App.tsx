@@ -2,7 +2,7 @@ import { copyText, inDesktop, insecureServer, invoke, saveDownload, keystore, lo
 import { createContext, Fragment, useCallback, useMemo, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ask, askText, AskHost, tell, Avatar, Empty, Group, Icon, Row, Segmented, Switch, type Presence } from './ui'
 import { ago, ahead, dayLabel, fullDay, fullTime, pigment, PIGMENTS, schedule, setLooks, tok, usd, type Look } from './format'
-import { Markdown, openLink } from './markdown'
+import { Markdown, openLink, SentFile, splitSent } from './markdown'
 import { moodOf, type Mood } from './face'
 import { EXTRAS, EYES, SHAPES, traits } from './face-core'
 
@@ -148,7 +148,7 @@ function HandoffCard({ runId }: { runId: number }) {
         <div className="rc-head"><Avatar id={b.id} name={b.name} size={26} {...(run.status === 'error' ? { mood: 'sad' as const, still: true } : run.ended_at ? { still: true } : { mood: 'thinking' as const })} />
           <div><b>{b.name}</b> <small className="hint">{run.status === 'error' ? 'didn’t finish' : run.ended_at ? `took ${run.ended_at - run.started_at}s` : 'working…'}{run.model ? ` · ${run.model}` : ''}</small></div></div>
         {steps.length > 0 && <ol className="run-steps">{steps.map(s => <li key={s.id} className={s.ok ? 'ok' : 'failed'}><Icon name={s.ok ? 'check' : 'x'} size={11} />{s.summary}</li>)}</ol>}
-        {run.reply ? <div className="msg-body selectable"><Markdown text={run.reply.length > 1500 ? run.reply.slice(0, 1500) + '…' : run.reply} /></div>
+        {run.reply ? <div className="msg-body selectable"><Markdown text={(r => r.length > 1500 ? r.slice(0, 1500) + '…' : r)(splitSent(run.reply)[0])} /></div>
           : run.error ? <p className="error" style={{ margin: 0 }}>{run.error}</p> : null}
       </div>
     )
@@ -284,6 +284,7 @@ type Approval = { id: number; bot_id: number; chat_id: number; tool: string; sum
 function approvalRisk(a: Approval): { icon: string; label: string; tone: string; always: boolean } {
   if (a.kind === 'takeover') return { icon: 'laptop', label: 'A step only you should do. Take over on the live screen, then press Give back; the bot carries on.', tone: 'login', always: false }
   if (a.kind === 'login') return { icon: 'key', label: 'Types a saved login. Every use asks you.', tone: 'login', always: false }
+  if (a.kind === 'send' && a.tool === 'send_file') return { icon: 'send', label: 'Sends a file where others see it (a group, or a guest\'s chat). Every file there asks you.', tone: 'rule', always: false }
   if (a.kind === 'send') return { icon: 'send', label: 'Sends an email as you, to the address shown first. Every email asks you.', tone: 'rule', always: false }
   if (a.kind === 'bot') return { icon: 'user', label: 'Makes a new bot with this role, on the same AI account. Every new bot asks you.', tone: 'rule', always: false }
   if (a.kind === 'plan') return { icon: 'check', label: 'One OK for the whole plan: these steps won\'t ask again during this reply.', tone: 'rule', always: false }
@@ -1429,12 +1430,14 @@ function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, openBot
     )
     if (m.role === 'user') return <div className={'msg-user' + anim(m)} title={fullTime(m.ts)}><Said text={m.content} /></div>
     const b = botOf(m.bot_id)
+    const [text, files] = splitSent(m.content)
     return (
       <div className={'msg-bot' + anim(m)} style={{ '--pig': pigment(b.id) } as React.CSSProperties}>
         <Avatar id={b.id} name={b.name} size={26} still />
         <div>
-          <div className="msg-head"><b>{b.name}</b><time title={fullTime(m.ts)}>{ago(m.ts)}</time><CopyButton text={m.content} /></div>
-          <div className="msg-body"><Markdown text={m.content} /></div>
+          <div className="msg-head"><b>{b.name}</b><time title={fullTime(m.ts)}>{ago(m.ts)}</time><CopyButton text={text} /></div>
+          {text && <div className="msg-body"><Markdown text={text} /></div>}
+          {files.map(f => <SentFile key={f} chatId={chat.chat_id} name={f} />)}
           {m.actions && <Actions actions={m.actions} chatId={chat.chat_id} runId={m.run_id} onChange={() => { log.reload(); onTurn() }} />}
         </div>
       </div>
@@ -2696,12 +2699,12 @@ function BotPage({ bot, status, canDelete, onSaved, onDeleted, onChat }: {
           <input className="input" type="password" aria-label="Telegram bot token" placeholder="123456:ABC…" value={typed('telegram_token')} onChange={e => type('telegram_token', e.target.value)} autoComplete="off" />
         </ChannelRow>
         <ChannelRow icon="slack" title="Slack" st={chan('slack')} has={has('has_slack')} onRemove={() => save({ ...NO_SECRETS, slack_bot_token: '', slack_app_token: '' })}
-          hint="Create a Slack app with Socket Mode and Interactivity on; scopes chat:write, im:history, app_mentions:read, files:read, channels:history, groups:history; events message.im and app_mention (add message.channels and message.groups so it follows a thread without another @-mention).">
+          hint="Create a Slack app with Socket Mode and Interactivity on; scopes chat:write, im:history, app_mentions:read, files:read, files:write, channels:history, groups:history; events message.im and app_mention (add message.channels and message.groups so it follows a thread without another @-mention).">
           <input className="input" type="password" aria-label="Slack bot token" placeholder="Bot token (xoxb-…)" value={typed('slack_bot_token')} onChange={e => type('slack_bot_token', e.target.value)} autoComplete="off" />
           <input className="input" type="password" aria-label="Slack app-level token" placeholder="App-level token (xapp-…)" value={typed('slack_app_token')} onChange={e => type('slack_app_token', e.target.value)} autoComplete="off" />
         </ChannelRow>
         <ChannelRow icon="discord" title="Discord" st={chan('discord')} has={has('has_discord')} onRemove={() => save({ ...NO_SECRETS, discord_token: '' })}
-          hint="In the Discord Developer Portal, create a bot, turn on Message Content Intent, and invite it with Send Messages.">
+          hint="In the Discord Developer Portal, create a bot, turn on Message Content Intent, and invite it with Send Messages and Attach Files.">
           <input className="input" type="password" aria-label="Discord bot token" placeholder="Bot token" value={typed('discord_token')} onChange={e => type('discord_token', e.target.value)} autoComplete="off" />
         </ChannelRow>
       </Group>

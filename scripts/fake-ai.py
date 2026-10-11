@@ -9,6 +9,7 @@ replies "DONE <tool>: <the tool's result>":
 
     ASK SEARCH → ask_bot    MAKE BOT → bot_create    ROUTINE → routine_create    REMEMBER → memory_store
     FORGET <n> → memory_forget(n)    FILE → file_write    LIST FILES → file_list    DELETE ROUTINE <n> → routine_delete(n)
+    SEND FILE → send_file(notes/trip.md)
 
 Anything else gets "OK: <your message>". A message with SLOW in it is answered after 3 seconds (any bot), for
 switching away mid-reply. Each request is logged to stdout.
@@ -31,6 +32,7 @@ SCRIPT = [
     ("REMEMBER", "memory_store", lambda m: {"type": "knowledge", "title": "Dentist", "body": "Dr. Lee in Stellenbosch", "source": "user said"}),
     ("FORGET", "memory_forget", lambda m: {"id": int(re.search(r"FORGET (\d+)", m).group(1))}),
     ("LIST FILES", "file_list", lambda m: {}),
+    ("SEND FILE", "send_file", lambda m: {"path": "notes/trip.md"}),
     ("FILE", "file_write", lambda m: {"path": "notes/trip.md", "content": "- passport\n", "mode": "create"}),
 ]
 

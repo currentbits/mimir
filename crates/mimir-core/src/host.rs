@@ -512,6 +512,12 @@ impl Host {
             "files" => ok(crate::files::list(&self.db, arg(a, "chat_id")?, "")?.into_iter().map(|(path, size)| json!({"path": path, "size": size})).collect::<Vec<_>>()),
             "file" => ok(crate::files::read(&self.db, arg(a, "chat_id")?, &arg::<String>(a, "path")?)?.0),
             "delete_file" => ok(crate::files::delete(&self.db, arg(a, "chat_id")?, &arg::<String>(a, "path")?)?),
+            // A file a bot sent to the chat ([[file:…]] in its reply), as base64, to show or save.
+            "sent_file" => {
+                use base64::Engine;
+                let (path, name) = crate::files::sent_path(&self.home, arg(a, "chat_id")?, &arg::<String>(a, "name")?).context("that file is gone (sent files are kept 60 days)")?;
+                ok(json!({"name": name, "data": base64::engine::general_purpose::STANDARD.encode(std::fs::read(path)?)}))
+            }
             // Mimir's skill library for a chat: each skill, which bots there already have it, and per bot the tools it
             // needs that the bot can't use here (a calendar not linked, a tool off for that bot…).
             "skill_library" => {

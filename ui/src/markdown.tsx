@@ -1,9 +1,9 @@
 // A small Markdown renderer for bot replies. Builds React elements (never raw HTML), so a reply
 // can't inject markup. Covers what chat models actually write: paragraphs, lists, headings,
 // quotes, code, bold/italic, links.
-import { tell } from './ui'
-import type { ReactNode } from 'react'
-import { inDesktop, localInvoke } from './api'
+import { Icon, tell } from './ui'
+import { useEffect, useState, type ReactNode } from 'react'
+import { inDesktop, invoke, localInvoke, saveDownload } from './api'
 
 type Block =
   | { kind: 'p' | 'h' | 'quote'; text: string }
@@ -107,4 +107,31 @@ export function Markdown({ text, caret }: { text: string; caret?: boolean }) {
       {caret && bs.length === 0 && <span className="caret" />}
     </div>
   )
+}
+
+const SENT = /^\s*\[\[file:([^\]]+)\]\]\s*$/
+
+/** A reply's text without the `[[file:…]]` lines for files the bot sent, and their names. */
+export function splitSent(text: string): [string, string[]] {
+  const files: string[] = []
+  const kept = text.split('\n').filter(l => { const m = l.match(SENT); if (m) files.push(m[1]); return !m })
+  return [kept.join('\n').trimEnd(), files]
+}
+
+/** A file a bot sent to the chat: a photo shown in place, anything else a chip that saves it. */
+export function SentFile({ chatId, name }: { chatId: number; name: string }) {
+  const [file, setFile] = useState<{ name: string; data: string } | null>(null)
+  const [gone, setGone] = useState(false)
+  useEffect(() => { invoke<{ name: string; data: string }>('sent_file', { chatId, name }).then(setFile, () => setGone(true)) }, [chatId, name])
+  const shown = file?.name ?? name.replace(/^sent-\d+-[0-9a-f]+-/, '')
+  if (file && /\.(jpe?g|png|gif|webp)$/i.test(file.name)) {
+    const type = /\.png$/i.test(file.name) ? 'png' : /\.gif$/i.test(file.name) ? 'gif' : /\.webp$/i.test(file.name) ? 'webp' : 'jpeg'
+    return <img className="sent-photo" src={`data:image/${type};base64,${file.data}`} alt={shown} />
+  }
+  const save = () => {
+    if (!file) return
+    const text = new TextDecoder().decode(Uint8Array.from(atob(file.data), c => c.charCodeAt(0)))
+    saveDownload(file.name, text, 'text/plain').then(where => tell(`Saved ${file.name} to ${where}.`), e => tell(`Couldn't save it: ${e}`))
+  }
+  return <button className="btn sent-file" disabled={!file} onClick={save} title={gone ? 'This file is gone (sent files are kept 60 days)' : 'Save'}><Icon name="file" size={14} />{shown}</button>
 }

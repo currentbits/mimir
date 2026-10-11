@@ -1,6 +1,6 @@
 //! Slack via Socket Mode (outbound WebSocket, no public URL needed).
 //! App setup: enable Socket Mode, create an app-level token (connections:write), bot scopes
-//! chat:write, im:history, app_mentions:read, files:read (+ channels:history, groups:history to catch up channel
+//! chat:write, im:history, app_mentions:read, files:read, files:write (+ channels:history, groups:history to catch up channel
 //! mentions sent while Mimir was off); subscribe to message.im and app_mention events (+ message.channels and
 //! message.groups, so the bot follows a thread it was mentioned in without another @-mention);
 //! enable Interactivity (for Approve/Deny buttons).
@@ -74,6 +74,22 @@ impl Slack {
             body["thread_ts"] = json!(ts);
         }
         body
+    }
+
+    /// A file the bot sends (needs the files:write scope): Slack's two-step upload, into the same thread as a reply.
+    pub(crate) async fn upload(&self, channel: &str, name: &str, bytes: Vec<u8>) -> Result<()> {
+        let len = bytes.len().to_string();
+        let v: Value = self.http.post(url::Url::parse_with_params("https://slack.com/api/files.getUploadURLExternal", [("filename", name), ("length", &len)])?).bearer_auth(&self.bot_token).send().await?.json().await?;
+        let (Some(url), Some(id)) = (v["upload_url"].as_str(), v["file_id"].as_str()) else {
+            bail!("slack files.getUploadURLExternal: {}", v["error"].as_str().unwrap_or("unknown error"));
+        };
+        self.http.post(url).body(bytes).send().await?.error_for_status()?;
+        let mut done = json!({"files": [{"id": id, "title": name}], "channel_id": channel});
+        if let Some(ts) = self.post(channel, json!({})).get("thread_ts") {
+            done["thread_ts"] = ts.clone();
+        }
+        self.api("files.completeUploadExternal", &self.bot_token, done).await?;
+        Ok(())
     }
 
     pub(crate) async fn send(&self, channel: &str, text: &str) -> Result<()> {

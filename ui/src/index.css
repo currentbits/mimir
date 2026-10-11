@@ -335,6 +335,8 @@ a { color: inherit; }
 .msg-head b { font-size: 12.5px; font-weight: 650; color: var(--pig, var(--text)); }
 .msg-head time { font-size: 11px; color: var(--text-3); }
 .msg-body { font-size: 14px; line-height: 1.6; word-wrap: break-word; }
+.sent-photo { display: block; max-width: min(100%, 420px); margin-top: 8px; border-radius: 8px; border: 1px solid var(--line); }
+.sent-file { display: inline-flex; align-items: center; gap: 6px; margin: 8px 6px 0 0; }
 .md > :first-child { margin-top: 0; }
 .md > :last-child { margin-bottom: 0; }
 .md p { margin: 0 0 0.65em; }

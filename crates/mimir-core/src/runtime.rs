@@ -114,6 +114,25 @@ impl Chan {
         }
     }
 
+    /// The files a reply named (`[[file:…]]` lines), uploaded after its text; one that fails is said in the chat.
+    async fn attach(&self, ext: &str, db: &Db, chat: i64, files: &[String]) {
+        for f in files {
+            let Some((path, name)) = crate::files::sent_path(&db.dir(), chat, f) else { continue };
+            let r = match std::fs::read(&path) {
+                Ok(bytes) => match self {
+                    Chan::Telegram(c) => c.upload(ext, &name, bytes).await,
+                    Chan::Slack(c) => c.upload(ext, &name, bytes).await,
+                    Chan::Discord(c) => c.upload(ext, &name, bytes).await,
+                },
+                Err(e) => Err(e.into()),
+            };
+            if let Err(e) = r {
+                eprintln!("{} upload to {ext} failed: {e:#}", self.kind());
+                self.send(ext, &format!("I couldn't attach {name} ({}).", crate::tools::truncate(&format!("{e:#}"), 200))).await;
+            }
+        }
+    }
+
     /// Stream a reply into one message: post the draft once text arrives, then edit it as it grows.
     fn follow(&self, bot: i64, chat_id: i64, ext: &str) -> Follower {
         let (chan, ext, stop) = (self.clone(), ext.to_string(), Arc::new(Notify::new()));
@@ -803,7 +822,9 @@ impl Core {
                         None => reply,
                     };
                     let draft = follower.finish().await;
-                    chan.finish(&ext, draft, &reply).await;
+                    let (reply, files) = crate::files::split_sent(&reply);
+                    chan.finish(&ext, draft, if reply.trim().is_empty() && !files.is_empty() { "📎" } else { &reply }).await;
+                    chan.attach(&ext, &core.db, chat, &files).await;
                 });
             }
         }
@@ -879,20 +900,25 @@ impl Core {
             }
             let routines = self.db.routines(chat)?;
             let mut msg = String::from(if mine.is_empty() { "☀️ **All quiet**\n" } else { "☀️ **Your digest**\n" });
+            let mut files = vec![];
             for (_, _, rid, text, _) in &mine {
                 let when = routines.iter().find(|r| Some(r.id) == *rid).map(|r| crate::tools::truncate(&r.prompt, 60)).unwrap_or_else(|| "A routine".into());
+                let (text, sent) = crate::files::split_sent(text);
+                files.extend(sent);
                 msg.push_str(&format!("\n**{when}**\n{}\n", crate::tools::truncate(text.trim(), 700)));
             }
             if quiet > 0 {
                 msg.push_str(&format!("\n{quiet} quiet {} ran; nothing needed you.", if quiet == 1 { "check" } else { "checks" }));
             }
-            self.db.log(self.bot, chat, "assistant", &msg, None)?;
+            let lines: String = files.iter().map(|f| format!("\n{}{f}]]", crate::files::SENT_MARK)).collect();
+            self.db.log(self.bot, chat, "assistant", &format!("{msg}{lines}"), None)?;
             // What routines found on the web is outside content in this conversation too.
             if mine.iter().any(|i| i.4) {
                 self.db.conv_taint(self.bot, chat)?;
             }
             if let Some((c, ext)) = Self::chan_for(chans, chat, &self.db) {
                 c.send(&ext, &msg).await;
+                c.attach(&ext, &self.db, chat, &files).await;
             }
             self.db.digest_mark_sent(&mine.iter().map(|i| i.0).collect::<Vec<_>>())?;
         }
@@ -1067,8 +1093,11 @@ impl Core {
             ("digest", _) => "in the digest".to_string(),
             ("log", _) => "only in the log".to_string(),
             (_, None) => "in the app".to_string(),
-            (_, Some((c, ext))) => match c.deliver(ext, &text).await {
-                Ok(()) => format!("sent to {}", c.kind()),
+            (_, Some((c, ext))) => match c.deliver(ext, &crate::files::split_sent(&text).0).await {
+                Ok(()) => {
+                    c.attach(ext, &self.db, r.chat_id, &crate::files::split_sent(&text).1).await;
+                    format!("sent to {}", c.kind())
+                }
                 Err(e) => format!("{} to {}: {}", crate::db::NOT_SENT, c.kind(), crate::tools::truncate(&format!("{e:#}"), 200)),
             },
         };

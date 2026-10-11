@@ -415,6 +415,12 @@ async fn read_pdf_apart(exe: &std::path::Path, bytes: Vec<u8>) -> anyhow::Result
     tokio::time::timeout(std::time::Duration::from_secs(60), work).await.map_err(|_| anyhow::anyhow!("couldn't read that PDF in time"))?
 }
 
+/// A file sent as a photo (shown in place) rather than a document.
+pub fn is_photo(name: &str) -> bool {
+    let n = name.to_lowercase();
+    [".jpg", ".jpeg", ".png", ".gif", ".webp"].iter().any(|e| n.ends_with(e))
+}
+
 /// A file whose text a bot can read: a PDF or a plain-text file (by type or name).
 pub fn readable_document(name: &str, mime: &str) -> bool {
     let lower = name.to_lowercase();
@@ -742,6 +748,10 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
     // A quiet check that found nothing stays silent: no message, no conversation entry (the run log has it).
     if quiet && is_nothing(&reply.text) {
         return Ok((String::new(), reply.usage));
+    }
+    // Files it sent go at the end, as [[file:…]] lines: the chat apps upload them, the app shows them.
+    if let Some(run) = ctx.run_id {
+        reply.text.push_str(&files::sent_lines(&ctx.db, run));
     }
     match &trigger {
         Trigger::Delegated { .. } => {}
