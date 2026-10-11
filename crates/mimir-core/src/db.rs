@@ -444,7 +444,7 @@ PRAGMA secure_delete=ON;
 
 /// The schema version this build writes (`PRAGMA user_version`). A schema change bumps it and adds a step to
 /// `migrate`; each step runs once per database.
-const VERSION: i64 = 1;
+const VERSION: i64 = 2;
 
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS entries(
@@ -644,6 +644,9 @@ fn migrate(c: &Connection) -> Result<()> {
     if v < 1 {
         migrate_v1(c)?;
     }
+    if v < 2 {
+        migrate_v2(c)?;
+    }
     c.execute(
         "INSERT INTO settings(key, value) VALUES ('schema_written_by', ?1) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
         [env!("CARGO_PKG_VERSION")],
@@ -807,6 +810,15 @@ fn migrate_v1(c: &Connection) -> Result<()> {
     c.execute_batch(
         "INSERT OR IGNORE INTO sessions(bot_id, chat_id, session) SELECT 1, chat_id, claude_session FROM chats WHERE claude_session IS NOT NULL;
          UPDATE chats SET claude_session = NULL WHERE claude_session IS NOT NULL;",
+    )?;
+    Ok(())
+}
+
+/// Version 2: indexes for the messages poll (a chat's actions since a run) and a chat's latest messages.
+fn migrate_v2(c: &Connection) -> Result<()> {
+    c.execute_batch(
+        "CREATE INDEX IF NOT EXISTS tool_calls_chat ON tool_calls(chat_id, run_id);
+         CREATE INDEX IF NOT EXISTS messages_chat ON messages(chat_id, id);",
     )?;
     Ok(())
 }
@@ -3287,6 +3299,13 @@ mod tests {
         let mut kept: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().filter_map(|e| e.file_name().into_string().ok()).filter(|n| n.contains(".before-")).collect();
         kept.sort();
         assert_eq!(kept, vec!["mimir.db.before--1".to_string(), format!("mimir.db.before-{VERSION}")]);
+
+        // Version 1 → 2 adds the indexes.
+        Connection::open(&p).unwrap().execute_batch("DROP INDEX tool_calls_chat; DROP INDEX messages_chat; PRAGMA user_version = 1").unwrap();
+        let d = Db::open(&p).unwrap();
+        let n: i64 = d.c().query_row("SELECT count(*) FROM sqlite_master WHERE name IN ('tool_calls_chat', 'messages_chat')", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 2);
+        drop(d);
 
         // Written by a newer Mimir: refused, untouched.
         Connection::open(&p).unwrap().execute_batch("PRAGMA user_version = 99; UPDATE settings SET value='9.9.9' WHERE key='schema_written_by'").unwrap();
