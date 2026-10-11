@@ -148,7 +148,7 @@ mod tests {
         assert!(f.contains("nothing was sent") && f.contains(NO_REMINDER) && f.contains("\"set it\""), "{f}");
         assert!(!f.contains('✓'), "a parked call is no receipt: {f}");
         let reminded = call("routine_create", "Once at 2026-10-17 09:00: call mum", "allow", true, "routine #4 created");
-        assert_eq!(footer(&[reminded.clone()], "", "I'll remind you on Friday.", false), "");
+        assert_eq!(footer(std::slice::from_ref(&reminded), "", "I'll remind you on Friday.", false), "");
         assert_eq!(footer(&[reminded], "", "I'll remind you on Friday.", true), "✓ Reminder set for 2026-10-17 09:00");
         let routine = call("routine_create", "Create routine [0 8 * * *] Brief me on tech news", "allow", true, "routine #5 created");
         assert_eq!(footer(&[routine], "", "Done.", true), "✓ Routine set: Brief me on tech news");
