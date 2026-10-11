@@ -1221,8 +1221,7 @@ impl Core {
             r.delivery = "digest".into();
         }
         // Over a daily cap: pause (it stays due, so it runs once when the day's over) and ask, in Needs you.
-        let day_start = chrono::Local::now().date_naive().and_hms_opt(0, 0, 0).and_then(|t| chrono::TimeZone::from_local_datetime(&chrono::Local, &t).earliest()).map_or(0, |t| t.timestamp());
-        if let Some((key, h)) = self.db.over_cap(&r, day_start)? {
+        if let Some((key, h)) = self.db.over_cap(&r, crate::day_start())? {
             let said = format!("⏸ Paused until tomorrow: {}. You can let it go on today in Mimir's Needs you.", h.why);
             self.db.hold_set(&key, &h)?;
             if let Some((c, ext)) = Self::chan_for(chans, r.chat_id, &self.db).filter(|_| r.delivery == "now") {
@@ -1336,7 +1335,9 @@ impl Core {
         if text.trim().is_empty() {
             return Ok(());
         }
-        let how = match (r.delivery.as_str(), &target) {
+        // Matched the person's "come through right away if …" (within the day's cap): sent now, whatever its lane.
+        let urgent = run.map(|run| self.db.run_urgent(run)).transpose()?.unwrap_or(false);
+        let how = match (if urgent { "now" } else { r.delivery.as_str() }, &target) {
             ("digest", _) => "in the digest".to_string(),
             ("log", _) => "only in the log".to_string(),
             (_, None) => "in the app".to_string(),
