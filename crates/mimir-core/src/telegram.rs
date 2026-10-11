@@ -2,7 +2,8 @@
 // ponytail: plain reqwest, no teloxide; adopt it if we need media/inline queries
 
 use crate::db::Approval;
-use crate::runtime::{Chan, Core, Sender, Slot, card_text, parse_decision, verdict_for};
+use crate::runtime::{Chan, Core, Row, Sender, Slot, card_text, parse_decision, verdict_for};
+use crate::say::tr;
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -37,6 +38,13 @@ impl Tg {
         if matches!(method, "sendMessage" | "editMessageText") && body.get("link_preview_options").is_none() {
             body["link_preview_options"] = json!({"is_disabled": true});
         }
+        // "chat:topic" (a topic in a private chat, see `listen`): the chat, and the topic new messages go to.
+        if let Some((chat, topic)) = body["chat_id"].as_str().and_then(|c| c.split_once(':')).map(|(c, t)| (c.to_string(), t.parse::<i64>().unwrap_or(0))) {
+            body["chat_id"] = json!(chat);
+            if matches!(method, "sendMessage" | "sendMessageDraft" | "sendChatAction") {
+                body["message_thread_id"] = json!(topic);
+            }
+        }
         // The token is in the URL: errors drop it (they reach logs and the bot's status in the app).
         let v: Value = self.http.post(format!("{}/{method}", self.base)).json(&body).send().await.map_err(|e| e.without_url())?.json().await.map_err(|e| e.without_url())?;
         if v["ok"].as_bool() != Some(true) {
@@ -58,15 +66,18 @@ impl Tg {
 
     /// Markdown → Telegram HTML, split between blocks under the 4096-char cap. If Telegram
     /// rejects the markup, that piece goes out as plain text instead of being lost.
-    pub(crate) async fn send(&self, chat: &str, text: &str) -> Result<()> {
-        self.finish(chat, None, text).await
-    }
-
-    /// Final formatted reply. With a streamed draft, the draft is replaced by the first part.
-    pub(crate) async fn finish(&self, chat: &str, draft: Option<&str>, text: &str) -> Result<()> {
+    /// Markdown → Telegram HTML, split between blocks under the 4096-char cap. If Telegram rejects the markup, that piece
+    /// goes out as plain text instead of being lost. Buttons go under the last part. With a streamed draft, the draft is replaced by the first part.
+    pub(crate) async fn finish(&self, chat: &str, draft: Option<&str>, text: &str, rows: &[Row]) -> Result<()> {
         let draft = draft.and_then(|d| d.parse::<i64>().ok());
-        for (i, html) in crate::fmt::telegram(text, 3800).into_iter().enumerate() {
+        let parts = crate::fmt::telegram(text, 3800);
+        let last = parts.len().saturating_sub(1);
+        for (i, html) in parts.into_iter().enumerate() {
             let mut msg = json!({"chat_id": chat, "text": html, "parse_mode": "HTML", "link_preview_options": {"is_disabled": true}});
+            let buttons = (i == last && !rows.is_empty()).then(|| keyboard(rows));
+            if let Some(k) = &buttons {
+                msg["reply_markup"] = k.clone();
+            }
             let method = match draft.filter(|_| i == 0) {
                 Some(mid) => {
                     msg["message_id"] = json!(mid);
@@ -77,11 +88,17 @@ impl Tg {
             if self.call(method, msg.clone()).await.is_err() {
                 // Rejected markup: the same text, plain, rather than nothing.
                 let plain: Vec<char> = crate::fmt::html_to_plain(&html).chars().collect();
+                let chunks = plain.chunks(4000).count();
                 for (j, chunk) in plain.chunks(4000).enumerate() {
                     msg["text"] = json!(chunk.iter().collect::<String>());
                     msg.as_object_mut().unwrap().remove("parse_mode");
                     if j > 0 {
                         msg.as_object_mut().unwrap().remove("message_id");
+                    }
+                    // The buttons stay under the very last piece.
+                    match (&buttons, j + 1 == chunks) {
+                        (Some(k), true) => msg["reply_markup"] = k.clone(),
+                        _ => drop(msg.as_object_mut().unwrap().remove("reply_markup")),
                     }
                     self.call(if j == 0 { method } else { "sendMessage" }, msg.clone()).await?;
                 }
@@ -95,7 +112,7 @@ impl Tg {
     /// reply is then sent as a new message (`finish` sees "draft:N" isn't a message id). Groups, and any
     /// error, fall back to posting a message and editing it.
     pub(crate) async fn draft_post(&self, chat: &str, text: &str) -> Option<String> {
-        if chat.parse::<i64>().is_ok_and(|c| c > 0) {
+        if crate::db::tg_chat(chat).parse::<i64>().is_ok_and(|c| c > 0) {
             let id = crate::random_hex(4).ok().and_then(|h| u32::from_str_radix(&h, 16).ok()).map_or(1, |n| (n & 0x7fff_ffff).max(1));
             if self.draft(chat, id, text).await {
                 return Some(format!("draft:{id}"));
@@ -136,9 +153,7 @@ impl Tg {
             json!({
                 "chat_id": chat,
                 "text": card_text(a),
-                "reply_markup": {"inline_keyboard": crate::runtime::card_buttons(a).into_iter()
-                    .map(|row| row.into_iter().map(|(text, data)| json!({"text": text, "callback_data": data})).collect::<Vec<_>>())
-                    .collect::<Vec<_>>()}
+                "reply_markup": keyboard(&crate::runtime::card_buttons(a))
             }),
         )
         .await?;
@@ -151,10 +166,11 @@ impl Tg {
         slot.connected(format!("@{}", bot["username"].as_str().unwrap_or("?")));
         // The "/" menu in Telegram shows these.
         let base = json!([
-            {"command": "memory", "description": "What I remember about you"},
-            {"command": "routines", "description": "What I do on a schedule"},
-            {"command": "new", "description": "Start a fresh conversation (memories kept)"},
-            {"command": "stop", "description": "Stop the reply I'm writing"}
+            {"command": "memory", "description": tr("What I remember about you")},
+            {"command": "routines", "description": tr("What I do on a schedule")},
+            {"command": "why", "description": tr("What my last reply used")},
+            {"command": "new", "description": tr("Start a fresh conversation (memories kept)")},
+            {"command": "stop", "description": tr("Stop the reply I'm writing")}
         ]);
         let _ = self.call("setMyCommands", json!({"commands": base})).await;
         // Each chat's menu also lists the bot's skills there ("/book_padel"), refreshed every 10 minutes when it changed.
@@ -198,7 +214,8 @@ impl Tg {
                     // The stop button on a streaming draft: same as /stop.
                     let chat = chat.to_string();
                     core.stop(me, &chat, Sender { id: &chat, dm: true }).map(drop)
-                } else if let (Some(chat), Some(text)) = (u["message"]["chat"]["id"].as_i64(), u["message"]["text"].as_str()) {
+                } else if let (Some(_), Some(text)) = (u["message"]["chat"]["id"].as_i64(), u["message"]["text"].as_str()) {
+                    let chat = address(&u["message"], core.topics());
                     let c = &u["message"]["chat"];
                     let title = c["title"].as_str().or(c["username"].as_str()).or(c["first_name"].as_str()).unwrap_or("");
                     let from = u["message"]["from"]["id"].as_i64().map(|i| i.to_string()).unwrap_or_default();
@@ -206,14 +223,14 @@ impl Tg {
                     if u["message"]["forward_origin"].is_object() {
                         // A forwarded message is someone else's words: outside content, like a file.
                         let said = crate::with_document("(I forwarded you a message.)", "a forwarded message", text);
-                        core.incoming_outside(me, &chat.to_string(), who, title, &said, u["message"]["date"].as_i64()).await
+                        core.incoming_outside(me, &chat, who, title, &said, u["message"]["date"].as_i64()).await
                     } else if let Some(quoted) = replied_to(&u["message"], me_id) {
-                        core.incoming(me, &chat.to_string(), who, title, &crate::with_reply(text, &quoted), u["message"]["date"].as_i64()).await
+                        core.incoming(me, &chat, who, title, &crate::with_reply(text, &quoted), u["message"]["date"].as_i64()).await
                     } else {
-                        core.incoming(me, &chat.to_string(), who, title, text, u["message"]["date"].as_i64()).await
+                        core.incoming(me, &chat, who, title, text, u["message"]["date"].as_i64()).await
                     }
-                } else if let Some(chat) = u["message"]["chat"]["id"].as_i64().filter(|_| u["message"]["chat"]["type"] == "private") {
-                    self.on_media(me, &core, &chat.to_string(), &u["message"]).await
+                } else if u["message"]["chat"]["id"].is_i64() && u["message"]["chat"]["type"] == "private" {
+                    self.on_media(me, &core, &address(&u["message"], core.topics()), &u["message"]).await
                 } else {
                     Ok(())
                 };
@@ -263,7 +280,7 @@ impl Tg {
         if let Some(id) = m["document"]["file_id"].as_str() {
             // Telegram's bots can download files up to 20 MB.
             if m["document"]["file_size"].as_i64().unwrap_or(0) > 20_000_000 {
-                me.send(chat, "That file is over 20 MB, more than Telegram lets me download. Could you send a smaller one?").await;
+                me.send(chat, tr("That file is over 20 MB, more than Telegram lets me download. Could you send a smaller one?")).await;
                 return Ok(());
             }
             let (name, mime) = (m["document"]["file_name"].as_str().unwrap_or("file"), m["document"]["mime_type"].as_str().unwrap_or(""));
@@ -275,30 +292,53 @@ impl Tg {
         core.incoming_media(me, chat).await
     }
 
-    async fn on_button(&self, me: &Chan, core: &Core, q: &Value) -> Result<()> {
-        let chat = q["message"]["chat"]["id"].as_i64().map(|c| c.to_string()).unwrap_or_default();
+    async fn on_button(&self, me: &Chan, core: &Arc<Core>, q: &Value) -> Result<()> {
+        // A button in a topic: its answer (a tapped choice, say) belongs to that topic's conversation.
+        let chat = address(&q["message"], core.topics());
         let from = q["from"]["id"].as_i64().map(|i| i.to_string()).unwrap_or_default();
         let who = Sender { id: &from, dm: q["message"]["chat"]["type"] == "private" };
-        let refused;
-        let reply = match parse_decision(q["data"].as_str().unwrap_or("")) {
-            Some((id, d)) => match core.decide(me, &chat, who, id, d).map_err(|e| e.to_string()) {
-                Err(e) => {
-                    refused = e;
-                    refused.as_str()
-                }
+        let data = q["data"].as_str().unwrap_or("");
+        let mid = q["message"]["message_id"].as_i64();
+        let reply = match parse_decision(data) {
+            Some((id, d)) => match core.decide(me, &chat, who, id, d) {
+                Err(e) => e.to_string(),
                 Ok(Some(a)) => {
-                    if let Some(mid) = q["message"]["message_id"].as_i64() {
+                    if let Some(mid) = mid {
                         let _ = self.call("editMessageText", json!({"chat_id": chat, "message_id": mid, "text": verdict_for(&a, d)})).await;
                     }
-                    if a.status == "approved" { "✅ Approved" } else { "❌ Denied" }
+                    (if a.status == "approved" { tr("✅ Approved") } else { tr("❌ Denied") }).into()
                 }
-                Ok(None) => "This request is no longer pending.",
+                Ok(None) => tr("This request is no longer pending.").into(),
             },
-            None => "Unknown button.",
+            None => match core.tap(me, &chat, who, data).await {
+                Err(e) => e.to_string(),
+                Ok(Some(did)) => {
+                    // The buttons go; the message stays as it was.
+                    if let Some(mid) = mid {
+                        let _ = self.call("editMessageReplyMarkup", json!({"chat_id": chat, "message_id": mid, "reply_markup": {"inline_keyboard": []}})).await;
+                    }
+                    did
+                }
+                Ok(None) => tr("Unknown button.").into(),
+            },
         };
-        self.call("answerCallbackQuery", json!({"callback_query_id": q["id"], "text": reply})).await?;
+        self.call("answerCallbackQuery", json!({"callback_query_id": q["id"], "text": crate::tools::truncate(&reply, 190)})).await?;
         Ok(())
     }
+}
+
+/// Where a message came from: its chat, or with topics on, "chat:topic" for a message in a private chat's topic (Bot
+/// API 9.3), so each topic is its own conversation and replies go back into it.
+fn address(m: &Value, topics: bool) -> String {
+    let chat = m["chat"]["id"].as_i64().unwrap_or(0);
+    match m["message_thread_id"].as_i64().filter(|_| topics && m["is_topic_message"] == true && m["chat"]["type"] == "private") {
+        Some(topic) => format!("{chat}:{topic}"),
+        None => chat.to_string(),
+    }
+}
+
+fn keyboard(rows: &[Row]) -> Value {
+    json!({"inline_keyboard": rows.iter().map(|row| row.iter().map(|(text, data)| json!({"text": text, "callback_data": data})).collect::<Vec<_>>()).collect::<Vec<_>>()})
 }
 
 /// The bot's own message this one replies to (swipe-to-reply): the part the person selected, else the whole message.
@@ -314,6 +354,17 @@ fn replied_to(m: &Value, me_id: Option<i64>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use serde_json::json;
+
+    #[test]
+    fn a_topic_in_a_private_chat_is_its_own_address_when_on() {
+        let m = json!({"chat": {"id": 5, "type": "private"}, "message_thread_id": 9, "is_topic_message": true});
+        assert_eq!(super::address(&m, true), "5:9");
+        assert_eq!(super::address(&m, false), "5", "opt-in");
+        assert_eq!(super::address(&json!({"chat": {"id": 5, "type": "private"}}), true), "5", "no topic");
+        let group = json!({"chat": {"id": -100, "type": "supergroup"}, "message_thread_id": 9, "is_topic_message": true});
+        assert_eq!(super::address(&group, true), "-100", "private chats only");
+        assert_eq!(crate::db::tg_chat("5:9"), "5");
+    }
 
     #[test]
     fn a_reply_says_which_of_the_bots_messages() {

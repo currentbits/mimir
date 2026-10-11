@@ -74,6 +74,7 @@ pub fn step_label(tool: &str) -> String {
         "skill_view" => "Reading a skill".into(),
         "plan_propose" => "Waiting for your OK on a plan".into(),
         "ask_bot" => "Asking another bot".into(),
+        "ask_choice" => "Asking you a question".into(),
         "bot_create" => "Creating a bot".into(),
         "WebSearch" | "web_search" => "Searching the web".into(),
         _ if t.starts_with("computer_") => "Using the computer".into(),

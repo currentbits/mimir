@@ -2,7 +2,7 @@
 // can't inject markup. Covers what chat models actually write: paragraphs, lists, headings,
 // quotes, code, bold/italic, links.
 import { Icon, tell } from './ui'
-import { useEffect, useState, type ReactNode } from 'react'
+import { memo, useEffect, useState, type ReactNode } from 'react'
 import { inDesktop, invoke, localInvoke, saveDownload } from './api'
 
 type Block =
@@ -89,7 +89,8 @@ function breaks(s: string, key: number): ReactNode[] {
   return s.split('\n').flatMap((part, i) => i ? [<br key={`${key}-${i}`} />, part] : [part])
 }
 
-export function Markdown({ text, caret }: { text: string; caret?: boolean }) {
+// memo: a chat redraws on every poll, and its old replies haven't changed.
+export const Markdown = memo(function Markdown({ text, caret }: { text: string; caret?: boolean }) {
   const bs = blocks(text)
   return (
     <div className="md">
@@ -107,7 +108,7 @@ export function Markdown({ text, caret }: { text: string; caret?: boolean }) {
       {caret && bs.length === 0 && <span className="caret" />}
     </div>
   )
-}
+})
 
 const SENT = /^\s*\[\[file:([^\]]+)\]\]\s*$/
 
