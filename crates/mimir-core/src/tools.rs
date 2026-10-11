@@ -1378,8 +1378,10 @@ pub async fn call(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
         crate::live::set_step(ctx.bot_id, ctx.chat_id, None);
     }
     let result = match &out {
+        // A search's addresses, all of them: what a reply's links are checked against (receipts::footer).
+        Ok(r) if name == "web_search" => truncate(&r.lines().map(str::trim).filter(|l| l.starts_with("http")).collect::<Vec<_>>().join("\n"), 2000),
         // A screenshot's file is for the model, not the run log.
-        Ok(r) => truncate(&crate::computer::split_image(r, &ctx.db.dir()).1, 400),
+        Ok(r) =>truncate(&crate::computer::split_image(r, &ctx.db.dir()).1, 400),
         Err(e) => truncate(&format!("{e:#}"), 400),
     };
     let summary = truncate(&describe(ctx, name, args), 300);

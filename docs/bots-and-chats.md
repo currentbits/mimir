@@ -44,6 +44,19 @@ What's shared and what isn't:
 - **Telegram, Slack, Discord.** One bot can be on all three at once. Each connects *out* (long-polling, Socket Mode,
   the Gateway), so you don't need a public address.
 
+### What a reply did, from the log
+
+Every reply is checked against its own run log. No model and no network requests are involved, and the reply itself is never changed.
+
+- **Receipts and sources.** In Telegram, Slack and Discord, lines like "✓ Sent an email to ana@…", "✓ Added Tue 14 Oct
+  15:00, "Dentist"" or "✓ Reminder set for …" follow the reply. A "Sources:" line lists the pages it read and the
+  searches it ran. The app shows the same things as chips under the reply.
+- **Claims with nothing behind them.** A reply that says it sent, booked or will remind you, when no matching action
+  succeeded in that run, gets a note: *Not done in this reply: …*. An action that is still waiting for your OK doesn't
+  count. If it promised a reminder, the app shows a **Set it** button. In a messaging app, reply "set it".
+- **Links.** A link that the run never opened or found in a search is listed as unchecked. Links you sent yourself are
+  not. Routine results get the same checks.
+
 ### Guests
 
 You can let someone else talk to your bots (a partner, a housemate): give them a pairing code and they pair their own

@@ -54,6 +54,8 @@ function LookPicker({ id, look, onChange }: { id: number; look: Look; onChange: 
 }
 type Secrets = { telegram_token: string | null; slack_bot_token: string | null; slack_app_token: string | null; discord_token: string | null }
 type Action = { tool: string; summary: string; decision: string; ok: boolean; result?: string }
+/** The note under a reply that promised a reminder and set none (receipts.rs NO_REMINDER): it gets a Set it button. */
+const NO_REMINDER = "I said I'd remind you, but no reminder was set."
 type Message = { id: number; bot_id: number; role: string; content: string; ts: number; actions?: Action[]; run_id?: number }
 
 /** What a reply did, in a few words: ["memory", "Saved to memory · Dentist"]. Lookups and listings aren't worth a line. */
@@ -67,6 +69,9 @@ function actionLine(a: Action): [string, string] | null {
     : a.tool === 'routine_delete' ? ['clock', 'Deleted a routine']
     : a.tool === 'ask_bot' ? ['user', `Asked ${q(/^Ask (.*?):/)}`]
     : a.tool === 'web_fetch' ? ['globe', `Read ${q(/^Read https?:\/\/([^/\s]+)/) || 'a page'}`]
+    : a.tool === 'web_search' ? ['search', `Searched · ${q(/^Search the web: (.*)$/)}`]
+    : a.tool === 'email_send' ? ['send', a.result?.startsWith('Not done yet') ? `Waiting for your OK · email to ${q(/^Send an email to (.*?): "/)}` : `Sent an email to ${q(/^Send an email to (.*?): "/)}`]
+    : a.tool === 'calendar_create' ? ['clock', a.result?.startsWith('Not done yet') ? 'Waiting for your OK · calendar' : `Added · ${q(/^Add to .*?: (.*?".*?")/) || 'to your calendar'}`]
     : a.tool === 'skill_save' ? ['bolt', `Skill to save · ${q(/^Save as a skill: (.*)$/)}`]
     : a.tool.includes('__') ? [a.tool.startsWith('browser__') ? 'browser' : 'plug', s.split(' (')[0]]
     : null
@@ -1537,6 +1542,8 @@ function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, openBot
         <div>
           <div className="msg-head"><b>{b.name}</b><time title={fullTime(m.ts)}>{ago(m.ts)}</time><CopyButton text={m.content} /></div>
           <div className="msg-body"><Markdown text={m.content} /></div>
+          {/* Only under the latest message: once anything follows, it's been answered one way or another. */}
+          {m.content.includes(NO_REMINDER) && m === msgs[msgs.length - 1] && <button type="button" className="btn btn-sm" onClick={() => send(`@${b.name} Set the reminder you said you would.`)} disabled={working}>Set it</button>}
           {m.actions && <Actions actions={m.actions} chatId={chat.chat_id} runId={m.run_id} onChange={() => { log.reload(); onTurn() }} />}
         </div>
       </div>

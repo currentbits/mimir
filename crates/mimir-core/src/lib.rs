@@ -75,6 +75,7 @@ mod telegram;
 pub mod tidy;
 pub mod mcp;
 pub mod provider;
+pub mod receipts;
 pub mod runtime;
 pub mod say;
 pub mod server_update;
@@ -740,6 +741,17 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
     // A quiet check that found nothing stays silent: no message, no conversation entry (the run log has it).
     if quiet && is_nothing(&reply.text) {
         return Ok((String::new(), reply.usage));
+    }
+    // What the reply says, against what the run did: receipts, sources and notes under it (the asking bot checks a
+    // handed-over task's reply as its own; a rehearsal did nothing by design).
+    if !matches!(trigger, Trigger::Delegated { .. })
+        && !ctx.rehearsal
+        && let Some(run) = ctx.run_id
+    {
+        let lines = receipts::footer(&receipts::calls_of(&ctx.db, run)?, &text, &reply.text, ctx.chat_id != host::LOCAL_CHAT);
+        if !lines.is_empty() {
+            reply.text = format!("{}\n\n{lines}", reply.text.trim_end());
+        }
     }
     match &trigger {
         Trigger::Delegated { .. } => {}
