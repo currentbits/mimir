@@ -2012,13 +2012,13 @@ mod tests {
         // Due with nothing come: no run.
         let (base, asked) = recording_ai().await;
         let core = core_on(&db, &base);
-        core.run_routine(&[], r.clone()).await.unwrap();
+        core.run_routine(&[], r.clone(), None).await.unwrap();
         assert!(asked.lock().unwrap().is_empty() && db.runs(Some(0), 5).unwrap().is_empty());
         // Can't reach the AI: what came waits for the try after.
         db.routine_event_add(r.id, "{\"build\":\"red\"}").unwrap();
-        core_on(&db, "http://127.0.0.1:9/v1").run_routine(&[], fresh(&db).unwrap()).await.unwrap();
+        core_on(&db, "http://127.0.0.1:9/v1").run_routine(&[], fresh(&db).unwrap(), None).await.unwrap();
         assert_eq!(db.routine_events(r.id).unwrap().len(), 1);
-        core.run_routine(&[], fresh(&db).unwrap()).await.unwrap();
+        core.run_routine(&[], fresh(&db).unwrap(), None).await.unwrap();
         let req = asked.lock().unwrap().pop().unwrap();
         assert!(req.contains("its webhook was called") && req.contains("build") && req.contains("red") && req.contains("outside content"), "{req}");
         assert!(db.routine_events(r.id).unwrap().is_empty(), "seen");
@@ -2027,7 +2027,7 @@ mod tests {
         // "Tell me when it arrives": gone after the first run that worked.
         db.routine_set_once(r.id).unwrap();
         db.routine_event_add(r.id, "{\"build\":\"green\"}").unwrap();
-        core.run_routine(&[], fresh(&db).unwrap()).await.unwrap();
+        core.run_routine(&[], fresh(&db).unwrap(), None).await.unwrap();
         assert!(fresh(&db).is_none());
     }
 
