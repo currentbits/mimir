@@ -142,5 +142,6 @@ async fn serve(db: Db, home: PathBuf) -> Result<()> {
     }
     db.close_interrupted()?;
     let provider = Arc::new(Provider::from_env(home)?);
+    mimir_core::say::load(&db);
     runtime::serve(db, cli_bot(), provider, channels, Default::default()).await
 }

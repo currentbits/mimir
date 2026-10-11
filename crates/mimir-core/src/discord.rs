@@ -380,7 +380,7 @@ impl Discord {
         let body = match parse_decision(data) {
             Some((id, choice)) => match core.decide(me, channel, from, id, choice) {
                 Ok(Some(a)) => json!({"type": 7, "data": {"content": verdict_for(&a, choice), "components": []}}),
-                Ok(None) => private("This request is no longer pending.".into()),
+                Ok(None) => private(crate::say::tr("This request is no longer pending.").into()),
                 Err(e) => private(e.to_string()),
             },
             // The buttons give way to a small line saying what the tap did; the message above them stays.

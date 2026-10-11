@@ -89,6 +89,10 @@ Chat commands: `/memory`, `/routines`, `/new`, `/stop` (a bare "stop" works too 
 (take back something it learned; see [Memory](memory.md#learned-this-week)), and `/<skill>` for each of the bot's
 skills (see [Skills](skills.md)). Everything else is plain language.
 
+Bots answer in the language you write in. What Mimir itself says in the chat apps (pairing, approval cards and their
+buttons, errors, the digest, the weekly "what I learned", the Telegram "/" menu) follows Settings → Language: English
+or Dutch so far, by default the computer's language (a server's: its `LANG`). The app itself is still English.
+
 ## Photos, voice notes and files
 
 Send a photo on Telegram, Slack or Discord (up to 4 at once there), or paste or drop one into the app's chat, and the

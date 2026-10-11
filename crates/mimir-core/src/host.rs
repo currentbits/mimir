@@ -149,6 +149,7 @@ impl Host {
     pub fn new(db: Db, home: PathBuf, secrets: Arc<dyn SecretStore>, rt: tokio::runtime::Handle, mode: &'static str) -> Self {
         let _ = MODE.set(mode);
         install_secrets(secrets.clone());
+        crate::say::load(&db);
         if let Err(e) = db.incognito_leftovers().and_then(|_| db.prune_old()).and_then(|_| db.close_interrupted()) {
             eprintln!("cleanup: {e:#}");
         }
@@ -948,6 +949,22 @@ impl Host {
                     self.db.set_setting("quiet_hours", &h)?;
                 }
                 ok(self.db.setting("quiet_hours")?.unwrap_or_default())
+            }
+            // The language Mimir writes in, in chat apps: a code from say::LANGS, or "" for the system's (get without
+            // `lang`, set with it).
+            "language" => {
+                if let Some(l) = arg::<Option<String>>(a, "lang")? {
+                    if !l.is_empty() && !crate::say::LANGS.iter().any(|(c, _)| *c == l) {
+                        bail!("Mimir doesn't speak {l} yet");
+                    }
+                    self.db.set_setting("language", &l)?;
+                    crate::say::load(&self.db);
+                }
+                ok(json!({
+                    "lang": self.db.setting("language")?.unwrap_or_default(),
+                    "system": crate::say::system(),
+                    "langs": crate::say::LANGS,
+                }))
             }
             // The weekly "what I learned" message in chat apps: on unless switched off (get without `on`, set with it).
             "weekly_review" => {
