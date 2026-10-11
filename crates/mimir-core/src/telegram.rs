@@ -2,7 +2,8 @@
 // ponytail: plain reqwest, no teloxide; adopt it if we need media/inline queries
 
 use crate::db::Approval;
-use crate::runtime::{Chan, Core, Sender, Slot, card_text, parse_decision, verdict_for};
+use crate::runtime::{Chan, Core, Row, Sender, Slot, card_text, parse_decision, verdict_for};
+use crate::say::tr;
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -52,17 +53,18 @@ impl Tg {
         Ok(v["result"].clone())
     }
 
-    /// Markdown → Telegram HTML, split between blocks under the 4096-char cap. If Telegram
-    /// rejects the markup, that piece goes out as plain text instead of being lost.
-    pub(crate) async fn send(&self, chat: &str, text: &str) -> Result<()> {
-        self.finish(chat, None, text).await
-    }
-
-    /// Final formatted reply. With a streamed draft, the draft is replaced by the first part.
-    pub(crate) async fn finish(&self, chat: &str, draft: Option<&str>, text: &str) -> Result<()> {
+    /// Markdown → Telegram HTML, split between blocks under the 4096-char cap. If Telegram rejects the markup, that piece
+    /// goes out as plain text instead of being lost. Buttons go under the last part. With a streamed draft, the draft is replaced by the first part.
+    pub(crate) async fn finish(&self, chat: &str, draft: Option<&str>, text: &str, rows: &[Row]) -> Result<()> {
         let draft = draft.and_then(|d| d.parse::<i64>().ok());
-        for (i, html) in crate::fmt::telegram(text, 3800).into_iter().enumerate() {
+        let parts = crate::fmt::telegram(text, 3800);
+        let last = parts.len().saturating_sub(1);
+        for (i, html) in parts.into_iter().enumerate() {
             let mut msg = json!({"chat_id": chat, "text": html, "parse_mode": "HTML", "link_preview_options": {"is_disabled": true}});
+            let buttons = (i == last && !rows.is_empty()).then(|| keyboard(rows));
+            if let Some(k) = &buttons {
+                msg["reply_markup"] = k.clone();
+            }
             let method = match draft.filter(|_| i == 0) {
                 Some(mid) => {
                     msg["message_id"] = json!(mid);
@@ -73,11 +75,17 @@ impl Tg {
             if self.call(method, msg.clone()).await.is_err() {
                 // Rejected markup: the same text, plain, rather than nothing.
                 let plain: Vec<char> = crate::fmt::html_to_plain(&html).chars().collect();
+                let chunks = plain.chunks(4000).count();
                 for (j, chunk) in plain.chunks(4000).enumerate() {
                     msg["text"] = json!(chunk.iter().collect::<String>());
                     msg.as_object_mut().unwrap().remove("parse_mode");
                     if j > 0 {
                         msg.as_object_mut().unwrap().remove("message_id");
+                    }
+                    // The buttons stay under the very last piece.
+                    match (&buttons, j + 1 == chunks) {
+                        (Some(k), true) => msg["reply_markup"] = k.clone(),
+                        _ => drop(msg.as_object_mut().unwrap().remove("reply_markup")),
                     }
                     self.call(if j == 0 { method } else { "sendMessage" }, msg.clone()).await?;
                 }
@@ -132,9 +140,7 @@ impl Tg {
             json!({
                 "chat_id": chat,
                 "text": card_text(a),
-                "reply_markup": {"inline_keyboard": crate::runtime::card_buttons(a).into_iter()
-                    .map(|row| row.into_iter().map(|(text, data)| json!({"text": text, "callback_data": data})).collect::<Vec<_>>())
-                    .collect::<Vec<_>>()}
+                "reply_markup": keyboard(&crate::runtime::card_buttons(a))
             }),
         )
         .await?;
@@ -147,10 +153,11 @@ impl Tg {
         slot.connected(format!("@{}", bot["username"].as_str().unwrap_or("?")));
         // The "/" menu in Telegram shows these.
         let base = json!([
-            {"command": "memory", "description": "What I remember about you"},
-            {"command": "routines", "description": "What I do on a schedule"},
-            {"command": "new", "description": "Start a fresh conversation (memories kept)"},
-            {"command": "stop", "description": "Stop the reply I'm writing"}
+            {"command": "memory", "description": tr("What I remember about you")},
+            {"command": "routines", "description": tr("What I do on a schedule")},
+            {"command": "why", "description": tr("What my last reply used")},
+            {"command": "new", "description": tr("Start a fresh conversation (memories kept)")},
+            {"command": "stop", "description": tr("Stop the reply I'm writing")}
         ]);
         let _ = self.call("setMyCommands", json!({"commands": base})).await;
         // Each chat's menu also lists the bot's skills there ("/book_padel"), refreshed every 10 minutes when it changed.
@@ -260,7 +267,7 @@ impl Tg {
         if let Some(id) = m["document"]["file_id"].as_str() {
             // Telegram's bots can download files up to 20 MB.
             if m["document"]["file_size"].as_i64().unwrap_or(0) > 20_000_000 {
-                me.send(chat, "That file is over 20 MB, more than Telegram lets me download. Could you send a smaller one?").await;
+                me.send(chat, tr("That file is over 20 MB, more than Telegram lets me download. Could you send a smaller one?")).await;
                 return Ok(());
             }
             let (name, mime) = (m["document"]["file_name"].as_str().unwrap_or("file"), m["document"]["mime_type"].as_str().unwrap_or(""));
@@ -272,28 +279,37 @@ impl Tg {
         core.incoming_media(me, chat).await
     }
 
-    async fn on_button(&self, me: &Chan, core: &Core, q: &Value) -> Result<()> {
-        let chat = q["message"]["chat"]["id"].as_i64().map(|c| c.to_string()).unwrap_or_default();
+    async fn on_button(&self, me: &Chan, core: &Arc<Core>, q: &Value) -> Result<()> {
+        // A button in a topic: its answer (a tapped choice, say) belongs to that topic's conversation.
+        let chat = address(&q["message"], core.topics());
         let from = q["from"]["id"].as_i64().map(|i| i.to_string()).unwrap_or_default();
         let who = Sender { id: &from, dm: q["message"]["chat"]["type"] == "private" };
-        let refused;
-        let reply = match parse_decision(q["data"].as_str().unwrap_or("")) {
-            Some((id, d)) => match core.decide(me, &chat, who, id, d).map_err(|e| e.to_string()) {
-                Err(e) => {
-                    refused = e;
-                    refused.as_str()
-                }
+        let data = q["data"].as_str().unwrap_or("");
+        let mid = q["message"]["message_id"].as_i64();
+        let reply = match parse_decision(data) {
+            Some((id, d)) => match core.decide(me, &chat, who, id, d) {
+                Err(e) => e.to_string(),
                 Ok(Some(a)) => {
-                    if let Some(mid) = q["message"]["message_id"].as_i64() {
+                    if let Some(mid) = mid {
                         let _ = self.call("editMessageText", json!({"chat_id": chat, "message_id": mid, "text": verdict_for(&a, d)})).await;
                     }
-                    if a.status == "approved" { "✅ Approved" } else { "❌ Denied" }
+                    (if a.status == "approved" { tr("✅ Approved") } else { tr("❌ Denied") }).into()
                 }
-                Ok(None) => "This request is no longer pending.",
+                Ok(None) => tr("This request is no longer pending.").into(),
             },
-            None => "Unknown button.",
+            None => match core.tap(me, &chat, who, data).await {
+                Err(e) => e.to_string(),
+                Ok(Some(did)) => {
+                    // The buttons go; the message stays as it was.
+                    if let Some(mid) = mid {
+                        let _ = self.call("editMessageReplyMarkup", json!({"chat_id": chat, "message_id": mid, "reply_markup": {"inline_keyboard": []}})).await;
+                    }
+                    did
+                }
+                Ok(None) => tr("Unknown button.").into(),
+            },
         };
-        self.call("answerCallbackQuery", json!({"callback_query_id": q["id"], "text": reply})).await?;
+        self.call("answerCallbackQuery", json!({"callback_query_id": q["id"], "text": crate::tools::truncate(&reply, 190)})).await?;
         Ok(())
     }
 }
@@ -306,6 +322,10 @@ fn address(m: &Value, topics: bool) -> String {
         Some(topic) => format!("{chat}:{topic}"),
         None => chat.to_string(),
     }
+}
+
+fn keyboard(rows: &[Row]) -> Value {
+    json!({"inline_keyboard": rows.iter().map(|row| row.iter().map(|(text, data)| json!({"text": text, "callback_data": data})).collect::<Vec<_>>()).collect::<Vec<_>>()})
 }
 
 /// The bot's own message this one replies to (swipe-to-reply): the part the person selected, else the whole message.

@@ -50,7 +50,15 @@ For contributors: how the pieces fit together.
 Both run the same `Host`. The desktop calls it in-process through one Tauri command (`api`); the server exposes it as
 `POST /api/<cmd>` with a bearer token. The UI's `invoke()` goes to whichever is active, so the same React app is the
 desktop UI and the web UI. A few commands are handled by the desktop itself, before the host, because they belong to
-this computer: `meeting` (recording, the meetings list), `keep_awake`, `quick_shortcut`, `selftest`.
+this computer (`api` in `mimir-desktop/src/main.rs`):
+- `meeting`: recording, the meetings list, the microphone and calendar settings;
+- `keep_awake`, `open_at_login`, `quick_shortcut`, `show_main`;
+- `copy_text`, `save_download`, `open_url`: what the webview can't do itself (clipboard after a wait, downloads, links
+  in the browser);
+- `remote_token`: the admin token of the server the app is connected to, kept in the keychain;
+- `local_bots`: runs this computer's bots, or stops them while the app shows a server;
+- `update_status`, `update_check`, `update_install`, `update_auto`;
+- `selftest`, `selftest_report`: the launch test (`MIMIR_SELFTEST=1`).
 
 ## Meetings
 
@@ -104,15 +112,18 @@ The [Security model](security.md) in terms of where it lives. Keep these when ch
     folder (`grok_trust`, `grok_rules`; Windows keeps `--rules`).
   - PDFs are read by `<binary> read-pdf` (`pdf_helper_main`).
   - The AI CLIs' transcripts are removed by `Provider::forget_session`.
-  - `Host::new` does startup cleanup (`incognito_leftovers`, `prune_old`, `tmp/`, old media). Never put that in
+  - `Host::new` does startup cleanup (`incognito_leftovers`, `prune_old`, `close_interrupted`, `tmp/`, old media). Never put that in
     `Db::open`: the tools server opens the database on every turn.
 - **Downloads.** `transcribe::download(url, path, min, sha256)` with pinned hashes. Models come from a fixed Hugging
   Face revision.
 
 ## Data
 
-One SQLite file in the data folder (`~/.mimir`, or `MIMIR_HOME`). Schema changes are additive (`add_col` in
-`Db::open`), so an older database opens in a newer build. Installs from before the rename to Mimir (`~/.botpoc`,
+One SQLite file in the data folder (`~/.mimir`, or `MIMIR_HOME`). Its schema version is `PRAGMA user_version`
+(`VERSION` in `db.rs`). A schema change bumps `VERSION` and adds a `migrate_v<n>` step to `migrate`. Each step runs
+once, in one transaction, after `VACUUM INTO mimir.db.before-<n>` (the last 2 are kept). An up-to-date database only
+reads its version. A database with a higher version than the build is refused, and the desktop app shows the error
+and the data folder in a dialog. Installs from before the rename to Mimir (`~/.botpoc`,
 `botpoc.db`) are moved over once on startup.
 
 ## Environment variables
@@ -135,15 +146,23 @@ One SQLite file in the data folder (`~/.mimir`, or `MIMIR_HOME`). Schema changes
 
 `.github/workflows/release.yml` builds the installers when a version tag is pushed:
 
-1. Set `version` in `crates/mimir-desktop/tauri.conf.json` (the tag must match it; the workflow checks).
-2. `git tag v0.1.0 && git push origin v0.1.0`.
-3. The workflow drafts a GitHub release and attaches the `.dmg`, `.exe`/`.msi`, `.deb`/`.rpm` and `.AppImage`
-   (macOS on Apple silicon; Linux built on Ubuntu 22.04 so it runs on older systems).
-4. Read the draft over, paste the "Unreleased" section of `CHANGELOG.md` into its notes (installed apps show them
-   with the update), rename that section to the version, and publish.
+1. Set `version` under `[workspace.package]` in the root `Cargo.toml`. It's the only place: every crate inherits it
+   and the desktop app takes it from its crate (`tauri.conf.json` has no version). Rename the "Unreleased" section of
+   `CHANGELOG.md` to the version (`## 0.1.6`) and commit.
+2. `git tag v0.1.6 && git push origin v0.1.6`.
+3. The workflow checks the tag against `cargo metadata` and that `CHANGELOG.md` has the section, then drafts a GitHub
+   release with that section as its notes and attaches the `.dmg`, `.exe`/`.msi`, `.deb`/`.rpm` and `.AppImage`
+   (macOS on Apple silicon; Linux built on Ubuntu 22.04 so it runs on older systems). Installed apps show the section
+   with the update.
+4. Read the draft over and publish.
 
-The Mac app is ad-hoc signed (`signingIdentity: "-"`), which Apple silicon needs to open a downloaded app at all;
-it isn't notarized, and Windows builds aren't signed.
+**Signing.** With the Apple secrets set (`APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`,
+`APPLE_API_ISSUER`, `APPLE_API_KEY`, `APPLE_API_KEY_P8`), CI signs the Mac app with Developer ID, notarizes the app and
+the `.dmg`, and only then adds "signed and notarized by Apple" to the notes. Without them the app is ad-hoc signed
+(`signingIdentity: "-"`, which Apple silicon needs to open a downloaded app at all) and the notes don't mention
+notarization: sign and notarize on a Mac with the Developer ID certificate instead, and replace the Mac assets (and
+their signatures in `latest.json`) before publishing. The released Mac apps so far were done that way. Windows builds
+aren't signed.
 
 **Updates** (`crates/mimir-desktop/src/update.rs`, Tauri's updater plugin). Apps read `latest.json` from the newest
 *published* release (`plugins.updater.endpoints` in `tauri.conf.json`; drafts aren't served), so publishing the draft is
@@ -160,7 +179,14 @@ serve the first, and start the second with `MIMIR_UPDATE_TEST=1`: it installs an
 ```sh
 cargo test --workspace          # unit and integration tests (needs cmake for the desktop crate)
 cd ui && npx tsc -b             # the UI typecheck (`tsc -p .` checks nothing here)
+cargo clippy --workspace --all-targets -- -D warnings; cd ui && npm run lint
 ```
+
+CI (`.github/workflows/build.yml`) runs all of these, plus the end-to-end flows on Linux: `scripts/fake-ai.py` and
+`mimir server` with `MIMIR_CHATGPT_*` pointed at it, then `scripts/e2e-flows.py` and `scripts/ui-flows.mjs` (see each
+script's header; Playwright comes with `npm ci` in `ui/`). If another checkout's test server already has ports 8789/8899,
+start yours on others and set `E2E_SERVER` / `E2E_AI`. A pull request that touches the `Dockerfile` or a lockfile also
+builds the server image (`docker.yml`, not pushed). Unit tests use a data folder of their own and no real channel tokens.
 
 Test hooks and opt-in tests:
 - `MIMIR_SELFTEST=1 <desktop binary>`: starts the real app, reports what rendered, exits 0 only without UI errors
@@ -169,6 +195,10 @@ Test hooks and opt-in tests:
   prints what was saved. With PulseAudio null sinks in a container, this tests the whole meeting pipeline on Linux.
 - `MIMIR_WHISPER_DEBUG=1`: prints voice-activity stretches and chunk timings.
 - `scripts/mock-telegram.py`: a fake Telegram Bot API; set `MIMIR_TELEGRAM_API` to it.
+- `scripts/fake-mail.py`: a fake IMAP (port 1143) and SMTP (port 1025) server, any login accepted, with a planted
+  instruction in one message for outside-content tests. Point a bot's email at `127.0.0.1`.
+- `scripts/e2e-busy-chat.py <dir>`: a Telegram message to a busy bot gets an answer, not silence. Starts its own
+  `mock-telegram.py` and `fake-ai.py`; wants a `mimir` binary in `<dir>`.
 - `scripts/learning-eval.py <mimir binary> [model] [--control] [--web]`: does learning work end to end? A simulated
   person with three hidden preferences talks to a real bot for three "days", correcting it; the tidy-up runs between
   days. Prints how many replies broke a preference each day (with learning it should drop to about zero by day 2).

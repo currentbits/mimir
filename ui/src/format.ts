@@ -20,7 +20,13 @@ export const pigment = (id: number, look = looks.get(id)) => look?.color ?? PIGM
 
 // ---------------- time & schedule text ----------------
 
-export const time = (d: Date) => d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+// Formatters are made once: toLocale*String builds a new one on every call, which is most of a long chat's render.
+const fmt = (o: Intl.DateTimeFormatOptions) => new Intl.DateTimeFormat(undefined, o)
+const HM = fmt({ hour: 'numeric', minute: '2-digit' }), WEEKDAY = fmt({ weekday: 'long' }), WD = fmt({ weekday: 'short' })
+const LONG = fmt({ weekday: 'long', day: 'numeric', month: 'long' }), LONG_Y = fmt({ weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
+const SHORT = fmt({ weekday: 'short', day: 'numeric', month: 'short' }), FULL_TIME = fmt({ dateStyle: 'medium', timeStyle: 'short' })
+
+export const time = (d: Date) => HM.format(d)
 const sameDay = (a: Date, b: Date) => a.toDateString() === b.toDateString()
 
 /** "just now", "12 min ago", "3 h ago", "Yesterday 14:05", "Mon 9 Oct" */
@@ -30,11 +36,11 @@ export function dayLabel(ts: number) {
   const days = Math.round((new Date(now.toDateString()).getTime() - new Date(d.toDateString()).getTime()) / 86400000)
   if (days === 0) return 'Today'
   if (days === 1) return 'Yesterday'
-  if (days < 7) return d.toLocaleDateString(undefined, { weekday: 'long' })
-  return d.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long', year: d.getFullYear() === now.getFullYear() ? undefined : 'numeric' })
+  if (days < 7) return WEEKDAY.format(d)
+  return (d.getFullYear() === now.getFullYear() ? LONG : LONG_Y).format(d)
 }
 
-export const fullTime = (ts: number) => new Date(ts * 1000).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+export const fullTime = (ts: number) => FULL_TIME.format(new Date(ts * 1000))
 
 export function ago(ts: number) {
   const s = Date.now() / 1000 - ts
@@ -46,7 +52,7 @@ export function ago(ts: number) {
   if (sameDay(d, now)) return `Today ${time(d)}`
   const y = new Date(now); y.setDate(now.getDate() - 1)
   if (sameDay(d, y)) return `Yesterday ${time(d)}`
-  return d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })
+  return SHORT.format(d)
 }
 
 /** "in 20 min", "today 19:00", "tomorrow 08:30", "Mon 08:30" (reads after "Next run") */
@@ -59,7 +65,7 @@ export function ahead(ts: number) {
   if (sameDay(d, now)) return `today ${time(d)}`
   const t = new Date(now); t.setDate(now.getDate() + 1)
   if (sameDay(d, t)) return `tomorrow ${time(d)}`
-  return `${d.toLocaleDateString(undefined, { weekday: 'short' })} ${time(d)}`
+  return `${WD.format(d)} ${time(d)}`
 }
 
 const DAY: Record<string, string> = { '0': 'Sun', '1': 'Mon', '2': 'Tue', '3': 'Wed', '4': 'Thu', '5': 'Fri', '6': 'Sat', '7': 'Sun' }
@@ -67,8 +73,16 @@ export const dayName = (d: string) => DAY[d] ?? d.slice(0, 1).toUpperCase() + d.
 const FULL: Record<string, string> = { Mon: 'Monday', Tue: 'Tuesday', Wed: 'Wednesday', Thu: 'Thursday', Fri: 'Friday', Sat: 'Saturday', Sun: 'Sunday' }
 export const fullDay = (d: string) => FULL[dayName(d)] ?? d
 
+/** A calendar routine's next_fire while no matching event is coming up (db::IDLE). */
+export const IDLE = 4_102_444_800
+
 /** Cron → plain words for the common shapes; anything else is shown as-is. */
 export function schedule(cron: string): string {
+  const cal = cron.trim().match(/^calendar:(\d+)(?::(meetings|outside))?$/)
+  if (cal) {
+    const m = +cal[1], lead = m % 60 === 0 && m > 0 ? `${m / 60} hour${m === 60 ? '' : 's'}` : `${m} min`
+    return `${lead} before each ${cal[2] === 'meetings' ? 'meeting with someone else' : cal[2] === 'outside' ? 'meeting with someone outside' : 'calendar event'}`
+  }
   const f = cron.trim().split(/\s+/)
   if (f.length !== 5) return cron
   const [m, h, dom, mon, dow] = f

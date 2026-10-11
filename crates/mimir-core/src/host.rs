@@ -121,6 +121,7 @@ struct BotView {
 
 /// Write-only channel secrets: None = keep, "" = remove, else replace.
 #[derive(serde::Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 struct Secrets {
     telegram_token: Option<String>,
     slack_bot_token: Option<String>,
@@ -148,7 +149,8 @@ impl Host {
     pub fn new(db: Db, home: PathBuf, secrets: Arc<dyn SecretStore>, rt: tokio::runtime::Handle, mode: &'static str) -> Self {
         let _ = MODE.set(mode);
         install_secrets(secrets.clone());
-        if let Err(e) = db.incognito_leftovers().and_then(|_| db.prune_old()) {
+        crate::say::load(&db);
+        if let Err(e) = db.incognito_leftovers().and_then(|_| db.prune_old()).and_then(|_| db.close_interrupted()) {
             eprintln!("cleanup: {e:#}");
         }
         // Private files a crash left behind (a run's instructions), and photos and files older than 60 days.
@@ -174,9 +176,11 @@ impl Host {
             let (db, home) = (db.clone(), home.clone());
             rt.spawn(async move {
                 loop {
-                    if crate::computer::enabled(&db) && !crate::computer::running() {
+                    if crate::computer::enabled(&db) {
+                        // Both block (a TCP connect or xdotool, then up to ~13 s of starting).
                         let h = home.clone();
-                        if let Ok(Err(e)) = tokio::task::spawn_blocking(move || crate::computer::start(&h)).await {
+                        let up = move || if crate::computer::running() { Ok(()) } else { crate::computer::start(&h) };
+                        if let Ok(Err(e)) = tokio::task::spawn_blocking(up).await {
                             eprintln!("computer: {e:#}");
                         }
                     }
@@ -330,8 +334,15 @@ impl Host {
                 })
                 .collect::<Vec<_>>()),
             "save_bot" => {
-                let bot: Bot = arg(a, "bot")?;
-                let secrets: Secrets = arg(a, "secrets").unwrap_or_default();
+                // The UI sends back the bot as `bots` listed it: the channel flags are that list's, not the bot's.
+                let mut bot = a.get("bot").cloned().unwrap_or_default();
+                if let Some(o) = bot.as_object_mut() {
+                    for k in ["has_telegram_token", "has_slack", "has_discord"] {
+                        o.remove(k);
+                    }
+                }
+                let bot: Bot = arg(&json!({"bot": bot}), "bot")?;
+                let secrets: Secrets = arg::<Option<Secrets>>(a, "secrets")?.unwrap_or_default();
                 Provider::for_bot(&bot, self.home.clone())?;
                 let unknown: Vec<&str> =
                     bot.tools.split(',').map(str::trim).filter(|t| !t.is_empty() && !t.ends_with("__*") && !tools::all_specs(&self.db).iter().any(|(n, ..)| n == t)).collect();
@@ -497,7 +508,6 @@ impl Host {
             // Everything Mimir keeps about you, as one JSON file (memories, conversations, meetings, skills, routines,
             // bots without their tokens).
             "export_all" => ok(self.db.export_all()?),
-            "unpair" => ok(self.db.unpair(arg(a, "chat_id")?)?),
             // Someone else's chat (a guest: nothing of yours there), or yours.
             "chat_guest" => ok(self.db.chat_set_guest(arg(a, "chat_id")?, arg(a, "guest")?)?),
             "entries" => ok(self.db.entries(&scope(a)?)?),
@@ -639,24 +649,11 @@ impl Host {
                 ok(0)
             }
             // ---- meetings and calls (recorded and transcribed by the desktop app) ----
-            "meetings" => ok(self.db.meetings()?),
             "meeting" => {
                 let id: i64 = arg(a, "id")?;
                 let m = self.db.meetings()?.into_iter().find(|m| m["id"] == id).context("no such meeting")?;
                 let lines: Vec<Value> = self.db.meeting_lines(id)?.into_iter().map(|(ts, who, text)| json!({"ts": ts, "who": who, "text": text})).collect();
                 ok(json!({"meeting": m, "lines": lines}))
-            }
-            "meeting_save" => {
-                #[derive(serde::Deserialize)]
-                struct L {
-                    ts: i64,
-                    who: String,
-                    text: String,
-                }
-                let lines: Vec<L> = arg(a, "lines")?;
-                let title: String = arg::<Option<String>>(a, "title")?.filter(|t| !t.trim().is_empty()).unwrap_or_else(|| "Meeting".into());
-                let lines: Vec<(i64, String, String)> = lines.into_iter().map(|l| (l.ts, if l.who == "you" { "you".into() } else { "others".into() }, l.text)).collect();
-                ok(self.db.meeting_save(&title, arg(a, "started_at")?, arg(a, "ended_at")?, &lines)?)
             }
             "meeting_speaker" => ok(self.db.meeting_speaker(arg(a, "id")?, &arg::<String>(a, "key")?, &arg::<String>(a, "name")?)?),
             "meeting_summary" => ok(self.db.meeting_summary(arg(a, "id")?, &arg::<String>(a, "summary")?)?),
@@ -664,7 +661,10 @@ impl Host {
             "meeting_rename" => ok(self.db.meeting_update(arg(a, "id")?, Some(&arg::<String>(a, "title")?), None)?),
             "meeting_delete" => ok(self.db.meeting_delete(arg(a, "id")?)?),
             // ---- the bots' computer (self-hosted Linux server) ----
-            "computer" => ok(json!({"available": crate::computer::available(), "enabled": crate::computer::enabled(&self.db), "running": crate::computer::running()})),
+            "computer" => {
+                let running = tokio::task::spawn_blocking(crate::computer::running).await?;
+                ok(json!({"available": crate::computer::available(), "enabled": crate::computer::enabled(&self.db), "running": running}))
+            }
             "computer_enable" => {
                 let on: bool = arg(a, "on")?;
                 if on && !crate::computer::available() {
@@ -677,7 +677,7 @@ impl Host {
                 } else {
                     crate::computer::stop();
                 }
-                ok(json!({"enabled": on, "running": crate::computer::running()}))
+                ok(json!({"enabled": on, "running": tokio::task::spawn_blocking(crate::computer::running).await?}))
             }
             // The live view: the screen as a JPEG (base64), for watching in the app.
             "computer_screen" => {
@@ -744,16 +744,6 @@ impl Host {
                 })
                 .await??;
                 ok(true)
-            }
-            // Generic MCP servers (stdio): [{name, command, args, env}]. Each is started once to list its tools.
-            "set_tool_servers" => {
-                let list: Vec<ext::ServerConf> = arg(a, "servers")?;
-                ext::set_servers(&self.db, &list)?;
-                let mut counts = serde_json::Map::new();
-                for s in &list {
-                    counts.insert(s.name.clone(), json!(ext::refresh(&self.db, s).await.map_err(|e| format!("{e:#}")).map_or_else(Value::from, Value::from)));
-                }
-                ok(counts)
             }
             "vault" => ok(ext::vault(&self.db)),
             "vault_save" => ok(ext::vault_save(&self.db, arg(a, "entry")?, arg::<Option<String>>(a, "value")?.as_deref())?),
@@ -963,7 +953,30 @@ impl Host {
                 }
                 ok(self.db.setting("quiet_hours")?.unwrap_or_default())
             }
+            // The language Mimir writes in, in chat apps: a code from say::LANGS, or "" for the system's (get without
+            // `lang`, set with it).
+            "language" => {
+                if let Some(l) = arg::<Option<String>>(a, "lang")? {
+                    if !l.is_empty() && !crate::say::LANGS.iter().any(|(c, _)| *c == l) {
+                        bail!("Mimir doesn't speak {l} yet");
+                    }
+                    self.db.set_setting("language", &l)?;
+                    crate::say::load(&self.db);
+                }
+                ok(json!({
+                    "lang": self.db.setting("language")?.unwrap_or_default(),
+                    "system": crate::say::system(),
+                    "langs": crate::say::LANGS,
+                }))
+            }
             // The weekly "what I learned" message in chat apps: on unless switched off (get without `on`, set with it).
+            // Idle hours before a messaging chat's next message starts a new session (get without `hours`; 0 = never).
+            "fresh_after_hours" => {
+                if let Some(h) = arg::<Option<i64>>(a, "hours")? {
+                    self.db.set_setting("fresh_after_hours", &h.clamp(0, 24 * 30).to_string())?;
+                }
+                ok(self.db.setting("fresh_after_hours")?.and_then(|v| v.parse::<i64>().ok()).unwrap_or(crate::FRESH_AFTER_HOURS))
+            }
             "weekly_review" => {
                 if let Some(on) = arg::<Option<bool>>(a, "on")? {
                     self.db.set_setting("weekly_review", if on { "on" } else { "off" })?;
@@ -980,7 +993,19 @@ impl Host {
             )?),
             "delete_routine" => ok(self.db.routine_delete(arg(a, "chat_id")?, arg(a, "id")?)?),
             // With bot_id: that bot's own conversation in the chat (a bot opened from the sidebar); without, everyone's.
-            "messages" => ok(self.db.messages_of(arg(a, "chat_id")?, arg(a, "bot_id")?, 200)?),
+            // Paging back: before_id, the 200 before it; from_id, everything from it on (a search hit, and what's below).
+            "messages" => {
+                let from: Option<i64> = arg(a, "from_id")?;
+                // ponytail: from_id loads up to 20k at once; page it if chats ever get that long
+                ok(self.db.messages_of(arg(a, "chat_id")?, arg(a, "bot_id")?, arg(a, "before_id")?, from.unwrap_or(0), if from.is_some() { 20_000 } else { 200 })?)
+            }
+            // The chat's messages matching `query`, best first (for one bot only, with bot_id).
+            "chat_search" => {
+                let bot: Option<i64> = arg(a, "bot_id")?;
+                let hits = self.db.chat_search(arg(a, "chat_id")?, &arg::<String>(a, "query")?, None, (0, i64::MAX), 60)?;
+                ok(hits.into_iter().filter(|h| bot.is_none_or(|b| h.bot_id == b)).take(30)
+                    .map(|h| json!({"id": h.id, "ts": h.ts, "bot_id": h.bot_id, "role": h.role, "excerpt": h.excerpt})).collect::<Vec<_>>())
+            }
             "runs" => ok(self.db.runs(Some(arg(a, "chat_id")?), 200)?),
             // Last 30 days for one chat.
             // What other bots did for a run (tasks it handed over): their runs with each step.
@@ -1053,6 +1078,22 @@ impl Host {
                     bail!("not a hold");
                 }
                 ok(self.db.hold_clear(&key, true)?)
+            }
+            // Pause all bots (no bot_id) or one, until a time (or until resumed); on: false resumes. Without `on`, what's paused.
+            "pause" => {
+                let bot: Option<i64> = arg(a, "bot_id")?;
+                match arg::<Option<bool>>(a, "on")? {
+                    Some(true) => {
+                        let until: i64 = arg::<Option<i64>>(a, "until")?.unwrap_or(0);
+                        if until != 0 && until <= crate::db::now() {
+                            bail!("that time has already passed");
+                        }
+                        self.db.pause_set(bot, until)?
+                    }
+                    Some(false) => self.db.pause_end(bot)?,
+                    None => {}
+                }
+                ok(self.db.pauses(crate::db::now())?.into_iter().map(|(bot, until)| json!({"bot_id": bot, "until": until})).collect::<Vec<_>>())
             }
             // Daily token caps (get without values, set with them; 0 or null = no cap).
             "caps" => {
@@ -1176,11 +1217,65 @@ mod tests {
         }
     }
 
+    /// A data folder of the test's own, removed at the end (Host::new tidies tmp/ and media/ in it).
+    struct Home(std::path::PathBuf);
+    impl Home {
+        fn new(name: &str) -> Home {
+            let dir = std::env::temp_dir().join(format!("mimir-test-{name}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            Home(dir)
+        }
+    }
+    impl Drop for Home {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// Every command the UI sends is one the host or the desktop app handles: a name with no handler is a button
+    /// that does nothing.
+    #[test]
+    fn every_ui_command_has_a_handler() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let read = |p: &str| std::fs::read_to_string(root.join(p)).unwrap();
+        // ponytail: reads the source, not a list. The host's names are the quoted ones before `=>` in Host::call;
+        // the desktop's, any word between quotes in its `api` (extra words only make this check looser).
+        let host = read("crates/mimir-core/src/host.rs");
+        let call = &host[host.find("pub async fn call").unwrap()..host.find("#[cfg(test)]").unwrap()];
+        let desktop = read("crates/mimir-desktop/src/main.rs");
+        let api = &desktop[desktop.find("async fn api(").unwrap()..desktop.find("fn toggle_quick").unwrap()];
+        let quoted = |s: &str| s.split('"').filter(|w| !w.is_empty() && w.chars().all(|c| c.is_ascii_lowercase() || c == '_')).map(String::from).collect::<Vec<_>>();
+        let mut known: std::collections::HashSet<String> = quoted(api).into_iter().collect();
+        for line in call.lines().filter(|l| l.trim_start().starts_with('"')) {
+            if let Some((pat, _)) = line.split_once("=>") {
+                known.extend(quoted(pat));
+            }
+        }
+        let (mut missing, mut seen) = (vec![], 0);
+        for f in std::fs::read_dir(root.join("ui/src")).unwrap() {
+            let path = f.unwrap().path();
+            let src = std::fs::read_to_string(&path).unwrap();
+            // invoke('name'…), invoke<T>('name'…), localInvoke('name'…); not api.ts's own tauriInvoke('api', …).
+            for (i, _) in src.match_indices("nvoke").filter(|(i, _)| !src[..*i].ends_with("tauriI")) {
+                let rest = &src[i + 5..];
+                let rest = if rest.starts_with('<') { &rest[rest.find(">(").map_or(0, |j| j + 1)..] } else { rest };
+                if let Some(name) = rest.strip_prefix("('").and_then(|r| r.split('\'').next()) {
+                    seen += 1;
+                    if !known.contains(name) {
+                        missing.push(format!("{}: {name}", path.display()));
+                    }
+                }
+            }
+        }
+        assert!(known.len() > 100 && seen > 100, "found the handlers and the calls");
+        assert!(missing.is_empty(), "UI commands nothing handles: {missing:?}");
+    }
+
     #[tokio::test]
     async fn the_skill_library() {
-        let p = std::env::temp_dir().join(format!("mimir-library-{}.db", std::process::id()));
-        let _ = std::fs::remove_file(&p);
-        let host = Host::new(Db::open(&p).unwrap(), std::env::temp_dir(), Arc::new(Mem(Default::default())), tokio::runtime::Handle::current(), "server");
+        let home = Home::new("library");
+        let host = Host::new(Db::open(&home.0.join("mimir.db")).unwrap(), home.0.clone(), Arc::new(Mem(Default::default())), tokio::runtime::Handle::current(), "server");
         let lib = host.call("skill_library", &json!({"chat_id": 0})).await.unwrap();
         let lib = lib.as_array().unwrap();
         assert_eq!(lib.len(), crate::library::all().len());
@@ -1200,17 +1295,24 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch() {
-        let p = std::env::temp_dir().join(format!("mimir-host-{}.db", std::process::id()));
-        let _ = std::fs::remove_file(&p);
-        let db = Db::open(&p).unwrap();
-        let host = Host::new(db, std::env::temp_dir(), Arc::new(Mem(Default::default())), tokio::runtime::Handle::current(), "server");
+        let home = Home::new("host");
+        let mem = Arc::new(Mem(Default::default()));
+        let host = Host::new(Db::open(&home.0.join("mimir.db")).unwrap(), home.0.clone(), mem.clone(), tokio::runtime::Handle::current(), "server");
 
         assert_eq!(host.call("info", &json!({})).await.unwrap()["mode"], "server");
         let bot = json!({"id":0,"name":"Ops","persona":"","provider":"claude","model":"","base_url":"","tools":""});
-        let id = host.call("save_bot", &json!({"bot": bot, "secrets": {"discord_token": "x"}})).await.unwrap();
+        // A misspelled field inside an argument is an error, not dropped; `bots`' channel flags sent back are fine.
+        assert!(host.call("save_bot", &json!({"bot": bot, "secrets": {"slackBotToken": "x"}})).await.is_err());
+        let mut typo = bot.clone();
+        typo["baseUrl"] = json!("");
+        assert!(host.call("save_bot", &json!({"bot": typo})).await.is_err());
+        // Half a Slack pair: the token is stored, but no channel starts (a test opens no connections).
+        let id = host.call("save_bot", &json!({"bot": bot, "secrets": {"slack_bot_token": " x "}})).await.unwrap();
+        assert_eq!(mem.get(&key(id.as_i64().unwrap(), SLACK_BOT)).as_deref(), Some("x"));
         let bots = host.call("bots", &json!({})).await.unwrap();
         assert_eq!(bots[1]["name"], "Ops");
-        assert_eq!((bots[1]["has_discord"].as_bool(), bots[0]["has_discord"].as_bool()), (Some(true), Some(false)));
+        assert_eq!((bots[1]["has_slack"].as_bool(), bots[0]["has_slack"].as_bool()), (Some(false), Some(false)));
+        assert_eq!(host.call("save_bot", &json!({"bot": bots[1], "secrets": {}})).await.unwrap(), id);
         // Saving starts the bot; asking for statuses starts any not running yet (one a bot made in its tool process).
         assert_eq!(host.call("statuses", &json!({})).await.unwrap().as_array().unwrap().len(), 2);
 
