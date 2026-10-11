@@ -94,11 +94,12 @@ if (await forgetBtn.count()) { await forgetBtn.click(); await p.waitForTimeout(4
 check('forgotten memory leaves the list', await until(async () => (await p.getByRole('button', { name: /^Forget Dentist$/ }).count()) === 0, 5000))
 
 // Skills: add one from the library
-await tab('Skills').click(); await p.waitForTimeout(1200)
+// The library loads in seconds on a busy CI runner: wait for it rather than a fixed time.
+await tab('Skills').click()
 const add = p.getByRole('button', { name: /^Add/ }).first()
-check('library Add button', (await add.count()) > 0)
-if (await add.count()) { await add.click(); await p.waitForTimeout(1200) }
-check('skill added', (await main()).match(/Morning briefing|Inbox triage|added/i) !== null)
+check('library Add button', await until(async () => (await add.count()) > 0))
+if (await add.count()) await add.click()
+check('skill added', await until(async () => (await main()).match(/Morning briefing|Inbox triage|added/i) !== null))
 
 // Activity has the runs
 await tab('Activity').click(); await p.waitForTimeout(1200)
