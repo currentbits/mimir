@@ -743,6 +743,8 @@ impl Db {
         add_col("runs", "cache_write", "INTEGER NOT NULL DEFAULT 0")?;
         // Memories already put in this session's messages (comma-separated ids): it keeps them, so they aren't sent again.
         add_col("sessions", "sent", "TEXT NOT NULL DEFAULT ''")?;
+        // A hash of the instructions the session holds ('' = unknown, from before this column).
+        add_col("sessions", "prompt", "TEXT NOT NULL DEFAULT ''")?;
         c.execute(
             "INSERT OR IGNORE INTO bots(id, name, provider, model, base_url, created_at) VALUES (1, 'Mimir',
                coalesce((SELECT value FROM settings WHERE key='provider'), 'claude'),
@@ -2570,16 +2572,20 @@ impl Db {
         Ok(self.c().query_row("SELECT session FROM sessions WHERE bot_id=?1 AND chat_id=?2", [bot, chat], |r| r.get(0)).optional()?)
     }
 
-    /// Memories already sent in the chat's current session.
-    pub fn session_sent(&self, bot: i64, chat: i64) -> Result<Vec<i64>> {
-        let s: Option<String> = self.c().query_row("SELECT sent FROM sessions WHERE bot_id=?1 AND chat_id=?2", [bot, chat], |r| r.get(0)).optional()?;
-        Ok(s.unwrap_or_default().split(',').filter_map(|s| s.parse().ok()).collect())
+    /// What the chat's current session already holds: the memories sent in it, and a hash of its instructions.
+    pub fn session_held(&self, bot: i64, chat: i64) -> Result<(Vec<i64>, String)> {
+        let (s, p): (String, String) = self
+            .c()
+            .query_row("SELECT sent, prompt FROM sessions WHERE bot_id=?1 AND chat_id=?2", [bot, chat], |r| Ok((r.get(0)?, r.get(1)?)))
+            .optional()?
+            .unwrap_or_default();
+        Ok((s.split(',').filter_map(|s| s.parse().ok()).collect(), p))
     }
 
-    /// The memories the chat's current session holds (call after set_session).
-    pub fn set_session_sent(&self, bot: i64, chat: i64, ids: &[i64]) -> Result<()> {
+    /// The memories and instructions the chat's current session holds (call after set_session).
+    pub fn set_session_held(&self, bot: i64, chat: i64, ids: &[i64], prompt: &str) -> Result<()> {
         let list = ids.iter().map(i64::to_string).collect::<Vec<_>>().join(",");
-        self.c().execute("UPDATE sessions SET sent=?3 WHERE bot_id=?1 AND chat_id=?2", params![bot, chat, list])?;
+        self.c().execute("UPDATE sessions SET sent=?3, prompt=?4 WHERE bot_id=?1 AND chat_id=?2", params![bot, chat, list, prompt])?;
         Ok(())
     }
 
@@ -3815,12 +3821,12 @@ mod tests {
         d.set_session(1, 5, Some("s1")).unwrap();
         d.set_session(id, 5, Some("s2")).unwrap();
         assert_eq!((d.session(1, 5).unwrap().as_deref(), d.session(id, 5).unwrap().as_deref()), (Some("s1"), Some("s2")));
-        d.set_session_sent(1, 5, &[3, 7]).unwrap();
+        d.set_session_held(1, 5, &[3, 7], "h1").unwrap();
         d.set_session(1, 5, Some("s1b")).unwrap();
-        assert_eq!(d.session_sent(1, 5).unwrap(), vec![3, 7], "kept when the CLI names the resumed session anew");
+        assert_eq!(d.session_held(1, 5).unwrap(), (vec![3, 7], "h1".into()), "kept when the CLI names the resumed session anew");
         d.set_session(1, 5, None).unwrap();
         assert_eq!(d.session(1, 5).unwrap(), None);
-        assert!(d.session_sent(1, 5).unwrap().is_empty(), "a fresh conversation starts with none sent");
+        assert_eq!(d.session_held(1, 5).unwrap(), (vec![], String::new()), "a fresh conversation starts with nothing held");
         // API history: its start moves 10 messages at a time.
         let lens: Vec<usize> = (0..25).map(|i| { d.log(1, 77, "user", &i.to_string(), None).unwrap(); d.recent_stepped(1, 77).unwrap().len() }).collect();
         assert_eq!(&lens[..12], &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);

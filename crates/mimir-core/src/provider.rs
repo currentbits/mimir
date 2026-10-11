@@ -136,6 +136,12 @@ impl Provider {
         matches!(self, Provider::OpenAi { .. } | Provider::ChatGpt { .. })
     }
 
+    /// A resumed session keeps the instructions from its first turn and ignores new ones (verified on claude 2.1.283
+    /// and grok 1.0.50; codex 0.159 reads model_instructions_file again on every run).
+    pub fn keeps_first_instructions(&self) -> bool {
+        matches!(self, Provider::Claude { .. } | Provider::Grok { .. })
+    }
+
     pub async fn run(&self, ctx: &ToolCtx, system: &str, history: &[(String, String)], user: &str, session: Option<String>) -> Result<Reply> {
         match self {
             Provider::Claude { model, home } | Provider::Codex { model, home } | Provider::Grok { model, home } => {

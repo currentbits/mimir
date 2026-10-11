@@ -152,9 +152,9 @@ pub async fn incognito_turn(provider: &Provider, ctx: &ToolCtx, history: &[(Stri
     Ok(out?.text)
 }
 
-/// "Now: Tue 14:05", at the top of each turn's message.
+/// "Now: Tue 2026-10-13 14:05 CEST", at the top of each turn's message.
 fn now_line() -> String {
-    format!("Now: {}\n\n", chrono::Local::now().format("%a %H:%M"))
+    format!("Now: {}\n\n", chrono::Local::now().format("%a %Y-%m-%d %H:%M %Z"))
 }
 
 /// A routine running well after it was due (the computer slept, Mimir was off, a hold): said, so a morning brief at
@@ -672,10 +672,9 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
         ""
     };
     let system = format!(
-        "Your name is {}. {PERSONA}{role}{guest}{}{team}{logins}{plans}{skills}\n\nToday is {}; each message starts with the time it was sent.\n{}",
+        "Your name is {}. {PERSONA}{role}{guest}{}{team}{logins}{plans}{skills}\n\nEach message starts with the date and time it was sent.\n{}",
         bot.name,
         if quiet { QUIET } else { "" },
-        chrono::Local::now().format("%A %Y-%m-%d %Z"),
         block("standing_memory", &ctx.db.bootstrap(&scope)?)
     );
     // Standing memory and this automatic recall hold only confirmed memories (a word in common with an unconfirmed one
@@ -710,12 +709,20 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
     // Routines run in a fresh session so they don't derail the live conversation.
     let session = if is_routine { None } else { ctx.db.session(ctx.bot_id, ctx.chat_id)? };
     // A CLI session keeps every message it was sent: a memory recalled earlier in it isn't sent again.
-    let sent = if session.is_some() && !provider.uses_history() { ctx.db.session_sent(ctx.bot_id, ctx.chat_id)? } else { vec![] };
+    let (sent, held_prompt) = if session.is_some() && !provider.uses_history() { ctx.db.session_held(ctx.bot_id, ctx.chat_id)? } else { (vec![], String::new()) };
     let unsent: Vec<_> = recall.iter().filter(|e| !sent.contains(&e.id)).cloned().collect();
-    // The time goes here, not in the system prompt: a resumed `claude -p` keeps its first turn's instructions (so the
-    // time froze there), and for API accounts a prompt that changed every minute broke the cached prefix behind it.
+    // The date and time go here, not in the system prompt: a resumed `claude -p` keeps its first turn's instructions
+    // (so the time froze there), and for API accounts a prompt that changed every minute broke the cached prefix.
     let user_with = |recall: &[db::Entry]| format!("{}{}{past}{last}{text}", now_line(), block("memory", recall));
-    let user = user_with(&unsent);
+    // For the same reason a resumed claude or grok session never sees a new standing memory, role, skill or teammate:
+    // when the instructions changed since it began, the new ones come along in this message, once.
+    let prompt_hash = format!("{:x}", <sha2::Sha256 as sha2::Digest>::digest(system.as_bytes()));
+    let update = if session.is_some() && provider.keeps_first_instructions() && held_prompt != prompt_hash {
+        format!("<instructions_update>\nYour instructions changed since this conversation began. These replace them:\n{system}\n</instructions_update>\n\n")
+    } else {
+        String::new()
+    };
+    let user = format!("{update}{}", user_with(&unsent));
 
     let history = if provider.uses_history() { ctx.db.recent_stepped(ctx.bot_id, ctx.chat_id)? } else { vec![] };
     // Accounts that are handed the history again: if it holds outside content, so does this turn.
@@ -756,7 +763,7 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
         for e in recall.iter().filter(|e| !held.contains(&e.id)).collect::<Vec<_>>() {
             held.push(e.id);
         }
-        ctx.db.set_session_sent(ctx.bot_id, ctx.chat_id, &held)?;
+        ctx.db.set_session_held(ctx.bot_id, ctx.chat_id, &held, &prompt_hash)?;
     }
     // A quiet check that found nothing stays silent: no message, no conversation entry (the run log has it).
     if quiet && is_nothing(&reply.text) {

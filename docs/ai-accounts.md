@@ -57,6 +57,6 @@ reports (subscriptions aren't billed per token); OpenRouter runs show what OpenR
 show tokens only.
 
 Hover the tokens to see how much of the input came from the AI's prompt cache and how much was written to it. To keep
-that cache useful, the instructions carry only the date (each message starts with the time it was sent), Claude
+that cache useful, the instructions carry no date or time (each message starts with them), Claude
 models on OpenRouter get cache breakpoints, and API accounts are handed the last 10 to 19 messages, a window that
 moves ten messages at a time rather than two every turn.
