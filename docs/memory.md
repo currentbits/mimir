@@ -97,8 +97,8 @@ never suggests forgetting one for this, so the history stays.
 **Check before accepting.** On a suggestion, *Check* replays your past corrections that look related, each once with
 the change and once without, and a judge that isn't told which is which says whether each reply still has the problem
 you corrected. It says, for example, "Fixes 2 of 3 past corrections about this; 1 was already fine without it", so a
-change your AI no longer needs shows as such. It uses your AI account for a few short replies, so it runs only when you
-press it.
+change your AI no longer needs shows as such. It uses your AI account for a few short replies (sent all at once, then
+judged), so it runs only when you press it.
 
 Accepted preferences have **Check** too (on the memory). It replays on your memory bot's own model, not the cheaper
 tidy-up model, so after switching models you can see whether a preference is still needed: one that fixes nothing the
