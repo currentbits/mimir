@@ -545,6 +545,23 @@ pub(crate) fn paused_note(until: i64) -> String {
     }
 }
 
+/// Whether a chat can be the decisions chat: paired, private, yours (not a guest's), and in a messaging app.
+pub(crate) fn decisions_ok(db: &Db, chat: i64) -> bool {
+    chat != crate::host::LOCAL_CHAT && chat != crate::INCOGNITO_CHAT && db.is_paired(chat).unwrap_or(false) && db.chat_private(chat) && !db.chat_guest(chat)
+}
+
+/// The one chat (setting decisions_chat) that also gets the routines' asks, failed routines and memory suggestions
+/// from every other chat. None if unset, or if that chat can't be it any more (unpaired, or now a guest's).
+pub(crate) fn decisions_chat(db: &Db) -> Option<i64> {
+    let chat = db.setting("decisions_chat").ok()??.parse().ok()?;
+    decisions_ok(db, chat).then_some(chat)
+}
+
+/// A chat's name, for saying where something came from.
+fn chat_name(db: &Db, chat: i64) -> String {
+    db.chats().unwrap_or_default().into_iter().find(|c| c.chat_id == chat).map(|c| c.title).unwrap_or_else(|| format!("chat {chat}"))
+}
+
 /// `quiet_now` at the current local time.
 pub fn quiet(db: &Db) -> bool {
     quiet_now(db, chrono::Local::now())
@@ -998,8 +1015,8 @@ impl Core {
         Ok(running.map(|h| h.abort()).is_some())
     }
 
-    /// An Approve/Deny button press. Only the chat the request belongs to can decide it, and in it only the person who
-    /// paired it (an error says so, for the button's reply).
+    /// An Approve/Deny button press. Only the chat the request belongs to can decide it (or the decisions chat it was
+    /// also sent to), and in it only the person who paired it (an error says so, for the button's reply).
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn decide(&self, chan: &Chan, ext: &str, from: Sender<'_>, id: i64, d: Decision) -> Result<Option<Approval>> {
         let approve = d != Decision::Deny;
@@ -1008,17 +1025,23 @@ impl Core {
                 if self.sender_ok(chat, from)? != Some(true) || self.db.chat_owner(chat)? != from.id {
                     anyhow::bail!(tr("Only the person who paired me here can answer this."));
                 }
+                let mirror = self.db.approval_mirror(id)? == Some(chat) && decisions_ok(&self.db, chat);
+                let scope = (!mirror).then_some(chat);
                 if d == Decision::RestOfRun {
-                    self.db.approval_allow_rest_of_run(id, Some(chat))?;
+                    self.db.approval_allow_rest_of_run(id, scope)?;
                 }
-                let a = self.db.approval_decide(id, approve, Some(chat))?;
+                let a = self.db.approval_decide(id, approve, scope)?;
                 if let Some(a) = &a {
                     crate::tools::after_decision(&self.db, a);
                     if d == Decision::Always {
                         crate::tools::always_allow(&self.db, a)?;
                     }
-                    // The button handler edits its own card.
-                    self.db.approval_mark_closed(a.id)?;
+                    // The button handler edits its own card; the approvals loop closes the other one.
+                    if a.chat_id == chat {
+                        self.db.approval_mark_closed(a.id)?;
+                    } else {
+                        self.db.mirror_mark_closed(a.id)?;
+                    }
                 }
                 Ok(a)
             }
@@ -1298,6 +1321,15 @@ impl Core {
         Ok(())
     }
 
+    /// Also said in the decisions chat, unless that's where it happened (`from`) or it's quiet hours (Needs you has it).
+    // ponytail: dropped in quiet hours rather than queued; queue it for the digest if that's missed
+    async fn tell_decisions(&self, chans: &[Chan], from: Option<i64>, text: &str) {
+        let Some(to) = decisions_chat(&self.db).filter(|to| Some(*to) != from && !quiet(&self.db)) else { return };
+        if let Some((c, ext)) = Self::chan_for(chans, to, &self.db) {
+            c.send(&ext, text).await;
+        }
+    }
+
     fn chan_for(chans: &[Chan], chat: i64, db: &Db) -> Option<(Chan, String)> {
         let (kind, ext) = db.chat_address(chat).ok()??;
         chans.iter().find(|c| c.kind() == kind).map(|c| (c.clone(), ext))
@@ -1418,6 +1450,7 @@ impl Core {
                 if r.delivery == "digest" {
                     self.db.digest_add(self.bot, r.chat_id, r.id, &text, false)?;
                 }
+                self.tell_decisions(chans, Some(r.chat_id), &trf("From {chat}: {text}", &[("chat", &chat_name(&self.db, r.chat_id)), ("text", &text)])).await;
                 text
             }
         };
@@ -1560,7 +1593,17 @@ impl Core {
                     // No chat lock: it reads the chat and calls the AI without a session, so replies needn't wait.
                     let (db, provider, bot, id) = (self.db.clone(), self.provider.clone(), self.bot, chat.chat_id);
                     match self.own_task(id, async move { crate::tidy::run(&db, &provider, bot, id).await }).await {
-                        Ok(n) if n > 0 => eprintln!("tidy-up: {n} memory suggestions for chat {}", chat.chat_id),
+                        Ok(n) if n > 0 => {
+                            eprintln!("tidy-up: {n} memory suggestions for chat {}", chat.chat_id);
+                            let at = [("n", n.to_string()), ("chat", chat.title.clone())];
+                            let at = at.each_ref().map(|(k, v)| (*k, v.as_str()));
+                            let what = if n == 1 {
+                                trf("🧠 1 memory suggestion for {chat}: accept or dismiss it in Mimir's Needs you.", &at)
+                            } else {
+                                trf("🧠 {n} memory suggestions for {chat}: accept or dismiss them in Mimir's Needs you.", &at)
+                            };
+                            self.tell_decisions(&chans, None, &what).await;
+                        }
                         Ok(_) => {}
                         Err(e) => eprintln!("tidy-up for chat {}: {e:#}", chat.chat_id),
                     }
@@ -1585,6 +1628,26 @@ impl Core {
                     None
                 });
                 let _ = self.db.approval_mark_notified(a.id, card.as_deref());
+            }
+            // A routine's ask from any other chat (the app's too) also goes to the decisions chat, saying where it's from.
+            if let Some(to) = decisions_chat(&self.db).filter(|_| !quiet)
+                && let Some((c, ext)) = Self::chan_for(&chans, to, &self.db)
+            {
+                for mut a in self.db.approvals_to_mirror(self.bot, to).unwrap_or_default() {
+                    let id = a.id;
+                    a.summary = format!("{}\n\n{}", a.summary, trf("From: {chat}", &[("chat", &chat_name(&self.db, a.chat_id))]));
+                    let card = c.card(&ext, &a).await.unwrap_or_else(|e| {
+                        eprintln!("approval #{id} card to the decisions chat failed: {e:#}");
+                        None
+                    });
+                    let _ = self.db.approval_mark_mirrored(id, to, card.as_deref());
+                }
+            }
+            for (a, chat, card) in self.db.mirrors_to_close(self.bot).unwrap_or_default() {
+                if let Some((c, ext)) = Self::chan_for(&chans, chat, &self.db) {
+                    c.draft_edit(&ext, &card, &verdict(&a)).await;
+                    let _ = self.db.mirror_mark_closed(a.id);
+                }
             }
             // Decided in the app, the tray or the CLI, or ran out: the card shows the outcome, without buttons.
             for (a, card) in self.db.approvals_to_close(self.bot).unwrap_or_default() {
@@ -1913,6 +1976,63 @@ mod tests {
         assert!(db.over_cap(&r, 0).unwrap().is_none());
         db.set_setting("cap_routine", "3000").unwrap();
         assert!(db.over_cap(&r, 0).unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn routine_asks_also_go_to_the_decisions_chat_and_close_everywhere() {
+        let p = std::env::temp_dir().join(format!("mimir-decisions-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = Db::open(&p).unwrap();
+        let core = Core {
+            db: db.clone(),
+            bot: 1,
+            provider: Arc::new(Provider::new("claude", None, None, None, std::env::temp_dir()).unwrap()),
+            code: Default::default(),
+            status: Default::default(),
+            misses: Default::default(),
+            locks: Default::default(),
+            greeted: Default::default(),
+        };
+        let tg = Chan::Telegram(Tg::new("t").unwrap());
+        let me = Sender { id: "42", dm: true };
+        // Only your own private chat in a messaging app can be it: not a group, a guest's chat, or the app.
+        for (ext, owner) in [("42", "42"), ("-100", "42"), ("77", "77"), ("5", "42")] {
+            let chat = db.pair_external("telegram", ext, ext).unwrap();
+            db.chat_set_owner(chat, owner).unwrap();
+        }
+        db.chat_set_guest(77, true).unwrap();
+        db.pair(crate::host::LOCAL_CHAT, "This computer").unwrap();
+        assert!(decisions_ok(&db, 42) && !decisions_ok(&db, -100) && !decisions_ok(&db, 77) && !decisions_ok(&db, crate::host::LOCAL_CHAT));
+        db.set_setting("decisions_chat", "77").unwrap();
+        assert_eq!(decisions_chat(&db), None, "a guest's chat is never used, even if saved");
+        db.set_setting("decisions_chat", "42").unwrap();
+        assert_eq!(decisions_chat(&db), Some(42));
+        let ask = |chat, parked| {
+            let id = db.approval_create(1, chat, "email_send", "send it", 3600, "rule", None).unwrap();
+            if parked {
+                db.approval_park(id, "{}", false).unwrap();
+            }
+            id
+        };
+        // A routine's ask in the app chat goes to the decisions chat; a live ask, or one from the decisions chat itself, doesn't.
+        let (app, live) = (ask(crate::host::LOCAL_CHAT, true), ask(5, false));
+        ask(42, true);
+        assert_eq!(db.approvals_to_mirror(1, 42).unwrap().iter().map(|a| a.id).collect::<Vec<_>>(), vec![app]);
+        db.approval_mark_mirrored(app, 42, Some("m1")).unwrap();
+        assert!(db.approvals_to_mirror(1, 42).unwrap().is_empty(), "sent once");
+        // Another chat can't answer it; the decisions chat can, and its own card is the one its button edits.
+        assert!(core.decide(&tg, "5", me, app, Decision::Once).unwrap().is_none());
+        assert_eq!(core.decide(&tg, "42", me, app, Decision::Deny).unwrap().unwrap().status, "denied");
+        assert!(db.mirrors_to_close(1).unwrap().is_empty());
+        // A routine's ask from another chat, answered there: the decisions chat's card closes too.
+        let other = ask(5, true);
+        db.approval_mark_notified(other, Some("c5")).unwrap();
+        db.approval_mark_mirrored(other, 42, Some("m2")).unwrap();
+        assert!(core.decide(&tg, "5", me, other, Decision::Once).unwrap().is_some());
+        assert_eq!(db.mirrors_to_close(1).unwrap().into_iter().map(|(a, c, r)| (a.id, c, r)).collect::<Vec<_>>(), vec![(other, 42, "m2".to_string())]);
+        assert!(db.approvals_to_close(1).unwrap().is_empty(), "the button edited its own card");
+        // The decisions chat can't answer asks that weren't sent to it.
+        assert!(core.decide(&tg, "42", me, live, Decision::Once).unwrap().is_none());
     }
 
     #[tokio::test]

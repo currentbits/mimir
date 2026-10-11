@@ -489,7 +489,7 @@ PRAGMA secure_delete=ON;
 
 /// The schema version this build writes (`PRAGMA user_version`). A schema change bumps it and adds a step to
 /// `migrate`; each step runs once per database.
-const VERSION: i64 = 4;
+const VERSION: i64 = 5;
 
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS entries(
@@ -714,6 +714,9 @@ fn migrate(c: &Connection) -> Result<()> {
     if v < 4 {
         migrate_v4(c)?;
     }
+    if v < 5 {
+        migrate_v5(c)?;
+    }
     c.execute(
         "INSERT INTO settings(key, value) VALUES ('schema_written_by', ?1) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
         [env!("CARGO_PKG_VERSION")],
@@ -908,6 +911,16 @@ fn migrate_v4(c: &Connection) -> Result<()> {
     for (table, col, ty) in [("routines", "urgent", "TEXT NOT NULL DEFAULT ''"), ("runs", "urgent", "INTEGER NOT NULL DEFAULT 0")] {
         if !c.prepare(&format!("SELECT 1 FROM pragma_table_info('{table}') WHERE name='{col}'"))?.exists([])? {
             c.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {col} {ty}"))?;
+        }
+    }
+    Ok(())
+}
+
+/// Version 5: a routine's ask also sent to the decisions chat: that chat, and its card there until it shows the outcome.
+fn migrate_v5(c: &Connection) -> Result<()> {
+    for (col, decl) in [("mirror_chat", "INTEGER"), ("mirror_ref", "TEXT")] {
+        if !c.prepare(&format!("SELECT 1 FROM pragma_table_info('approvals') WHERE name='{col}'"))?.exists([])? {
+            c.execute_batch(&format!("ALTER TABLE approvals ADD COLUMN {col} {decl}"))?;
         }
     }
     Ok(())
@@ -2655,6 +2668,41 @@ impl Db {
     /// The card now shows the outcome; don't edit it again.
     pub fn approval_mark_closed(&self, id: i64) -> Result<()> {
         self.c().execute("UPDATE approvals SET notified=2 WHERE id=?1", [id])?;
+        Ok(())
+    }
+
+    /// This bot's pending routine asks from other chats (not incognito) not yet sent to the decisions chat `to`.
+    pub fn approvals_to_mirror(&self, bot: i64, to: i64) -> Result<Vec<Approval>> {
+        self.approvals_where(&format!("status = 'pending' AND parked_args IS NOT NULL AND mirror_chat IS NULL AND chat_id NOT IN (-1, {to}) AND bot_id = ?1"), bot)
+    }
+
+    /// The ask was sent to the decisions chat `chat` (`card_ref`: its message, if the channel said).
+    pub fn approval_mark_mirrored(&self, id: i64, chat: i64, card_ref: Option<&str>) -> Result<()> {
+        self.c().execute("UPDATE approvals SET mirror_chat=?2, mirror_ref=?3 WHERE id=?1", params![id, chat, card_ref])?;
+        Ok(())
+    }
+
+    /// The decisions chat this ask was also sent to, if any.
+    pub fn approval_mirror(&self, id: i64) -> Result<Option<i64>> {
+        Ok(self.c().query_row("SELECT mirror_chat FROM approvals WHERE id=?1", [id], |r| r.get(0)).optional()?.flatten())
+    }
+
+    /// This bot's decisions-chat cards whose ask was answered elsewhere or ran out: (approval, its chat, card message).
+    pub fn mirrors_to_close(&self, bot: i64) -> Result<Vec<(Approval, i64, String)>> {
+        Self::expire_stale(&self.c())?;
+        let list = self.approvals_where("status != 'pending' AND mirror_ref IS NOT NULL AND bot_id = ?1", bot)?;
+        let c = self.c();
+        let mut out = vec![];
+        for a in list {
+            let (chat, card) = c.query_row("SELECT mirror_chat, mirror_ref FROM approvals WHERE id=?1", [a.id], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            out.push((a, chat, card));
+        }
+        Ok(out)
+    }
+
+    /// The decisions-chat card now shows the outcome; don't edit it again.
+    pub fn mirror_mark_closed(&self, id: i64) -> Result<()> {
+        self.c().execute("UPDATE approvals SET mirror_ref=NULL WHERE id=?1", [id])?;
         Ok(())
     }
 
