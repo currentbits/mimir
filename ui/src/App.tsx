@@ -288,12 +288,14 @@ function RoutineCard({ id, chatId, onChange }: { id: number; chatId: number; onC
     </div>
   )
 }
-type Chat = { chat_id: number; title: string; memories: number; channel: string; guest?: boolean }
+type Chat = { chat_id: number; title: string; memories: number; channel: string; guest?: boolean; household?: boolean; family?: boolean; private?: boolean }
 type Kind = 'convention' | 'knowledge' | 'task'
 type EntryRow = {
   id: number; kind: Kind; title: string; body: string; source: string; created_at: number
   status: 'active' | 'superseded' | 'forgotten'; superseded_by: number | null; access_count: number; pinned?: boolean; background?: boolean
   origin?: '' | 'you' | 'bot' | 'tidy' | 'import' | 'know_me'; bot_id?: number | null; tainted?: boolean; missteps?: number; valid_until?: number | null; asked?: string | null
+  /** Kept by one bot only (0: all bots). */
+  for_bot?: number
 }
 type Delivery = 'now' | 'digest' | 'log'
 type Routine = { id: number; bot_id: number; quiet: boolean; paused: boolean; chat_id: number; cron: string; prompt: string; next_fire: number; delivery: Delivery; once?: boolean; watch?: string }
@@ -330,13 +332,14 @@ function RoutineHealth({ s, onReset }: { s?: RoutineStats; onReset?: () => void 
     </div>
   )
 }
-type Approval = { id: number; bot_id: number; chat_id: number; tool: string; summary: string; created_at: number; expires_at: number; kind?: 'rule' | 'guarded' | 'login' | 'plan' | 'bot' | 'send' | 'takeover'; site?: string | null; parked?: boolean; allowed_before?: number }
+type Approval = { id: number; bot_id: number; chat_id: number; tool: string; summary: string; created_at: number; expires_at: number; kind?: 'rule' | 'guarded' | 'login' | 'plan' | 'bot' | 'send' | 'takeover' | 'remind'; site?: string | null; parked?: boolean; allowed_before?: number }
 
 /** What an approval would do, in a few words, and whether it can become an "always allow". */
 function approvalRisk(a: Approval): { icon: string; label: string; tone: string; always: boolean } {
   if (a.kind === 'takeover') return { icon: 'laptop', label: 'A step only you should do. Take over on the live screen, then press Give back; the bot carries on.', tone: 'login', always: false }
   if (a.kind === 'login') return { icon: 'key', label: 'Types a saved login. Every use asks you.', tone: 'login', always: false }
   if (a.kind === 'send') return { icon: 'send', label: 'Sends an email as you, to the address shown first. Every email asks you.', tone: 'rule', always: false }
+  if (a.kind === 'remind') return { icon: 'user', label: 'Sends to someone else’s chat in your household. Asked the first time for each person.', tone: 'rule', always: false }
   if (a.kind === 'bot') return { icon: 'user', label: 'Makes a new bot with this role, on the same AI account. Every new bot asks you.', tone: 'rule', always: false }
   if (a.kind === 'plan') return { icon: 'check', label: 'One OK for the whole plan: these steps won\'t ask again during this reply.', tone: 'rule', always: false }
   if (a.kind === 'guarded') return { icon: 'shield', label: 'Asking because this conversation read outside content (a web page, a file, a tool’s result).', tone: 'guarded', always: false }
@@ -355,6 +358,8 @@ type VaultEntry = { name: string; domains: string[] }
 type Rule = { tool: string; description: string; action: 'allow' | 'ask' | 'deny'; default: string }
 
 const LOCAL = 0
+/** The household's memories (shared with the guests you add) live in a chat of their own. */
+const HOUSEHOLD = -2
 /** The incognito chat (built-in chat only): messages stay in the window; nothing is stored. */
 const INCOGNITO = -1
 /** The built-in chat: on this computer, or the web chat of a self-hosted server. */
@@ -363,7 +368,7 @@ const LOCAL_NAME = inDesktop && !remoteServer() ? 'This computer' : 'Web chat'
 const SECRETS_AT = inDesktop && !remoteServer() ? keystore : "your server's private database"
 const CHANNEL: Record<string, { name: string; icon: string }> = {
   telegram: { name: 'Telegram', icon: 'telegram' }, slack: { name: 'Slack', icon: 'slack' },
-  discord: { name: 'Discord', icon: 'discord' }, local: { name: 'Built-in chat', icon: inDesktop && !remoteServer() ? 'laptop' : 'globe' },
+  discord: { name: 'Discord', icon: 'discord' }, household: { name: 'Shared with your household', icon: 'home' }, local: { name: 'Built-in chat', icon: inDesktop && !remoteServer() ? 'laptop' : 'globe' },
 }
 const online = (s?: Status) => s?.channels.filter(c => c.connected) ?? []
 /** What's wrong with a bot that isn't working, in words (its account, or a messaging app that won't connect). */
@@ -897,8 +902,13 @@ function Main() {
   const botOf = (id: number) => botList.find(b => b.id === id) ?? { id, name: `Bot ${id}` }
   const statusOf = (id: number) => statuses.data?.find(s => s.bot_id === id)
   const all = chats.data ?? []
-  const list = all.some(c => c.chat_id === LOCAL) ? all : [{ chat_id: LOCAL, title: LOCAL_NAME, memories: 0, channel: 'local' }, ...all]
+  // The built-in chat first, then the household, then the paired chats.
+  const list = (all.some(c => c.chat_id === LOCAL) ? all : [{ chat_id: LOCAL, title: LOCAL_NAME, memories: 0, channel: 'local' }, ...all])
+    .toSorted((a, b) => Number(b.chat_id === LOCAL) - Number(a.chat_id === LOCAL) || Number(b.chat_id === HOUSEHOLD) - Number(a.chat_id === HOUSEHOLD))
   const chat = list.find(c => c.chat_id === chatId) ?? list[0]
+  // The household is memories only: nobody chats there.
+  const household = chat.channel === 'household'
+  useEffect(() => { if (household && view !== 'memory' && TABS.some(t => t.id === view)) setView('memory') }, [household, view])
   const inChat = view !== 'settings' && view !== 'bot' && view !== 'inbox' && view !== 'computer' && view !== 'meetings'
   const computer = useLoad(() => invoke<ComputerStatus>('computer'), [], 20000)
   // A meeting being transcribed (this computer), for the sidebar's dot.
@@ -1050,9 +1060,9 @@ function Main() {
             const cc = CHANNEL[c.chat_id === LOCAL ? 'local' : c.channel] ?? CHANNEL.local
             return (
               <button key={c.chat_id} className={'rail-item' + (inChat && !botChat && c.chat_id === chat.chat_id ? ' on' : '')}
-                onClick={() => { setChatId(c.chat_id); setViaBot(false); if (!inChat) setView('chat') }}>
+                onClick={() => { setChatId(c.chat_id); setViaBot(false); if (!inChat) setView(c.channel === 'household' ? 'memory' : 'chat') }}>
                 <span className="ri-glyph"><Icon name={cc.icon} size={15} /></span>
-                <span className="ri-text"><span className="ri-name">{chatName(c)}</span><span className="ri-sub">{cc.name}{c.guest ? ' · guest' : ''}</span></span>
+                <span className="ri-text"><span className="ri-name">{chatName(c)}</span><span className="ri-sub">{c.family ? `${cc.name} · family` : `${cc.name}${c.guest ? ' · guest' : ''}${c.household && c.guest ? ' · household' : ''}`}</span></span>
                 <span className="ri-count" title={`${c.memories} memories`}>{c.memories || ''}</span>
               </button>
             )
@@ -1072,8 +1082,8 @@ function Main() {
             <>
               <div className="toolbar-title" data-tauri-drag-region>
                 <span className="ri-glyph" style={{ width: 26, height: 26, borderRadius: 7, display: 'grid', placeItems: 'center', background: 'var(--hover)', color: 'var(--text-2)' }}><Icon name={ch.icon} size={14} /></span>
-                <span className="tt" data-tauri-drag-region><b>{botChat ? botOf(chatBot ?? botList[0]?.id ?? 1).name : chatName(chat)}</b><small>{ch.name} · {chat.memories} {chat.memories === 1 ? 'memory' : 'memories'}, shared by all your bots</small></span>
-                {!botChat && chat.chat_id !== LOCAL && (
+                <span className="tt" data-tauri-drag-region><b>{botChat ? botOf(chatBot ?? botList[0]?.id ?? 1).name : chatName(chat)}</b><small>{ch.name} · {chat.memories} {chat.memories === 1 ? 'memory' : 'memories'}{household ? '' : ', shared by all your bots'}{chat.household && !household ? ' · reads the household' : ''}</small></span>
+                {!botChat && chat.chat_id !== LOCAL && !household && !chat.family && (
                   <button className={'btn btn-sm btn-ghost' + (chat.guest ? ' guest-on' : '')}
                     title={chat.guest ? 'Paired by someone else: bots here have their own memory, and none of your email, calendar, meetings, saved logins or tool servers. Click if this chat is yours.' : 'Click if someone else uses this chat (a partner, a housemate): bots here then get none of your email, calendar, meetings, saved logins or tool servers.'}
                     onClick={() => ask(chat.guest ? 'Make this chat yours? Bots here get your email, calendar, meetings, saved logins and tool servers.' : 'Treat this chat as a guest’s? Bots here lose your email, calendar, meetings, saved logins and tool servers.', chat.guest ? 'Make it mine' : 'Make it a guest’s')
@@ -1081,8 +1091,24 @@ function Main() {
                     {chat.guest ? 'Guest' : 'Yours'}
                   </button>
                 )}
+                {/* A guest's own chat can share the household's lists; a group can become one the whole household talks in. */}
+                {!botChat && chat.chat_id !== LOCAL && !household && chat.private && chat.guest && (
+                  <button className={'btn btn-sm btn-ghost' + (chat.household ? ' guest-on' : '')}
+                    title={chat.household ? 'In your household: bots here read the household’s memories, and what this guest adds comes to you as a suggestion. Click to take them out.' : 'Add this guest to your household: bots here read the household’s memories and lists, and what they add comes to you as a suggestion first.'}
+                    onClick={() => void invoke('chat_household', { chatId: chat.chat_id, on: !chat.household }).then(chats.reload, e => tell(String(e)))}>
+                    <Icon name="home" size={13} /> {chat.household ? 'In household' : 'Add to household'}
+                  </button>
+                )}
+                {!botChat && chat.chat_id !== LOCAL && !household && chat.private === false && (
+                  <button className={'btn btn-sm btn-ghost' + (chat.family ? ' guest-on' : '')}
+                    title={chat.family ? 'A family group: everyone in your household can talk to the bots here. Like a guest’s chat, bots here get none of your email, calendar, meetings, saved logins or tool servers.' : 'Make this a family group: everyone in your household can talk to the bots here, and they read the household’s memories.'}
+                    onClick={() => (chat.family ? Promise.resolve(true) : ask('Make this a family group? Everyone in your household can talk to the bots here, and bots here lose your email, calendar, meetings, saved logins and tool servers (like a guest’s chat).', 'Make it a family group'))
+                      .then(ok => { if (ok) void invoke('chat_family', { chatId: chat.chat_id, on: !chat.family }).then(chats.reload, e => tell(String(e))) })}>
+                    <Icon name="home" size={13} /> {chat.family ? 'Family group' : 'Make family group'}
+                  </button>
+                )}
               </div>
-              <Segmented label="Sections" value={view as Tab} onChange={setView} options={TABS} />
+              <Segmented label="Sections" value={view as Tab} onChange={setView} options={household ? TABS.filter(t => t.id === 'memory') : TABS} />
             </>
           ) : (
             <div className="toolbar-title" data-tauri-drag-region>
@@ -1945,7 +1971,8 @@ function MemoryView({ chatId, onChange }: { chatId: number; onChange: () => void
         <label className="search"><Icon name="search" size={15} /><input className="input" placeholder="Search memory" aria-label="Search memory" value={query} onChange={e => setQuery(e.target.value)} /></label>
         <Segmented size="sm" label="Which memories" value={history} onChange={setHistory}
           options={[{ id: 'now', label: 'Current' }, { id: 'all', label: `History${inactive ? ` · ${inactive}` : ''}` }]} />
-        <TidyButton chatId={chatId} onDone={refresh} />
+        {/* The tidy-up reads a chat's conversations; the household has none. */}
+        {chatId !== HOUSEHOLD && <TidyButton chatId={chatId} onDone={refresh} />}
         <button className="btn btn-ghost" onClick={() => setAdding(a => a === 'import' ? null : 'import')} title="Bring in what another assistant remembers about you">Import</button>
         <button className="btn" onClick={() => setAdding(a => a === 'one' ? null : 'one')}><Icon name="plus" size={14} />Add</button>
       </div>
@@ -2447,6 +2474,15 @@ function MemoryCard({ r, versions, act, chatId, showKind }: { r: EntryRow; versi
         {r.tainted && <span className="warn" title="A bot saved this in a conversation that had read outside content (a web page, a file, a tool’s result). Check it says what you meant; until you confirm it, your bots don't keep it in mind (they only see it, labelled, if they search for it).">after reading outside content</span>}
         {r.tainted && r.status === 'active' && <button type="button" className="linkish" onClick={() => act(invoke('confirm_memory', { chatId, id: r.id }))}>Looks right</button>}
         <span>{ago(r.created_at)}</span>
+        {/* Kept by one bot only, or by all: the bot that keeps it (or learned it) can have it to itself. */}
+        {r.status === 'active' && chatId !== HOUSEHOLD && (r.for_bot || (r.origin === 'bot' && r.bot_id)) ? (
+          <select className="inline-date" aria-label={`Which bots keep ${r.title}`} value={r.for_bot ?? 0}
+            title="Only one bot keeps this in mind (your other bots don't see it), or all of them."
+            onChange={e => act(invoke('memory_for_bot', { chatId, id: r.id, botId: Number(e.target.value) }))}>
+            <option value={0}>all bots</option>
+            <option value={r.for_bot || r.bot_id!}>only {botOf(r.for_bot || r.bot_id!).name}</option>
+          </select>
+        ) : null}
         {r.valid_until && r.status === 'active' && (
           <span className={r.valid_until * 1000 <= Date.now() ? 'gone' : undefined}
             title="Your bots keep it in mind through this day; after that only search finds it, marked as ended.">
@@ -2905,6 +2941,7 @@ function BotPage({ bot, status, canDelete, onSaved, onDeleted, onChat }: {
   const edit = (patch: Partial<Bot>) => { setB({ ...b, ...patch }); setMsg(null) }
   const chan = (kind: string) => status?.channels.find(c => c.kind === kind)
   const toolServers = useLoad(() => invoke<{ servers: ToolServer[] }>('tool_servers'), [], 60000)
+  const topics = useLoad(() => bot ? invoke<boolean>('telegram_topics', { botId: bot.id }) : Promise.resolve(false), [bot?.id], 60000)
   const serverTools: [string, string][] = (toolServers.data?.servers ?? []).filter(s => !s.preset).map(s => [`${s.name}__*`, `Use ${s.name}`])
   const ALL = [...Object.keys(TOOL_LABEL), 'browser__*', ...serverTools.map(([t]) => t)]
   const enabled = b.tools.trim() ? b.tools.split(',').map(t => t.trim()) : ALL
@@ -3002,6 +3039,11 @@ function BotPage({ bot, status, canDelete, onSaved, onDeleted, onChat }: {
           hint="Message @BotFather, send /newbot, and paste the token it gives you.">
           <input className="input" type="password" aria-label="Telegram bot token" placeholder="123456:ABC…" value={typed('telegram_token')} onChange={e => type('telegram_token', e.target.value)} autoComplete="off" />
         </ChannelRow>
+        {bot && has('has_telegram_token') && (
+          <Row title="Each topic is its own conversation" desc="If you turn on topics in your private chat with this bot on Telegram, each topic gets its own conversation and /new. Memories and routines are shared. Telegram is still changing this feature.">
+            <Switch label="Each topic is its own conversation" checked={!!topics.data} onChange={on => invoke('set_telegram_topics', { botId: bot.id, on }).then(topics.reload, e => setErr(String(e)))} />
+          </Row>
+        )}
         <ChannelRow icon="slack" title="Slack" st={chan('slack')} has={has('has_slack')} onRemove={() => save({ ...NO_SECRETS, slack_bot_token: '', slack_app_token: '' })}
           hint="Create a Slack app with Socket Mode and Interactivity on; scopes chat:write, im:history, app_mentions:read, files:read, channels:history, groups:history; events message.im and app_mention (add message.channels and message.groups so it follows a thread without another @-mention).">
           <input className="input" type="password" aria-label="Slack bot token" placeholder="Bot token (xoxb-…)" value={typed('slack_bot_token')} onChange={e => type('slack_bot_token', e.target.value)} autoComplete="off" />

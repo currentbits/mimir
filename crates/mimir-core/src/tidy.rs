@@ -960,7 +960,7 @@ mod tests {
     use super::*;
 
     fn row(id: i64, kind: &str, title: &str, body: &str) -> EntryRow {
-        EntryRow { id, kind: kind.into(), title: title.into(), body: body.into(), source: String::new(), created_at: 0, status: "active", superseded_by: None, access_count: 0, pinned: false, background: false, origin: String::new(), bot_id: None, run_id: None, tainted: false, missteps: 0, valid_until: None, asked: None }
+        EntryRow { id, kind: kind.into(), title: title.into(), body: body.into(), source: String::new(), created_at: 0, status: "active", superseded_by: None, access_count: 0, pinned: false, background: false, origin: String::new(), bot_id: None, run_id: None, tainted: false, missteps: 0, valid_until: None, asked: None, for_bot: 0 }
     }
 
     #[test]
@@ -1243,7 +1243,7 @@ mod tests {
             db.log(1, 0, role, text, None).unwrap();
             if role == "user" && text.contains("bullet") {
                 db.signal_add(1, 0, "correction", text).unwrap();
-                db.blame_last_reply(1, 0, text).unwrap();
+                db.blame_last_reply(1, 0, 0, text).unwrap();
             }
         }
         super::run(&db, &provider, 1, 0).await.unwrap();
