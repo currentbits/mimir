@@ -18,6 +18,7 @@ pub fn ctx_from_args(db: crate::db::Db, args: &[String]) -> Result<ToolCtx> {
     let flag = |f: &str| args.iter().position(|a| a == f).and_then(|i| args.get(i + 1)).and_then(|s| s.parse::<i64>().ok());
     let chat = flag("--chat").ok_or_else(|| anyhow::anyhow!("--chat <id> required"))?;
     let mut ctx = ToolCtx::new(db, flag("--bot").unwrap_or(1), chat).with_run(flag("--run"));
+    ctx.conv = flag("--conv").unwrap_or(chat);
     ctx.tools_off = args.iter().any(|a| a == "--no-tools");
     ctx.read_only = args.iter().any(|a| a == "--read-only");
     ctx.depth = flag("--depth").unwrap_or(0).clamp(0, 9) as u8;
@@ -29,7 +30,7 @@ pub fn ctx_from_args(db: crate::db::Db, args: &[String]) -> Result<ToolCtx> {
     // restarting its servers) must not forget that this run already read untrusted content.
     if args.iter().any(|a| a == "--tainted")
         || ctx.run_id.is_some_and(|r| ctx.db.run_tainted(r).unwrap_or(true))
-        || (ctx.sticky && ctx.db.conv_tainted(ctx.bot_id, ctx.chat_id).unwrap_or(true))
+        || (ctx.sticky && ctx.db.conv_tainted(ctx.bot_id, ctx.conv).unwrap_or(true))
     {
         ctx.pre_taint();
     }
