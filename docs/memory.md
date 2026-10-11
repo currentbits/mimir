@@ -10,6 +10,8 @@ is shared by all your bots. You can see, correct and remove every bit of it in t
   a size budget (about 2,000 tokens). **Pin** a memory to keep it there however much else there is. The Memory tab shows
   how full it is ("Standing memory 67% full · 12 memories in every reply").
 - **Search**: everything else is found with `memory_search` when a question needs it ("who's my dentist?").
+- **Recall**: up to six memories that match your message come along with it. A CLI conversation (Claude, Codex,
+  Grok) keeps what it was sent, so a memory recalled earlier in it isn't sent again.
 - **Saving**: a bot saves with `memory_store` when you tell it something worth keeping. To correct a memory it saves a
   new version; the old one stays under *earlier version*.
 - **End dates**: something true only for a while ("I'm in Lisbon until Friday") is saved with an end date. Through that

@@ -667,6 +667,7 @@ fn claude_usage(v: &Value) -> Usage {
         tokens_out: n("output_tokens"),
         cost_usd: v["total_cost_usd"].as_f64(),
         cache_read: n("cache_read_input_tokens"),
+        cache_write: n("cache_creation_input_tokens"),
         estimated: false,
     }
 }
@@ -1025,7 +1026,15 @@ async fn openai(ctx: &ToolCtx, base: &str, key: &str, model: &str, system: &str,
     let rounds = if tools::specs_for(ctx).iter().any(|s| s.0 == "computer_screenshot") { 40 } else { MAX_TOOL_ROUNDS };
     for _ in 0..rounds {
         // Our own bookkeeping field stays out of the request (strict APIs reject unknown fields).
-        let sent: Vec<Value> = messages.iter().map(|m| { let mut m = m.clone(); if let Some(o) = m.as_object_mut() { o.remove("mimir_screenshot"); } m }).collect();
+        let mut sent: Vec<Value> = messages.iter().map(|m| { let mut m = m.clone(); if let Some(o) = m.as_object_mut() { o.remove("mimir_screenshot"); } m }).collect();
+        // Claude models only cache what's marked: the system prompt, and the newest message so the next round or
+        // turn reads everything before it back from the cache.
+        if model.starts_with("anthropic/") {
+            cache_mark(&mut sent[0]);
+            if let Some(m) = sent.iter_mut().rev().find(|m| m["role"] == "user" || m["role"] == "tool") {
+                cache_mark(m);
+            }
+        }
         let mut body = json!({"model":model,"messages":sent});
         // OpenAI rejects an empty tools array.
         if !tool_specs.is_empty() {
@@ -1088,6 +1097,7 @@ async fn openai(ctx: &ToolCtx, base: &str, key: &str, model: &str, system: &str,
         usage.tokens_in += v["usage"]["prompt_tokens"].as_i64().unwrap_or(0);
         usage.tokens_out += v["usage"]["completion_tokens"].as_i64().unwrap_or(0);
         usage.cache_read += v["usage"]["prompt_tokens_details"]["cached_tokens"].as_i64().unwrap_or(0);
+        usage.cache_write += v["usage"]["prompt_tokens_details"]["cache_write_tokens"].as_i64().unwrap_or(0);
         if let Some(c) = v["usage"]["cost"].as_f64() {
             usage.cost_usd = Some(usage.cost_usd.unwrap_or(0.0) + c);
         }
@@ -1129,6 +1139,16 @@ async fn openai(ctx: &ToolCtx, base: &str, key: &str, model: &str, system: &str,
 }
 
 /// Tell a CLI model where the attached images are (it opens them with its Read tool).
+/// A cache breakpoint on a message's (last) text part, for Claude models via OpenRouter.
+fn cache_mark(m: &mut Value) {
+    if let Some(t) = m["content"].as_str() {
+        m["content"] = json!([{"type": "text", "text": t}]);
+    }
+    if let Some(p) = m["content"].as_array_mut().and_then(|v| v.iter_mut().rev().find(|p| p["type"] == "text")) {
+        p["cache_control"] = json!({"type": "ephemeral"});
+    }
+}
+
 fn with_image_note(user: &str, images: &[PathBuf]) -> String {
     if images.is_empty() {
         return user.to_string();
@@ -1292,6 +1312,10 @@ mod tests {
         assert_eq!((r.usage.tokens_in, r.usage.tokens_out), (5, 0));
         let c = claude_usage(&serde_json::json!({"total_cost_usd":0.02,"usage":{"input_tokens":2,"cache_read_input_tokens":10,"cache_creation_input_tokens":5,"output_tokens":4},"modelUsage":{"claude-sonnet-5":{}}}));
         assert_eq!((c.model.as_deref(), c.tokens_in, c.tokens_out, c.cost_usd), (Some("claude-sonnet-5"), 17, 4, Some(0.02)));
+        assert_eq!((c.cache_read, c.cache_write), (10, 5));
+        let mut m = serde_json::json!({"role": "user", "content": "hi"});
+        cache_mark(&mut m);
+        assert_eq!(m["content"], serde_json::json!([{"type": "text", "text": "hi", "cache_control": {"type": "ephemeral"}}]));
 
         let limited = r#"{"type":"thread.started","thread_id":"t2"}
 {"type":"error","message":"You've hit your usage limit."}
