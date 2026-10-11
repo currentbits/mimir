@@ -9,10 +9,10 @@ replies "DONE <tool>: <the tool's result>":
 
     EMAIL (email not connected) → points to Settings → Email, from its <not_connected> instructions
     ASK SEARCH → ask_bot    MAKE BOT → bot_create    ROUTINE → routine_create    REMEMBER → memory_store
-    FORGET <n> → memory_forget(n)    FILE → file_write    LIST FILES → file_list    DELETE ROUTINE <n> → routine_delete(n)
+    FORGET <n> → memory_forget(n)    CHOOSE → ask_choice    FILE → file_write    LIST FILES → file_list    DELETE ROUTINE <n> → routine_delete(n)
 
 Anything else gets "OK: <your message>". A message with SLOW in it is answered after 3 seconds (any bot), for
-switching away mid-reply. Each request is logged to stdout.
+switching away mid-reply; "SLOW <n>" waits n seconds. Each request is logged to stdout.
 
 It also stands in for ChatGPT's sign-in and Responses API ("Sign in with ChatGPT"): start the server with
 MIMIR_CHATGPT_AUTH=http://127.0.0.1:8899 MIMIR_CHATGPT_API=http://127.0.0.1:8899/v1. The fake sign-in code is
@@ -31,6 +31,7 @@ SCRIPT = [
     ("ROUTINE", "routine_create", lambda m: {"cron": "0 8 * * *", "prompt": "Brief me on tech news"}),
     ("REMEMBER", "memory_store", lambda m: {"type": "knowledge", "title": "Dentist", "body": "Dr. Lee in Stellenbosch", "source": "user said"}),
     ("FORGET", "memory_forget", lambda m: {"id": int(re.search(r"FORGET (\d+)", m).group(1))}),
+    ("CHOOSE", "ask_choice", lambda m: {"question": "Which day?", "options": ["Thursday", "Friday"]}),
     ("LIST FILES", "file_list", lambda m: {}),
     ("FILE", "file_write", lambda m: {"path": "notes/trip.md", "content": "- passport\n", "mode": "create"}),
 ]
@@ -71,7 +72,7 @@ class H(BaseHTTPRequestHandler):
         last = msgs[-1] if msgs else {}
         print(f"[{bot}] last={last.get('role')} user={last_user[-80:]!r}", flush=True)
         if "SLOW" in last_user and last.get("role") == "user":
-            time.sleep(3)
+            time.sleep(int((re.search(r"SLOW (\d+)", last_user) or [0, 3])[1]))
         if bot == "Search":
             return self.reply({"role": "assistant", "content": f"SEARCH-ANSWER: the title tag is fine (asked: {last_user[-60:]})"})
         # The one-time "get to know me" pass: one suggestion per email sender line it was shown.

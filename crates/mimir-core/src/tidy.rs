@@ -6,6 +6,7 @@
 
 use crate::db::{Db, EntryRow, Suggestion, Usage};
 use crate::provider::Provider;
+use crate::say::{tr, trf};
 use crate::tools::{ToolCtx, truncate};
 use anyhow::{Result, bail};
 use std::collections::HashSet;
@@ -503,26 +504,29 @@ pub fn trends(weeks: &[crate::db::Week]) -> Vec<String> {
     };
     let mut out = vec![];
     if now.turns > 0 {
-        let was = per10(&before.iter().collect::<Vec<_>>(), |w| w.corrections).map(|v| format!(" (was {v})")).unwrap_or_default();
-        out.push(format!("{} corrections per 10 messages{was}", per10(&[now], |w| w.corrections).unwrap_or(0.0)));
+        let n = per10(&[now], |w| w.corrections).unwrap_or(0.0).to_string();
+        out.push(match per10(&before.iter().collect::<Vec<_>>(), |w| w.corrections) {
+            Some(was) => trf("{n} corrections per 10 messages (was {was})", &[("n", &n), ("was", &was.to_string())]),
+            None => trf("{n} corrections per 10 messages", &[("n", &n)]),
+        });
     }
     if now.repeats > 0 {
-        out.push(format!("{} repeated an earlier correction", now.repeats));
+        out.push(trf("{n} repeated an earlier correction", &[("n", &now.repeats.to_string())]));
     }
     if now.forgot > 0 {
-        out.push(format!("{} \"I told you\"", now.forgot));
+        out.push(trf("{n} \"I told you\"", &[("n", &now.forgot.to_string())]));
     }
     if now.denials + now.stops > 0 {
-        out.push(format!("{} denied, {} stopped", now.denials, now.stops));
+        out.push(trf("{denied} denied, {stopped} stopped", &[("denied", &now.denials.to_string()), ("stopped", &now.stops.to_string())]));
     }
     if now.tool_calls > 0 {
-        out.push(format!("{}% of actions failed", now.tool_errors * 100 / now.tool_calls));
+        out.push(trf("{n}% of actions failed", &[("n", &(now.tool_errors * 100 / now.tool_calls).to_string())]));
     }
     if now.accepted + now.dismissed > 0 {
-        out.push(format!("{} of {} suggestions accepted", now.accepted, now.accepted + now.dismissed));
+        out.push(trf("{n} of {all} suggestions accepted", &[("n", &now.accepted.to_string()), ("all", &(now.accepted + now.dismissed).to_string())]));
     }
     if now.undone > 0 {
-        out.push(format!("{} learned {} taken back", now.undone, if now.undone == 1 { "memory" } else { "memories" }));
+        out.push(if now.undone == 1 { tr("1 learned memory taken back").into() } else { trf("{n} learned memories taken back", &[("n", &now.undone.to_string())]) });
     }
     out
 }
@@ -554,17 +558,17 @@ pub fn weekly_review(db: &Db, chat: i64, now: i64) -> Result<Option<(String, Vec
     if learned.is_empty() {
         return Ok(None);
     }
-    let mut msg = String::from("🧠 **What I learned this week**\n");
+    let mut msg = format!("{}\n", tr("🧠 **What I learned this week**"));
     for (i, e) in learned.iter().enumerate() {
         msg.push_str(&format!("\n{}. **{}**: {}", i + 1, e.title, truncate(&e.body, 200)));
         if let Some(a) = e.asked.as_deref().filter(|a| !a.trim().is_empty()) {
-            msg.push_str(&format!("\n   _You said: “{}”_", truncate(a, 120)));
+            msg.push_str(&format!("\n   _{}_", trf("You said: “{said}”", &[("said", &truncate(a, 120))])));
         }
     }
-    msg.push_str(&format!("\n\nWrong? Reply /undo {} to take it back (or /undo with another number). It's all in Memory in the app too.", learned.len()));
+    msg.push_str(&format!("\n\n{}", trf("Wrong? Reply /undo {n} to take it back (or /undo with another number). It's all in Memory in the app too.", &[("n", &learned.len().to_string())])));
     let trend = trends(&db.weeks(chat, 4, now)?);
     if !trend.is_empty() {
-        msg.push_str(&format!("\n\n_This week: {}_", trend.join(" · ")));
+        msg.push_str(&format!("\n\n_{}_", trf("This week: {trends}", &[("trends", &trend.join(" · "))])));
     }
     Ok(Some((msg, learned.iter().map(|e| e.id).collect())))
 }
@@ -573,11 +577,11 @@ pub fn weekly_review(db: &Db, chat: i64, now: i64) -> Result<Option<(String, Vec
 pub fn undo_learned(db: &Db, chat: i64, n: usize) -> Result<String> {
     let ids: Vec<i64> = db.setting(&format!("weekly_items:{chat}"))?.and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default();
     let Some(&id) = n.checked_sub(1).and_then(|i| ids.get(i)) else {
-        return Ok(if ids.is_empty() { "There's nothing to undo yet: I list what I learned once a week.".into() } else { format!("Pick a number from 1 to {}.", ids.len()) });
+        return Ok(if ids.is_empty() { tr("There's nothing to undo yet: I list what I learned once a week.").into() } else { trf("Pick a number from 1 to {n}.", &[("n", &ids.len().to_string())]) });
     };
     let scope = format!("chat:{chat}");
     let title = db.entries(&scope)?.into_iter().find(|e| e.id == id).map(|e| e.title).unwrap_or_default();
-    Ok(if db.undo(&scope, id)? { format!("Took back “{title}”.") } else { format!("“{title}” was already changed or forgotten.") })
+    Ok(if db.undo(&scope, id)? { trf("Took back “{title}”.", &[("title", &title)]) } else { trf("“{title}” was already changed or forgotten.", &[("title", &title)]) })
 }
 
 fn words(s: &str) -> HashSet<String> {

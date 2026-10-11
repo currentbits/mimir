@@ -28,6 +28,7 @@ Bots act through **tools**. Every tool call is checked against your rules before
 | `skill_view` | Read the steps of an accepted skill | allow |
 | `skill_save` | Propose a skill from what the conversation did, when you ask; you press Save ([Skills](skills.md)) | allow |
 | `plan_propose` | Propose a plan you approve once (below) | allow |
+| `ask_choice` | Ask you one question with 2 to 4 answers to tap, plus "Something else". The buttons go under the reply, and your tap is your next message. Only in Telegram, Slack and Discord chats, never in routines or another bot's task. A tap is never an approval | allow |
 | `computer_*` | Use the bots' computer, self-hosted only ([The bots' computer](computer.md)) | allow; `computer_open` **asks** |
 | `browser__*` | The headless browser, when switched on (below) | opening a page **asks** |
 | *tool servers* | Tools from MCP servers you added (below) | read-only allow, the rest **ask** |
@@ -61,7 +62,8 @@ out:
   computer), however short: a link like `evil.example/v/483920` could carry a sign-in code out;
 - a web search whose query holds one of your memories.
 
-Those ask too. "Start fresh" (or `/new`) ends it. Requests made after reading outside content, and any use of a saved
+Those ask too. "Start fresh" (or `/new`) ends it, and so does a messaging chat's fresh start after a quiet spell
+(unless the outside content is in the "where we left off" it quotes). Requests made after reading outside content, and any use of a saved
 login, never become "always". Approval cards show where an action goes (recipient, address, path) first, so a long
 message body can't push it off the card.
 
