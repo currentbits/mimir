@@ -1383,7 +1383,7 @@ impl Db {
              DELETE FROM runs WHERE bot_id={id}; DELETE FROM messages WHERE bot_id={id};
              DELETE FROM signals WHERE bot_id={id}; DELETE FROM cases WHERE bot_id={id}; DELETE FROM digest_items WHERE bot_id={id};
              DELETE FROM routines WHERE bot_id={id}; DELETE FROM sessions WHERE bot_id={id}; DELETE FROM conv_taint WHERE bot_id={id};
-             DELETE FROM settings WHERE key LIKE 'seen:{id}:%'; DELETE FROM bots WHERE id={id};"
+             DELETE FROM settings WHERE key LIKE 'seen:{id}:%' OR key='pause:{id}'; DELETE FROM bots WHERE id={id};"
         ))?;
         self.wipe_free_space();
         Ok(())
@@ -3366,6 +3366,61 @@ impl Db {
         self.c().execute("UPDATE routines SET next_fire=?2 WHERE id=?1", params![r.id, next])?;
         Ok(())
     }
+
+    // ---------- pause ----------
+
+    /// The person paused all bots (None) or one, until a time or (0) until they resume. While paused nothing runs on
+    /// its own, and messaging apps are told so.
+    pub fn pause_set(&self, bot: Option<i64>, until: i64) -> Result<()> {
+        self.set_setting(&pause_key(bot), &until.to_string())
+    }
+
+    /// End a pause (resumed, or its time came). Routines that came due meanwhile move on to their next time, as if
+    /// they'd run: no rush of catch-up runs, and nothing shows as missed. A one-off (a reminder) still runs once.
+    // ponytail: a slot due after a timed pause ended, while the computer slept, is skipped too, not run late
+    pub fn pause_end(&self, bot: Option<i64>) -> Result<()> {
+        let t = now();
+        for r in self.routines_where("(?1 IS NULL OR bot_id = ?1) AND next_fire <= ?2 AND once = 0", params![bot, t])? {
+            self.c().execute("UPDATE routines SET next_fire=?2, retries=0 WHERE id=?1", params![r.id, next_fire(&r.cron, t)?])?;
+        }
+        // Moved on first, then unpaused: a scheduler pass in between still sees the pause.
+        self.c().execute("DELETE FROM settings WHERE key=?1", [pause_key(bot)])?;
+        Ok(())
+    }
+
+    /// Pauses that haven't ended: (the bot, or None for all; until, 0 for until resumed).
+    pub fn pauses(&self, now: i64) -> Result<Vec<(Option<i64>, i64)>> {
+        let c = self.c();
+        let mut st = c.prepare("SELECT key, value FROM settings WHERE key LIKE 'pause:%'")?;
+        let v: Vec<(String, String)> = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<Result<_, _>>()?;
+        Ok(v.into_iter()
+            .filter_map(|(k, v)| Some((k.strip_prefix("pause:")?.parse().ok(), v.parse::<i64>().ok()?)))
+            .filter(|&(_, until)| until == 0 || until > now)
+            .collect())
+    }
+
+    /// Whether this bot is paused (its own pause or everyone's): Some(until), 0 for until resumed; the later end wins.
+    /// A pause whose time has come is ended here.
+    pub fn paused(&self, bot: i64, now: i64) -> Result<Option<i64>> {
+        let mut out: Option<i64> = None;
+        for who in [None, Some(bot)] {
+            let Some(until) = self.setting(&pause_key(who))?.and_then(|v| v.parse::<i64>().ok()) else { continue };
+            if until != 0 && until <= now {
+                self.pause_end(who)?;
+            } else {
+                out = Some(match out {
+                    Some(0) => 0,
+                    Some(o) if until != 0 => o.max(until),
+                    _ => until,
+                });
+            }
+        }
+        Ok(out)
+    }
+}
+
+fn pause_key(bot: Option<i64>) -> String {
+    bot.map_or("pause:all".into(), |b| format!("pause:{b}"))
 }
 
 #[cfg(test)]
@@ -4203,6 +4258,37 @@ mod tests {
         assert!(d.due(2, now() + 60).unwrap().iter().any(|r| r.id == c.id));
         d.routine_advance(&d.routines(crate::host::LOCAL_CHAT).unwrap()[0]).unwrap();
         assert_eq!(d.routines(crate::host::LOCAL_CHAT).unwrap()[0].next_fire, IDLE, "the next event is the scheduler's to find");
+    }
+
+    #[test]
+    fn pause_and_resume() {
+        let d = db();
+        let r = d.routine_create(2, 7, "0 9 * * *", "brief", false).unwrap();
+        let o = d.routine_once(2, 7, now() + 600, "call mum", false).unwrap();
+        let other = d.routine_create(3, 7, "0 9 * * *", "news", false).unwrap();
+        // Slots came due while it was paused.
+        d.c().execute("UPDATE routines SET next_fire=?1", [now() - 3 * 86400]).unwrap();
+        d.pause_set(Some(2), 0).unwrap();
+        assert_eq!(d.paused(2, now()).unwrap(), Some(0), "until resumed");
+        assert_eq!(d.paused(3, now()).unwrap(), None, "only that bot");
+        // Everyone's pause on top: the later end wins (0 = no end).
+        d.pause_set(None, now() + 600).unwrap();
+        assert_eq!(d.paused(2, now()).unwrap(), Some(0));
+        assert_eq!(d.paused(3, now()).unwrap(), Some(now() + 600));
+        assert_eq!(d.pauses(now()).unwrap().len(), 2);
+        // Resumed: the routine moves on to its next time instead of catching up (or showing as missed); the
+        // one-off still runs once. The other bot is still held by everyone's pause.
+        d.pause_end(Some(2)).unwrap();
+        assert_eq!(d.paused(2, now()).unwrap(), Some(now() + 600));
+        let due: Vec<i64> = d.due(2, now()).unwrap().iter().map(|x| x.id).collect();
+        assert_eq!(due, vec![o.id]);
+        assert!(d.routines(7).unwrap().iter().any(|x| x.id == r.id && x.next_fire > now()));
+        assert!(d.routine_missed(&d.routines(7).unwrap().into_iter().find(|x| x.id == r.id).unwrap(), now(), ASLEEP).unwrap().is_none());
+        // A timed pause whose time has come ends by itself, the same way.
+        d.pause_set(None, now() - 1).unwrap();
+        assert_eq!(d.paused(3, now()).unwrap(), None);
+        assert!(d.pauses(now()).unwrap().is_empty());
+        assert!(d.routines(7).unwrap().iter().any(|x| x.id == other.id && x.next_fire > now()));
     }
 
     #[test]

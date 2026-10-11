@@ -1771,7 +1771,7 @@ async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
                 "no routines".into()
             } else {
                 v.iter()
-                    .map(|r| format!("#{} [{}]{}{}{} — {}", r.id, if r.once { "once" } else { &r.cron }, if r.quiet { " quiet" } else { "" }, if r.watch.is_empty() { String::new() } else { format!(" watching {}", r.watch) }, if r.paused { " paused".into() } else { format!(" next {}", next_run(r)) }, r.prompt))
+                    .map(|r| format!("#{} [{}]{}{}{} — {}", r.id, if r.once { "once" } else { &r.cron }, if r.quiet { " quiet" } else { "" }, if r.watch.is_empty() { String::new() } else { format!(" watching {}", r.watch) }, if r.paused || ctx.db.paused(r.bot_id, crate::db::now()).ok().flatten().is_some() { " paused".into() } else { format!(" next {}", next_run(r)) }, r.prompt))
                     .collect::<Vec<_>>()
                     .join("\n")
             }
@@ -1824,6 +1824,9 @@ async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
             })?;
             if target.id == ctx.bot_id {
                 bail!("{who} is you; do the task yourself");
+            }
+            if ctx.db.paused(target.id, crate::db::now())?.is_some() {
+                bail!("{} is paused by the user; do the task yourself or say it has to wait", target.name);
             }
             let from = ctx.db.bot(ctx.bot_id)?.name;
             let provider = crate::provider::Provider::for_bot(target, ctx.db.dir())?;

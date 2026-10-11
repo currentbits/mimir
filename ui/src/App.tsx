@@ -260,6 +260,7 @@ function RoutineCard({ id, chatId, onChange }: { id: number; chatId: number; onC
   const [busy, setBusy] = useState(false)
   const [note, setNote] = useState<string | null>(null)
   const r = rows.data?.find(x => x.id === id)
+  const held = useContext(Paused)(r?.bot_id ?? 0)
   if (!rows.data) return null
   if (!r) return <div className="routine-card gone">This routine has been deleted.</div>
   const runNow = () => {
@@ -272,9 +273,9 @@ function RoutineCard({ id, chatId, onChange }: { id: number; chatId: number; onC
       <div className="rc-head">
         <span className={'ri' + (r.quiet ? ' quiet' : '')}><Icon name={r.quiet ? 'moon' : 'clock'} size={15} /></span>
         <div className="rc-main">
-          <div className="rt">{when(r)}{r.quiet && <span className="badge pending">Quiet</span>}{r.paused && <span className="badge">Paused</span>}{r.delivery === 'digest' && <span className="badge">In digest</span>}{r.delivery === 'log' && <span className="badge">Log only</span>}</div>
+          <div className="rt">{when(r)}{r.quiet && <span className="badge pending">Quiet</span>}{(r.paused || held !== undefined) && <span className="badge">Paused</span>}{r.delivery === 'digest' && <span className="badge">In digest</span>}{r.delivery === 'log' && <span className="badge">Log only</span>}</div>
           <div className="rp selectable">{r.prompt}</div>
-          <div className="rm">{r.paused ? 'Paused' : r.next_fire >= IDLE ? 'Runs when a matching event is on the calendar' : `Next run ${ahead(r.next_fire)}`} · change it any time in Routines</div>
+          <div className="rm">{r.paused ? 'Paused' : held !== undefined ? `${pausedText(held)} with its bot` : r.next_fire >= IDLE ? 'Runs when a matching event is on the calendar' : `Next run ${ahead(r.next_fire)}`} · change it any time in Routines</div>
         </div>
       </div>
       <div className="rc-actions">
@@ -841,7 +842,16 @@ function Main() {
   const [viaBot, setViaBot] = useState(false)
   const talkTo = (id: number) => { setChatBot(id); setChatId(LOCAL); setIncognito(false); setViaBot(true); setView('chat'); setMenu(null) }
   const botChat = viaBot && view === 'chat' && chat.chat_id === LOCAL
-  const [menu, setMenu] = useState<{ x: number; y: number; id: number } | null>(null)
+  // A bot's right-click menu, or pause choices (for one bot, or all of them: id null).
+  const [menu, setMenu] = useState<{ x: number; y: number; id: number | null; pick?: boolean } | null>(null)
+  const pauses = useLoad(() => invoke<Pause[]>('pause'), [], 5000)
+  const allPause = pauses.data?.find(p => p.bot_id === null)
+  const ownPause = (id: number) => pauses.data?.find(p => p.bot_id === id)
+  const pausedOf = (id: number) => {
+    const u = [allPause, ownPause(id)].flatMap(p => p ? [p.until] : [])
+    return u.length ? (u.includes(0) ? 0 : Math.max(...u)) : undefined
+  }
+  const setPause = (botId: number | null, on: boolean, until = 0) => { setMenu(null); invoke('pause', { botId, on, until }).then(pauses.reload, e => tell(String(e))) }
   // On a phone the sidebar is a full screen of its own, opened from the tab bar's Chats.
   const [phoneList, setPhoneList] = useState(false)
   const phoneTab = phoneList || view === 'chat' ? 'chats' : view
@@ -888,6 +898,7 @@ function Main() {
 
   return (
     <Bots.Provider value={botOf}>
+    <Paused.Provider value={pausedOf}>
     <div className={'app' + (phoneList ? ' list' : '')}>
       <aside className="rail" aria-label="Bots and chats"
         onClick={e => { if ((e.target as Element).closest('.rail-item, .rail-label button')) setPhoneList(false) }}>
@@ -913,7 +924,16 @@ function Main() {
               <span className="ri-text"><span className="ri-name">Computer</span><span className="ri-sub">{computer.data.running ? 'Watch or take over' : 'Starting…'}</span></span>
             </button>
           )}
-          <div className="rail-label">Bots<button title={`New bot  ${shortcut('N')}`} aria-label="New bot" onClick={() => openBot(0)}><Icon name="plus" size={14} /></button></div>
+          {allPause && (
+            <button className="rail-item" onClick={() => setPause(null, false)} title="Resume all bots">
+              <span className="ri-glyph"><Icon name="pause" size={15} /></span>
+              <span className="ri-text"><span className="ri-name">All bots paused</span><span className="ri-sub">{allPause.until ? `Back ${ahead(allPause.until)}` : 'Click to resume'}</span></span>
+            </button>
+          )}
+          <div className="rail-label">Bots<span>
+            {!allPause && <button title="Pause all bots" aria-label="Pause all bots" onClick={e => { const r = e.currentTarget.getBoundingClientRect(); setMenu({ x: r.left, y: r.bottom + 4, id: null, pick: true }) }}><Icon name="pause" size={13} /></button>}
+            <button title={`New bot  ${shortcut('N')}`} aria-label="New bot" onClick={() => openBot(0)}><Icon name="plus" size={14} /></button>
+          </span></div>
           {botList.map(b => {
             const st = statusOf(b.id)
             const on = online(st)
@@ -943,6 +963,7 @@ function Main() {
                     <Avatar id={b.id} name={b.name} presence={p} mood={w ? busyMood(w) : undefined} />
                     <span className="ri-text"><span className="ri-name">{b.name}</span>
                       <span className={'ri-sub' + (w ? ' busy' : '')}>{w ? busyLabel(w)
+                        : pausedOf(b.id) !== undefined ? pausedText(pausedOf(b.id)!)
                         : on.length ? on.map(c => CHANNEL[c.kind].name).join(' · ') : p === 'err' ? 'Needs attention' : p === 'wait' ? 'Connecting…' : `${LOCAL_NAME} only`}</span></span>
                   </>
                 })()}
@@ -1033,8 +1054,18 @@ function Main() {
           </button>
         ))}
       </nav>
-      {menu && <BotMenu at={menu} name={botOf(menu.id).name} onChat={() => talkTo(menu.id)} onSettings={() => openBot(menu.id)} onClose={() => setMenu(null)} />}
+      {menu && (menu.pick || menu.id === null
+        ? <Menu key="pick" at={menu} name={menu.id === null ? 'Pause all bots' : `Pause ${botOf(menu.id).name}`} items={pauseChoices(until => setPause(menu.id, true, until))} onClose={() => setMenu(null)} />
+        : (() => {
+          const id = menu.id, name = botOf(id).name
+          return <Menu key="bot" at={menu} name={name} onClose={() => setMenu(null)} items={[
+            ['chat', `Chat with ${name}`, () => talkTo(id)],
+            ['settings', 'Settings', () => openBot(id)],
+            ownPause(id) ? ['play', `Resume ${name}`, () => setPause(id, false)] : ['pause', `Pause ${name}…`, () => setMenu({ ...menu, pick: true })],
+          ]} />
+        })())}
     </div>
+    </Paused.Provider>
     </Bots.Provider>
   )
 }
@@ -1308,9 +1339,27 @@ function CopyButton({ text }: { text: string }) {
   )
 }
 
-/** A bot's right-click menu in the sidebar: chat with it, or its settings. Escape, a click elsewhere or leaving the
- * menu closes it; arrow keys move between its items. */
-function BotMenu({ at, name, onChat, onSettings, onClose }: { at: { x: number; y: number }; name: string; onChat: () => void; onSettings: () => void; onClose: () => void }) {
+/** A pause: the bot, or null for all of them; until when (0: until you resume). */
+type Pause = { bot_id: number | null; until: number }
+/** When a bot's pause ends, if it's paused (its own or everyone's; 0: until you resume). */
+const Paused = createContext<(bot: number) => number | undefined>(() => undefined)
+const pausedText = (until: number) => until ? `Paused · back ${ahead(until)}` : 'Paused'
+/** Pause choices: until you resume, an hour, tomorrow 8:00, Monday 8:00. */
+function pauseChoices(pause: (until: number) => void): MenuItem[] {
+  const at8 = (days: number) => { const d = new Date(); d.setDate(d.getDate() + days); d.setHours(8, 0, 0, 0); return Math.floor(d.getTime() / 1000) }
+  const monday = (8 - new Date().getDay()) % 7 || 7
+  return [
+    ['pause', 'Until I resume', () => pause(0)],
+    ['clock', 'For an hour', () => pause(Math.floor(Date.now() / 1000) + 3600)],
+    ['clock', 'Until tomorrow 8:00', () => pause(at8(1))],
+    ...(monday > 1 ? [['clock', 'Until Monday 8:00', () => pause(at8(monday))] as MenuItem] : []),
+  ]
+}
+
+type MenuItem = [icon: string, label: string, run: () => void]
+/** A small menu at a point (a bot's right-click menu in the sidebar, pause choices). Escape, a click elsewhere or
+ * leaving the menu closes it; arrow keys move between its items. */
+function Menu({ at, name, items, onClose }: { at: { x: number; y: number }; name: string; items: MenuItem[]; onClose: () => void }) {
   const ref = useRef<HTMLDivElement>(null)
   useLayoutEffect(() => {
     const el = ref.current
@@ -1333,8 +1382,7 @@ function BotMenu({ at, name, onChat, onSettings, onClose }: { at: { x: number; y
   }
   return (
     <div ref={ref} className="ctx-menu" role="menu" aria-label={name} onKeyDown={onKey} onContextMenu={e => e.preventDefault()}>
-      <button role="menuitem" onClick={onChat}><Icon name="chat" size={14} />Chat with {name}</button>
-      <button role="menuitem" onClick={onSettings}><Icon name="settings" size={14} />Settings</button>
+      {items.map(([icon, label, run]) => <button key={label} role="menuitem" onClick={run}><Icon name={icon} size={14} />{label}</button>)}
     </div>
   )
 }
@@ -2492,6 +2540,7 @@ function RoutinesView({ chatId, bots }: { chatId: number; bots: Bot[] }) {
   const rows = useLoad(() => invoke<Routine[]>('routines', { chatId }), [chatId])
   const stats = useLoad(() => invoke<RoutineStats[]>('routine_stats', { chatId }), [chatId], 30000)
   const botOf = useContext(Bots)
+  const pausedOf = useContext(Paused)
   const [err, setErr] = useState<string | null>(null)
   const [draft, setDraft] = useState<RoutineDraft | null>(null)
   const [editing, setEditing] = useState<{ id: number; draft: RoutineDraft } | null>(null)
@@ -2525,17 +2574,18 @@ function RoutinesView({ chatId, bots }: { chatId: number; bots: Bot[] }) {
           <div className="group">
             {list.map(r => {
               const b = botOf(r.bot_id)
+              const held = pausedOf(r.bot_id)
               if (editing?.id === r.id) return (
                 <RoutineForm key={r.id} inline skills={skillRows.data ?? []} draft={editing.draft} setDraft={d => setEditing({ id: r.id, draft: d })} bots={bots} onCancel={() => setEditing(null)}
                   onSave={() => update(r, { cron: toCron(editing.draft.when), prompt: editing.draft.prompt, quiet: editing.draft.quiet, delivery: editing.draft.delivery, watch: editing.draft.quiet ? editing.draft.watch : '' })} />
               )
               return (
-                <div className={'routine' + (r.paused ? ' paused' : '')} key={r.id}>
+                <div className={'routine' + (r.paused || held !== undefined ? ' paused' : '')} key={r.id}>
                   <span className={'ri' + (r.quiet ? ' quiet' : '')}><Icon name={r.quiet ? 'moon' : 'clock'} /></span>
                   <div>
-                    <div className="rt">{when(r)}{r.quiet && <span className="badge pending" title="Read-only; speaks up only when something needs your attention">Quiet</span>}{r.paused && <span className="badge">Paused</span>}{r.delivery === 'digest' && <span className="badge" title="Collected into your daily digest">In digest</span>}{r.delivery === 'log' && <span className="badge" title="Not sent; see Activity">Log only</span>}{r.quiet && r.watch && <span className="badge" title="Mimir looks first and only runs the AI when this changed">Watching {r.watch === 'mail' ? 'mail' : (() => { try { return new URL(r.watch).host } catch { return r.watch } })()}</span>}</div>
+                    <div className="rt">{when(r)}{r.quiet && <span className="badge pending" title="Read-only; speaks up only when something needs your attention">Quiet</span>}{(r.paused || held !== undefined) && <span className="badge">Paused</span>}{r.delivery === 'digest' && <span className="badge" title="Collected into your daily digest">In digest</span>}{r.delivery === 'log' && <span className="badge" title="Not sent; see Activity">Log only</span>}{r.quiet && r.watch && <span className="badge" title="Mimir looks first and only runs the AI when this changed">Watching {r.watch === 'mail' ? 'mail' : (() => { try { return new URL(r.watch).host } catch { return r.watch } })()}</span>}</div>
                     <div className="rp selectable">{r.prompt}</div>
-                    <div className="rm"><Avatar id={b.id} name={b.name} size={16} still /><span>{b.name}</span><span>·</span><span>{r.paused ? 'Won’t run until you turn it back on' : r.next_fire >= IDLE ? 'No matching event on the calendar this week' : `${r.once ? 'Runs' : 'Next run'} ${ahead(r.next_fire)}${r.once ? ', then it’s gone' : ''}`}</span></div>
+                    <div className="rm"><Avatar id={b.id} name={b.name} size={16} still /><span>{b.name}</span><span>·</span><span>{r.paused ? 'Won’t run until you turn it back on' : held !== undefined ? `${pausedText(held)} with ${b.name}; ${r.once ? 'it runs once then' : 'runs in between are skipped, not caught up'}` : r.next_fire >= IDLE ? 'No matching event on the calendar this week' : `${r.once ? 'Runs' : 'Next run'} ${ahead(r.next_fire)}${r.once ? ', then it’s gone' : ''}`}</span></div>
                     <RoutineHealth s={stats.data?.find(x => x.id === r.id)} onReset={() => invoke('reset_watch_noise', { chatId, id: r.id }).then(stats.reload, e => setErr(String(e)))} />
                     {rehearsal?.id === r.id && (rehearsal.r ? <RehearsalResult r={rehearsal.r} onClose={() => setRehearsal(null)} /> : <p className="hint">Rehearsing… it runs for real, but anything it would send or change is only described.</p>)}
                   </div>
