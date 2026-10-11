@@ -37,7 +37,7 @@ lopdf = { version = "0.42", default-features = false }
 zip = { version = "4.6", default-features = false, features = ["deflate-flate2"] }
 url = "2"
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls", "http2", "multipart"] }
-rusqlite = { version = "0.40.2", features = ["bundled"] }
+rusqlite = { version = "0.40.2", features = ["bundled", "backup"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 sha2 = "0.10.9"

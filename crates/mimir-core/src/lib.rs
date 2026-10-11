@@ -8,6 +8,7 @@ macro_rules! skill_shape {
     };
 }
 
+pub mod backup;
 pub mod chatgpt;
 pub mod computer;
 pub mod db;
@@ -116,6 +117,9 @@ fn block(tag: &str, entries: &[Entry]) -> String {
 /// The app's incognito chat: no memory in or out, no chat history, no run log, no saved CLI session.
 /// Its messages live only in the window; each turn gets them back as `history`.
 pub const INCOGNITO_CHAT: i64 = -1;
+/// The household's memories: shared by you and the guests you add (see `Db::in_household`).
+pub const HOUSEHOLD_CHAT: i64 = -2;
+pub const HOUSEHOLD: &str = "chat:-2";
 
 /// Hours a messaging chat can sit idle before its next message starts a new CLI session (setting `fresh_after_hours`, 0 = never).
 pub const FRESH_AFTER_HOURS: i64 = 12;
@@ -220,7 +224,7 @@ pub async fn turn(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) -> R
     // A conversation remembers having read untrusted content; routines and handed-over tasks start clean
     // (their own fresh sessions), though a delegate inherits its caller's taint in ask_bot.
     ctx.sticky = ctx.stream;
-    if ctx.sticky && ctx.db.conv_tainted(ctx.bot_id, ctx.chat_id)? {
+    if ctx.sticky && ctx.db.conv_tainted(ctx.bot_id, ctx.conv)? {
         ctx.pre_taint();
     }
     // A routine a bot made after reading outside content: its prompt may be someone else's words, every time it runs.
@@ -501,6 +505,12 @@ pub fn is_pdf(name: &str, mime: &str) -> bool {
 const WORD: &str = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 const EXCEL: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 
+/// A file sent as a photo (shown in place) rather than a document.
+pub fn is_photo(name: &str) -> bool {
+    let n = name.to_lowercase();
+    [".jpg", ".jpeg", ".png", ".gif", ".webp"].iter().any(|e| n.ends_with(e))
+}
+
 /// A file whose text a bot can read: a PDF, a Word or Excel file, or a plain-text file (by type or name).
 pub fn readable_document(name: &str, mime: &str) -> bool {
     let lower = name.to_lowercase();
@@ -736,6 +746,37 @@ pub fn friendly_error(e: &str) -> String {
     format!("⚠️ {what} {fix}\n\n_{}_", tools::truncate(e.lines().next().unwrap_or(e), 160))
 }
 
+/// What the person hasn't connected yet, and where to: asked for one, a bot says so in the setting's own words (the app
+/// turns "Settings → Email" into a button) instead of guessing, and tries again once it's connected. Only where those
+/// would be offered at all: a chat with the person alone, not a guest's, not incognito, not a task from another bot.
+pub(crate) fn not_connected(ctx: &ToolCtx) -> String {
+    if ctx.depth > 0 || ctx.incognito() || ctx.db.chat_guest(ctx.chat_id) || !ctx.db.chat_private(ctx.chat_id) {
+        return String::new();
+    }
+    let db = &ctx.db;
+    let missing: Vec<&str> = [
+        (email::account(db).is_none(), "email (search, read, draft, send): Settings → Email"),
+        (
+            host::secret_get(calendar::SECRET).is_none() && caldav::account(db).is_none(),
+            "your calendar: Settings → Calendar to add events, or the calendar link in Meetings to read it",
+        ),
+        (tools::search_service(db).is_none(), "web search: Settings → Web search"),
+        (!ext::servers(db).iter().any(|s| s.name == ext::BROWSER), "a web browser (pages that need clicks or a login): Settings → Browser"),
+    ]
+    .into_iter()
+    .filter_map(|(m, s)| m.then_some(s))
+    .collect();
+    if missing.is_empty() {
+        return String::new();
+    }
+    format!(
+        "\n\n<not_connected>\nNot connected yet:\n- {}\nIf a request needs one of these, don't guess or work around it: say in a sentence that it isn't \
+         connected yet and where to connect it, in those exact words (like Settings → Email), and that you'll do it once it is. \
+         When they say it's connected, try again.\n</not_connected>",
+        missing.join("\n- ")
+    )
+}
+
 /// What a quiet check replies when nothing needs the user's attention.
 const NOTHING: &str = "NOTHING";
 
@@ -750,6 +791,25 @@ pub(crate) fn is_nothing(reply: &str) -> bool {
     reply.trim().trim_matches(|c: char| !c.is_alphanumeric()).eq_ignore_ascii_case(NOTHING)
 }
 
+/// Midnight today, local time.
+pub(crate) fn day_start() -> i64 {
+    let t = chrono::Local::now().date_naive().and_hms_opt(0, 0, 0);
+    t.and_then(|t| chrono::TimeZone::from_local_datetime(&chrono::Local, &t).earliest()).map_or(0, |t| t.timestamp())
+}
+
+/// The person's rule for coming through right away, when this run's result would otherwise wait (the digest, the
+/// log, or quiet hours, which turn "now" into the digest). A rehearsal doesn't use up the day's.
+fn urgent_rule<'a>(r: &'a db::Routine, ctx: &ToolCtx) -> Option<&'a str> {
+    (!r.urgent.is_empty() && r.delivery != "now" && !ctx.rehearsal).then_some(r.urgent.as_str())
+}
+
+/// A reply whose first line is URGENT: the rest of it.
+fn urgent_body(reply: &str) -> Option<&str> {
+    let reply = reply.trim_start();
+    let (first, rest) = reply.split_once('\n').unwrap_or((reply, ""));
+    first.trim_matches(|c: char| !c.is_alphanumeric()).eq_ignore_ascii_case("URGENT").then(|| rest.trim())
+}
+
 async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) -> Result<(String, db::Usage)> {
     let scope = ctx.scope();
     let (text, is_routine, quiet) = match &trigger {
@@ -761,7 +821,8 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
         Trigger::Routine(r) => {
             // A routine can just run a skill: its prompt is "/skill-name …".
             let prompt = skill_command(&ctx.db, &scope, ctx.bot_id, &r.prompt).unwrap_or_else(|| r.prompt.clone());
-            (format!("[Scheduled {} #{} \"{}\"{}] {prompt}", if r.quiet { "quiet check" } else { "routine" }, r.id, r.cron, late(r.next_fire, db::now())), true, r.quiet)
+            let urgent = urgent_rule(r, ctx).map(|u| format!("\n\n[This result waits to be sent, unless the person's own rule holds now: \"{u}\". Only if it does, make the first line of your reply exactly URGENT.]")).unwrap_or_default();
+            (format!("[Scheduled {} #{} \"{}\"{}] {prompt}{urgent}", if r.quiet { "quiet check" } else { "routine" }, r.id, r.cron, late(r.next_fire, db::now())), true, r.quiet)
         }
     };
     // "/skill-name …" from the person: use that skill (the message is kept as they wrote it).
@@ -775,7 +836,7 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
         _ => None,
     };
     // A reply to one of the bot's messages quotes it: if a recent reply was written after reading a page, it may be that.
-    if matches!(&trigger, Trigger::Message(t) if own_part(t).len() != t.len()) && ctx.db.recent_outside(ctx.bot_id, ctx.chat_id, 20)? {
+    if matches!(&trigger, Trigger::Message(t) if own_part(t).len() != t.len()) && ctx.db.recent_outside(ctx.bot_id, ctx.conv, 20)? {
         ctx.pre_taint();
     }
     // Pushing back on the last reply is the strongest hint of how the person wants things done.
@@ -783,19 +844,19 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
     if let Some(t) = own
         && is_correction(t)
         && own_words(t)
-        && let recent = ctx.db.recent(ctx.bot_id, ctx.chat_id, 2)?
+        && let recent = ctx.db.recent(ctx.bot_id, ctx.conv, 2)?
         && let [.., (role, last)] = recent.as_slice()
         && role == "assistant"
     {
         // The reply they pushed back on may have been written after reading a page: labelled, like in the tidy-up's
         // conversation, so its text can't pass for theirs. A routine's result says which routine, so a fix can be for it.
-        let outside = if ctx.db.recent_outside(ctx.bot_id, ctx.chat_id, 1)? { " [outside content: not the person's words]" } else { "" };
+        let outside = if ctx.db.recent_outside(ctx.bot_id, ctx.conv, 1)? { " [outside content: not the person's words]" } else { "" };
         let routine = match recent.as_slice() {
             [(r, asked), _] if r == "user" && asked.starts_with("[Scheduled ") => format!("On a routine's result ({}): ", tools::truncate(asked, 140)),
             _ => String::new(),
         };
         ctx.db.signal_add(ctx.bot_id, ctx.chat_id, "correction", &format!("{routine}You said{outside}: {} → They replied: {t}", tools::truncate(last, 240)))?;
-        ctx.db.blame_last_reply(ctx.bot_id, ctx.chat_id, t)?;
+        ctx.db.blame_last_reply(ctx.bot_id, ctx.chat_id, ctx.conv, t)?;
         // A whole case needs the message that reply answered (a weekly review or routine result has none).
         if let [(asked_role, asked), _] = recent.as_slice()
             && asked_role == "user"
@@ -811,7 +872,7 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
     } else if let Some(t) = own
         && !t.starts_with('/')
         && own_words(t)
-        && let [.., asked, last] = ctx.db.messages(ctx.chat_id, 2)?.as_slice()
+        && let [.., asked, last] = ctx.db.messages(ctx.conv, 2)?.as_slice()
         && asked.role == "user" && asked.bot_id == ctx.bot_id
         && last.role == "assistant"
         && last.bot_id == ctx.bot_id
@@ -892,16 +953,35 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
     } else {
         ""
     };
+    let missing = not_connected(ctx);
+    let family = if ctx.db.chat_family(ctx.chat_id) {
+        "\n\nThis is a family group: several people of the household talk to you here, and each message starts with who \
+         wrote it (\"Sam: …\"). Answer that person."
+    } else {
+        ""
+    };
+    // The household: memories and lists shared with the people the person who runs you chose (a shopping list).
+    let household = if ctx.db.in_household(ctx.chat_id) {
+        let name = ctx.db.chat_title(HOUSEHOLD_CHAT).unwrap_or_default();
+        format!(
+            "\n<household name=\"{}\">\nShared by everyone in the household (lists, plans, who does what). To add to or change one of \
+             these, use memory_store with household: true (and supersedes to update a list).\n{}</household>\n",
+            name.replace(['"', '<', '>'], ""),
+            ctx.db.bootstrap(HOUSEHOLD, ctx.bot_id)?.iter().map(|e| e.line() + "\n").collect::<String>()
+        )
+    } else {
+        String::new()
+    };
     let system = format!(
-        "Your name is {}. {PERSONA}{role}{guest}{}{team}{logins}{plans}{skills}\n\nCurrent local time: {}.\n{}",
+        "Your name is {}. {PERSONA}{role}{guest}{family}{}{team}{logins}{plans}{skills}{missing}\n\nCurrent local time: {}.\n{}{household}",
         bot.name,
         if quiet { QUIET } else { "" },
         chrono::Local::now().format("%A %Y-%m-%d %H:%M %Z"),
-        block("standing_memory", &ctx.db.bootstrap(&scope)?)
+        block("standing_memory", &ctx.db.bootstrap(&scope, ctx.bot_id)?)
     );
     // Standing memory and this automatic recall hold only confirmed memories (a word in common with an unconfirmed one
     // shouldn't mark the whole reply); the bot can still look one up with memory_search, which marks it then.
-    let recall: Vec<_> = ctx.db.search(&scope, &text, 6)?.into_iter().filter(|e| !e.tainted).collect();
+    let recall: Vec<_> = ctx.db.search(&scope, ctx.bot_id, &text, 6)?.into_iter().filter(|e| !e.tainted).collect();
     if let Some(run) = ctx.run_id {
         ctx.db.run_recalled(run, &recall.iter().map(|e| e.id).collect::<Vec<_>>())?;
     }
@@ -922,16 +1002,16 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
     if matches!(trigger, Trigger::Message(_))
         && ctx.chat_id > host::LOCAL_CHAT
         && idle_hours > 0
-        && let Some(old) = ctx.db.session(ctx.bot_id, ctx.chat_id)?
-        && ctx.db.last_said(ctx.bot_id, ctx.chat_id)?.is_some_and(|t| db::now() - t >= idle_hours * 3600)
+        && let Some(old) = ctx.db.session(ctx.bot_id, ctx.conv)?
+        && ctx.db.last_said(ctx.bot_id, ctx.conv)?.is_some_and(|t| db::now() - t >= idle_hours * 3600)
     {
-        let tail = ctx.db.recent(ctx.bot_id, ctx.chat_id, 10)?;
+        let tail = ctx.db.recent(ctx.bot_id, ctx.conv, 10)?;
         // What's quoted may hold outside content; then this turn has read it too.
-        if ctx.db.recent_outside(ctx.bot_id, ctx.chat_id, 10)? {
+        if ctx.db.recent_outside(ctx.bot_id, ctx.conv, 10)? {
             ctx.pre_taint();
         }
         provider.forget_session(&old);
-        ctx.db.set_session(ctx.bot_id, ctx.chat_id, None)?;
+        ctx.db.set_session(ctx.bot_id, ctx.conv, None)?;
         if !tail.is_empty() {
             left_off = format!(
                 "<where_we_left_off>\nIt's been a while since you last talked, so this is a new session. The end of the last one, from Mimir's log:\n{}\n</where_we_left_off>\n\n",
@@ -944,11 +1024,11 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
     let mut last = String::new();
     if matches!(trigger, Trigger::Message(_))
         && !provider.uses_history()
-        && let Some((kind, said)) = ctx.db.last_outside_session(ctx.bot_id, ctx.chat_id)?
+        && let Some((kind, said)) = ctx.db.last_outside_session(ctx.bot_id, ctx.conv)?
     {
         // One from no run (a digest of routine results, the weekly review quoting learned memories, a note on what an
         // approved action returned) can't be shown clean, so it counts as outside content, like in chat_search.
-        if kind == "message" || ctx.db.recent_outside(ctx.bot_id, ctx.chat_id, 1)? {
+        if kind == "message" || ctx.db.recent_outside(ctx.bot_id, ctx.conv, 1)? {
             ctx.pre_taint();
         }
         let said = tools::truncate(&said, 4000).replace('<', "‹").replace('>', "›");
@@ -956,13 +1036,13 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
     }
     let user = format!("{}{past}{left_off}{last}{text}", block("memory", &recall));
 
-    let history = if provider.uses_history() { ctx.db.recent(ctx.bot_id, ctx.chat_id, 20)? } else { vec![] };
+    let history = if provider.uses_history() { ctx.db.recent(ctx.bot_id, ctx.conv, 20)? } else { vec![] };
     // Accounts that are handed the history again: if it holds outside content, so does this turn.
-    if !history.is_empty() && ctx.db.recent_outside(ctx.bot_id, ctx.chat_id, 20)? {
+    if !history.is_empty() && ctx.db.recent_outside(ctx.bot_id, ctx.conv, 20)? {
         ctx.pre_taint();
     }
     // Routines run in a fresh session so they don't derail the live conversation.
-    let session = if is_routine { None } else { ctx.db.session(ctx.bot_id, ctx.chat_id)? };
+    let session = if is_routine { None } else { ctx.db.session(ctx.bot_id, ctx.conv)? };
 
     let had_session = session.is_some();
     let mut reply = match provider.run(ctx, &system, &history, &user, session).await {
@@ -970,8 +1050,8 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
         // changed accounts): a new one starts with the chat so far, from Mimir's own log, so it isn't a blank page.
         Err(e) if had_session && !provider::is_usage_limit(&e) => {
             eprintln!("resume failed ({e:#}); starting a new session with the chat so far");
-            let so_far = so_far(&ctx.db.recent(ctx.bot_id, ctx.chat_id, 60)?, 30_000);
-            if ctx.db.recent_outside(ctx.bot_id, ctx.chat_id, 60)? {
+            let so_far = so_far(&ctx.db.recent(ctx.bot_id, ctx.conv, 60)?, 30_000);
+            if ctx.db.recent_outside(ctx.bot_id, ctx.conv, 60)? {
                 ctx.pre_taint();
             }
             let user = format!("<conversation_so_far>\nYour earlier session with this person couldn't be reopened. This is the last part of it, from Mimir's log:\n{so_far}\n</conversation_so_far>\n\n{user}");
@@ -990,11 +1070,30 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
         reply.usage.estimated = true;
     }
     if !is_routine && reply.session.is_some() {
-        ctx.db.set_session(ctx.bot_id, ctx.chat_id, reply.session.as_deref())?;
+        ctx.db.set_session(ctx.bot_id, ctx.conv, reply.session.as_deref())?;
     }
     // A quiet check that found nothing stays silent: no message, no conversation entry (the run log has it).
     if quiet && is_nothing(&reply.text) {
         return Ok((String::new(), reply.usage));
+    }
+    // A result that matched the person's rule comes through now, within the day's cap (the run is marked, so the
+    // scheduler sends it); over the cap it waits as usual, saying so.
+    let mut lane = match &trigger {
+        Trigger::Routine(r) => r.delivery.as_str(),
+        _ => "",
+    };
+    if let Trigger::Routine(r) = &trigger
+        && let Some(rule) = urgent_rule(r, ctx)
+        && let Some(body) = urgent_body(&reply.text).map(str::to_string)
+    {
+        if let Some(run) = ctx.run_id
+            && ctx.db.run_take_urgent(run, day_start())?
+        {
+            reply.text = format!("🔔 _Came through because: {rule}_\n\n{body}");
+            lane = "now";
+        } else {
+            reply.text = format!("{body}\n\n_This matched \"{rule}\", but {} already came through today._", db::URGENT_PER_DAY);
+        }
     }
     // What the reply says, against what the run did: receipts, sources and notes under it (the asking bot checks a
     // handed-over task's reply as its own; a rehearsal did nothing by design).
@@ -1007,17 +1106,21 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
             reply.text = format!("{}\n\n{lines}", reply.text.trim_end());
         }
     }
+    // Files it sent go at the end, as [[file:…]] lines: the chat apps upload them, the app shows them.
+    if let Some(run) = ctx.run_id {
+        reply.text.push_str(&files::sent_lines(&ctx.db, run));
+    }
     match &trigger {
         Trigger::Delegated { .. } => {}
         // Routines in the digest or log-only lane don't land in the chat as they run.
-        Trigger::Routine(r) if r.delivery == "digest" => {
+        Trigger::Routine(r) if lane == "digest" => {
             ctx.db.digest_add(ctx.bot_id, ctx.chat_id, r.id, &reply.text, ctx.is_tainted())?;
             // What it found came from outside: the conversation it lands in has read it too.
             if ctx.is_tainted() {
-                ctx.db.conv_taint(ctx.bot_id, ctx.chat_id)?;
+                ctx.db.conv_taint(ctx.bot_id, ctx.conv)?;
             }
         }
-        Trigger::Routine(r) if r.delivery == "log" => {}
+        Trigger::Routine(_) if lane == "log" => {}
         _ => {
             // A new routine's first results ask what to trim, so the brief gets tuned by a reply rather than left as
             // first written (the bot changes it with routine_update).
@@ -1030,10 +1133,10 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
             }
             // What the person typed ("/book-padel Thursday"), not the instruction it became.
             let said = if let Trigger::Message(t) = &trigger { t.to_string() } else { text.clone() };
-            ctx.db.log(ctx.bot_id, ctx.chat_id, "user", &said, None)?;
-            ctx.db.log(ctx.bot_id, ctx.chat_id, "assistant", &reply.text, ctx.run_id)?;
+            ctx.db.log(ctx.bot_id, ctx.conv, "user", &said, None)?;
+            ctx.db.log(ctx.bot_id, ctx.conv, "assistant", &reply.text, ctx.run_id)?;
             if is_routine && ctx.is_tainted() {
-                ctx.db.conv_taint(ctx.bot_id, ctx.chat_id)?;
+                ctx.db.conv_taint(ctx.bot_id, ctx.conv)?;
             }
         }
     }
@@ -1044,10 +1147,33 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
 mod tests {
 
     #[test]
+    fn urgent_first_line() {
+        assert_eq!(super::urgent_body("URGENT\nFlight BA12 is delayed 3h."), Some("Flight BA12 is delayed 3h."));
+        assert_eq!(super::urgent_body("\n**Urgent:**\nx"), Some("x"));
+        assert_eq!(super::urgent_body("Nothing urgent today.\nURGENT"), None, "only the first line counts");
+    }
+
+    #[test]
     fn a_late_run_is_told() {
         let now = super::db::now();
         assert_eq!(super::late(now - 60, now), "", "on time");
         assert!(super::late(now - 3 * 3600, now).starts_with(", due at "), "hours late");
+    }
+
+    #[test]
+    fn a_bot_is_told_what_isnt_connected_where_it_could_be_used() {
+        let p = std::env::temp_dir().join(format!("mimir-missing-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let d = super::db::Db::open(&p).unwrap();
+        let ctx = super::ToolCtx::new(d.clone(), 1, super::host::LOCAL_CHAT);
+        let note = super::not_connected(&ctx);
+        assert!(note.contains("Settings → Email") && note.contains("Settings → Web search"), "{note}");
+        d.set_setting("searxng_url", "https://search.example").unwrap();
+        assert!(!super::not_connected(&ctx).contains("Web search"), "connected: not mentioned");
+        let mut delegated = ctx.clone();
+        delegated.depth = 1;
+        assert_eq!(super::not_connected(&delegated), "", "not for another bot's task");
+        assert_eq!(super::not_connected(&super::ToolCtx::new(d, 1, -42)), "", "not in a group");
     }
 
     #[test]

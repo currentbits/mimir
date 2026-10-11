@@ -98,6 +98,27 @@ ada = api("messages", {"chatId": 0, "botId": 1})
 check("messages carry their id (the app follows long chats by it)", ada and all(isinstance(m.get("id"), int) for m in ada), ada[:1])
 check("Search's own thread holds no Ada messages", all(m["bot_id"] == search_id for m in mine), [m["bot_id"] for m in mine])
 
+# A digest routine with the person's own "come through right away if …" rule, made due now
+rt = api("add_routine", {"chatId": 0, "botId": 1, "cron": "0 9 * * *", "prompt": "check if my flight is DELAYED"})
+api("set_delivery", {"chatId": 0, "id": rt["id"], "delivery": "digest"})
+api("set_urgent", {"chatId": 0, "id": rt["id"], "rule": "the flight is delayed"})
+with sqlite3.connect(DB) as c:
+    c.execute("UPDATE routines SET next_fire=strftime('%s','now') - 1 WHERE id=?", (rt["id"],))
+said = []
+for _ in range(90):
+    said = [m["content"] for m in api("messages", {"chatId": 0, "botId": 1}) if "Came through because" in m["content"]]
+    if said: break
+    time.sleep(0.5)
+check("urgent: came through right away, saying why", said and "the flight is delayed" in said[0] and "URGENT" not in said[0], said)
+check("urgent: not also in the digest", not q("SELECT id FROM digest_items WHERE routine_id=?", rt["id"]))
+# The message is saved before the run records how it went out: wait for that, briefly.
+for _ in range(20):
+    if q("SELECT urgent, delivered FROM runs WHERE routine_id=? ORDER BY id DESC LIMIT 1", rt["id"]) == [(1, "in the app")]: break
+    time.sleep(0.25)
+check("urgent: the run counts towards the day's cap", q("SELECT urgent, delivered FROM runs WHERE routine_id=? ORDER BY id DESC LIMIT 1", rt["id"]) == [(1, "in the app")],
+      q("SELECT urgent, delivered FROM runs WHERE routine_id=?", rt["id"]))
+api("delete_routine", {"chatId": 0, "id": rt["id"]})
+
 # Deleting a bot takes its routines and runs with it; memories stay
 api("add_routine", {"chatId": 0, "botId": scout[0][0], "cron": "0 9 * * *", "prompt": "check prices", "quiet": True})
 api("delete_bot", {"id": scout[0][0]})
