@@ -4,6 +4,8 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 
 ## Unreleased
 
+- **Word and Excel files and scanned PDFs:** send a `.docx` or `.xlsx` and the bot reads it (Excel sheet by sheet).
+  A scanned PDF's pages go to the bot as photos, so a scanned contract or letter no longer needs photographing.
 - **A starter team in the first minutes:** the first run asks what you want off your plate (tap up to three), and your
   first bot suggests bots, routines and library skills for them on one card. Untick what you don't want, and the rest
   is set up when you start.
@@ -12,7 +14,6 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
   accept it.
 - **Bots know what isn't connected yet:** ask for your email before it's set up and the bot says where to connect it.
   The chat shows a button to that setting and a **Try again** for afterwards.
-
 - **Email providers that send on port 587 work:** Settings → Email has an *Outgoing port* next to the outgoing server.
   Empty is 465 as before; 587 (or any other port) uses STARTTLS. Saving used to set it back to 465 every time.
 

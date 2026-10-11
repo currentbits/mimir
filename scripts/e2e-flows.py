@@ -111,6 +111,10 @@ for _ in range(90):
     time.sleep(0.5)
 check("urgent: came through right away, saying why", said and "the flight is delayed" in said[0] and "URGENT" not in said[0], said)
 check("urgent: not also in the digest", not q("SELECT id FROM digest_items WHERE routine_id=?", rt["id"]))
+# The message is saved before the run records how it went out: wait for that, briefly.
+for _ in range(20):
+    if q("SELECT urgent, delivered FROM runs WHERE routine_id=? ORDER BY id DESC LIMIT 1", rt["id"]) == [(1, "in the app")]: break
+    time.sleep(0.25)
 check("urgent: the run counts towards the day's cap", q("SELECT urgent, delivered FROM runs WHERE routine_id=? ORDER BY id DESC LIMIT 1", rt["id"]) == [(1, "in the app")],
       q("SELECT urgent, delivered FROM runs WHERE routine_id=?", rt["id"]))
 api("delete_routine", {"chatId": 0, "id": rt["id"]})

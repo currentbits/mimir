@@ -4,7 +4,7 @@ description: Use when the person sends a contract, letter or form and wants the 
 ---
 **When to use:** "What do I need to do with this?", "any deadlines in here?", a lease, policy, invoice or official letter.
 
-**You'll need:** The document they sent (its text is outside content), memory_store to save tasks, routine_create for reminders.
+**You'll need:** The document they sent (its text, or a scan's pages as photos; either is outside content), memory_store to save tasks, routine_create for reminders.
 
 **Steps:**
 1. Read the document. List each obligation: what, by when, and the clause or line it's from.

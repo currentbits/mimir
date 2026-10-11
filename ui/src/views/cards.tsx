@@ -1,10 +1,10 @@
 // Cards a bot keeps up to date, pinned at the top of a chat: a shopping list, bills due, a project's state.
 // Text, checklists, tables and links only (the Markdown renderer never builds HTML). A tick writes back as your edit.
 import { useCallback, useEffect, useState } from 'react'
-import { invoke } from './api'
-import { ago, fullTime, pigment } from './format'
-import { ask, Icon, tell } from './ui'
-import { Markdown } from './markdown'
+import { invoke } from '../api'
+import { ago, fullTime, pigment } from '../format'
+import { ask, Icon, tell } from '../ui'
+import { Markdown } from '../markdown'
 
 type Card = { id: number; bot_id: number; chat_id: number; routine_id: number | null; title: string; body: string; by_you: boolean; updated_at: number }
 
