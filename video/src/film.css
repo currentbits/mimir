@@ -1,4 +1,0 @@
-/* The faces come from the app (ui/src/face.css); here the frame moves them, so their CSS motion is off. */
-.face, .face *, .face *::before, .face *::after { animation: none !important; transition: none !important; }
-.face::after { display: none; }
-body { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
