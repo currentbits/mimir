@@ -37,6 +37,12 @@ set up Brave Search or your own SearXNG once in Settings → Web search, and eve
   localhost callback). Or paste a key.
 - **Keys** (OpenAI-compatible, xAI) go to the OS keychain (or the server's private database).
 
+## A fallback for usage limits
+
+A bot's page can name a second account for its routines while its own is at a usage limit, until the limit resets
+([how it works](routines.md#when-a-run-doesnt-work)). It's another kind of account, not a second login of the same
+kind: Mimir uses one Claude, ChatGPT or Grok sign-in for all bots.
+
 ## How tools reach the model
 
 The CLIs (Claude, Codex, Grok) start Mimir as an **MCP server** for each run, so the model sees Mimir's tools

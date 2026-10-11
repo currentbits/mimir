@@ -111,10 +111,42 @@ impl Db {
              DELETE FROM runs WHERE bot_id={id}; DELETE FROM messages WHERE bot_id={id};
              DELETE FROM signals WHERE bot_id={id}; DELETE FROM cases WHERE bot_id={id}; DELETE FROM digest_items WHERE bot_id={id}; DELETE FROM cards WHERE bot_id={id};
              DELETE FROM routines WHERE bot_id={id}; DELETE FROM sessions WHERE bot_id={id}; DELETE FROM conv_taint WHERE bot_id={id};
-             DELETE FROM settings WHERE key LIKE 'seen:{id}:%' OR key='pause:{id}'; DELETE FROM bots WHERE id={id};"
+             DELETE FROM settings WHERE key LIKE 'seen:{id}:%' OR key IN ('pause:{id}', 'fallback:{id}', 'fallback_spent:{id}');
+             DELETE FROM bots WHERE id={id};"
         ))?;
         self.wipe_free_space();
         Ok(())
+    }
+
+    /// The account a bot's routines run on while its own is at a usage limit: (account kind, model). None: off.
+    pub fn fallback(&self, bot: i64) -> Result<Option<(String, String)>> {
+        Ok(self.setting(&format!("fallback:{bot}"))?.and_then(|v| serde_json::from_str(&v).ok()))
+    }
+
+    /// Set (or, with an empty kind, turn off) a bot's fallback account.
+    pub fn set_fallback(&self, bot: i64, kind: &str, model: &str) -> Result<()> {
+        let key = format!("fallback:{bot}");
+        if kind.is_empty() {
+            self.c().execute("DELETE FROM settings WHERE key=?1", [key])?;
+            return Ok(());
+        }
+        if kind == self.bot(bot)?.provider && ["claude", "codex", "grok", "chatgpt"].contains(&kind) {
+            bail!("that's the same login as the bot's own, so it's at the same limit");
+        }
+        self.set_setting(&key, &serde_json::to_string(&(kind, model.trim()))?)
+    }
+
+    /// The fallback a bot's routines run on right now: its own account is held for a usage limit (not a daily cap,
+    /// which applies whatever the account), and the fallback isn't at its own limit. With when the hold ends: back then.
+    pub fn on_fallback(&self, bot: i64, now: i64) -> Result<Option<(String, String, i64)>> {
+        let Some(h) = self.hold(&format!("hold:{bot}"))?.filter(|h| h.until > now && h.waive.is_none()) else { return Ok(None) };
+        let spent = self.setting(&format!("fallback_spent:{bot}"))?.and_then(|v| v.parse::<i64>().ok()).is_some_and(|t| t > now);
+        Ok(self.fallback(bot)?.filter(|_| !spent).map(|(k, m)| (k, m, h.until)))
+    }
+
+    /// The fallback hit its own usage limit: routines wait for the bot's own account again, until `until`.
+    pub fn fallback_spent(&self, bot: i64, until: i64) -> Result<()> {
+        self.set_setting(&format!("fallback_spent:{bot}"), &until.to_string())
     }
 
     /// Delete a chat's history: its conversation, the run log and tool calls, corrections, digests, decided

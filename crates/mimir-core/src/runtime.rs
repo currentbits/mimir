@@ -1354,7 +1354,21 @@ impl Core {
 
     /// One routine that's due: the change gate, a setup check, the run, what happens after a failure (wait for the
     /// usage limit, try again soon, or say so), and where its result went.
-    async fn run_routine(&self, chans: &[Chan], mut r: crate::db::Routine) -> Result<()> {
+    /// The fallback account this bot's routines run on right now, with when they go back to its own (see Db::on_fallback).
+    fn fallback(&self, now: i64) -> Option<(Arc<Provider>, i64)> {
+        let (kind, model, until) = self.db.on_fallback(self.bot, now).unwrap_or_else(|e| { eprintln!("fallback: {e:#}"); None })?;
+        let home = crate::data_dir().ok()?;
+        match Provider::new(&kind, Some(model), None, crate::host::api_key(&kind), home) {
+            Ok(p) => Some((Arc::new(p), until)),
+            Err(e) => {
+                eprintln!("bot #{}'s fallback account: {e:#}", self.bot);
+                None
+            }
+        }
+    }
+
+    async fn run_routine(&self, chans: &[Chan], mut r: crate::db::Routine, fallback: Option<&(Arc<Provider>, i64)>) -> Result<()> {
+        let provider = fallback.map_or_else(|| self.provider.clone(), |(p, _)| p.clone());
         // Quiet hours: what would message right away goes into the next digest instead.
         if r.delivery == "now" && quiet_now(&self.db, chrono::Local::now()) {
             r.delivery = "digest".into();
@@ -1408,18 +1422,18 @@ impl Core {
             None => None,
         };
         // Nothing is spent on an AI account that isn't there: that's a failure (tried again, like the network) instead.
-        let ready = self.provider.ready().await;
+        let ready = provider.ready().await;
         let _g = self.chat_lock(r.chat_id).lock_owned().await;
         // Local-chat routines (or ones whose channel isn't connected) still run; the reply lands in the app.
         let target = Self::chan_for(chans, r.chat_id, &self.db);
         let out = match ready {
             Err(e) => {
-                self.db.run_not_started(&r, &self.provider.name(), &format!("{e:#}"))?;
+                self.db.run_not_started(&r, &provider.name(), &format!("{e:#}"))?;
                 Err(e)
             }
             Ok(()) => {
                 let typing = target.as_ref().and_then(|(c, ext)| c.typing(ext));
-                let (provider, ctx, routine) = (self.provider.clone(), ToolCtx::new(self.db.clone(), self.bot, r.chat_id), r.clone());
+                let (provider, ctx, routine) = (provider.clone(), ToolCtx::new(self.db.clone(), self.bot, r.chat_id), r.clone());
                 let out = self.own_task(r.chat_id, async move { turn(&provider, &ctx, Trigger::Routine(&routine)).await }).await;
                 if let Some(t) = typing {
                     t.abort();
@@ -1446,6 +1460,12 @@ impl Core {
                 let now = crate::db::now();
                 let clock = |t: i64| chrono::TimeZone::timestamp_opt(&chrono::Local, t, 0).single().map(|d| d.format(if t - now < 18 * 3600 { "%H:%M" } else { "%a %-d %b %H:%M" }).to_string()).unwrap_or_default();
                 let again = match crate::cause(&e) {
+                    // The fallback is at its limit too: back to waiting for the bot's own account.
+                    crate::Cause::Quota if let Some((_, until)) = fallback => {
+                        self.db.fallback_spent(self.bot, *until)?;
+                        self.db.routine_retry(&r, *until)?;
+                        Some(format!("The fallback account was at its usage limit too; this one runs again at {}, when the bot's own account resets.", clock(*until)))
+                    }
                     crate::Cause::Quota => {
                         // ponytail: an hour when the AI didn't say when it resets; a run then finds out again
                         let until = crate::provider::quota_reset(&self.db, self.provider.kind(), &e, now).unwrap_or(now + 3600).min(now + 8 * 86400);
@@ -1453,6 +1473,14 @@ impl Core {
                         // Every bot on the same signed-in AI (Claude, ChatGPT or Grok is one login for all of them) waits
                         // too, instead of each finding out with a failed run. Bots on an API key may be limited per model.
                         let held = self.db.hold_account(self.bot, self.provider.kind(), &crate::db::Hold { until, why, waive: None })?;
+                        // A fallback account set: this one runs again on it straight away (the scheduler's next pass).
+                        if self.db.on_fallback(self.bot, now)?.is_some() {
+                            self.db.routine_retry(&r, now)?;
+                            if let Some(run) = run {
+                                self.db.run_note(run, &format!("Routines run on the fallback account until {}, then on this one again.", clock(until)))?;
+                            }
+                            return Ok(());
+                        }
                         self.db.routine_retry(&r, until)?;
                         let who = if held.len() > 1 { "Routines on this AI account wait" } else { "This bot's routines wait" };
                         let note = format!("{who} until {}, when the limit resets; this one runs again then.", clock(until));
@@ -1489,8 +1517,16 @@ impl Core {
                 text
             }
         };
+        // The run log says when a run was on the fallback account (shown after where the result went).
+        let fell_back = fallback.map(|(_, until)| {
+            let at = chrono::TimeZone::timestamp_opt(&chrono::Local, *until, 0).single().map(|d| d.format("%H:%M").to_string()).unwrap_or_default();
+            format!("on the fallback account until {at}")
+        });
         // Empty = a quiet check that found nothing worth saying. Digest / log-only routines don't message now.
         if text.trim().is_empty() {
+            if let (Some(run), Some(f)) = (run, &fell_back) {
+                self.db.run_delivered(run, f)?;
+            }
             return Ok(());
         }
         // Matched the person's "come through right away if …" (within the day's cap): sent now, whatever its lane.
@@ -1514,7 +1550,7 @@ impl Core {
             }
         };
         if let Some(run) = run {
-            self.db.run_delivered(run, &how)?;
+            self.db.run_delivered(run, &fell_back.map_or(how.clone(), |f| format!("{how} · {f}")))?;
         }
         Ok(())
     }
@@ -1577,6 +1613,9 @@ impl Core {
             if hold.is_some() && !held {
                 let _ = self.db.hold_clear(&bot_hold, false);
             }
+            // A bot with a fallback account runs on it instead, until the hold ends: then it's back on its own.
+            let fallback = if held { self.fallback(now) } else { None };
+            let held = held && fallback.is_none();
             self.calendar_times(now).await;
             // Mail triggers look at new mail every two minutes; a match makes its routine due in this pass.
             if now - rules_looked >= 120 {
@@ -1604,11 +1643,12 @@ impl Core {
                             eprintln!("routine #{} missed: {e:#}", r.id);
                         }
                         let id = r.id;
-                        if let Err(e) = self.run_routine(&chans, r).await {
+                        if let Err(e) = self.run_routine(&chans, r, fallback.as_ref()).await {
                             eprintln!("routine #{id}: {e:#}");
                         }
-                        // It hit the usage limit or the bot's cap: the rest wait too.
-                        if self.db.hold(&bot_hold).ok().flatten().is_some_and(|h| h.until > crate::db::now()) {
+                        // It hit the usage limit or the bot's cap: the rest wait too (or switch to the fallback, next pass).
+                        let now = crate::db::now();
+                        if self.db.hold(&bot_hold).ok().flatten().is_some_and(|h| h.until > now) && (fallback.is_none() || self.fallback(now).is_none()) {
                             break;
                         }
                     }
@@ -1889,10 +1929,10 @@ mod tests {
 
         // Can't reach the AI: tried again in 5 minutes, without a message; one item in Needs you that says so.
         let down = core_on(&db, "http://127.0.0.1:9/v1");
-        down.run_routine(&[], fresh(&db)).await.unwrap();
+        down.run_routine(&[], fresh(&db), None).await.unwrap();
         let after = fresh(&db);
         assert!((after.retries, after.next_fire > now + 200 && after.next_fire <= now + 400) == (1, true), "{after:?}");
-        down.run_routine(&[], after).await.unwrap();
+        down.run_routine(&[], after, None).await.unwrap();
         assert_eq!(fresh(&db).retries, 2);
         let failed = db.runs_failed(0).unwrap();
         assert_eq!((failed.len(), failed[0].repeats), (1, 2), "one item for the same failure");
@@ -1900,15 +1940,29 @@ mod tests {
 
         // The plan's usage limit: the bot's routines wait (an hour, when nobody says when it resets), this one runs then.
         let limited = core_on(&db, &fake_ai("429 Too Many Requests", r#"{"error":{"message":"Rate limit reached"}}"#).await);
-        limited.run_routine(&[], fresh(&db)).await.unwrap();
+        limited.run_routine(&[], fresh(&db), None).await.unwrap();
         let h = db.hold("hold:1").unwrap().expect("held");
         assert!(h.until > now + 3000 && h.until <= now + 3700 && fresh(&db).next_fire <= h.until, "{h:?}");
         assert_eq!(db.holds(now).unwrap().len(), 1, "another bot on an API key isn't held");
         assert_eq!(db.runs_failed(0).unwrap().len(), 2, "a usage limit is its own item");
+        let ok = core_on(&db, &fake_ai("200 OK", r#"{"choices":[{"message":{"role":"assistant","content":"Three headlines."}}],"usage":{"prompt_tokens":3,"completion_tokens":2}}"#).await);
+
+        // With a fallback account: it runs again there straight away, the run log says so, and at the fallback's own
+        // limit it waits for the bot's account after all.
+        db.set_fallback(1, "local", "m").unwrap();
+        limited.run_routine(&[], fresh(&db), None).await.unwrap();
+        assert!(fresh(&db).next_fire <= crate::db::now(), "runs again on the next pass");
+        assert!(db.runs(Some(0), 1).unwrap()[0].error.as_deref().unwrap().contains("on the fallback account until"));
+        let until = db.on_fallback(1, now).unwrap().expect("on the fallback").2;
+        ok.run_routine(&[], fresh(&db), Some(&(ok.provider.clone(), until))).await.unwrap();
+        assert!(db.runs(Some(0), 1).unwrap()[0].delivered.as_deref().unwrap().starts_with("in the app · on the fallback account until"));
+        limited.run_routine(&[], fresh(&db), Some(&(limited.provider.clone(), until))).await.unwrap();
+        assert!(db.runs(Some(0), 1).unwrap()[0].error.as_deref().unwrap().contains("fallback account was at its usage limit too"));
+        assert!(db.on_fallback(1, now).unwrap().is_none(), "the fallback is spent until the hold ends");
+        db.set_fallback(1, "", "").unwrap();
 
         // It works again: its failures leave Needs you, the tries start over, and the result's whereabouts are logged.
-        let ok = core_on(&db, &fake_ai("200 OK", r#"{"choices":[{"message":{"role":"assistant","content":"Three headlines."}}],"usage":{"prompt_tokens":3,"completion_tokens":2}}"#).await);
-        ok.run_routine(&[], fresh(&db)).await.unwrap();
+        ok.run_routine(&[], fresh(&db), None).await.unwrap();
         assert_eq!(fresh(&db).retries, 0);
         assert!(db.runs_failed(0).unwrap().is_empty(), "healed");
         assert_eq!(db.runs(Some(0), 1).unwrap()[0].delivered.as_deref(), Some("in the app"));
@@ -1917,7 +1971,7 @@ mod tests {
         let once = db.routine_once(1, 0, now + 60, "call mum", false).unwrap();
         db.routine_advance(&once).unwrap();
         assert!(db.routines(0).unwrap().iter().any(|x| x.id == once.id && x.next_fire > now + 3000));
-        ok.run_routine(&[], once.clone()).await.unwrap();
+        ok.run_routine(&[], once.clone(), None).await.unwrap();
         assert!(!db.routines(0).unwrap().iter().any(|x| x.id == once.id));
     }
 
@@ -2045,7 +2099,7 @@ mod tests {
         let r = db.routine_create(1, 0, "0 8 * * *", "brief me", false).unwrap();
         for _ in 0..4 {
             let r = db.routines(0).unwrap().into_iter().find(|x| x.id == r.id).unwrap();
-            ok.run_routine(&[], r).await.unwrap();
+            ok.run_routine(&[], r, None).await.unwrap();
         }
         let said: Vec<String> = db.messages(0, 8).unwrap().into_iter().filter(|m| m.role == "assistant").map(|m| m.content).collect();
         let asks = said.iter().filter(|m| m.contains(&format!("adjust this routine (#{})", r.id))).count();
@@ -2065,10 +2119,10 @@ mod tests {
         let other = db.routine_create(1, 0, "0 9 * * *", "and this", false).unwrap();
         let get = |id: i64| db.routines(0).unwrap().into_iter().find(|x| x.id == id).unwrap();
         db.set_setting("cap_routine", "5").unwrap();
-        ok.run_routine(&[], get(r.id)).await.unwrap();
+        ok.run_routine(&[], get(r.id), None).await.unwrap();
         // 5 tokens used: the next run would go over this routine's cap. It pauses until tomorrow, still due.
         let before = get(r.id).next_fire;
-        ok.run_routine(&[], get(r.id)).await.unwrap();
+        ok.run_routine(&[], get(r.id), None).await.unwrap();
         let key = format!("hold:routine:{}", r.id);
         let h = db.hold(&key).unwrap().expect("paused");
         assert!(h.why.contains("this routine reached the daily cap of 5 tokens") && h.until > crate::db::now(), "{h:?}");
@@ -2076,20 +2130,20 @@ mod tests {
         let held = db.holds(0).unwrap();
         assert_eq!((held.len(), held[0].2), (1, Some(r.id)));
         // Another routine has its own cap.
-        ok.run_routine(&[], get(other.id)).await.unwrap();
+        ok.run_routine(&[], get(other.id), None).await.unwrap();
         assert_eq!(db.runs(Some(0), 9).unwrap().len(), 2);
         // "Let it go on today": it runs, and doesn't pause again today.
         db.hold_clear(&key, true).unwrap();
         assert!(db.holds(crate::db::now()).unwrap().is_empty(), "ended, out of Needs you");
         assert!(db.hold(&key).unwrap().is_some_and(|h| h.until < crate::db::now()), "kept, so a late run says why");
-        ok.run_routine(&[], get(r.id)).await.unwrap();
-        ok.run_routine(&[], get(r.id)).await.unwrap();
+        ok.run_routine(&[], get(r.id), None).await.unwrap();
+        ok.run_routine(&[], get(r.id), None).await.unwrap();
         assert!(db.hold(&key).unwrap().is_some_and(|h| h.until < crate::db::now()), "not paused again today");
         assert_eq!(db.runs(Some(0), 9).unwrap().len(), 4);
         // All bots together: a bot-wide pause.
         db.set_setting("cap_routine", "0").unwrap();
         db.set_setting("cap_day", "10").unwrap();
-        ok.run_routine(&[], get(other.id)).await.unwrap();
+        ok.run_routine(&[], get(other.id), None).await.unwrap();
         assert!(db.hold("hold:1").unwrap().unwrap().why.contains("all your bots together"));
         // Ending on its own (the day is over) doesn't let tomorrow go over the cap.
         db.hold_clear("hold:1", false).unwrap();

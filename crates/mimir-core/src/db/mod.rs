@@ -1106,6 +1106,31 @@ mod tests {
     }
 
     #[test]
+    fn a_fallback_runs_while_the_login_is_held() {
+        let d = db();
+        let mut b = d.bot(1).unwrap();
+        b.provider = "claude".into();
+        d.bot_save(&b).unwrap();
+        assert!(d.set_fallback(1, "claude", "").is_err(), "the same login is at the same limit");
+        d.set_fallback(1, "openrouter", " openrouter/auto ").unwrap();
+        assert_eq!(d.fallback(1).unwrap(), Some(("openrouter".into(), "openrouter/auto".into())));
+        assert_eq!(d.on_fallback(1, now()).unwrap(), None, "not held: its own account");
+        let until = now() + 600;
+        d.hold_account(1, "claude", &Hold { until, why: "limit".into(), waive: None }).unwrap();
+        assert_eq!(d.on_fallback(1, now()).unwrap(), Some(("openrouter".into(), "openrouter/auto".into(), until)));
+        assert_eq!(d.on_fallback(1, until).unwrap(), None, "the limit reset: back on its own");
+        // A daily cap applies whatever the account.
+        d.hold_set("hold:1", &Hold { until, why: "cap".into(), waive: Some("cap_waived:bot:1".into()) }).unwrap();
+        assert_eq!(d.on_fallback(1, now()).unwrap(), None);
+        // The fallback at its own limit: wait for the bot's own again.
+        d.hold_account(1, "claude", &Hold { until, why: "limit".into(), waive: None }).unwrap();
+        d.fallback_spent(1, until).unwrap();
+        assert_eq!(d.on_fallback(1, now()).unwrap(), None);
+        d.set_fallback(1, "", "").unwrap();
+        assert_eq!(d.fallback(1).unwrap(), None);
+    }
+
+    #[test]
     fn watched_quiet_checks() {
         let d = db();
         let r = d.routine_create(1, 8, "*/15 * * * *", "tell me if the price drops", true).unwrap();

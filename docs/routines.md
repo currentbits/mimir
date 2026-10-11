@@ -112,6 +112,14 @@ What happens next depends on why:
   hour when the AI doesn't say), then each runs once, and the one that hit the limit runs again. You get one message
   where that routine speaks, and **Needs you** shows "routines wait until 15:00" with *Run them now* (if you raised the
   limit or switched account).
+
+  **A fallback account** (the bot's page, *When it hits a usage limit*; off by default) runs the bot's routines on
+  another account instead: a different login (ChatGPT, Codex, Grok, Claude) or a key (OpenRouter, xAI, an API key,
+  which bill per token, so that costs money). The routine that hit the limit runs again there on the next pass, the
+  others go on as usual, and at the reset time they're back on the bot's own account. Each run on the fallback says so
+  in the run log ("on the fallback account until 15:00"), and Needs you doesn't list the bot as waiting. Daily caps
+  still apply. If the fallback hits its own limit, its routines wait for the bot's own account after all. Replies to
+  your messages stay on the bot's own account.
 - **Couldn't reach the AI** (the network, a local model that's starting): it tries again after 5, 15 and 30 minutes,
   without messaging you, and only then says it failed.
 - **The AI account isn't set up** (not installed, signed out): Mimir checks this before each run, so nothing is spent;

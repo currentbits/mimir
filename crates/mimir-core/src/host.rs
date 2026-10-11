@@ -583,6 +583,19 @@ impl Host {
             "chats" => ok(self.db.chats()?),
             // Each topic in a private Telegram chat its own conversation (read per message, so no restart).
             "telegram_topics" => ok(self.db.setting(&format!("telegram_topics:{}", arg::<i64>(a, "bot_id")?))?.as_deref() == Some("on")),
+            // The account a bot's routines run on while its own is at a usage limit (get without `provider`; "" turns it off).
+            "fallback" => {
+                let bot: i64 = arg(a, "bot_id")?;
+                if let Some(kind) = arg::<Option<String>>(a, "provider")? {
+                    let model = arg::<Option<String>>(a, "model")?.unwrap_or_default();
+                    if !kind.is_empty() {
+                        // Checked like a bot's own account: a key that isn't there, a local model without a name.
+                        Provider::new(&kind, Some(model.clone()), None, api_key(&kind), self.home.clone())?;
+                    }
+                    self.db.set_fallback(bot, &kind, &model)?;
+                }
+                ok(self.db.fallback(bot)?.map(|(provider, model)| json!({"provider": provider, "model": model})))
+            }
             "set_telegram_topics" => ok(self.db.set_setting(&format!("telegram_topics:{}", arg::<i64>(a, "bot_id")?), if arg(a, "on")? { "on" } else { "off" })?),
             // Has this conversation read untrusted content (so changes ask first)? And: start a fresh one.
             "conversation" => ok(json!({"tainted": self.db.conv_tainted(arg(a, "bot_id")?, arg(a, "chat_id")?)?})),
@@ -1242,7 +1255,8 @@ impl Host {
                     "missed": self.db.approvals_missed(now - 86400)?,
                     "failed": self.db.runs_failed(now - 7 * 86400)?,
                     // Routines waiting: for a usage limit to reset, or for tomorrow after a daily cap.
-                    "holds": self.db.holds(now)?.into_iter().map(|(key, bot, routine, h)| {
+                    // A bot running on its fallback account isn't waiting.
+                    "holds": self.db.holds(now)?.into_iter().filter(|(_, bot, routine, _)| routine.is_some() || !self.db.on_fallback(*bot, now).is_ok_and(|f| f.is_some())).map(|(key, bot, routine, h)| {
                         let prompt = routine.and_then(|id| self.db.routine_prompt(id).ok().flatten()).map(|p| crate::tools::truncate(&p, 60));
                         json!({"key": key, "bot_id": bot, "routine_id": routine, "routine": prompt, "until": h.until, "why": h.why, "cap": h.waive.is_some()})
                     }).collect::<Vec<_>>(),
