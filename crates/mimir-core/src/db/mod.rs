@@ -1351,15 +1351,16 @@ mod tests {
         d.pause_set(Some(2), 0).unwrap();
         assert_eq!(d.paused(2, now()).unwrap(), Some(0), "until resumed");
         assert_eq!(d.paused(3, now()).unwrap(), None, "only that bot");
-        // Everyone's pause on top: the later end wins (0 = no end).
-        d.pause_set(None, now() + 600).unwrap();
+        // Everyone's pause on top: the later end wins (0 = no end). One clock read: a slow runner crosses a second.
+        let end = now() + 600;
+        d.pause_set(None, end).unwrap();
         assert_eq!(d.paused(2, now()).unwrap(), Some(0));
-        assert_eq!(d.paused(3, now()).unwrap(), Some(now() + 600));
+        assert_eq!(d.paused(3, now()).unwrap(), Some(end));
         assert_eq!(d.pauses(now()).unwrap().len(), 2);
         // Resumed: the routine moves on to its next time instead of catching up (or showing as missed); the
         // one-off still runs once. The other bot is still held by everyone's pause.
         d.pause_end(Some(2)).unwrap();
-        assert_eq!(d.paused(2, now()).unwrap(), Some(now() + 600));
+        assert_eq!(d.paused(2, now()).unwrap(), Some(end));
         let due: Vec<i64> = d.due(2, now()).unwrap().iter().map(|x| x.id).collect();
         assert_eq!(due, vec![o.id]);
         assert!(d.routines(7).unwrap().iter().any(|x| x.id == r.id && x.next_fire > now()));
