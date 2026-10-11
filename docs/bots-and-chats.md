@@ -86,7 +86,8 @@ Other people's replies in the thread are still ignored. (Mentions in a thread wh
 
 **Replying to one of its messages** (swipe to reply on Telegram, Reply on Discord) tells the bot which message you mean,
 so "move this one to Friday" under item 3 of a briefing works. On Telegram, select part of the message first to quote
-just that part.
+just that part. In a Slack thread the bot is told the message that started the thread (this needs the history scopes:
+`im:history`, `channels:history`, `groups:history`); if someone other than you wrote it, it's read as outside content.
 
 Replies stream on all three: a message appears as soon as the bot starts and is edited as it grows (Telegram private
 chats use Telegram's own streaming, with a native stop button). A message answered 10+ minutes late (the computer was

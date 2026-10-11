@@ -297,13 +297,28 @@ pub(crate) fn is_correction(text: &str) -> bool {
 /// A reply to one of the bot's earlier messages (Telegram's swipe-to-reply, a Discord reply), ahead of what the person
 /// wrote, so "this one" or "move it to Friday" says which. The quote can't close the tag and pass for their words.
 pub fn with_reply(text: &str, quoted: &str) -> String {
-    let q = tools::truncate(&quoted.split_whitespace().collect::<Vec<_>>().join(" "), 2000).replace('<', "‹").replace('>', "›");
-    format!("<replying_to_your_message>{q}</replying_to_your_message>\n{text}")
+    replying("your", text, quoted)
+}
+
+/// The person's own earlier message they reply under (the one that started a Slack thread), ahead of what they wrote.
+pub(crate) fn with_own_reply(text: &str, quoted: &str) -> String {
+    replying("their", text, quoted)
+}
+
+/// Replies quote at most this many characters of the message they answer.
+pub(crate) const QUOTE_CHARS: usize = 2000;
+
+fn replying(whose: &str, text: &str, quoted: &str) -> String {
+    let q = tools::truncate(&quoted.split_whitespace().collect::<Vec<_>>().join(" "), QUOTE_CHARS).replace('<', "‹").replace('>', "›");
+    format!("<replying_to_{whose}_message>{q}</replying_to_{whose}_message>\n{text}")
 }
 
 /// What the person wrote, without the message they replied to.
 pub(crate) fn own_part(text: &str) -> &str {
-    text.strip_prefix("<replying_to_your_message>").and_then(|r| r.split_once("</replying_to_your_message>\n")).map_or(text, |(_, rest)| rest)
+    ["your", "their"]
+        .iter()
+        .find_map(|w| text.strip_prefix(&format!("<replying_to_{w}_message>"))?.split_once(&format!("</replying_to_{w}_message>\n")).map(|(_, rest)| rest))
+        .unwrap_or(text)
 }
 
 pub(crate) fn own_words(text: &str) -> bool {
