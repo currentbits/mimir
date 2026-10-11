@@ -663,7 +663,21 @@ fn main() {
     if !mcp_mode {
         fix_path(&home);
     }
-    let db = Db::open(&home.join("mimir.db")).expect("open database");
+    let db = match Db::open(&home.join("mimir.db")) {
+        Ok(db) => db,
+        Err(e) => {
+            // The tools process has no window: its error goes to the app that started it.
+            if !mcp_mode {
+                rfd::MessageDialog::new()
+                    .set_level(rfd::MessageLevel::Error)
+                    .set_title("Mimir can't open its data")
+                    .set_description(format!("{e:#}\n\nYour data is in {}", home.display()))
+                    .show();
+            }
+            eprintln!("open database: {e:#}");
+            std::process::exit(1);
+        }
+    };
     let rt = tokio::runtime::Runtime::new().expect("tokio");
 
     if mcp_mode {

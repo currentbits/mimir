@@ -44,7 +44,9 @@ const PATHS: Record<string, string> = {
   file: 'M14 3H7a1.5 1.5 0 0 0-1.5 1.5v15A1.5 1.5 0 0 0 7 21h10a1.5 1.5 0 0 0 1.5-1.5V7.5L14 3Zm0 0v4.5h4.5M9 13h6M9 16.5h6',
   incognito: 'M3 10.5h18M6 10.5l1.5-5.5h9l1.5 5.5M7.5 18.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5Zm9 0a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5ZM10 16h4',
   copy: 'M8.5 8.5V5A1.5 1.5 0 0 1 10 3.5h9A1.5 1.5 0 0 1 20.5 5v9a1.5 1.5 0 0 1-1.5 1.5h-3.5M5 8.5h9a1.5 1.5 0 0 1 1.5 1.5v9a1.5 1.5 0 0 1-1.5 1.5H5A1.5 1.5 0 0 1 3.5 19v-9A1.5 1.5 0 0 1 5 8.5Z',
-  retry: 'M4.5 12a7.5 7.5 0 1 0 2.2-5.3L4.5 9m0-4.5V9H9',
+  pause: 'M9 5.5v13m6-13v13',
+  play: 'M7.5 5.5v13l11-6.5-11-6.5Z',
+  retry:'M4.5 12a7.5 7.5 0 1 0 2.2-5.3L4.5 9m0-4.5V9H9',
 }
 
 export function Icon({ name, size = 16, className }: { name: keyof typeof PATHS | string; size?: number; className?: string }) {
