@@ -3,6 +3,7 @@
 //! aborts/respawns it on settings change.
 
 use crate::db::{Approval, Db};
+use crate::say::{tr, trf};
 use crate::{Trigger, discord::Discord, provider::Provider, slack::Slack, telegram::Tg, tools::ToolCtx, turn};
 use anyhow::Result;
 use serde::Serialize;
@@ -78,36 +79,37 @@ impl Chan {
     }
 
     pub(crate) async fn send(&self, ext: &str, text: &str) {
-        if let Err(e) = self.try_send(ext, text).await {
+        if let Err(e) = self.try_send(ext, text, &[]).await {
             eprintln!("{} send to {ext} failed: {e:#}", self.kind());
         }
     }
 
-    async fn try_send(&self, ext: &str, text: &str) -> Result<()> {
+    async fn try_send(&self, ext: &str, text: &str, rows: &[Row]) -> Result<()> {
         let text = if text.trim().is_empty() { "(no reply)" } else { text };
         match self {
-            Chan::Telegram(c) => c.send(ext, text).await,
-            Chan::Slack(c) => c.send(ext, text).await,
-            Chan::Discord(c) => c.send(ext, text).await,
+            Chan::Telegram(c) => c.finish(ext, None, text, rows).await,
+            Chan::Slack(c) => c.finish(ext, None, text, rows).await,
+            Chan::Discord(c) => c.finish(ext, None, text, rows).await,
         }
     }
 
-    /// A routine's result: tried once more after a moment if the app didn't take it, and the error if it still didn't.
-    async fn deliver(&self, ext: &str, text: &str) -> Result<()> {
-        if self.try_send(ext, text).await.is_ok() {
+    /// A routine's result, with its buttons: tried once more after a moment if the app didn't take it, and the error if
+    /// it still didn't.
+    async fn deliver(&self, ext: &str, text: &str, rows: &[Row]) -> Result<()> {
+        if self.try_send(ext, text, rows).await.is_ok() {
             return Ok(());
         }
         tokio::time::sleep(Duration::from_secs(5)).await;
-        self.try_send(ext, text).await
+        self.try_send(ext, text, rows).await
     }
 
-    /// Final reply; replaces the streamed draft if there is one.
-    async fn finish(&self, ext: &str, draft: Option<String>, text: &str) {
+    /// Final reply, with buttons under it if any; replaces the streamed draft if there is one.
+    async fn finish(&self, ext: &str, draft: Option<String>, text: &str, rows: &[Row]) {
         let text = if text.trim().is_empty() { "(no reply)" } else { text };
         let r = match self {
-            Chan::Telegram(c) => c.finish(ext, draft.as_deref(), text).await,
-            Chan::Slack(c) => c.finish(ext, draft.as_deref(), text).await,
-            Chan::Discord(c) => c.finish(ext, draft.as_deref(), text).await,
+            Chan::Telegram(c) => c.finish(ext, draft.as_deref(), text, rows).await,
+            Chan::Slack(c) => c.finish(ext, draft.as_deref(), text, rows).await,
+            Chan::Discord(c) => c.finish(ext, draft.as_deref(), text, rows).await,
         };
         if let Err(e) = r {
             eprintln!("{} reply to {ext} failed: {e:#}", self.kind());
@@ -224,8 +226,8 @@ pub(crate) struct Core {
     status: SharedStatus,
     /// Wrong pairing codes per chat in the last hour; after a few, that chat's tries are ignored until the hour is up.
     misses: std::sync::Mutex<std::collections::HashMap<String, (u32, i64)>>,
-    // ponytail: one turn at a time per bot (keeps CLI --resume sessions serial); per-chat locks if a bot gets busy
-    lock: Mutex<()>,
+    /// One reply or routine at a time per chat (keeps its CLI --resume session serial); other chats don't wait.
+    locks: std::sync::Mutex<std::collections::HashMap<i64, Arc<Mutex<()>>>>,
     /// Unpaired chats already told how to pair (once each per run, so a stranger can't make it chatty).
     greeted: std::sync::Mutex<std::collections::HashSet<String>>,
 }
@@ -238,6 +240,8 @@ pub(crate) enum Command<'a> {
     Pair(&'a str),
     Start,
     Memory,
+    /// "/why": what the last reply drew on.
+    Why,
     Routines,
     New,
     /// "/stop", or a bare "stop" while a reply is being written.
@@ -248,6 +252,10 @@ pub(crate) enum Command<'a> {
 }
 
 impl Core {
+    fn chat_lock(&self, chat: i64) -> Arc<Mutex<()>> {
+        self.locks.lock().unwrap().entry(chat).or_default().clone()
+    }
+
     /// This bot's skills per Telegram chat, as menu commands (name, description), for the "/" menu.
     pub(crate) fn skill_menus(&self) -> Vec<(i64, Vec<(String, String)>)> {
         self.db
@@ -279,6 +287,28 @@ pub(crate) struct Sender<'a> {
     pub dm: bool,
 }
 
+/// `/why`: the memories, skills and pages the last reply used, with how to fix a memory that steered it wrong.
+fn why(used: Option<crate::db::Used>) -> String {
+    let Some(u) = used.filter(|u| !u.is_empty()) else {
+        return tr("My last reply didn't use any memories, skills or pages.").into();
+    };
+    let mut out = vec![tr("My last reply used:").to_string()];
+    for m in &u.memories {
+        let gone = match m.status { "forgotten" => tr(" (forgotten since)"), "superseded" => tr(" (corrected since)"), _ => "" };
+        out.push(format!("• #{} {}: {}{gone}", m.id, m.title, crate::tools::truncate(&m.body, 200)));
+    }
+    for (_, name) in &u.skills {
+        out.push(trf("• skill: {name}", &[("name", name)]));
+    }
+    for p in &u.pages {
+        out.push(format!("• {}", crate::tools::truncate(p, 200)));
+    }
+    if let Some(m) = u.memories.iter().find(|m| m.status == "active") {
+        out.push(trf("\nIf a memory is wrong, tell me (\"forget #{id}\", or what's true now), or fix it in the app under Memory.", &[("id", &m.id.to_string())]));
+    }
+    out.join("\n")
+}
+
 /// Pairing works as "/pair CODE" or "pair CODE" (Slack reserves leading slashes).
 pub(crate) fn parse_command(text: &str) -> Command<'_> {
     let t = text.trim();
@@ -296,6 +326,7 @@ pub(crate) fn parse_command(text: &str) -> Command<'_> {
     match lower.as_str() {
         "/start" | "/help" => Command::Start,
         "/memory" => Command::Memory,
+        "/why" => Command::Why,
         "/routines" => Command::Routines,
         "/new" => Command::New,
         "/stop" => Command::Stop(true),
@@ -342,11 +373,11 @@ pub(crate) fn offers_always(a: &Approval) -> bool {
 pub(crate) fn card_buttons(a: &Approval) -> Vec<Vec<(String, String)>> {
     let b = |label: String, d: char| (label, format!("ap:{}:{d}", a.id));
     if a.kind == "takeover" {
-        return vec![vec![b("Done".into(), 'y'), b("Can't now".into(), 'n')]];
+        return vec![vec![b(tr("Done").into(), 'y'), b(tr("Can't now").into(), 'n')]];
     }
-    let mut rows = vec![vec![b("Approve".into(), 'y'), b("Deny".into(), 'n')]];
+    let mut rows = vec![vec![b(tr("Approve").into(), 'y'), b(tr("Deny").into(), 'n')]];
     if offers_all(a) {
-        rows.push(vec![b("Approve all like this".into(), 'a')]);
+        rows.push(vec![b(tr("Approve all like this").into(), 'a')]);
     }
     if offers_always(a) {
         // Allowed a few times already: Always comes right after Approve / Deny.
@@ -354,6 +385,72 @@ pub(crate) fn card_buttons(a: &Approval) -> Vec<Vec<(String, String)>> {
         rows.insert(at, vec![b(crate::tools::always_label(a), 'w')]);
     }
     rows
+}
+
+/// One row of buttons: (label, button data).
+pub(crate) type Row = Vec<(String, String)>;
+
+/// What the buttons under one message the bot sent are for, kept as setting "tap:<token>" until one is tapped (their
+/// data is "tp:<token>:<n>"). A tap is handled here in code, with no AI turn, except a choice's answer, which is the
+/// person's next message. None of them is ever an approval.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Tap {
+    bot: i64,
+    chat: i64,
+    at: i64,
+    #[serde(flatten)]
+    what: TapFor,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(tag = "k", rename_all = "snake_case")]
+enum TapFor {
+    /// ask_choice's question: its options, then Something else.
+    Choice { question: String, options: Vec<String> },
+    /// A one-off's result (a reminder): Done, Snooze 1h, Tomorrow.
+    Remind { prompt: String, due: i64, tainted: bool },
+    /// A routine's result: 👍, 👎, Less like this, Pause, For tomorrow…
+    Routine { id: i64, prompt: String, said: String, outside: bool },
+}
+
+/// The buttons for `what`, kept so a tap can be told apart (empty when that can't be saved: the message goes without).
+fn tap_rows(db: &Db, bot: i64, chat: i64, what: TapFor) -> Vec<Row> {
+    let labels: Vec<Vec<String>> = match &what {
+        TapFor::Choice { options, .. } => options.iter().map(|o| vec![o.clone()]).chain([vec![tr("Something else").into()]]).collect(),
+        TapFor::Remind { .. } => vec![vec![tr("Done").into(), tr("Snooze 1h").into(), tr("Tomorrow").into()]],
+        TapFor::Routine { .. } => vec![vec!["👍".into(), "👎".into(), tr("Less like this").into()], vec![tr("Pause").into(), tr("For tomorrow…").into()]],
+    };
+    let Ok(token) = crate::random_hex(4) else { return vec![] };
+    let tap = Tap { bot, chat, at: crate::db::now(), what };
+    if serde_json::to_string(&tap).map_err(anyhow::Error::from).and_then(|v| db.set_setting(&format!("tap:{token}"), &v)).is_err() {
+        return vec![];
+    }
+    let mut n = 0;
+    labels
+        .into_iter()
+        .map(|row| {
+            row.into_iter()
+                .map(|label| {
+                    n += 1;
+                    (label, format!("tp:{token}:{}", n - 1))
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// The same clock time on a later day, at least a minute from now.
+// ponytail: whole days of seconds, so it's an hour off across a clock change
+fn next_day(due: i64, now: i64) -> i64 {
+    let mut at = due + 86400;
+    while at <= now + 60 {
+        at += 86400;
+    }
+    at
+}
+
+fn clock(t: i64) -> String {
+    chrono::TimeZone::timestamp_opt(&chrono::Local, t, 0).single().map(|d| d.format("%H:%M").to_string()).unwrap_or_default()
 }
 
 /// The latest digest time (setting digest_time, "HH:MM", default 08:00) at or before `now`: today's, or yesterday's
@@ -406,17 +503,17 @@ pub(crate) fn late_note(sent: Option<i64>, now: i64) -> Option<String> {
         return None;
     }
     let ago = if d < 3600 {
-        format!("{} minutes ago", d / 60)
+        trf("{n} minutes ago", &[("n", &(d / 60).to_string())])
     } else if d < 7200 {
-        "an hour ago".into()
+        tr("an hour ago").into()
     } else if d < 86400 {
-        format!("{} hours ago", d / 3600)
+        trf("{n} hours ago", &[("n", &(d / 3600).to_string())])
     } else if d < 172800 {
-        "yesterday".into()
+        tr("yesterday").into()
     } else {
-        format!("{} days ago", d / 86400)
+        trf("{n} days ago", &[("n", &(d / 86400).to_string())])
     };
-    Some(format!("Sorry for the slow reply: I was offline when you wrote {ago}."))
+    Some(trf("Sorry for the slow reply: I was offline when you wrote {ago}.", &[("ago", &ago)]))
 }
 
 /// What a paused bot answers in a messaging app.
@@ -434,24 +531,24 @@ pub fn quiet(db: &Db) -> bool {
 
 pub(crate) fn card_text(a: &Approval) -> String {
     let mins = ((a.expires_at - crate::db::now()) / 60).max(1);
-    let wait = if mins >= 120 { format!("{} h", mins / 60) } else { format!("{mins} min") };
-    let then = if a.parked { "It runs when you approve." } else { "No answer means deny." };
+    let wait = if mins >= 120 { trf("{n} h", &[("n", &(mins / 60).to_string())]) } else { trf("{n} min", &[("n", &mins.to_string())]) };
+    let then = if a.parked { tr("It runs when you approve.") } else { tr("No answer means deny.") };
     // Allowed the same thing a few times already: offer to stop asking (like the app).
-    let again = if offers_always(a) && a.allowed_before >= 2 { format!("\nYou've allowed this {} times. Press Always to stop being asked.", a.allowed_before) } else { String::new() };
+    let again = if offers_always(a) && a.allowed_before >= 2 { format!("\n{}", trf("You've allowed this {n} times. Press Always to stop being asked.", &[("n", &a.allowed_before.to_string())])) } else { String::new() };
     if a.kind == "takeover" {
-        return format!("🖐 I need you on the computer\n\n{}\n\nWaits {wait}.", a.summary);
+        return trf("🖐 I need you on the computer\n\n{summary}\n\nWaits {wait}.", &[("summary", &a.summary), ("wait", &wait)]);
     }
-    format!("🔐 Approve this action?\n\n{}\n\nWaits {wait}. {then}{again}", a.summary)
+    trf("🔐 Approve this action?\n\n{summary}\n\nWaits {wait}. {then}", &[("summary", &a.summary), ("wait", &wait), ("then", then)]) + &again
 }
 
 pub(crate) fn verdict(a: &Approval) -> String {
     let outcome = match a.status.as_str() {
-        "approved" if a.kind == "takeover" => "✅ Done, carrying on",
-        "expired" if a.kind == "takeover" => "⌛ Nobody took over in time",
-        _ if a.kind == "takeover" => "Not now",
-        "approved" => "✅ Approved",
-        "expired" => "⌛ No answer in time, so not done",
-        _ => "❌ Denied",
+        "approved" if a.kind == "takeover" => tr("✅ Done, carrying on"),
+        "expired" if a.kind == "takeover" => tr("⌛ Nobody took over in time"),
+        _ if a.kind == "takeover" => tr("Not now"),
+        "approved" => tr("✅ Approved"),
+        "expired" => tr("⌛ No answer in time, so not done"),
+        _ => tr("❌ Denied"),
     };
     format!("{outcome}: {}", a.summary)
 }
@@ -460,8 +557,11 @@ pub(crate) fn verdict(a: &Approval) -> String {
 pub(crate) fn verdict_for(a: &Approval, d: Decision) -> String {
     match d {
         Decision::Always if a.status == "approved" => {
-            let scope = a.site.as_deref().map(|s| format!(" on {s}")).unwrap_or_default();
-            format!("{}\nFrom now on this runs{scope} without asking (Settings → Permissions to change it).", verdict(a))
+            let after = match a.site.as_deref() {
+                Some(site) => trf("From now on this runs on {site} without asking (Settings → Permissions to change it).", &[("site", site)]),
+                None => tr("From now on this runs without asking (Settings → Permissions to change it).").into(),
+            };
+            format!("{}\n{after}", verdict(a))
         }
         _ => verdict(a),
     }
@@ -472,7 +572,7 @@ impl Core {
     /// A file it can't use yet (video, sticker, a spreadsheet…) in a paired direct chat: say so instead of dropping it.
     pub(crate) async fn incoming_media(&self, chan: &Chan, ext: &str) -> Result<()> {
         if self.is_paired(chan, ext)? {
-            chan.send(ext, "I can read text, photos, voice notes, PDFs and text files, but not this kind of file yet. Could you describe it or send a photo?").await;
+            chan.send(ext, tr("I can read text, photos, voice notes, PDFs and text files, but not this kind of file yet. Could you describe it or send a photo?")).await;
         }
         Ok(())
     }
@@ -492,7 +592,7 @@ impl Core {
                 Ok(())
             }
             Some(Ok(t)) if t.split_whitespace().count() < 5 => {
-                chan.send(ext, "That file has no text I can read (a scanned PDF?). Send photos of the pages instead.").await;
+                chan.send(ext, tr("That file has no text I can read (a scanned PDF?). Send photos of the pages instead.")).await;
                 Ok(())
             }
             Some(Ok(t)) => {
@@ -516,7 +616,7 @@ impl Core {
         }
         let usable: Vec<&File> = files.iter().filter(|f| !f.url.is_empty() && f.size <= MAX_FILE).collect();
         if usable.is_empty() && files.iter().any(|f| f.size > MAX_FILE) {
-            chan.send(ext, "That file is over 20 MB, more than I take. Could you send a smaller one?").await;
+            chan.send(ext, tr("That file is over 20 MB, more than I take. Could you send a smaller one?")).await;
             return Ok(());
         }
         // Only files that can't be fetched (a Google Drive link shared in Slack): the words are the message.
@@ -527,7 +627,7 @@ impl Core {
         let fetch = async |f: &File| match get(f).await {
             Ok(b) => Some(b),
             Err(e) => {
-                chan.send(ext, &format!("I couldn't fetch {} ({e:#}).", f.name)).await;
+                chan.send(ext, &trf("I couldn't fetch {name} ({error}).", &[("name", &f.name), ("error", &format!("{e:#}"))])).await;
                 None
             }
         };
@@ -558,16 +658,16 @@ impl Core {
     pub(crate) async fn incoming_voice(self: &Arc<Self>, chan: &Chan, ext: &str, from: Sender<'_>, bytes: Vec<u8>, name: &str, forwarded: bool, sent: Option<i64>) -> Result<()> {
         match crate::provider::transcribe(bytes, name).await {
             Some(Ok(text)) if !text.is_empty() => {
-                chan.send(ext, &format!("🎙️ I heard: “{text}”")).await;
+                chan.send(ext, &trf("🎙️ I heard: “{text}”", &[("text", &text)])).await;
                 if forwarded {
                     let said = crate::with_document("(I forwarded you a voice note.)", "a forwarded voice note", &text);
                     return self.incoming_outside_with(chan, ext, from, "", &said, vec![], sent).await;
                 }
                 return self.incoming_with(chan, ext, from, "", &text, vec![], sent).await;
             }
-            Some(Ok(_)) => chan.send(ext, "I couldn't make out any words in that voice note.").await,
-            Some(Err(e)) => chan.send(ext, &format!("I couldn't transcribe that voice note ({e:#}). Could you type it?")).await,
-            None => chan.send(ext, "To understand voice notes I need an OpenAI API key for transcription (Settings → AI keys in Mimir). Until then, could you type it?").await,
+            Some(Ok(_)) => chan.send(ext, tr("I couldn't make out any words in that voice note.")).await,
+            Some(Err(e)) => chan.send(ext, &trf("I couldn't transcribe that voice note ({error}). Could you type it?", &[("error", &format!("{e:#}"))])).await,
+            None => chan.send(ext, tr("To understand voice notes I need an OpenAI API key for transcription (Settings → AI keys in Mimir). Until then, could you type it?")).await,
         }
         Ok(())
     }
@@ -662,7 +762,7 @@ impl Core {
             // Telegram's shared senders (an anonymous group admin, a channel, its service account) are many people
             // behind one id: a chat paired by them would answer all of them.
             if from.id.is_empty() || (kind == "telegram" && ["1087968824", "136817688", "777000"].contains(&from.id)) {
-                chan.send(ext, "I can only be paired by a person writing as themselves (not anonymously or as a channel).").await;
+                chan.send(ext, tr("I can only be paired by a person writing as themselves (not anonymously or as a channel).")).await;
                 return Ok(());
             }
             let now = crate::db::now();
@@ -691,9 +791,9 @@ impl Core {
                 self.db.chat_set_dm(chat, from.dm)?;
                 self.db.chat_set_guest(chat, guest)?;
                 chan.send(ext, if guest {
-                    "Paired ✅ as a guest: I keep your own memory and reminders here, and I can search the web for you. I can't see the email, calendar or meetings of the person who runs me. Commands: /memory, /routines, /new, /stop"
+                    tr("Paired ✅ as a guest: I keep your own memory and reminders here, and I can search the web for you. I can't see the email, calendar or meetings of the person who runs me. Commands: /memory, /routines, /new, /stop")
                 } else {
-                    "Paired ✅ Talk to me normally. Commands: /memory, /routines, /new, /stop, /undo"
+                    tr("Paired ✅ Talk to me normally. Commands: /memory, /routines, /new, /stop, /undo, /why")
                 }).await;
             } else {
                 {
@@ -701,7 +801,7 @@ impl Core {
                     misses.retain(|_, (_, at)| now - *at < 3600);
                     misses.insert(who, (tries + 1, now));
                 }
-                chan.send(ext, if tries + 1 >= MAX_PAIR_TRIES { "Wrong pairing code. Too many tries: try again in an hour." } else { "Wrong pairing code." }).await;
+                chan.send(ext, if tries + 1 >= MAX_PAIR_TRIES { tr("Wrong pairing code. Too many tries: try again in an hour.") } else { tr("Wrong pairing code.") }).await;
             }
             return Ok(());
         }
@@ -714,8 +814,8 @@ impl Core {
                 greeted.insert(format!("{kind}:{ext}"))
             };
             if first {
-                let name = self.db.bot(self.bot).map(|b| b.name).unwrap_or_else(|_| "this bot".into());
-                chan.send(ext, &format!("Hi! I'm {name}, a private assistant. If you set me up, send pair followed by the code shown on my page in the Mimir app.")).await;
+                let name = self.db.bot(self.bot).map(|b| b.name).unwrap_or_else(|_| tr("this bot").into());
+                chan.send(ext, &trf("Hi! I'm {name}, a private assistant. If you set me up, send pair followed by the code shown on my page in the Mimir app.", &[("name", &name)])).await;
             }
             return Ok(());
         };
@@ -730,7 +830,7 @@ impl Core {
             Some(false) => return Ok(()),
             None => {
                 if self.greeted.lock().unwrap().insert(format!("{kind}:{ext}:repair")) {
-                    chan.send(ext, "For your safety I now answer only the person who pairs me in a group. Whoever set me up: send pair followed by the code on my page in the Mimir app, here, once more.").await;
+                    chan.send(ext, tr("For your safety I now answer only the person who pairs me in a group. Whoever set me up: send pair followed by the code on my page in the Mimir app, here, once more.")).await;
                 }
                 return Ok(());
             }
@@ -741,23 +841,24 @@ impl Core {
                 return Ok(());
             }
             if asked {
-                chan.send(ext, "Nothing to stop: I'm not writing anything right now.").await;
+                chan.send(ext, tr("Nothing to stop: I'm not writing anything right now.")).await;
                 return Ok(());
             }
             command = Command::Chat;
         }
         match command {
-            Command::Start => chan.send(ext, "Hi! Just talk to me. /memory shows what I remember, /routines lists schedules, /new starts a fresh conversation, /stop cuts off a reply I'm writing, /undo N takes back something from my weekly list of what I learned.").await,
+            Command::Start => chan.send(ext, tr("Hi! Just talk to me. /memory shows what I remember, /routines lists schedules, /why shows what my last reply used, /new starts a fresh conversation, /stop cuts off a reply I'm writing, /undo N takes back something from my weekly list of what I learned.")).await,
             Command::Memory => {
                 // What bots keep in mind, then what's waiting for you to confirm (bots don't keep those in mind).
                 let scope = format!("chat:{chat}");
                 let mut lines: Vec<String> = self.db.bootstrap(&scope)?.iter().map(|e| e.line()).collect();
                 let unconfirmed: Vec<String> = self.db.search_unconfirmed(&scope)?.iter().map(|e| e.line()).collect();
                 if !unconfirmed.is_empty() {
-                    lines.push(format!("\nNot confirmed yet (saved after reading outside content; check them in the app):\n{}", unconfirmed.join("\n")));
+                    lines.push(format!("\n{}\n{}", tr("Not confirmed yet (saved after reading outside content; check them in the app):"), unconfirmed.join("\n")));
                 }
-                chan.send(ext, &if lines.is_empty() { "Nothing remembered yet.".into() } else { lines.join("\n") }).await;
+                chan.send(ext, &if lines.is_empty() { tr("Nothing remembered yet.").into() } else { lines.join("\n") }).await;
             }
+            Command::Why => chan.send(ext, &why(self.db.last_reply_used(self.bot, chat)?)).await,
             Command::Routines => {
                 let out = crate::tools::call(&ToolCtx::new(self.db.clone(), self.bot, chat), "routine_list", &json!({})).await?;
                 chan.send(ext, &out).await;
@@ -767,7 +868,7 @@ impl Core {
                     self.provider.forget_session(&s);
                 }
                 self.db.set_session(self.bot, chat, None)?;
-                chan.send(ext, "Fresh conversation started (memories kept).").await;
+                chan.send(ext, tr("Fresh conversation started (memories kept).")).await;
             }
             Command::Undo(n) => chan.send(ext, &crate::tidy::undo_learned(&self.db, chat, n)?).await,
             Command::Stop(_) => unreachable!("handled above"),
@@ -781,8 +882,18 @@ impl Core {
                 let late = late_note(sent, crate::db::now());
                 let (core, chan, ext, text) = (self.clone(), chan.clone(), ext.to_string(), text.trim().to_string());
                 tokio::spawn(async move {
-                    let _g = core.lock.lock().await;
+                    // Typing at once, even when this chat is still busy; a wait past a few seconds says why, once.
                     let typing = chan.typing(&ext);
+                    let wait = core.chat_lock(chat).lock_owned();
+                    tokio::pin!(wait);
+                    let _g = tokio::select! {
+                        g = &mut wait => g,
+                        _ = tokio::time::sleep(BUSY_NOTE_AFTER) => {
+                            let busy = TURNS.lock().unwrap().contains_key(&(core.bot, chat));
+                            chan.send(&ext, if busy { "_Finishing my last reply first…_" } else { "_Finishing a routine first…_" }).await;
+                            wait.await
+                        }
+                    };
                     // The reply shows up as it's written: one message, edited as it grows, then formatted.
                     let follower = chan.follow(core.bot, chat, &ext);
                     let mut ctx = ToolCtx::new(core.db.clone(), core.bot, chat);
@@ -795,14 +906,24 @@ impl Core {
                     if let Some(t) = typing {
                         t.abort();
                     }
+                    let choice = core.take_choice(chat);
+                    let mut rows = vec![];
                     let reply = match out {
-                        Ok(out) => out.unwrap_or_else(|e| crate::friendly_error(&format!("{e:#}"))),
+                        // ask_choice: the question and its buttons under the reply.
+                        Ok(Ok(text)) => match choice {
+                            Some((q, r)) => {
+                                rows = r;
+                                format!("{}\n\n**{q}**", text.trim_end()).trim_start().to_string()
+                            }
+                            None => text,
+                        },
+                        Ok(Err(e)) => crate::friendly_error(&format!("{e:#}")),
                         Err(e) if !e.is_cancelled() => crate::friendly_error(&e.to_string()),
                         // /stop: keep what was asked and written so far, like Stop in the app.
                         Err(_) => {
                             let partial = crate::live::get(core.bot, chat).unwrap_or_default();
                             crate::live::end(core.bot, chat);
-                            let note = if partial.trim().is_empty() { "_Stopped before replying._".to_string() } else { format!("{}\n\n_Stopped._", partial.trim_end()) };
+                            let note = if partial.trim().is_empty() { tr("_Stopped before replying._").to_string() } else { format!("{}\n\n{}", partial.trim_end(), tr("_Stopped._")) };
                             let logged = core.db.run_stop(core.bot, chat, &text).and_then(|_| core.db.log(core.bot, chat, "user", &text, None)).and_then(|_| core.db.log(core.bot, chat, "assistant", &note, None));
                             if let Err(e) = logged {
                                 eprintln!("stop: {e:#}");
@@ -816,7 +937,7 @@ impl Core {
                         None => reply,
                     };
                     let draft = follower.finish().await;
-                    chan.finish(&ext, draft, &reply).await;
+                    chan.finish(&ext, draft, &reply, &rows).await;
                 });
             }
         }
@@ -841,7 +962,7 @@ impl Core {
         match self.db.chat_lookup(chan.kind(), ext)? {
             Some(chat) => {
                 if self.sender_ok(chat, from)? != Some(true) {
-                    anyhow::bail!("Only the person who paired me here can answer this.");
+                    anyhow::bail!(tr("Only the person who paired me here can answer this."));
                 }
                 if d == Decision::RestOfRun {
                     self.db.approval_allow_rest_of_run(id, Some(chat))?;
@@ -859,6 +980,107 @@ impl Core {
             }
             None => Ok(None),
         }
+    }
+
+    /// The question ask_choice left during this chat's reply, as (question, its buttons); taken either way, so a reply
+    /// that failed or was stopped leaves none behind for the next one.
+    fn take_choice(&self, chat: i64) -> Option<(String, Vec<Row>)> {
+        let v: serde_json::Value = serde_json::from_str(&self.db.setting_take(&crate::tools::choice_key(self.bot, chat)).ok()??).ok()?;
+        let question = v["question"].as_str()?.to_string();
+        let options = v["options"].as_array()?.iter().filter_map(|o| o.as_str().map(String::from)).collect();
+        let rows = tap_rows(&self.db, self.bot, chat, TapFor::Choice { question: question.clone(), options });
+        Some((question, rows))
+    }
+
+    /// The buttons under a routine's result: a one-off's are a reminder's.
+    fn result_rows(&self, r: &crate::db::Routine, said: &str) -> Vec<Row> {
+        let what = if r.once {
+            TapFor::Remind { prompt: r.prompt.clone(), due: r.next_fire, tainted: r.tainted }
+        } else {
+            // A result written after reading a page is labelled as such where learning sees it, like a correction's.
+            let outside = self.db.recent_outside(self.bot, r.chat_id, 1).unwrap_or(true);
+            // Without the "anything here you didn't need?" line a new routine's first results end with.
+            let said = said.split("\n\n_Anything here you didn't need").next().unwrap_or(said);
+            TapFor::Routine { id: r.id, prompt: crate::tools::truncate(&r.prompt, 140), said: crate::tools::truncate(said.trim(), 240), outside }
+        };
+        tap_rows(&self.db, self.bot, r.chat_id, what)
+    }
+
+    /// A tap on buttons from `tap_rows` ("tp:<token>:<n>"): what it did, in a few words for the app's button reply, or
+    /// None if the data isn't one of these. Each message's buttons work once, and only for the person who paired the chat.
+    pub(crate) async fn tap(self: &Arc<Self>, chan: &Chan, ext: &str, from: Sender<'_>, data: &str) -> Result<Option<String>> {
+        let Some((token, n)) = data.strip_prefix("tp:").and_then(|r| r.split_once(':')).and_then(|(t, n)| Some((t, n.parse::<usize>().ok()?))) else { return Ok(None) };
+        let Some(chat) = self.db.chat_lookup(chan.kind(), ext)? else { return Ok(Some(tr("This chat isn't paired any more.").into())) };
+        if self.sender_ok(chat, from)? != Some(true) {
+            anyhow::bail!("Only the person who paired me here can answer this.");
+        }
+        let key = format!("tap:{token}");
+        // Another bot's or chat's buttons can't be used here, and a second tap (or a double tap) finds nothing left.
+        let ours = self.db.setting(&key)?.and_then(|v| serde_json::from_str::<Tap>(&v).ok()).is_some_and(|t| t.bot == self.bot && t.chat == chat);
+        let tap = if ours { self.db.setting_take(&key)?.and_then(|v| serde_json::from_str::<Tap>(&v).ok()) } else { None };
+        let Some(tap) = tap else { return Ok(Some(tr("Already done.").into())) };
+        let now = crate::db::now();
+        Ok(Some(match tap.what {
+            TapFor::Choice { question, options } => match options.get(n) {
+                // Their answer, as if typed in reply to the question (so a bot without the question in its history knows it).
+                Some(o) => {
+                    self.incoming(chan, ext, from, "", &crate::with_reply(o, &question), None).await?;
+                    trf("You chose: {choice}", &[("choice", o)])
+                }
+                None => {
+                    let ask = trf("✍️ Type your answer: {question}", &[("question", &question)]);
+                    self.db.log(self.bot, chat, "assistant", &ask, None)?;
+                    chan.send(ext, &ask).await;
+                    tr("Type your answer.").into()
+                }
+            },
+            TapFor::Remind { prompt, due, tainted } => {
+                let at = match n {
+                    0 => return Ok(Some(tr("✅ Done").into())),
+                    1 => now + 3600,
+                    _ => next_day(due, now),
+                };
+                let r = self.db.routine_once(self.bot, chat, at, &prompt, false)?;
+                if tainted {
+                    self.db.routine_taint(r.id)?;
+                }
+                if n == 1 { trf("⏰ I'll remind you again today at {at}.", &[("at", &clock(at))]) } else { trf("⏰ I'll remind you again tomorrow at {at}.", &[("at", &clock(at))]) }
+            }
+            TapFor::Routine { id, prompt, said, outside } => {
+                // Feedback is evidence for the tidy-up, which proposes changes for the person to accept; nothing is edited here.
+                let feedback = |kind: &str, reply: &str| {
+                    let outside = if outside { " [outside content: not the person's words]" } else { "" };
+                    self.db.signal_add(self.bot, chat, kind, &format!("On a routine's result (#{id} \"{prompt}\"): You said{outside}: {said} → They replied: {reply}"))
+                };
+                match n {
+                    0 => {
+                        feedback("liked", "👍 (tapped: this was useful)")?;
+                        tr("👍 Noted.").into()
+                    }
+                    1 => {
+                        feedback("correction", "👎 (tapped: this wasn't useful)")?;
+                        tr("👎 Noted: I'll learn from it.").into()
+                    }
+                    2 => {
+                        feedback("correction", "Less like this (tapped)")?;
+                        tr("Noted: less like this.").into()
+                    }
+                    3 => match self.db.routines(chat)?.into_iter().find(|r| r.id == id) {
+                        Some(r) => {
+                            self.db.routine_update(chat, id, &r.cron, &r.prompt, r.quiet, true)?;
+                            trf("⏸ Paused routine #{id}. Ask me, or use Mimir, to start it again.", &[("id", &id.to_string())])
+                        }
+                        None => tr("That routine is gone.").into(),
+                    },
+                    _ => {
+                        let ask = trf("What should be different next time? Reply here and I'll change routine #{id}.", &[("id", &id.to_string())]);
+                        self.db.log(self.bot, chat, "assistant", &ask, None)?;
+                        chan.send(ext, &ask).await;
+                        tr("Tell me what to change.").into()
+                    }
+                }
+            }
+        }))
     }
 
     /// Once a day at the digest time: everything the digest-lane routines found, as one message per chat.
@@ -891,13 +1113,14 @@ impl Core {
                 continue;
             }
             let routines = self.db.routines(chat)?;
-            let mut msg = String::from(if mine.is_empty() { "☀️ **All quiet**\n" } else { "☀️ **Your digest**\n" });
+            let mut msg = format!("{}\n", if mine.is_empty() { tr("☀️ **All quiet**") } else { tr("☀️ **Your digest**") });
             for (_, _, rid, text, _) in &mine {
-                let when = routines.iter().find(|r| Some(r.id) == *rid).map(|r| crate::tools::truncate(&r.prompt, 60)).unwrap_or_else(|| "A routine".into());
+                let when = routines.iter().find(|r| Some(r.id) == *rid).map(|r| crate::tools::truncate(&r.prompt, 60)).unwrap_or_else(|| tr("A routine").into());
                 msg.push_str(&format!("\n**{when}**\n{}\n", crate::tools::truncate(text.trim(), 700)));
             }
             if quiet > 0 {
-                msg.push_str(&format!("\n{quiet} quiet {} ran; nothing needed you.", if quiet == 1 { "check" } else { "checks" }));
+                let ran = if quiet == 1 { tr("1 quiet check ran; nothing needed you.").into() } else { trf("{n} quiet checks ran; nothing needed you.", &[("n", &quiet.to_string())]) };
+                msg.push_str(&format!("\n{ran}"));
             }
             self.db.log(self.bot, chat, "assistant", &msg, None)?;
             // What routines found on the web is outside content in this conversation too.
@@ -984,6 +1207,18 @@ impl Core {
             }
             return Ok(());
         }
+        // Timed off the calendar: the run is told which event it's for (the invite is someone else's words). An event
+        // gone or moved since is skipped (the scheduler finds its new time), and so is one that's over by now.
+        if let Ok(Some(t)) = crate::calendar::trigger(&r.cron) {
+            let start = r.next_fire + t.before;
+            match crate::calendar::events(start - 1, start + 1).await.ok().and_then(|evs| t.event_at(&evs, r.next_fire)).filter(|e| e.end > crate::db::now()) {
+                Some(ev) => {
+                    r.tainted = true;
+                    r.prompt.push_str(&format!("\n\nThe calendar event this run is for:\n{}", crate::tools::calendar_lines(&[ev])));
+                }
+                None => return self.db.routine_advance(&r),
+            }
+        }
         self.db.routine_advance(&r)?;
         // A watched quiet check: Mimir looks first, and only wakes the AI when something changed.
         let seen = match crate::watch::gate(&self.db, &r).await {
@@ -1001,7 +1236,7 @@ impl Core {
         };
         // Nothing is spent on an AI account that isn't there: that's a failure (tried again, like the network) instead.
         let ready = self.provider.ready().await;
-        let _g = self.lock.lock().await;
+        let _g = self.chat_lock(r.chat_id).lock_owned().await;
         // Local-chat routines (or ones whose channel isn't connected) still run; the reply lands in the app.
         let target = Self::chan_for(chans, r.chat_id, &self.db);
         let out = match ready {
@@ -1020,6 +1255,7 @@ impl Core {
             }
         };
         let run = self.db.routine_last_run(r.id)?;
+        let worked = out.is_ok();
         let text = match out {
             Ok(text) => {
                 // Compared against next time only once a run has seen this change (a failed one sees it again).
@@ -1044,9 +1280,10 @@ impl Core {
                         self.db.routine_retry(&r, until)?;
                         let who = if held.len() > 1 { "Routines on this AI account wait" } else { "This bot's routines wait" };
                         let note = format!("{who} until {}, when the limit resets; this one runs again then.", clock(until));
-                        // Said once, where this routine speaks; Needs you has it too.
+                        // Said once, where this routine speaks; Needs you has it too (in English, like the rest of the app).
                         if let Some((c, ext)) = target.as_ref().filter(|_| r.delivery == "now") {
-                            c.send(ext, &format!("⏸ I've hit my AI plan's usage limit. {note}")).await;
+                            let who = if held.len() > 1 { tr("Routines on this AI account wait") } else { tr("This bot's routines wait") };
+                            c.send(ext, &trf("⏸ I've hit my AI plan's usage limit. {who} until {at}, when the limit resets; this one runs again then.", &[("who", who), ("at", &clock(until))])).await;
                         }
                         Some(note)
                     }
@@ -1080,10 +1317,14 @@ impl Core {
             ("digest", _) => "in the digest".to_string(),
             ("log", _) => "only in the log".to_string(),
             (_, None) => "in the app".to_string(),
-            (_, Some((c, ext))) => match c.deliver(ext, &text).await {
-                Ok(()) => format!("sent to {}", c.kind()),
-                Err(e) => format!("{} to {}: {}", crate::db::NOT_SENT, c.kind(), crate::tools::truncate(&format!("{e:#}"), 200)),
-            },
+            (_, Some((c, ext))) => {
+                // A result gets one-tap feedback (a reminder, Done or Snooze); a failure doesn't.
+                let rows = if worked { self.result_rows(&r, &text) } else { vec![] };
+                match c.deliver(ext, &text, &rows).await {
+                    Ok(()) => format!("sent to {}", c.kind()),
+                    Err(e) => format!("{} to {}: {}", crate::db::NOT_SENT, c.kind(), crate::tools::truncate(&format!("{e:#}"), 200)),
+                }
+            }
         };
         if let Some(run) = run {
             self.db.run_delivered(run, &how)?;
@@ -1106,6 +1347,23 @@ impl Core {
         }
     }
 
+    /// Routines timed off the calendar: each one's next run is its next matching event's start, less the lead time.
+    /// Worked out again on every pass (the calendar is fetched at most every 10 minutes), so a meeting that's added,
+    /// moved or cancelled moves the run too. One the calendar can't be read for keeps the time it has.
+    async fn calendar_times(&self, now: i64) {
+        for r in self.db.calendar_routines(self.bot, now).unwrap_or_default() {
+            let Ok(Some(t)) = crate::calendar::trigger(&r.cron) else { continue };
+            // ponytail: a meeting added after its run time has passed (with less notice than the lead time) gets no run
+            let Ok(events) = crate::calendar::events(now + t.before, now + t.before + 7 * 86_400).await else { return };
+            let next = t.next(&events, now).unwrap_or(crate::db::IDLE);
+            if next != r.next_fire
+                && let Err(e) = self.db.routine_set_next(r.id, next)
+            {
+                eprintln!("routine #{}: {e:#}", r.id);
+            }
+        }
+    }
+
     async fn scheduler(self: Arc<Self>, chans: Vec<Chan>) -> Result<()> {
         // A routine due before this was Mimir not running; one due since, the computer asleep or a long run.
         let started = crate::db::now();
@@ -1123,6 +1381,7 @@ impl Core {
             if hold.is_some() && !held {
                 let _ = self.db.hold_clear(&bot_hold, false);
             }
+            self.calendar_times(now).await;
             match self.db.due(self.bot, now) {
                 Ok(due) if !held => {
                     for r in due {
@@ -1171,7 +1430,7 @@ impl Core {
             if crate::tidy::memory_bot(&self.db) == Some(self.bot) {
                 let now = crate::db::now();
                 for chat in self.db.chats().unwrap_or_default().into_iter().filter(|c| crate::tidy::is_due(&self.db, c.chat_id, now)) {
-                    let _g = self.lock.lock().await;
+                    // No chat lock: it reads the chat and calls the AI without a session, so replies needn't wait.
                     let (db, provider, bot, id) = (self.db.clone(), self.provider.clone(), self.bot, chat.chat_id);
                     match self.own_task(id, async move { crate::tidy::run(&db, &provider, bot, id).await }).await {
                         Ok(n) if n > 0 => eprintln!("tidy-up: {n} memory suggestions for chat {}", chat.chat_id),
@@ -1213,6 +1472,9 @@ impl Core {
     }
 }
 
+/// How long a message waits on its chat's routine or earlier reply before saying so.
+const BUSY_NOTE_AFTER: Duration = Duration::from_secs(4);
+
 /// Wrong pairing codes a chat may send in an hour.
 const MAX_PAIR_TRIES: u32 = 5;
 
@@ -1253,7 +1515,7 @@ pub async fn serve(db: Db, bot: i64, provider: Arc<Provider>, channels: Channels
         code: std::sync::Mutex::new(code),
         status: status.clone(),
         misses: Default::default(),
-        lock: Mutex::new(()),
+        locks: Default::default(),
         greeted: Default::default(),
     });
 
@@ -1348,7 +1610,7 @@ mod tests {
             code: Default::default(),
             status: Default::default(),
             misses: Default::default(),
-            lock: Mutex::new(()),
+            locks: Default::default(),
             greeted: Default::default(),
         }
     }
@@ -1504,7 +1766,7 @@ mod tests {
             code: Default::default(),
             status: Default::default(),
             misses: Default::default(),
-            lock: Mutex::new(()),
+            locks: Default::default(),
             greeted: Default::default(),
         });
         let chan = Chan::Discord(Discord::new("t").unwrap());
@@ -1526,6 +1788,68 @@ mod tests {
         assert!(core.mark_seen(&other, "C1", 3));
         db.unpair(chat).unwrap();
         assert_eq!((core.seen(&chan, "C1"), core.seen(&other, "C1")), (None, Some(3)));
+    }
+
+    #[tokio::test]
+    async fn tap_to_answer_snooze_and_rate() {
+        let p = std::env::temp_dir().join(format!("mimir-taps-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = Db::open(&p).unwrap();
+        let core = Arc::new(core_on(&db, "http://127.0.0.1:9/v1"));
+        let chan = Chan::Discord(Discord::new("t").unwrap());
+        let chat = db.pair_external("discord", "C1", "#c1").unwrap();
+        db.chat_set_owner(chat, "U1").unwrap();
+        let me = Sender { id: "U1", dm: false };
+        let labels = |rows: &[Row]| rows.iter().map(|r| r.iter().map(|b| b.0.as_str()).collect::<Vec<_>>().join("|")).collect::<Vec<_>>();
+        let now = crate::db::now();
+
+        // ask_choice: only where someone can tap (a paired messaging-app chat, not a routine, not the app's own chat).
+        let ctx = ToolCtx::new(db.clone(), 1, chat);
+        let offered = |c: &ToolCtx| crate::tools::specs_for(c).iter().any(|s| s.0 == "ask_choice");
+        let mut unattended = ctx.clone();
+        unattended.unattended = true;
+        assert!(offered(&ctx) && !offered(&unattended) && !offered(&ToolCtx::new(db.clone(), 1, 0)));
+        assert!(unattended.mcp_args().contains(&"--unattended".to_string()), "the MCP process knows too");
+        assert!(crate::tools::call(&ctx, "ask_choice", &json!({"question": "Which day?", "options": ["Thu"]})).await.is_err());
+        crate::tools::call(&ctx, "ask_choice", &json!({"question": "Which day?", "options": ["Thu", " Fri "]})).await.unwrap();
+        let (q, rows) = core.take_choice(chat).unwrap();
+        assert_eq!((q.as_str(), labels(&rows)), ("Which day?", vec!["Thu".to_string(), "Fri".into(), "Something else".into()]));
+        assert!(core.take_choice(chat).is_none(), "one reply's question only");
+
+        // A reminder: Snooze makes it again in an hour; the message's other buttons are then used up.
+        let once = db.routine_once(1, chat, now + 60, "call mum", false).unwrap();
+        let rows = core.result_rows(&once, "Call mum!");
+        assert_eq!(labels(&rows), ["Done|Snooze 1h|Tomorrow"]);
+        assert!(core.tap(&chan, "C1", me, &rows[0][1].1).await.unwrap().unwrap().contains("again today"));
+        let again: Vec<_> = db.routines(chat).unwrap().into_iter().filter(|r| r.once && r.id != once.id).collect();
+        assert!(again.len() == 1 && again[0].prompt == "call mum" && (again[0].next_fire - now - 3600).abs() < 5, "{again:?}");
+        assert_eq!(core.tap(&chan, "C1", me, &rows[0][2].1).await.unwrap().as_deref(), Some("Already done."));
+        assert_eq!(next_day(now - 600, now), now - 600 + 86400, "Tomorrow: the same time tomorrow");
+
+        // Someone else in the channel can't press them (and doesn't use them up); not a tap button at all: None.
+        let rows = core.result_rows(&once, "Call mum!");
+        assert!(core.tap(&chan, "C1", Sender { id: "U2", dm: false }, &rows[0][0].1).await.is_err());
+        assert_eq!(core.tap(&chan, "C1", me, &rows[0][0].1).await.unwrap().as_deref(), Some("✅ Done"));
+        assert!(core.tap(&chan, "C1", me, "ap:1:y").await.unwrap().is_none());
+
+        // A routine's result: 👎 is a correction for the tidy-up to learn from (nothing is changed); Pause pauses it.
+        let r = db.routine_create(1, chat, "0 8 * * *", "brief me", false).unwrap();
+        let rows = core.result_rows(&r, "Three headlines.");
+        assert_eq!(labels(&rows), ["👍|👎|Less like this", "Pause|For tomorrow…"]);
+        core.tap(&chan, "C1", me, &rows[0][1].1).await.unwrap();
+        let signals = db.signals_since(chat, 0).unwrap();
+        assert!(signals.iter().any(|(k, d)| k == "correction" && d.contains(&format!("#{}", r.id)) && d.contains("Three headlines.") && d.contains("👎")), "{signals:?}");
+        assert_eq!(db.routines(chat).unwrap().iter().find(|x| x.id == r.id).unwrap().prompt, "brief me");
+        let rows = core.result_rows(&r, "Three headlines.");
+        core.tap(&chan, "C1", me, &rows[1][0].1).await.unwrap();
+        assert!(db.routines(chat).unwrap().iter().find(|x| x.id == r.id).unwrap().paused);
+
+        // Another chat's buttons don't work here.
+        let other = db.pair_external("discord", "C2", "#c2").unwrap();
+        db.chat_set_owner(other, "U1").unwrap();
+        let rows = core.result_rows(&r, "x");
+        assert_eq!(core.tap(&chan, "C2", me, &rows[0][0].1).await.unwrap().as_deref(), Some("Already done."));
+        assert_eq!(core.tap(&chan, "C1", me, &rows[0][0].1).await.unwrap().as_deref(), Some("👍 Noted."), "still there for its own chat");
     }
 
     #[test]
@@ -1572,6 +1896,7 @@ mod tests {
         assert!(matches!(parse_command("Pair AB12"), Command::Pair("AB12")));
         assert!(matches!(parse_command("pairing is fun"), Command::Chat));
         assert!(matches!(parse_command("/memory"), Command::Memory));
+        assert!(matches!(parse_command("/why"), Command::Why));
         assert!(matches!(parse_command("what's in my memory?"), Command::Chat));
         assert!(matches!(parse_command("/stop"), Command::Stop(true)));
         assert!(matches!(parse_command("/undo 2"), Command::Undo(2)));
