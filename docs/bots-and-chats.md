@@ -51,6 +51,22 @@ logins, browser, tool servers or the bots' computer, and they can't make new bot
 sidebar. The **Guest** / **Yours** button at the top of a chat changes it (say, for your own second account, or a chat
 someone else paired before Mimir told guests apart).
 
+### The household and family groups
+
+The **Household** (in the sidebar once it's used) is a set of memories and lists you share with people you choose: a
+shopping list, plans, who does what. Bots in your own direct chats and the built-in chat read it and can add to it
+(`memory_store` with `household`). A guest reads it once you press **Add to household** at the top of their chat. What a
+guest adds doesn't change anything yet: it's a suggestion in your **Needs you** ("Sam wants to add this to the
+household"), which you accept or dismiss. Your own additions go straight in. The household has a Memory tab like any
+chat (edit, pin, forget, history), but no conversation of its own.
+
+**Family group.** In a group chat you paired (say a Telegram group with your partner and kids), **Make family group**
+lets everyone in your household talk to the bots there, not just you. People outside the household are still ignored,
+and only you can press Approve / Deny. Each message reaches the bot with who wrote it ("Sam: …"). A family group is a
+guest's chat whoever paired it (several people read it), so bots there get none of your email, calendar, meetings or
+logins. Your household is you plus each guest whose direct chat you added on the same app. (On Telegram, a bot
+in a group only sees every message if its privacy mode is off in @BotFather; otherwise talk to it with an @-mention.)
+
 ### Pairing a messaging app
 
 Only chats you've paired can talk to your bot. Send it `pair <CODE>` (the code is on the bot's page, or printed by

@@ -10,6 +10,12 @@ losing it. Schedules are in your local time. A routine a bot creates runs at mos
 becomes a routine that runs once, at that time, and is then gone (the Routines tab shows it as *Once · Fri 16 Oct
 09:00*). It can be paused or deleted like any routine.
 
+**Reminders for someone else.** "Remind Sam at 6 to take the bins out" goes to Sam's own chat, if Sam is in your
+[household](bots-and-chats.md#the-household-and-family-groups) (matched by the name of their chat, first name is
+enough). The first time for each person you're asked (its own kind of approval, never "always"); after that it's set up
+straight away. It shows under Sam's chat's Routines. Guests can't set reminders for others. The bot that sets it is the
+one that sends it, so it has to be one Sam paired with.
+
 The scheduler checks every 30 seconds, so a routine runs within half a minute of its time, as long as Mimir is running.
 On a laptop, **Settings → Keep this computer awake** helps; for 24/7, [self-host](self-hosting.md).
 

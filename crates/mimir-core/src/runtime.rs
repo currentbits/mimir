@@ -628,7 +628,8 @@ impl Core {
         self.incoming_with(chan, ext, from, title, text, images, sent).await
     }
 
-    /// Whether this person may talk to the bot in this paired chat, or press its buttons: the person who paired it. In
+    /// Whether this person may talk to the bot in this paired chat: the person who paired it, and in a family group
+    /// everyone in the household (only the person who paired it presses its buttons: see `decide`). In
     /// a group, channel or server everyone else is ignored. A chat paired before Mimir kept who paired it has no owner:
     /// in a direct chat the person writing is the owner; elsewhere (None) it has to be paired again.
     fn sender_ok(&self, chat: i64, from: Sender<'_>) -> Result<Option<bool>> {
@@ -641,7 +642,7 @@ impl Core {
             self.db.chat_set_dm(chat, true)?;
             return Ok(Some(true));
         }
-        Ok(Some(owner == from.id))
+        Ok(Some(owner == from.id || self.db.family_member(chat, from.id)?))
     }
 
     /// A message, possibly with images (photos the person sent).
@@ -743,8 +744,8 @@ impl Core {
             Command::Memory => {
                 // What bots keep in mind, then what's waiting for you to confirm (bots don't keep those in mind).
                 let scope = format!("chat:{chat}");
-                let mut lines: Vec<String> = self.db.bootstrap(&scope)?.iter().map(|e| e.line()).collect();
-                let unconfirmed: Vec<String> = self.db.search_unconfirmed(&scope)?.iter().map(|e| e.line()).collect();
+                let mut lines: Vec<String> = self.db.bootstrap(&scope, self.bot)?.iter().map(|e| e.line()).collect();
+                let unconfirmed: Vec<String> = self.db.search_unconfirmed(&scope, self.bot)?.iter().map(|e| e.line()).collect();
                 if !unconfirmed.is_empty() {
                     lines.push(format!("\nNot confirmed yet (saved after reading outside content; check them in the app):\n{}", unconfirmed.join("\n")));
                 }
@@ -766,7 +767,12 @@ impl Core {
             Command::Pair(_) | Command::Chat => {
                 // Measured on arrival, so a long reply (say, waiting for an approval) doesn't count as being offline.
                 let late = late_note(sent, crate::db::now());
-                let (core, chan, ext, text) = (self.clone(), chan.clone(), ext.to_string(), text.trim().to_string());
+                // In a family group the bot is told who wrote each message.
+                let text = match self.db.family_speaker(chat, from.id)? {
+                    Some(who) => format!("{who}: {}", text.trim()),
+                    None => text.trim().to_string(),
+                };
+                let (core, chan, ext) = (self.clone(), chan.clone(), ext.to_string());
                 tokio::spawn(async move {
                     let _g = core.lock.lock().await;
                     let typing = chan.typing(&ext);
@@ -827,7 +833,7 @@ impl Core {
         let approve = d != Decision::Deny;
         match self.db.chat_lookup(chan.kind(), ext)? {
             Some(chat) => {
-                if self.sender_ok(chat, from)? != Some(true) {
+                if self.sender_ok(chat, from)? != Some(true) || self.db.chat_owner(chat)? != from.id {
                     anyhow::bail!("Only the person who paired me here can answer this.");
                 }
                 if d == Decision::RestOfRun {

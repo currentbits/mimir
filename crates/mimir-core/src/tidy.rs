@@ -898,7 +898,7 @@ mod tests {
     use super::*;
 
     fn row(id: i64, kind: &str, title: &str, body: &str) -> EntryRow {
-        EntryRow { id, kind: kind.into(), title: title.into(), body: body.into(), source: String::new(), created_at: 0, status: "active", superseded_by: None, access_count: 0, pinned: false, background: false, origin: String::new(), bot_id: None, run_id: None, tainted: false, missteps: 0, valid_until: None, asked: None }
+        EntryRow { id, kind: kind.into(), title: title.into(), body: body.into(), source: String::new(), created_at: 0, status: "active", superseded_by: None, access_count: 0, pinned: false, background: false, origin: String::new(), bot_id: None, run_id: None, tainted: false, missteps: 0, valid_until: None, asked: None, for_bot: 0 }
     }
 
     #[test]
