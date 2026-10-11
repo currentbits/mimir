@@ -134,3 +134,13 @@ answered in time, and memory suggestions.
 Routines run with nobody watching, so an approval a routine needs is **parked** there for 24 hours instead of being
 denied after 5 minutes; when you approve, that exact action runs and the chat says so. The menu-bar / tray icon shows
 the count, and its menu lists what's waiting with Allow and Deny, so you can answer without opening the window.
+
+### One chat for decisions
+
+A parked approval's card goes to the chat its routine belongs to, so one made in the app chat waits until you open
+the app. Settings → Decisions picks one of your own private chats in Telegram, Slack or Discord (never a group or a
+guest's chat) that also gets them: a parked approval from any other chat comes there as a card saying where it's from
+("From: This computer"), a routine that failed for good says so, and new memory suggestions are mentioned (accept or
+dismiss them in Needs you). Answer the card in either place and the other one shows the outcome, without buttons.
+Quiet hours hold these too. Only the bot that asked sends the card, using its own app connection, so that bot needs a
+connection to the same app as the chat.

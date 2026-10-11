@@ -960,6 +960,21 @@ impl Host {
                 }
                 ok(self.db.setting("quiet_hours")?.unwrap_or_default())
             }
+            // The private chat that also gets every chat's routine asks, failed routines and memory suggestions: get
+            // without `chat`, set with it (0 = none). Returns the one in use and the chats that can be it.
+            "decisions_chat" => {
+                if let Some(chat) = arg::<Option<i64>>(a, "chat")? {
+                    if chat == 0 {
+                        self.db.set_setting("decisions_chat", "")?;
+                    } else if crate::runtime::decisions_ok(&self.db, chat) {
+                        self.db.set_setting("decisions_chat", &chat.to_string())?;
+                    } else {
+                        bail!("pick one of your own private chats, not a group or a guest's chat");
+                    }
+                }
+                let options: Vec<_> = self.db.chats()?.into_iter().filter(|c| crate::runtime::decisions_ok(&self.db, c.chat_id)).collect();
+                ok(json!({"chat": crate::runtime::decisions_chat(&self.db), "options": options}))
+            }
             // The weekly "what I learned" message in chat apps: on unless switched off (get without `on`, set with it).
             "weekly_review" => {
                 if let Some(on) = arg::<Option<bool>>(a, "on")? {

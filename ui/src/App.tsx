@@ -2847,6 +2847,7 @@ function SettingsView({ onComputer }: { onComputer: () => void }) {
       {inDesktop && !remoteServer() && <AppSettings />}
       {inDesktop && <UpdateSettings />}
       <DigestSettings />
+      <DecisionsSettings />
       <LimitsSettings />
       <ApiKeySettings />
       <WebSearchSettings />
@@ -3259,6 +3260,24 @@ function DigestSettings() {
       </Row>
       <Row icon={<Icon name="memory" size={15} />} title="Weekly “what I learned”" desc="Once a week at that time, each Telegram, Slack or Discord chat gets a list of what your bots learned there on their own. Reply /undo with a number to take one back.">
         {weekly !== null && <Switch label="Weekly what I learned" checked={weekly} onChange={v => { setWeekly(v); invoke<boolean>('weekly_review', { on: v }).then(setWeekly, () => setWeekly(!v)) }} />}
+      </Row>
+    </Group>
+  )
+}
+
+/** One private chat that also gets every chat's asks from routines, failed routines and memory suggestions. */
+function DecisionsSettings() {
+  const [d, setD] = useState<{ chat: number | null; options: Chat[] } | null>(null)
+  const [msg, setMsg] = useState<string | null>(null)
+  useEffect(() => { invoke<typeof d>('decisions_chat').then(setD, () => {}) }, [])
+  const pick = (chat: number) => invoke<typeof d>('decisions_chat', { chat }).then(v => { setD(v); setMsg(null) }, e => setMsg(String(e)))
+  return (
+    <Group title="Decisions" note="Asks from routines in any chat, including this app, also come here as a card; answer it in either place and both close. Failed routines and new memory suggestions are mentioned here too. Groups and guests' chats can't be picked.">
+      <Row icon={<Icon name="inbox" size={15} />} title="Also send decisions to" desc={msg ?? (d && !d.options.length ? 'Pair a private chat in Telegram, Slack or Discord first.' : 'Only the chat they came from, unless you pick one.')}>
+        {d && <select className="select" style={{ width: 'auto' }} value={d.chat ?? 0} aria-label="Decisions chat" onChange={e => pick(Number(e.target.value))}>
+          <option value={0}>No other chat</option>
+          {d.options.map(c => <option key={c.chat_id} value={c.chat_id}>{c.title} ({c.channel})</option>)}
+        </select>}
       </Row>
     </Group>
   )
