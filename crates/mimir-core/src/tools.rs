@@ -981,7 +981,7 @@ async fn propose_plan(ctx: &ToolCtx, args: &Value) -> Result<String> {
 
 /// Limits on what a bot may ask for, checked before any approval card.
 /// Where web_search goes: Brave Search with its key, else a SearXNG address; None when neither is set up.
-fn search_service(db: &Db) -> Option<(&'static str, String)> {
+pub(crate) fn search_service(db: &Db) -> Option<(&'static str, String)> {
     match crate::host::api_key("brave") {
         Some(k) => Some(("brave", k)),
         None => db.setting("searxng_url").ok().flatten().filter(|u| !u.is_empty()).map(|u| ("searxng", u)),

@@ -2327,6 +2327,8 @@ impl Db {
             // ponytail: import proposals are told apart by their reason; a column if more origins appear
             let (src, mut prov) = if s.reason.starts_with("Imported") {
                 ("imported, approved by you", Prov::by("import"))
+            } else if s.reason.starts_with("Found in your") {
+                ("found in your email or calendar, approved by you", Prov::by("know_me"))
             } else if s.reason.starts_with(BOT_PROPOSED) {
                 ("proposed by a bot, approved by you", Prov::by("bot"))
             } else {

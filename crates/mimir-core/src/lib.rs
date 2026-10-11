@@ -529,6 +529,37 @@ pub fn friendly_error(e: &str) -> String {
     format!("⚠️ {what} {fix}\n\n_{}_", tools::truncate(e.lines().next().unwrap_or(e), 160))
 }
 
+/// What the person hasn't connected yet, and where to: asked for one, a bot says so in the setting's own words (the app
+/// turns "Settings → Email" into a button) instead of guessing, and tries again once it's connected. Only where those
+/// would be offered at all: a chat with the person alone, not a guest's, not incognito, not a task from another bot.
+pub(crate) fn not_connected(ctx: &ToolCtx) -> String {
+    if ctx.depth > 0 || ctx.incognito() || ctx.db.chat_guest(ctx.chat_id) || !ctx.db.chat_private(ctx.chat_id) {
+        return String::new();
+    }
+    let db = &ctx.db;
+    let missing: Vec<&str> = [
+        (email::account(db).is_none(), "email (search, read, draft, send): Settings → Email"),
+        (
+            host::secret_get(calendar::SECRET).is_none() && caldav::account(db).is_none(),
+            "your calendar: Settings → Calendar to add events, or the calendar link in Meetings to read it",
+        ),
+        (tools::search_service(db).is_none(), "web search: Settings → Web search"),
+        (!ext::servers(db).iter().any(|s| s.name == ext::BROWSER), "a web browser (pages that need clicks or a login): Settings → Browser"),
+    ]
+    .into_iter()
+    .filter_map(|(m, s)| m.then_some(s))
+    .collect();
+    if missing.is_empty() {
+        return String::new();
+    }
+    format!(
+        "\n\n<not_connected>\nNot connected yet:\n- {}\nIf a request needs one of these, don't guess or work around it: say in a sentence that it isn't \
+         connected yet and where to connect it, in those exact words (like Settings → Email), and that you'll do it once it is. \
+         When they say it's connected, try again.\n</not_connected>",
+        missing.join("\n- ")
+    )
+}
+
 /// What a quiet check replies when nothing needs the user's attention.
 const NOTHING: &str = "NOTHING";
 
@@ -705,6 +736,7 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
     } else {
         ""
     };
+    let missing = not_connected(ctx);
     let family = if ctx.db.chat_family(ctx.chat_id) {
         "\n\nThis is a family group: several people of the household talk to you here, and each message starts with who \
          wrote it (\"Sam: …\"). Answer that person."
@@ -724,7 +756,7 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
         String::new()
     };
     let system = format!(
-        "Your name is {}. {PERSONA}{role}{guest}{family}{}{team}{logins}{plans}{skills}\n\nCurrent local time: {}.\n{}{household}",
+        "Your name is {}. {PERSONA}{role}{guest}{family}{}{team}{logins}{plans}{skills}{missing}\n\nCurrent local time: {}.\n{}{household}",
         bot.name,
         if quiet { QUIET } else { "" },
         chrono::Local::now().format("%A %Y-%m-%d %H:%M %Z"),
@@ -905,6 +937,22 @@ mod tests {
         let now = super::db::now();
         assert_eq!(super::late(now - 60, now), "", "on time");
         assert!(super::late(now - 3 * 3600, now).starts_with(", due at "), "hours late");
+    }
+
+    #[test]
+    fn a_bot_is_told_what_isnt_connected_where_it_could_be_used() {
+        let p = std::env::temp_dir().join(format!("mimir-missing-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let d = super::db::Db::open(&p).unwrap();
+        let ctx = super::ToolCtx::new(d.clone(), 1, super::host::LOCAL_CHAT);
+        let note = super::not_connected(&ctx);
+        assert!(note.contains("Settings → Email") && note.contains("Settings → Web search"), "{note}");
+        d.set_setting("searxng_url", "https://search.example").unwrap();
+        assert!(!super::not_connected(&ctx).contains("Web search"), "connected: not mentioned");
+        let mut delegated = ctx.clone();
+        delegated.depth = 1;
+        assert_eq!(super::not_connected(&delegated), "", "not for another bot's task");
+        assert_eq!(super::not_connected(&super::ToolCtx::new(d, 1, -42)), "", "not in a group");
     }
 
     #[test]

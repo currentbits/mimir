@@ -293,7 +293,7 @@ type Kind = 'convention' | 'knowledge' | 'task'
 type EntryRow = {
   id: number; kind: Kind; title: string; body: string; source: string; created_at: number
   status: 'active' | 'superseded' | 'forgotten'; superseded_by: number | null; access_count: number; pinned?: boolean; background?: boolean
-  origin?: '' | 'you' | 'bot' | 'tidy' | 'import'; bot_id?: number | null; tainted?: boolean; missteps?: number; valid_until?: number | null; asked?: string | null
+  origin?: '' | 'you' | 'bot' | 'tidy' | 'import' | 'know_me'; bot_id?: number | null; tainted?: boolean; missteps?: number; valid_until?: number | null; asked?: string | null
   /** Kept by one bot only (0: all bots). */
   for_bot?: number
 }
@@ -305,7 +305,7 @@ type Tab = 'chat' | 'memory' | 'skills' | 'routines' | 'activity'
 type View = Tab | 'settings' | 'bot' | 'inbox' | 'computer' | 'meetings'
 type ComputerStatus = { available: boolean; enabled: boolean; running: boolean }
 type Run = {
-  id: number; bot_id: number; chat_id: number; reply?: string | null; parent_run?: number | null; trigger: 'message' | 'routine' | 'rehearsal' | 'tidy' | 'delegated' | 'import' | 'check'; routine_id: number | null; provider: string; model: string | null
+  id: number; bot_id: number; chat_id: number; reply?: string | null; parent_run?: number | null; trigger: 'message' | 'routine' | 'rehearsal' | 'tidy' | 'delegated' | 'import' | 'know_me' | 'check'; routine_id: number | null; provider: string; model: string | null
   status: 'running' | 'ok' | 'error' | 'missed' | 'unchanged'; error: string | null; started_at: number; ended_at: number | null
   tokens_in: number; tokens_out: number; cost_usd: number | null; tool_calls: number
   delivered?: string | null; repeats?: number; cache_read?: number; estimated?: boolean
@@ -377,8 +377,8 @@ const troubleOf = (s?: Status): string | null =>
     .map(c => (c.error!.startsWith(CHANNEL[c.kind].name) ? c.error! : `${CHANNEL[c.kind].name}: ${c.error}`)).join(' · ') || null)
 type Busy = { bot_id: number; chat_id: number; trigger: string; step: string | null }
 /** A bot at work, as its face: the step a reply is on, else what kind of work it is. */
-const busyMood = (w: Busy): Mood => w.step ? moodOf(w.step, '') : w.trigger === 'tidy' || w.trigger === 'import' ? 'remembering' : w.trigger === 'teach' ? 'writing' : 'thinking'
-const BUSY_KIND: Record<string, string> = { routine: 'Running a routine', delegated: 'On a task for another bot', tidy: 'Tidying memory', check: 'Checking a preference', import: 'Importing memories', teach: 'Writing a skill' }
+const busyMood = (w: Busy): Mood => w.step ? moodOf(w.step, '') : w.trigger === 'tidy' || w.trigger === 'import' || w.trigger === 'know_me' ? 'remembering' : w.trigger === 'teach' ? 'writing' : 'thinking'
+const BUSY_KIND: Record<string, string> = { routine: 'Running a routine', delegated: 'On a task for another bot', tidy: 'Tidying memory', check: 'Checking a preference', import: 'Importing memories', know_me: 'Getting to know you', teach: 'Writing a skill' }
 const busyLabel = (w: Busy) => w.step ? `${w.step}…` : BUSY_KIND[w.trigger] ?? 'Replying…'
 const presenceOf = (s?: Status): Presence => !s ? 'off' : online(s).length ? 'live' : s.error || s.channels.some(c => c.error) ? 'err' : s.channels.length ? 'wait' : 'off'
 
@@ -609,6 +609,20 @@ function ModelInput({ provider, baseUrl, value, onChange, signedIn = true }: { p
   )
 }
 
+/** "What do you want off your plate?": each answer is a template bot (with its routines) and library skills; one
+ *  without a template teaches the first bot its skills. */
+const PLATE: { id: string; label: string; template?: string; skills: string[] }[] = [
+  { id: 'brief', label: 'A morning briefing', template: 'brief', skills: ['morning-briefing'] },
+  { id: 'tasks', label: 'Remembering my to-dos', template: 'tasks', skills: ['follow-up-tracker'] },
+  { id: 'inbox', label: 'Keeping up with email', skills: ['inbox-triage'] },
+  { id: 'meetings', label: 'Meeting prep and notes', skills: ['meeting-prep', 'meeting-follow-up'] },
+  { id: 'research', label: 'Looking things up', template: 'research', skills: ['research-brief', 'summarize-link'] },
+  { id: 'watch', label: 'Watching pages and prices', template: 'watch', skills: ['topic-watch', 'price-watch'] },
+  { id: 'review', label: 'A weekly look back', template: 'review', skills: ['weekly-review'] },
+]
+/** What a library skill needs that isn't connected yet, in words. */
+const NEEDS: Record<string, string> = { email_search: 'your email (Settings → Email)', calendar_list: 'your calendar link (Meetings)', meeting_read: 'a transcribed meeting (Meetings)' }
+
 const ROLE_IDEAS = ["You're my personal assistant. Keep answers short.", 'Help me stay on top of tasks and follow-ups.', 'Research things for me and always link your sources.']
 
 /** First run: pick an AI account that actually works, name the first bot, start talking. */
@@ -625,6 +639,16 @@ function Onboarding({ onDone }: { onDone: () => void }) {
   const [look, setLook] = useState<Look | null>(null)
   const [styling, setStyling] = useState(false)
   const [err, setErr] = useState<string | null>(null)
+  // What they want off their plate (up to three), and which of the suggestions that makes they turned off.
+  const [plate, setPlate] = useState<string[]>([])
+  const [skip, setSkip] = useState<string[]>([])
+  const [library, setLibrary] = useState<LibrarySkill[]>([])
+  const [busy, setBusy] = useState(false)
+  // Suggestions already set up: trying again after an error doesn't make a second copy.
+  const made = useRef(new Set<string>())
+  useEffect(() => { invoke<LibrarySkill[]>('skill_library', { chatId: LOCAL }).then(setLibrary, () => {}) }, [])
+  const lib = (slug: string) => library.find(k => k.slug === slug)
+  const picked = PLATE.filter(p => plate.includes(p.id) && !skip.includes(p.id))
 
   const load = () =>
     invoke<Record<string, Account>>('accounts').then(a => {
@@ -651,12 +675,22 @@ function Onboarding({ onDone }: { onDone: () => void }) {
   }
 
   const finish = async () => {
+    setBusy(true); setErr(null)
     try {
       const bots = await invoke<Bot[]>('bots')
-      await invoke('save_bot', { bot: { ...bots[0], name: name.trim() || 'Mimir', persona: role, provider, model: model.trim(), base_url: provider === 'local' ? acc?.base ?? '' : '', look: look ? JSON.stringify(look) : bots[0].look ?? '' }, secrets: {} })
+      const account = { provider, model: model.trim(), base_url: provider === 'local' ? acc?.base ?? '' : '' }
+      await invoke('save_bot', { bot: { ...bots[0], ...account, name: name.trim() || 'Mimir', persona: role, look: look ? JSON.stringify(look) : bots[0].look ?? '' }, secrets: {} })
+      // The starter team: each template a bot on the same account with its routines; skills go to that bot, or the first.
+      for (const p of picked.filter(p => !made.current.has(p.id))) {
+        const t = TEMPLATES.find(t => t.id === p.template)
+        const id = t ? await invoke<number>('save_bot', { bot: { ...BLANK, ...account, name: t.name, persona: t.persona, look: JSON.stringify(randomLook()) }, secrets: {} }) : bots[0].id
+        if (t) await addStarterRoutines(id, t.routines)
+        for (const slug of p.skills) await invoke('skill_add', { chatId: LOCAL, botId: id, slug })
+        made.current.add(p.id)
+      }
       await invoke('onboarding_done')
       onDone()
-    } catch (e) { setErr(String(e)) }
+    } catch (e) { setErr(String(e)); setBusy(false) }
   }
 
   const acc = accounts?.[provider]
@@ -665,7 +699,7 @@ function Onboarding({ onDone }: { onDone: () => void }) {
     <div className="center-screen">
       <div className="onboard fade-in" key={step}>
         <img className="mark" src="/logo.png" alt="" />
-        <div className="progress" aria-label={`Step ${step} of 3`}>{[1, 2, 3].map(i => <i key={i} className={i <= step ? 'on' : ''} />)}</div>
+        <div className="progress" aria-label={`Step ${step} of 4`}>{[1, 2, 3, 4].map(i => <i key={i} className={i <= step ? 'on' : ''} />)}</div>
 
         {step === 1 && (
           <>
@@ -717,6 +751,27 @@ function Onboarding({ onDone }: { onDone: () => void }) {
 
         {step === 2 && (
           <>
+            <div>
+              <h1>What do you want off your plate?</h1>
+              <p className="lead">Pick up to three. Your first bot suggests a starter team for them, and you choose what to keep.</p>
+            </div>
+            <div className="chips" role="group" aria-label="What you want help with">
+              {PLATE.map(p => {
+                const on = plate.includes(p.id)
+                return <button key={p.id} className={'chip' + (on ? ' on' : '')} aria-pressed={on} disabled={!on && plate.length >= 3}
+                  onClick={() => setPlate(on ? plate.filter(x => x !== p.id) : [...plate, p.id])}>{on && <Icon name="check" size={11} />}{p.label}</button>
+              })}
+            </div>
+            <div className="actions">
+              <button className="btn btn-ghost" onClick={() => setStep(1)}>Back</button>
+              <span className="grow" />
+              <button className="btn btn-primary btn-lg" onClick={() => setStep(3)}>{plate.length ? 'Continue' : 'Skip'}</button>
+            </div>
+          </>
+        )}
+
+        {step === 3 && (
+          <>
             <div className="page-head" style={{ margin: 0 }}>
               <button type="button" className="look-avatar" onClick={() => setStyling(s => !s)} aria-expanded={styling} title="Change how it looks">
                 <Avatar id={1} name={name || '?'} size={52} alive look={look ?? undefined} mood={name.trim() ? 'listening' : 'idle'} beat={name.length} />
@@ -730,28 +785,44 @@ function Onboarding({ onDone }: { onDone: () => void }) {
               <textarea className="textarea" placeholder="Describe its job in a sentence or two." value={role} onChange={e => setRole(e.target.value)} /></label>
             <div className="chips">{ROLE_IDEAS.map(r => <button key={r} className={'chip' + (role === r ? ' on' : '')} onClick={() => setRole(r)}>{r}</button>)}</div>
             <div className="actions">
-              <button className="btn btn-ghost" onClick={() => setStep(1)}>Back</button>
+              <button className="btn btn-ghost" onClick={() => setStep(2)}>Back</button>
               <span className="grow" />
-              <button className="btn btn-primary btn-lg" disabled={!name.trim()} onClick={() => setStep(3)}>Continue</button>
+              <button className="btn btn-primary btn-lg" disabled={!name.trim()} onClick={() => setStep(4)}>Continue</button>
             </div>
           </>
         )}
 
-        {step === 3 && (
+        {step === 4 && (
           <>
             <div>
               <h1>{name.trim() || 'Your bot'} is ready</h1>
-              <p className="lead">Tell it about yourself. Everything it remembers shows up in Memory, where you can correct or forget it.</p>
+              <p className="lead">{plate.length ? `${name.trim() || 'It'} suggests a starter team. Untick what you don’t want; change any of it later.` : 'Tell it about yourself. Everything it remembers shows up in Memory, where you can correct or forget it.'}</p>
             </div>
-            <ul className="tips">
+            {plate.length > 0 ? (
+              <ul className="tips plan" aria-label="Starter team">
+                {PLATE.filter(p => plate.includes(p.id)).map(p => {
+                  const on = !skip.includes(p.id)
+                  const t = TEMPLATES.find(t => t.id === p.template)
+                  const needs = [...new Set(p.skills.flatMap(slug => lib(slug)?.missing['1'] ?? []))].map(n => NEEDS[n]).filter(Boolean)
+                  return (
+                    <li key={p.id} className={on ? '' : 'off'}>
+                      <input type="checkbox" checked={on} aria-label={p.label} onChange={() => setSkip(on ? [...skip, p.id] : skip.filter(x => x !== p.id))} />
+                      <span><b>{t ? `New bot: ${t.name}` : `${name.trim() || 'Your bot'} takes on ${p.label.toLowerCase()}`}</b>
+                        <small>{[...(t?.routines.map(r => `${schedule(r.cron)}: ${r.prompt}`) ?? []), `Skills: ${p.skills.map(slug => lib(slug)?.name ?? slug).join(', ')}`].join(' · ')}</small>
+                        {needs.length > 0 && <small className="warn">Works once it has {needs.join(' and ')}.</small>}</span>
+                    </li>
+                  )
+                })}
+              </ul>
+            ) : <ul className="tips">
               <li><Icon name="chat" />“Remember that I prefer short answers.”</li>
               <li><Icon name="clock" />“Every weekday at 8:30, remind me of my open tasks.”</li>
               <li><Icon name="telegram" />Connect Telegram, Slack or Discord later from the bot’s page.</li>
-            </ul>
+            </ul>}
             <div className="actions">
-              <button className="btn btn-ghost" onClick={() => setStep(2)}>Back</button>
+              <button className="btn btn-ghost" onClick={() => setStep(3)}>Back</button>
               <span className="grow" />
-              <button className="btn btn-primary btn-lg" onClick={finish}>Start chatting</button>
+              <button className="btn btn-primary btn-lg" disabled={busy} onClick={finish}>{busy ? 'Setting up…' : picked.length ? 'Set them up and start' : 'Start chatting'}</button>
             </div>
           </>
         )}
@@ -866,6 +937,10 @@ function Main() {
   const [phoneList, setPhoneList] = useState(false)
   const phoneTab = phoneList || view === 'chat' ? 'chats' : view
   const go = (v: View) => { setPhoneList(false); setView(v) }
+  // A bot pointing at a setting ("Settings → Email") opens Settings searched for it.
+  const [find, setFind] = useState('')
+  useEffect(() => { if (view !== 'settings') setFind('') }, [view])
+  const openSettings = (q: string) => { setFind(q); go('settings') }
 
   // ⌘F: on the Settings page it searches settings; anywhere else, memory.
   const findIt = () => {
@@ -1046,7 +1121,7 @@ function Main() {
 
         {view === 'chat' ? (
           <ChatView key={`chat-${chat.chat_id}-${incognito && chat.chat_id === LOCAL}-${botChat ? chatBot ?? botList[0]?.id : 'all'}`} only={botChat} chat={chat} bots={botList} onTurn={chats.reload}
-            incognito={incognito && chat.chat_id === LOCAL} setIncognito={setIncognito} openBot={openBot}
+            incognito={incognito && chat.chat_id === LOCAL} setIncognito={setIncognito} openBot={openBot} openSettings={openSettings}
             botId={chatBot ?? undefined} onBot={setChatBot} troubleOf={id => troubleOf(statusOf(id))} busy={busy.data ?? undefined} />
         ) : (
           // Keyed: each view starts at the top (the scroller used to keep the last view's position).
@@ -1056,7 +1131,7 @@ function Main() {
               {view === 'skills' && <SkillsView chatId={chat.chat_id} />}
               {view === 'routines' && <RoutinesView chatId={chat.chat_id} bots={botList} />}
               {view === 'activity' && <ActivityView chatId={chat.chat_id} />}
-              {view === 'settings' && <SettingsView onComputer={computer.reload} />}
+              {view === 'settings' && <SettingsView onComputer={computer.reload} find={find} />}
               {view === 'computer' && <ComputerView bots={botList} chats={list} chatName={chatName} />}
               {view === 'meetings' && <MeetingsView bots={botList} onSent={talkTo} />}
               {view === 'inbox' && <InboxView data={inbox.data} troubled={troubled} reload={inbox.reload} chats={list} chatName={chatName} openBot={openBot} openChat={openChat} />}
@@ -1413,8 +1488,9 @@ function Menu({ at, name, items, onClose }: { at: { x: number; y: number }; name
   )
 }
 
-function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, openBot, botId: chosen, onBot, troubleOf: trouble, only = false, busy: running = [] }: {
+function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, openBot, openSettings, botId: chosen, onBot, troubleOf: trouble, only = false, busy: running = [] }: {
   chat: Chat; bots: Bot[]; onTurn: () => void; incognito?: boolean; setIncognito?: (on: boolean) => void; openBot?: (id: number) => void
+  openSettings?: (find: string) => void
   // Opened from a bot in the sidebar: only that bot's conversation, not everyone's in this chat.
   only?: boolean
   // The bot to message, when the app chose it (a click on a bot in the sidebar); the picker reports changes back.
@@ -1646,7 +1722,7 @@ function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, openBot
       // Swap the pending bubbles for the saved messages in one frame: no flash in between.
       .finally(() => { ownSend.current = true; log.reload().finally(() => { setPending(null); setTo(null) }); conv.reload(); onTurn(); if (only && to !== botId) onBot?.(to) })
   }
-  const bubble = (m: Message) => {
+  const bubble = (m: Message, last = false) => {
     const sched = m.role === 'user' ? m.content.match(SCHEDULED) : null
     if (sched) return (
       <div id={`m${m.id}`} className={'msg-trigger' + anim(m)} title={sched[4]}>
@@ -1666,12 +1742,20 @@ function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, openBot
           {m.content.includes(NO_REMINDER) && m === msgs[msgs.length - 1] && <button type="button" className="btn btn-sm" onClick={() => send(`@${b.name} Set the reminder you said you would.`)} disabled={working}>Set it</button>}
           {m.actions && <Actions actions={m.actions} chatId={chat.chat_id} runId={m.run_id} onChange={() => { log.reload(); onTurn() }} />}
           {m.used && <UsedLine used={m.used} chatId={chat.chat_id} onChange={() => log.reload()} />}
+          {last && setting && openSettings && !working && (
+            <div className="msg-actions">
+              <button className="btn btn-sm" onClick={() => openSettings(setting)}><Icon name="settings" size={13} />Open Settings → {setting}</button>
+              <button className="btn btn-sm btn-ghost" onClick={() => send('It’s connected now. Please try again.')}><Icon name="retry" size={13} />Try again</button>
+            </div>
+          )}
         </div>
       </div>
     )
   }
   const me = botOf(botId)
   const them = botOf(replier)
+  // The last reply says a setting isn't connected yet (bots name it in these words): a way there, and back.
+  const setting = msgs.at(-1)?.role === 'assistant' ? msgs.at(-1)!.content.match(/Settings → (Email|Calendar|Web search|Browser)\b/)?.[1] : undefined
 
   return (
     <div className="page view-in" ref={scroller} onScroll={onScroll}>
@@ -1708,7 +1792,7 @@ function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, openBot
           {msgs.map((m, i) => (
             <Fragment key={m.id}>
               {(i === 0 || dayLabel(m.ts) !== dayLabel(msgs[i - 1].ts)) && <div className="day-sep" role="separator"><span>{dayLabel(m.ts)}</span></div>}
-              {bubble(m)}
+              {bubble(m, i === msgs.length - 1)}
             </Fragment>
           ))}
           {working && (
@@ -2280,7 +2364,7 @@ function Learned({ chatId, entries, onChange }: { chatId: number; entries: Entry
         <button className="btn btn-sm btn-ghost" onClick={() => invoke('learned_seen', { chatId }).then(() => info.reload(), e => tell(String(e)))}>All good</button></div>
       {items.map(r => (
         <div className={'sugg' + (leaving.has(r.id) ? ' leaving' : '')} key={r.id}>
-          <span className="badge">{r.origin === 'tidy' ? 'Tidy-up' : r.origin === 'import' ? 'Imported' : r.bot_id ? botOf(r.bot_id).name : 'A bot'}</span>
+          <span className="badge">{r.origin === 'tidy' ? 'Tidy-up' : r.origin === 'import' ? 'Imported' : r.origin === 'know_me' ? 'Email & calendar' : r.bot_id ? botOf(r.bot_id).name : 'A bot'}</span>
           <div className="what selectable"><b>{r.title}</b>{r.body}
             {/* Their own words next to what was saved: a remark saved as firmer than they said it shows. */}
             {r.asked && <div className="why">You said: “{r.asked.length > 160 ? r.asked.slice(0, 160) + '…' : r.asked}”</div>}
@@ -2671,7 +2755,7 @@ function RoutinesView({ chatId, bots }: { chatId: number; bots: Bot[] }) {
 
 // ---------------- activity ----------------
 
-const RUN_TITLE: Record<Run['trigger'], string> = { message: 'Reply', routine: 'Routine', rehearsal: 'Rehearsal', tidy: 'Memory tidy-up', delegated: 'Task from another bot', import: 'Memory import', check: 'Checked a suggestion' }
+const RUN_TITLE: Record<Run['trigger'], string> = { message: 'Reply', routine: 'Routine', rehearsal: 'Rehearsal', tidy: 'Memory tidy-up', delegated: 'Task from another bot', import: 'Memory import', know_me: 'Getting to know you', check: 'Checked a suggestion' }
 /** "Quiet check · Weekdays at 8:30 AM"; a deleted routine keeps its number. */
 const runTitle = (r: Run, routine?: Routine) =>
   r.trigger !== 'routine' ? RUN_TITLE[r.trigger] : routine ? `${routine.quiet ? 'Quiet check' : routine.once ? 'One-off' : 'Routine'} · ${when(routine)}` : `Routine #${r.routine_id}`
@@ -2818,6 +2902,14 @@ const TEMPLATES: { id: string; icon: string; name: string; job: string; persona:
     routines: [{ cron: '0 16 * * Fri', prompt: "Review my week from our conversations and memory: what got done, what's still open, and one thing to focus on next week." }] },
 ]
 
+/** A new bot's starter routines run in the built-in chat (results there and as notifications). */
+async function addStarterRoutines(botId: number, routines: Omit<StarterRoutine, 'on'>[]) {
+  for (const r of routines.filter(r => r.prompt.trim())) {
+    const made = await invoke<Routine>('add_routine', { chatId: LOCAL, botId, cron: r.cron, prompt: r.prompt.trim(), quiet: !!r.quiet })
+    if (r.delivery && r.delivery !== 'now') await invoke('set_delivery', { chatId: LOCAL, id: made.id, delivery: r.delivery })
+  }
+}
+
 function Templates({ picked, pick }: { picked: string; pick: (id: string) => void }) {
   return (
     <div className="provider-cards templates" role="radiogroup" aria-label="Start from">
@@ -2850,13 +2942,7 @@ function BotPage({ bot, status, canDelete, onSaved, onDeleted, onChat }: {
     edit({ name: t?.name ?? '', persona: t?.persona ?? '' })
   }
   const setRoutine = (i: number, patch: Partial<StarterRoutine>) => setRoutines(routines.map((r, j) => j === i ? { ...r, ...patch } : r))
-  // A new bot's starter routines run in the built-in chat (results there and as notifications).
-  const addRoutines = async (botId: number) => {
-    for (const r of routines.filter(r => r.on && r.prompt.trim())) {
-      const made = await invoke<Routine>('add_routine', { chatId: LOCAL, botId, cron: r.cron, prompt: r.prompt.trim(), quiet: !!r.quiet })
-      if (r.delivery && r.delivery !== 'now') await invoke('set_delivery', { chatId: LOCAL, id: made.id, delivery: r.delivery })
-    }
-  }
+  const addRoutines = (botId: number) => addStarterRoutines(botId, routines.filter(r => r.on))
   const typed = (k: keyof Secrets) => sec[k] ?? ''
   const type = (k: keyof Secrets, v: string) => { setSec({ ...sec, [k]: v || null }); setMsg(null) }
   const edit = (patch: Partial<Bot>) => { setB({ ...b, ...patch }); setMsg(null) }
@@ -3088,11 +3174,11 @@ function useSettingsFilter(q: string) {
   return { ref, none }
 }
 
-function SettingsView({ onComputer }: { onComputer: () => void }) {
+function SettingsView({ onComputer, find = '' }: { onComputer: () => void; find?: string }) {
   // Adding a tool server (or the browser) adds tools: show their permissions straight away.
   const [tools, setTools] = useState(0)
   const toolsChanged = () => setTools(n => n + 1)
-  const [q, setQ] = useState('')
+  const [q, setQ] = useState(find)
   const box = useRef<HTMLInputElement>(null)
   const { ref, none } = useSettingsFilter(q)
   useEffect(() => {
@@ -3123,6 +3209,7 @@ function SettingsView({ onComputer }: { onComputer: () => void }) {
       <WebSearchSettings />
       <EmailSettings />
       <CalendarSettings />
+      <KnowMeSettings />
       <ComputerSettings onChange={() => { onComputer(); toolsChanged() }} />
       <BrowserSettings onChange={toolsChanged} />
       <ToolServerSettings onChange={toolsChanged} />
@@ -3808,6 +3895,22 @@ function CalendarSettings() {
           <span className="hint">iCloud is https://caldav.icloud.com and Fastmail https://caldav.fastmail.com, with the same app password as their email. Nextcloud is https://your-server/remote.php/dav.</span>
         </form>
       )}
+    </Group>
+  )
+}
+
+/** Once email or a calendar is connected: one read-only look at both, whose findings wait in Memory as suggestions. */
+function KnowMeSettings() {
+  const st = useLoad(() => invoke<{ ready: boolean; done: boolean }>('know_me', { chatId: LOCAL }), [], 4000)
+  const [state, setState] = useState<{ busy?: boolean; found?: number; err?: string }>({})
+  if (!st.data?.ready || (st.data.done && state.found === undefined)) return null
+  const go = () => { setState({ busy: true }); invoke<number>('know_me', { chatId: LOCAL, run: true }).then(found => { setState({ found }); st.reload() }, e => setState({ err: String(e) })) }
+  return (
+    <Group title="Get to know me" note={state.err ? <span className="error">{state.err}</span> : 'Once, and read-only: a bot looks at who wrote to you this month and what’s on your calendar (senders, subjects and events, never what an email says) and suggests what to remember. Nothing is kept until you accept it in Memory, and what you accept stays marked as found, not told.'}>
+      <Row icon={<Icon name="memory" size={15} />} title={state.found !== undefined ? (state.found ? `Found ${state.found} thing${state.found === 1 ? '' : 's'} to suggest` : 'Nothing worth suggesting') : 'Let your bots get to know you'}
+        desc={state.found !== undefined ? (state.found ? 'Accept or dismiss each in Memory (built-in chat).' : 'Tell a bot about yourself instead.') : 'Uses your connected email and calendar link'}>
+        {state.found === undefined && <button className="btn btn-sm" disabled={state.busy} onClick={go}>{state.busy ? 'Looking…' : 'Get to know me'}</button>}
+      </Row>
     </Group>
   )
 }

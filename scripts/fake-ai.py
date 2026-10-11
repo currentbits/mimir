@@ -8,6 +8,7 @@ task. Any other bot looks at your latest message for a word in capitals and call
 replies "DONE <tool>: <the tool's result>":
 
     REMIND SAM → routine_create for Sam    HOUSEHOLD → memory_store to the household
+    EMAIL (email not connected) → points to Settings → Email, from its <not_connected> instructions
     ASK SEARCH → ask_bot    MAKE BOT → bot_create    ROUTINE → routine_create    REMEMBER → memory_store
     FORGET <n> → memory_forget(n)    CHOOSE → ask_choice    FILE → file_write    LIST FILES → file_list    DELETE ROUTINE <n> → routine_delete(n)
 
@@ -78,6 +79,13 @@ class H(BaseHTTPRequestHandler):
             time.sleep(int((re.search(r"SLOW (\d+)", last_user) or [0, 3])[1]))
         if bot == "Search":
             return self.reply({"role": "assistant", "content": f"SEARCH-ANSWER: the title tag is fine (asked: {last_user[-60:]})"})
+        # The one-time "get to know me" pass: one suggestion per email sender line it was shown.
+        if "get to know them" in system:
+            senders = re.findall(r"^- [^|]+\| ([^|]+) \|", last_user, re.M)
+            return self.reply({"role": "assistant", "content": json.dumps([{"action": "add", "type": "knowledge", "title": f"Writes to you: {s.strip()}", "body": f"{s.strip()} emails you.", "reason": "Found in your email: a recent message"} for s in senders[:3]])})
+        # Asked for email while it isn't connected: the bot points at the setting, as its instructions say.
+        if "EMAIL" in last_user and "<not_connected>" in system and "Settings → Email" in system:
+            return self.reply({"role": "assistant", "content": "Your email isn't connected yet. Connect it in Settings → Email and I'll try again."})
         if last.get("role") == "tool":
             # What the tool said, back to the person.
             name = next((c["function"]["name"] for m in reversed(msgs) if m.get("role") == "assistant" for c in m.get("tool_calls") or []), "?")
