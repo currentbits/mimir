@@ -68,6 +68,10 @@ download clicks with Meterbird; that's the site, not the app.)
 - **Kept for six months**: the details of each action in the run log, corrections and signals. Then they're deleted.
 - **Export everything** (Settings → Your data) saves one JSON file with your memories, conversations, meetings,
   skills, routines, chats and bots (not tokens or keys).
+- **Daily backups**: once a day Mimir checks the database (SQLite's `quick_check`) and keeps a copy in `backups/`
+  in its data folder: the last 7 days and 4 weeks. Settings → Your data → **Restore a backup…** puts one back (a copy
+  of now is kept first). If the check finds damage, no copy is taken and Needs you says so. The copies hold what the
+  database holds (on a server, its secrets too) and stay in the owner-only data folder.
 - **Delete everything**: quit Mimir, delete `~/.mimir` (or your `MIMIR_HOME`), remove the Mimir items from the
   keychain, and delete Mimir's workspace folders in `~/.claude/projects/` and Codex's sessions in `~/.codex/sessions/`.
 

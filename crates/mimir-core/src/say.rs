@@ -226,6 +226,11 @@ static NL: &[(&str, &str)] = &[
     ("That routine is gone.", "Die routine bestaat niet meer."),
     ("What should be different next time? Reply here and I'll change routine #{id}.", "Wat moet er volgende keer anders? Antwoord hier en ik pas routine #{id} aan."),
     ("Tell me what to change.", "Vertel me wat ik moet veranderen."),
+    // The decisions chat.
+    ("From: {chat}", "Uit: {chat}"),
+    ("From {chat}: {text}", "Uit {chat}: {text}"),
+    ("🧠 1 memory suggestion for {chat}: accept or dismiss it in Mimir's Needs you.", "🧠 1 voorstel voor het geheugen van {chat}: neem het aan of wijs het af in Mimirs Needs you."),
+    ("🧠 {n} memory suggestions for {chat}: accept or dismiss them in Mimir's Needs you.", "🧠 {n} voorstellen voor het geheugen van {chat}: neem ze aan of wijs ze af in Mimirs Needs you."),
     // The digest.
     ("☀️ **All quiet**", "☀️ **Alles rustig**"),
     ("☀️ **Your digest**", "☀️ **Je overzicht**"),

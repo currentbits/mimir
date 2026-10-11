@@ -94,6 +94,8 @@ pub struct EntryRow {
     /// What the person wrote that the run saving it answered (bot-written memories), so a claim made firmer than
     /// they said it shows.
     pub asked: Option<String>,
+    /// Kept for one bot only (the others don't see it); 0 = all bots.
+    pub for_bot: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -105,6 +107,12 @@ pub struct Chat {
     pub memories: i64,
     /// Paired by someone other than you (their own memory and routines; none of your email, calendar, meetings…).
     pub guest: bool,
+    /// Reads (and adds to) the household's memories: your own direct chats always, a guest's or a group when you say so.
+    pub household: bool,
+    /// A group where every household member can talk to the bots (it's a guest's chat, so none of your private things).
+    pub family: bool,
+    /// A direct chat (only one person in it), not a group.
+    pub private: bool,
 }
 
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]
@@ -401,6 +409,10 @@ pub struct GoodRun {
 /// take minutes.
 pub const MISSED_AFTER: i64 = 15 * 60;
 
+/// Routine results that may come through right away on the person's own rule, a day, all bots together: the rule is
+/// theirs, but whether it holds is the AI's call on what it read, so a page can't flood them.
+pub const URGENT_PER_DAY: i64 = 3;
+
 #[derive(Debug, Clone, Serialize)]
 pub struct RunMark {
     pub status: String,
@@ -449,6 +461,10 @@ pub struct Routine {
     /// Tries since the last run that worked, after failures that may pass (the network, the setup).
     #[serde(default)]
     pub retries: i64,
+    /// The person's own rule for coming through right away when it would otherwise wait ("" = never). Only set from
+    /// the app, never by a bot, so nothing the bot read can widen it.
+    #[serde(default)]
+    pub urgent: String,
 }
 
 /// Routines waiting: until a usage limit resets, or a daily cap's day is over. `why` finishes "Missed 3 runs, …: ".
@@ -473,7 +489,7 @@ PRAGMA secure_delete=ON;
 
 /// The schema version this build writes (`PRAGMA user_version`). A schema change bumps it and adds a step to
 /// `migrate`; each step runs once per database.
-const VERSION: i64 = 2;
+const VERSION: i64 = 5;
 
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS entries(
@@ -534,6 +550,11 @@ CREATE TABLE IF NOT EXISTS routines(
   id INTEGER PRIMARY KEY, chat_id INTEGER NOT NULL, cron TEXT NOT NULL, prompt TEXT NOT NULL, next_fire INTEGER NOT NULL
 );
 ";
+
+/// The chat part of a Telegram address ("chat" or "chat:topic").
+pub(crate) fn tg_chat(external: &str) -> &str {
+    external.split(':').next().unwrap_or(external)
+}
 
 pub fn now() -> i64 {
     Local::now().timestamp()
@@ -686,6 +707,15 @@ fn migrate(c: &Connection) -> Result<()> {
     }
     if v < 2 {
         migrate_v2(c)?;
+    }
+    if v < 3 {
+        migrate_v3(c)?;
+    }
+    if v < 4 {
+        migrate_v4(c)?;
+    }
+    if v < 5 {
+        migrate_v5(c)?;
     }
     c.execute(
         "INSERT INTO settings(key, value) VALUES ('schema_written_by', ?1) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -863,6 +893,39 @@ fn migrate_v2(c: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Version 3: memories one bot keeps to itself (0: all bots, like skills); the household (memories you and chosen
+/// guests share) and family groups any household member can talk in.
+fn migrate_v3(c: &Connection) -> Result<()> {
+    // A database a branch build already gave these columns (or a re-run ladder) keeps them.
+    for (table, col) in [("entries", "for_bot"), ("chats", "household"), ("chats", "family")] {
+        if !c.prepare(&format!("SELECT 1 FROM pragma_table_info('{table}') WHERE name='{col}'"))?.exists([])? {
+            c.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {col} INTEGER NOT NULL DEFAULT 0"))?;
+        }
+    }
+    Ok(())
+}
+
+/// Version 4: the person's "come through right away if …" for a routine that would otherwise wait, and the runs
+/// it let through (counted for the daily cap).
+fn migrate_v4(c: &Connection) -> Result<()> {
+    for (table, col, ty) in [("routines", "urgent", "TEXT NOT NULL DEFAULT ''"), ("runs", "urgent", "INTEGER NOT NULL DEFAULT 0")] {
+        if !c.prepare(&format!("SELECT 1 FROM pragma_table_info('{table}') WHERE name='{col}'"))?.exists([])? {
+            c.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {col} {ty}"))?;
+        }
+    }
+    Ok(())
+}
+
+/// Version 5: a routine's ask also sent to the decisions chat: that chat, and its card there until it shows the outcome.
+fn migrate_v5(c: &Connection) -> Result<()> {
+    for (col, decl) in [("mirror_chat", "INTEGER"), ("mirror_ref", "TEXT")] {
+        if !c.prepare(&format!("SELECT 1 FROM pragma_table_info('approvals') WHERE name='{col}'"))?.exists([])? {
+            c.execute_batch(&format!("ALTER TABLE approvals ADD COLUMN {col} {decl}"))?;
+        }
+    }
+    Ok(())
+}
+
 impl Db {
     /// Opens the database, migrating it first if an older Mimir wrote it. An up-to-date database only reads its
     /// version: the tools process opens it on every turn, and mustn't compete with the app for the write lock.
@@ -919,7 +982,7 @@ impl Db {
         (*self.1).clone()
     }
 
-    fn c(&self) -> std::sync::MutexGuard<'_, Connection> {
+    pub(crate) fn c(&self) -> std::sync::MutexGuard<'_, Connection> {
         self.0.lock().unwrap_or_else(|e| e.into_inner())
     }
 
@@ -967,7 +1030,7 @@ impl Db {
             // A correction keeps the pin (or the background) and the end date; an unconfirmed one doesn't get the pin,
             // which would put it in every prompt.
             tx.execute(
-                "UPDATE entries SET (pinned, background, valid_until)=(SELECT pinned AND NOT ?3, background, valid_until FROM entries WHERE id=?2) WHERE id=?1",
+                "UPDATE entries SET (pinned, background, valid_until, for_bot)=(SELECT pinned AND NOT ?3, background, valid_until, for_bot FROM entries WHERE id=?2) WHERE id=?1",
                 params![id, old, prov.tainted],
             )?;
         }
@@ -1007,6 +1070,11 @@ impl Db {
     /// Give a memory an end date (unix seconds), or take it away (None).
     pub fn set_until(&self, scope: &str, id: i64, until: Option<i64>) -> Result<bool> {
         Ok(self.c().execute("UPDATE entries SET valid_until=?3 WHERE id=?1 AND scope=?2 AND superseded_by IS NULL AND invalid=0", params![id, scope, until])? > 0)
+    }
+
+    /// Keep a memory for one bot only, or for all bots again (0).
+    pub fn set_for_bot(&self, scope: &str, id: i64, bot: i64) -> Result<bool> {
+        Ok(self.c().execute("UPDATE entries SET for_bot=?3 WHERE id=?1 AND scope=?2 AND superseded_by IS NULL AND invalid=0", params![id, scope, bot])? > 0)
     }
 
     pub fn background(&self, scope: &str, id: i64, on: bool) -> Result<bool> {
@@ -1049,18 +1117,19 @@ impl Db {
     }
 
     /// bm25 × importance × recency decay (0.995/day, floor 0.05); drops hits under 20% of the top score.
-    pub fn search(&self, scope: &str, query: &str, limit: usize) -> Result<Vec<Entry>> {
+    /// `bot`: leave out the memories other bots keep to themselves (0: all of them).
+    pub fn search(&self, scope: &str, bot: i64, query: &str, limit: usize) -> Result<Vec<Entry>> {
         let Some(q) = fts_query(query) else { return Ok(vec![]) };
         let c = self.c();
         let mut st = c.prepare(
             "SELECT e.id, e.type, e.title, e.body, e.source, e.importance, e.created_at, bm25(entries_fts), e.tainted, e.valid_until
              FROM entries_fts JOIN entries e ON e.id = entries_fts.rowid
-             WHERE entries_fts MATCH ?1 AND e.scope = ?2 AND e.superseded_by IS NULL AND e.invalid = 0
+             WHERE entries_fts MATCH ?1 AND e.scope = ?2 AND e.superseded_by IS NULL AND e.invalid = 0 AND (?3 = 0 OR e.for_bot IN (0, ?3))
              ORDER BY bm25(entries_fts) LIMIT 50",
         )?;
         let t = now();
         let mut hits: Vec<(f64, Entry)> = st
-            .query_map(params![q, scope], |r| {
+            .query_map(params![q, scope, bot], |r| {
                 let imp: i64 = r.get(5)?;
                 let created: i64 = r.get(6)?;
                 let bm25: f64 = r.get(7)?;
@@ -1080,15 +1149,17 @@ impl Db {
 
     /// Standing context injected every turn: pinned memories (always), then preferences, then the most recent
     /// facts and tasks, within a size budget. Everything else is still found by search when a message needs it.
-    pub fn bootstrap(&self, scope: &str) -> Result<Vec<Entry>> {
+    /// `bot`: as in `search`.
+    pub fn bootstrap(&self, scope: &str, bot: i64) -> Result<Vec<Entry>> {
         let c = self.c();
         let mut st = c.prepare(
             "SELECT id, type, title, body, source, pinned, tainted, created_at, valid_until FROM entries
              WHERE scope=?1 AND superseded_by IS NULL AND invalid=0 AND background=0 AND tainted=0 AND (valid_until IS NULL OR valid_until > ?2)
+               AND (?3 = 0 OR for_bot IN (0, ?3))
              ORDER BY pinned DESC, (type='convention') DESC, created_at DESC, id DESC LIMIT 300",
         )?;
         let rows: Vec<(bool, Entry)> = st
-            .query_map(params![scope, now()], |r| Ok((r.get(5)?, Entry { id: r.get(0)?, kind: r.get(1)?, title: r.get(2)?, body: r.get(3)?, source: r.get(4)?, tainted: r.get(6)?, created_at: r.get(7)?, valid_until: r.get(8)? })))?
+            .query_map(params![scope, now(), bot], |r| Ok((r.get(5)?, Entry { id: r.get(0)?, kind: r.get(1)?, title: r.get(2)?, body: r.get(3)?, source: r.get(4)?, tainted: r.get(6)?, created_at: r.get(7)?, valid_until: r.get(8)? })))?
             .collect::<Result<_, _>>()?;
         let (mut used, mut recent, mut out) = (0, 0, vec![]);
         for (pinned, e) in rows {
@@ -1105,16 +1176,16 @@ impl Db {
     }
 
     /// Memories saved after reading outside content and not confirmed yet (for showing, never for prompts).
-    pub fn search_unconfirmed(&self, scope: &str) -> Result<Vec<Entry>> {
+    pub fn search_unconfirmed(&self, scope: &str, bot: i64) -> Result<Vec<Entry>> {
         let c = self.c();
-        let mut st = c.prepare("SELECT id, type, title, body, source, tainted, created_at, valid_until FROM entries WHERE scope=?1 AND superseded_by IS NULL AND invalid=0 AND tainted=1 ORDER BY id DESC LIMIT 30")?;
-        let v = st.query_map([scope], |r| Ok(Entry { id: r.get(0)?, kind: r.get(1)?, title: r.get(2)?, body: r.get(3)?, source: r.get(4)?, tainted: r.get(5)?, created_at: r.get(6)?, valid_until: r.get(7)? }))?.collect::<Result<_, _>>()?;
+        let mut st = c.prepare("SELECT id, type, title, body, source, tainted, created_at, valid_until FROM entries WHERE scope=?1 AND superseded_by IS NULL AND invalid=0 AND tainted=1 AND (?2 = 0 OR for_bot IN (0, ?2)) ORDER BY id DESC LIMIT 30")?;
+        let v = st.query_map(params![scope, bot], |r| Ok(Entry { id: r.get(0)?, kind: r.get(1)?, title: r.get(2)?, body: r.get(3)?, source: r.get(4)?, tainted: r.get(5)?, created_at: r.get(6)?, valid_until: r.get(7)? }))?.collect::<Result<_, _>>()?;
         Ok(v)
     }
 
     /// How full standing memory is: (characters used, the budget, memories in it). Pinned ones can push it past 100%.
     pub fn standing_usage(&self, scope: &str) -> Result<(usize, usize, usize)> {
-        let b = self.bootstrap(scope)?;
+        let b = self.bootstrap(scope, 0)?;
         Ok((b.iter().map(|e| e.line().len()).sum(), BOOTSTRAP_CHARS, b.len()))
     }
 
@@ -1123,7 +1194,7 @@ impl Db {
         let c = self.c();
         let mut st = c.prepare(
             "SELECT id, type, title, body, source, created_at, superseded_by, invalid, access_count, pinned, origin, bot_id, run_id, tainted, missteps, background, valid_until,
-               (SELECT asked FROM runs WHERE runs.id = entries.run_id)
+               (SELECT asked FROM runs WHERE runs.id = entries.run_id), for_bot
              FROM entries WHERE scope=?1 ORDER BY id DESC LIMIT 1000",
         )?;
         let v = st
@@ -1150,6 +1221,7 @@ impl Db {
                     valid_until: r.get(16)?,
                     // What they typed, without a file's text after it.
                     asked: r.get::<_, Option<String>>(17)?.map(|a| a.split("\n\n[Attached:").next().unwrap_or("").to_string()),
+                    for_bot: r.get(18)?,
                 })
             })?
             .collect::<Result<_, _>>()?;
@@ -1574,13 +1646,14 @@ impl Db {
     /// The person corrected the bot's last reply here: count it against the memories that reply recalled.
     /// `said`: the correction itself. Besides the memories recalled for the reply, preferences in the standing
     /// instructions that it's about (they shape every reply, so they never show up as "recalled") get a misstep too.
-    pub fn blame_last_reply(&self, bot: i64, chat: i64, said: &str) -> Result<usize> {
+    /// `conv`: the conversation the reply was in (`ToolCtx::conv`).
+    pub fn blame_last_reply(&self, bot: i64, chat: i64, conv: i64, said: &str) -> Result<usize> {
         let c = self.c();
         let recalled: Option<String> = c
             .query_row(
                 "SELECT r.recalled FROM messages m JOIN runs r ON r.id = m.run_id
                  WHERE m.bot_id=?1 AND m.chat_id=?2 AND m.role='assistant' ORDER BY m.id DESC LIMIT 1",
-                [bot, chat],
+                [bot, conv],
                 |r| r.get(0),
             )
             .optional()?
@@ -1652,8 +1725,8 @@ impl Db {
             )?,
             Err(e) => c.execute("UPDATE runs SET status='error', ended_at=?2, error=?3 WHERE id=?1", params![id, now(), e])?,
         };
-        // An approved plan only lasts for its run, and so does its hold on the computer.
-        c.execute("DELETE FROM settings WHERE key = ?1", [format!("plan:{id}")])?;
+        // An approved plan only lasts for its run, and so does its hold on the computer and its files to send.
+        c.execute("DELETE FROM settings WHERE key IN (?1, ?2)", [format!("plan:{id}"), format!("outbox:{id}")])?;
         c.execute("DELETE FROM settings WHERE key = 'computer_lease' AND json_extract(value, '$.who') = ?1", [format!("run:{id}")])?;
         Ok(())
     }
@@ -2093,7 +2166,7 @@ impl Db {
     /// Facts (not preferences or tasks) in standing memory that search hasn't brought up in `days` days.
     pub fn memories_unrecalled(&self, scope: &str, days: i64) -> Result<Vec<(i64, String)>> {
         // Only ones in standing memory: demoting the rest would change nothing.
-        let standing: std::collections::HashSet<i64> = self.bootstrap(scope)?.iter().map(|e| e.id).collect();
+        let standing: std::collections::HashSet<i64> = self.bootstrap(scope, 0)?.iter().map(|e| e.id).collect();
         let c = self.c();
         let mut st = c.prepare(
             "SELECT id, title FROM entries WHERE scope=?1 AND type='knowledge' AND superseded_by IS NULL AND invalid=0 AND pinned=0
@@ -2267,6 +2340,8 @@ impl Db {
             // ponytail: import proposals are told apart by their reason; a column if more origins appear
             let (src, mut prov) = if s.reason.starts_with("Imported") {
                 ("imported, approved by you", Prov::by("import"))
+            } else if s.reason.starts_with("Found in your") {
+                ("found in your email or calendar, approved by you", Prov::by("know_me"))
             } else if s.reason.starts_with(BOT_PROPOSED) {
                 ("proposed by a bot, approved by you", Prov::by("bot"))
             } else {
@@ -2596,6 +2671,41 @@ impl Db {
         Ok(())
     }
 
+    /// This bot's pending routine asks from other chats (not incognito) not yet sent to the decisions chat `to`.
+    pub fn approvals_to_mirror(&self, bot: i64, to: i64) -> Result<Vec<Approval>> {
+        self.approvals_where(&format!("status = 'pending' AND parked_args IS NOT NULL AND mirror_chat IS NULL AND chat_id NOT IN (-1, {to}) AND bot_id = ?1"), bot)
+    }
+
+    /// The ask was sent to the decisions chat `chat` (`card_ref`: its message, if the channel said).
+    pub fn approval_mark_mirrored(&self, id: i64, chat: i64, card_ref: Option<&str>) -> Result<()> {
+        self.c().execute("UPDATE approvals SET mirror_chat=?2, mirror_ref=?3 WHERE id=?1", params![id, chat, card_ref])?;
+        Ok(())
+    }
+
+    /// The decisions chat this ask was also sent to, if any.
+    pub fn approval_mirror(&self, id: i64) -> Result<Option<i64>> {
+        Ok(self.c().query_row("SELECT mirror_chat FROM approvals WHERE id=?1", [id], |r| r.get(0)).optional()?.flatten())
+    }
+
+    /// This bot's decisions-chat cards whose ask was answered elsewhere or ran out: (approval, its chat, card message).
+    pub fn mirrors_to_close(&self, bot: i64) -> Result<Vec<(Approval, i64, String)>> {
+        Self::expire_stale(&self.c())?;
+        let list = self.approvals_where("status != 'pending' AND mirror_ref IS NOT NULL AND bot_id = ?1", bot)?;
+        let c = self.c();
+        let mut out = vec![];
+        for a in list {
+            let (chat, card) = c.query_row("SELECT mirror_chat, mirror_ref FROM approvals WHERE id=?1", [a.id], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            out.push((a, chat, card));
+        }
+        Ok(out)
+    }
+
+    /// The decisions-chat card now shows the outcome; don't edit it again.
+    pub fn mirror_mark_closed(&self, id: i64) -> Result<()> {
+        self.c().execute("UPDATE approvals SET mirror_ref=NULL WHERE id=?1", [id])?;
+        Ok(())
+    }
+
     // ---------- chats & messages ----------
 
     pub fn is_paired(&self, chat: i64) -> Result<bool> {
@@ -2616,19 +2726,128 @@ impl Db {
         let mut st = c.prepare(
             "SELECT c.chat_id, c.title,
                (SELECT count(*) FROM entries e WHERE e.scope = 'chat:' || c.chat_id AND e.superseded_by IS NULL AND e.invalid = 0),
-               CASE WHEN c.chat_id = 0 THEN 'local' ELSE c.channel END, c.guest
+               CASE WHEN c.chat_id = 0 THEN 'local' ELSE c.channel END, c.guest, c.family
              FROM chats c ORDER BY c.chat_id",
         )?;
-        let v = st
-            .query_map([], |r| Ok(Chat { chat_id: r.get(0)?, title: r.get(1)?, memories: r.get(2)?, channel: r.get(3)?, guest: r.get(4)? }))?
+        let rows: Vec<Chat> = st
+            .query_map([], |r| Ok(Chat { chat_id: r.get(0)?, title: r.get(1)?, memories: r.get(2)?, channel: r.get(3)?, guest: r.get(4)?, household: false, family: r.get(5)?, private: false }))?
             .collect::<Result<_, _>>()?;
-        Ok(v)
+        drop(st);
+        drop(c);
+        Ok(rows.into_iter().map(|c| Chat { household: self.in_household(c.chat_id), private: self.chat_private(c.chat_id), ..c }).collect())
     }
 
-    /// The chat id for an inbound message, if that chat was paired. Telegram ids are used as-is.
+    // ---------- the household ----------
+
+    /// Whether a chat reads the household's memories (and can add to them): the app's own chat and your direct chats
+    /// always; a guest's chat or a group once you add it. Never the household itself or an incognito chat.
+    pub fn in_household(&self, chat: i64) -> bool {
+        if chat == crate::INCOGNITO_CHAT || chat == crate::HOUSEHOLD_CHAT {
+            return false;
+        }
+        let added = self.c().query_row("SELECT household FROM chats WHERE chat_id=?1", [chat], |r| r.get::<_, bool>(0)).unwrap_or(false);
+        added || (!self.chat_guest(chat) && self.chat_private(chat))
+    }
+
+    /// The household's memories live in a chat of their own (`HOUSEHOLD_CHAT`), so the Memory tab, suggestions and
+    /// Needs you work for it as for any chat. Made the first time it's needed.
+    pub fn household_ensure(&self) -> Result<()> {
+        self.c().execute(
+            "INSERT OR IGNORE INTO chats(chat_id, title, channel) VALUES (?1, 'Household', 'household')",
+            [crate::HOUSEHOLD_CHAT],
+        )?;
+        Ok(())
+    }
+
+    /// Add a guest's chat or a group to the household, or take it out. Your own direct chats are always in it.
+    pub fn chat_set_household(&self, chat: i64, on: bool) -> Result<bool> {
+        if chat == crate::HOUSEHOLD_CHAT || chat == crate::INCOGNITO_CHAT {
+            return Ok(false);
+        }
+        let n = self.c().execute("UPDATE chats SET household=?2, family=family AND ?2 WHERE chat_id=?1", params![chat, on])?;
+        if n > 0 && on {
+            self.household_ensure()?;
+        }
+        Ok(n > 0)
+    }
+
+    /// A family group: any household member can talk in it. It's in the household, and a guest's chat (several people
+    /// are in it, so none of your email, calendar or logins), whoever paired it.
+    pub fn chat_set_family(&self, chat: i64, on: bool) -> Result<bool> {
+        if self.chat_private(chat) || chat == crate::HOUSEHOLD_CHAT {
+            bail!("only a group chat can be a family group");
+        }
+        let sql = if on { "UPDATE chats SET family=1, household=1, guest=1 WHERE chat_id=?1" } else { "UPDATE chats SET family=0 WHERE chat_id=?1" };
+        let n = self.c().execute(sql, [chat])?;
+        if n > 0 && on {
+            self.household_ensure()?;
+        }
+        Ok(n > 0)
+    }
+
+    /// Someone in the household writing in a family group (not the person who paired it, who's let in anyway).
+    pub fn family_member(&self, chat: i64, person: &str) -> Result<bool> {
+        if person.is_empty() || !self.chat_family(chat) {
+            return Ok(false);
+        }
+        let channel: String = self.c().query_row("SELECT coalesce(channel, 'telegram') FROM chats WHERE chat_id=?1", [chat], |r| r.get(0))?;
+        Ok(self.household_people(&channel)?.iter().any(|p| p.0 == person))
+    }
+
+    /// Who wrote in a family group, for the bot: the title of their own chat ("Sam"); None outside family groups.
+    pub fn family_speaker(&self, chat: i64, person: &str) -> Result<Option<String>> {
+        if !self.chat_family(chat) {
+            return Ok(None);
+        }
+        let channel: String = self.c().query_row("SELECT coalesce(channel, 'telegram') FROM chats WHERE chat_id=?1", [chat], |r| r.get(0))?;
+        let name = self.household_people(&channel)?.into_iter().find(|p| p.0 == person).map(|p| p.2).filter(|t| !t.trim().is_empty());
+        // ‹›: a name can't pass for a block of the prompt.
+        Ok(Some(name.unwrap_or_else(|| "Someone".into()).replace('<', "‹").replace('>', "›").replace(':', "")))
+    }
+
+    pub fn chat_family(&self, chat: i64) -> bool {
+        self.c().query_row("SELECT family FROM chats WHERE chat_id=?1", [chat], |r| r.get::<_, bool>(0)).unwrap_or(false)
+    }
+
+    /// The household's people on one app: (their id there, their direct chat, its title). You, and each guest whose
+    /// direct chat you added to the household.
+    pub fn household_people(&self, channel: &str) -> Result<Vec<(String, i64, String)>> {
+        let rows: Vec<(String, i64, String)> = {
+            let c = self.c();
+            let mut st = c.prepare("SELECT owner, chat_id, title FROM chats WHERE coalesce(channel, 'telegram')=?1 AND owner != '' AND family=0 ORDER BY chat_id")?;
+            st.query_map([channel], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<Result<_, _>>()?
+        };
+        Ok(rows.into_iter().filter(|(_, chat, _)| self.chat_private(*chat) && self.in_household(*chat)).collect())
+    }
+
+    /// The direct chat of the household member called `name` (their chat's title, ignoring case; a first name will do),
+    /// other than `not` (the chat asking). Err names who there is when nobody, or more than one, matches.
+    pub fn household_member(&self, name: &str, not: i64) -> Result<(i64, String)> {
+        let want = name.trim().to_lowercase();
+        let mut all: Vec<(i64, String)> = vec![];
+        for channel in ["telegram", "slack", "discord"] {
+            all.extend(self.household_people(channel)?.into_iter().map(|(_, chat, title)| (chat, title)).filter(|(chat, _)| *chat != not));
+        }
+        let first = |t: &str| t.split_whitespace().next().unwrap_or("").to_lowercase();
+        let hits: Vec<_> = all.iter().filter(|(_, t)| t.to_lowercase() == want || first(t) == want).collect();
+        match hits.as_slice() {
+            [one] => Ok((*one).clone()),
+            _ => {
+                let names = all.iter().map(|(_, t)| t.as_str()).collect::<Vec<_>>().join(", ");
+                bail!(
+                    "{} household member called {name}. In the household: {}",
+                    if hits.is_empty() { "no" } else { "more than one" },
+                    if names.is_empty() { "nobody yet (add a guest's chat to the household in the app)" } else { &names }
+                )
+            }
+        }
+    }
+
+    /// The chat id for an inbound message, if that chat was paired. Telegram ids are used as-is ("chat:topic" is
+    /// that chat: a topic is its own conversation, see `topic_conv`, in the same chat).
     pub fn chat_lookup(&self, channel: &str, external: &str) -> Result<Option<i64>> {
         if channel == "telegram" {
-            let id: i64 = external.parse()?;
+            let id: i64 = tg_chat(external).parse()?;
             return Ok(self.is_paired(id)?.then_some(id));
         }
         Ok(self
@@ -2648,6 +2867,10 @@ impl Db {
     /// Pair a chat from any channel; returns its chat id. Non-Telegram chats get ids from a range
     /// (9e15+) above Telegram's, so no external id can collide with another.
     /// The person (their id in the messaging app) who paired this chat; "" for chats paired before it was kept.
+    pub fn chat_title(&self, chat: i64) -> Result<String> {
+        Ok(self.c().query_row("SELECT title FROM chats WHERE chat_id=?1", [chat], |r| r.get(0)).optional()?.unwrap_or_default())
+    }
+
     pub fn chat_owner(&self, chat: i64) -> Result<String> {
         Ok(self.c().query_row("SELECT owner FROM chats WHERE chat_id=?1", [chat], |r| r.get(0)).optional()?.unwrap_or_default())
     }
@@ -2679,6 +2902,10 @@ impl Db {
     }
 
     pub fn chat_set_guest(&self, chat: i64, guest: bool) -> Result<bool> {
+        // Everyone in the household talks in a family group: it can't have your email, calendar or logins.
+        if !guest && self.chat_family(chat) {
+            bail!("a family group is always a guest's chat; turn off Family group first");
+        }
         Ok(chat != crate::host::LOCAL_CHAT && self.c().execute("UPDATE chats SET guest=?2 WHERE chat_id=?1", params![chat, guest])? > 0)
     }
 
@@ -2698,7 +2925,7 @@ impl Db {
 
     pub fn pair_external(&self, channel: &str, external: &str, title: &str) -> Result<i64> {
         if channel == "telegram" {
-            let id: i64 = external.parse()?;
+            let id: i64 = tg_chat(external).parse()?;
             self.pair(id, title)?;
             return Ok(id);
         }
@@ -2711,6 +2938,19 @@ impl Db {
         let id: i64 = c.query_row("SELECT max(?1, coalesce(max(chat_id) + 1, ?1)) FROM chats WHERE chat_id >= ?1", [BASE], |r| r.get(0))?;
         c.execute("INSERT INTO chats(chat_id, title, channel, external) VALUES (?1,?2,?3,?4)", params![id, title, channel, external])?;
         Ok(id)
+    }
+
+    /// A Telegram topic's own conversation (session, taint, history; memory and routines stay the chat's): an id
+    /// from a range no chat uses (Telegram's are below 2^52, other apps' from 9e15), made when the topic is first used.
+    pub fn topic_conv(&self, chat: i64, topic: i64) -> Result<i64> {
+        const BASE: i64 = 8_000_000_000_000_000;
+        let c = self.c();
+        let key = format!("topic:{chat}:{topic}");
+        c.execute(
+            "INSERT OR IGNORE INTO settings(key, value) SELECT ?1, max(?2, coalesce(max(CAST(value AS INTEGER)) + 1, ?2)) FROM settings WHERE key LIKE 'topic:%'",
+            params![key, BASE],
+        )?;
+        Ok(c.query_row("SELECT CAST(value AS INTEGER) FROM settings WHERE key=?1", [key], |r| r.get(0))?)
     }
 
     /// Where to send messages for a chat: (channel, external id). None for the local chat.
@@ -2940,7 +3180,7 @@ impl Db {
             "INSERT INTO routines(bot_id, chat_id, cron, prompt, next_fire, quiet) VALUES (?1,?2,?3,?4,?5,?6)",
             params![bot, chat, cron.trim(), prompt.trim(), next, quiet],
         )?;
-        Ok(Routine { id: c.last_insert_rowid(), bot_id: bot, chat_id: chat, cron: cron.trim().into(), prompt: prompt.trim().into(), next_fire: next, quiet, paused: false, delivery: "now".into(), tainted: false, once: false, watch: String::new(), retries: 0 })
+        Ok(Routine { id: c.last_insert_rowid(), bot_id: bot, chat_id: chat, cron: cron.trim().into(), prompt: prompt.trim().into(), next_fire: next, quiet, paused: false, delivery: "now".into(), tainted: false, once: false, watch: String::new(), retries: 0, urgent: String::new() })
     }
 
     /// A one-off at `at` (unix seconds): a reminder, or a task for later. It's deleted once it has run.
@@ -2956,7 +3196,7 @@ impl Db {
             "INSERT INTO routines(bot_id, chat_id, cron, prompt, next_fire, quiet, once) VALUES (?1,?2,'',?3,?4,?5,1)",
             params![bot, chat, prompt.trim(), at, quiet],
         )?;
-        Ok(Routine { id: c.last_insert_rowid(), bot_id: bot, chat_id: chat, cron: String::new(), prompt: prompt.trim().into(), next_fire: at, quiet, paused: false, delivery: "now".into(), tainted: false, once: true, watch: String::new(), retries: 0 })
+        Ok(Routine { id: c.last_insert_rowid(), bot_id: bot, chat_id: chat, cron: String::new(), prompt: prompt.trim().into(), next_fire: at, quiet, paused: false, delivery: "now".into(), tainted: false, once: true, watch: String::new(), retries: 0, urgent: String::new() })
     }
 
     /// A routine a bot made after reading outside content: its prompt may carry someone else's words.
@@ -2967,7 +3207,7 @@ impl Db {
 
     fn routines_where(&self, sql: &str, p: impl rusqlite::Params) -> Result<Vec<Routine>> {
         let c = self.c();
-        let mut st = c.prepare(&format!("SELECT id, chat_id, cron, prompt, next_fire, bot_id, quiet, paused, delivery, tainted, once, watch, retries FROM routines WHERE {sql} ORDER BY id"))?;
+        let mut st = c.prepare(&format!("SELECT id, chat_id, cron, prompt, next_fire, bot_id, quiet, paused, delivery, tainted, once, watch, retries, urgent FROM routines WHERE {sql} ORDER BY id"))?;
         let v = st
             .query_map(p, |r| {
                 Ok(Routine {
@@ -2984,6 +3224,7 @@ impl Db {
                     once: r.get(10)?,
                     watch: r.get(11)?,
                     retries: r.get(12)?,
+                    urgent: r.get(13)?,
                 })
             })?
             .collect::<Result<_, _>>()?;
@@ -3040,6 +3281,15 @@ impl Db {
             bail!("delivery is now, digest or log");
         }
         Ok(self.c().execute("UPDATE routines SET delivery=?3 WHERE id=?1 AND chat_id=?2", params![id, chat, delivery])? > 0)
+    }
+
+    /// The person's "come through right away if …" ("" = never): one line, no angle brackets (it goes into the prompt).
+    pub fn routine_set_urgent(&self, chat: i64, id: i64, rule: &str) -> Result<bool> {
+        let rule = rule.split_whitespace().collect::<Vec<_>>().join(" ").replace(['<', '>'], "");
+        if rule.chars().count() > 200 {
+            bail!("keep it under 200 characters");
+        }
+        Ok(self.c().execute("UPDATE routines SET urgent=?3 WHERE id=?1 AND chat_id=?2", params![id, chat, rule])? > 0)
     }
 
     /// What a quiet check watches ("" for nothing, a page's address, or "mail"). A new target starts from a fresh look.
@@ -3142,6 +3392,19 @@ impl Db {
     pub fn run_delivered(&self, run: i64, how: &str) -> Result<()> {
         self.c().execute("UPDATE runs SET delivered=?2 WHERE id=?1", params![run, how])?;
         Ok(())
+    }
+
+    /// Let this run come through right away, unless URGENT_PER_DAY runs (all bots together) already did since
+    /// `day_start`. One statement, so two bots finishing at once can't both take the last one.
+    pub fn run_take_urgent(&self, run: i64, day_start: i64) -> Result<bool> {
+        Ok(self.c().execute(
+            "UPDATE runs SET urgent=1 WHERE id=?1 AND (SELECT count(*) FROM runs WHERE urgent=1 AND started_at >= ?2) < ?3",
+            params![run, day_start, URGENT_PER_DAY],
+        )? > 0)
+    }
+
+    pub fn run_urgent(&self, run: i64) -> Result<bool> {
+        Ok(self.c().query_row("SELECT urgent FROM runs WHERE id=?1", [run], |r| r.get(0))?)
     }
 
     /// What happens next, after a failed run's error ("Trying again at 10:35.").
@@ -3499,19 +3762,19 @@ mod tests {
         assert_eq!(d.store("chat:1", "convention", "Coffee", "User drinks oat flat whites", "x", None).unwrap(), a, "dedup");
         assert!(d.store("chat:1", "bogus", "t", "b", "", None).is_err());
 
-        let hits = d.search("chat:1", "who is my dentist?", 5).unwrap();
+        let hits = d.search("chat:1", 0, "who is my dentist?", 5).unwrap();
         assert_eq!(hits.len(), 1, "scoped + relevance gated");
         assert!(hits[0].body.contains("Dr. Lee"));
 
         let b = d.store("chat:1", "convention", "Coffee", "User switched to black coffee", "message", Some(a)).unwrap();
-        let hits = d.search("chat:1", "coffee", 5).unwrap();
+        let hits = d.search("chat:1", 0, "coffee", 5).unwrap();
         assert_eq!(hits.iter().map(|e| e.id).collect::<Vec<_>>(), vec![b], "superseded entry hidden");
         assert!(d.store("chat:1", "knowledge", "x", "y", "", Some(a)).is_err(), "can't supersede twice");
 
         assert!(d.forget("chat:1", b).unwrap());
-        assert!(d.search("chat:1", "coffee", 5).unwrap().is_empty());
-        assert!(d.search("chat:1", "\"); DROP TABLE entries; --", 5).is_ok(), "FTS input is sanitized");
-        assert_eq!(d.bootstrap("chat:1").unwrap().len(), 1);
+        assert!(d.search("chat:1", 0, "coffee", 5).unwrap().is_empty());
+        assert!(d.search("chat:1", 0, "\"); DROP TABLE entries; --", 5).is_ok(), "FTS input is sanitized");
+        assert_eq!(d.bootstrap("chat:1", 0).unwrap().len(), 1);
         let hist: Vec<_> = d.entries("chat:1").unwrap().into_iter().map(|e| (e.id, e.status)).collect();
         assert_eq!(hist, vec![(b, "forgotten"), (2, "active"), (a, "superseded")]);
 
@@ -3533,9 +3796,9 @@ mod tests {
         for i in 0..40 {
             d.store(s, "knowledge", &format!("Fact {i}"), "x", "", None).unwrap();
         }
-        assert!(!d.bootstrap(s).unwrap().iter().any(|e| e.id == old));
+        assert!(!d.bootstrap(s, 0).unwrap().iter().any(|e| e.id == old));
         assert!(d.pin(s, old, true).unwrap());
-        assert_eq!(d.bootstrap(s).unwrap()[0].id, old, "pinned comes first");
+        assert_eq!(d.bootstrap(s, 0).unwrap()[0].id, old, "pinned comes first");
         let fixed = d.store(s, "knowledge", "Blood type", "O positive", "", Some(old)).unwrap();
         assert!(d.entries(s).unwrap().iter().any(|e| e.id == fixed && e.pinned), "a correction keeps the pin");
         assert!(!d.pin("chat:2", fixed, false).unwrap(), "other scope");
@@ -3548,7 +3811,7 @@ mod tests {
         assert_eq!(d.erase(s, fixed).unwrap(), 2);
         let ids: Vec<i64> = d.entries(s).unwrap().iter().map(|e| e.id).collect();
         assert!(ids.contains(&third) && !ids.contains(&fixed) && !ids.contains(&old));
-        assert!(d.search(s, "negative", 5).unwrap().is_empty());
+        assert!(d.search(s, 0, "negative", 5).unwrap().is_empty());
         assert_eq!(d.erase("chat:2", third).unwrap(), 0, "other scope");
     }
 
@@ -3560,13 +3823,13 @@ mod tests {
         let sug = |action: &str| Suggestion { id: 0, action: action.into(), entry_id: Some(id), kind: "knowledge".into(), title: String::new(), body: String::new(), reason: "rarely matters".into(), check: None, tainted: false };
         let q = d.suggestion_add(s, &sug("demote")).unwrap().unwrap();
         assert_eq!(d.suggestion_decide(s, q, true).unwrap(), format!("#{id} moved to background"));
-        assert!(d.bootstrap(s).unwrap().is_empty(), "out of standing memory");
-        assert_eq!(d.search(s, "Observatory", 5).unwrap()[0].id, id, "still found by search");
+        assert!(d.bootstrap(s, 0).unwrap().is_empty(), "out of standing memory");
+        assert_eq!(d.search(s, 0, "Observatory", 5).unwrap()[0].id, id, "still found by search");
         assert!(d.suggestion_add(s, &sug("demote")).is_err(), "already in the background");
         let fixed = d.store(s, "knowledge", "Old flat", "Lived in Woodstock in 2019", "", Some(id)).unwrap();
         assert!(d.entries(s).unwrap().iter().any(|e| e.id == fixed && e.background), "a correction stays in the background");
         assert!(d.pin(s, fixed, true).unwrap());
-        assert_eq!(d.bootstrap(s).unwrap()[0].id, fixed, "pinning brings it back");
+        assert_eq!(d.bootstrap(s, 0).unwrap()[0].id, fixed, "pinning brings it back");
         assert!(d.suggestion_add(s, &Suggestion { entry_id: Some(fixed), ..sug("demote") }).is_err(), "pins aren't demoted");
         // Queued before the pin, accepted after: dismissed, and the pin stays.
         assert!(d.pin(s, fixed, false).unwrap());
@@ -3747,7 +4010,7 @@ mod tests {
         let e = d.store(s, "knowledge", "Old wifi hint", "the cat is called Bob", "user said", None).unwrap();
         d.c().execute("UPDATE entries SET created_at = created_at - 100 * 86400 WHERE id=?1", [e]).unwrap();
         assert_eq!(d.memories_unrecalled(s, 90).unwrap().iter().map(|m| m.0).collect::<Vec<_>>(), vec![e]);
-        d.search(s, "wifi hint", 5).unwrap();
+        d.search(s, 0, "wifi hint", 5).unwrap();
         assert!(d.memories_unrecalled(s, 90).unwrap().is_empty(), "recalled just now");
     }
 
@@ -3913,11 +4176,11 @@ mod tests {
         let d = db();
         let used = d.store("chat:7", "knowledge", "Office", "Office is in Paarl", "", None).unwrap();
         let other = d.store("chat:8", "knowledge", "Office", "Office is in Paarl", "", None).unwrap();
-        assert_eq!(d.blame_last_reply(1, 7, "no").unwrap(), 0, "no reply yet");
+        assert_eq!(d.blame_last_reply(1, 7, 7, "no").unwrap(), 0, "no reply yet");
         let run = d.run_start(1, 7, "message", None, "test").unwrap();
         d.run_recalled(run, &[used, other]).unwrap();
         d.log(1, 7, "assistant", "See you at the Paarl office", Some(run)).unwrap();
-        assert_eq!(d.blame_last_reply(1, 7, "no, wrong").unwrap(), 1, "only this chat's memory");
+        assert_eq!(d.blame_last_reply(1, 7, 7, "no, wrong").unwrap(), 1, "only this chat's memory");
         let count = |scope: &str, id| d.entries(scope).unwrap().into_iter().find(|e| e.id == id).unwrap().missteps;
         assert_eq!((count("chat:7", used), count("chat:8", other)), (1, 0));
         // What the reply used, under it and for /why: this chat's memory only, and what happened to it since.
@@ -3933,11 +4196,11 @@ mod tests {
         // A standing preference the correction is about gets one too (it's in every reply, never "recalled").
         let bullets = d.store("chat:7", "convention", "News format", "Give tech news as three bullet points", "", None).unwrap();
         let tone = d.store("chat:7", "convention", "Tone", "Keep it friendly", "", None).unwrap();
-        assert_eq!(d.blame_last_reply(1, 7, "Please, no bullet points for this").unwrap(), 2, "the recalled memory and the bullets rule");
+        assert_eq!(d.blame_last_reply(1, 7, 7, "Please, no bullet points for this").unwrap(), 2, "the recalled memory and the bullets rule");
         assert_eq!((count("chat:7", bullets), count("chat:7", tone)), (1, 0));
         // Lines in a prompt carry the date they were saved.
         let today = chrono::Local::now().format("%Y-%m-%d").to_string();
-        assert!(d.bootstrap("chat:7").unwrap().iter().all(|e| e.line().contains(&format!(", saved {today}]"))));
+        assert!(d.bootstrap("chat:7", 0).unwrap().iter().all(|e| e.line().contains(&format!(", saved {today}]"))));
     }
 
     #[test]
@@ -3951,7 +4214,7 @@ mod tests {
             d.store(s, "convention", &format!("Rule {i}"), &long, "", None).unwrap();
         }
         let short = d.store(s, "convention", "Tone", "Be brief", "", None).unwrap();
-        let b = d.bootstrap(s).unwrap();
+        let b = d.bootstrap(s, 0).unwrap();
         let size: usize = b.iter().map(|e| e.line().len()).sum();
         assert_eq!(b[0].id, pin, "pinned first, always");
         assert!(size <= BOOTSTRAP_CHARS, "{size}");
@@ -4071,6 +4334,24 @@ mod tests {
         d.hold_set(&format!("hold:routine:{}", r.id), &Hold { until: now() + 60, why: "cap".into(), waive: None }).unwrap();
         d.routine_delete(8, r.id).unwrap();
         assert!(d.hold(&format!("hold:routine:{}", r.id)).unwrap().is_none());
+    }
+
+    #[test]
+    fn urgent_rule_and_daily_cap() {
+        let d = db();
+        let r = d.routine_create(1, 8, "0 * * * *", "check my flight", true).unwrap();
+        assert!(d.routine_set_urgent(8, r.id, "  the flight\n is <b>delayed</b> ").unwrap());
+        assert_eq!(d.routines(8).unwrap()[0].urgent, "the flight is bdelayed/b", "one line, no tags");
+        assert!(d.routine_set_urgent(8, r.id, &"x".repeat(201)).is_err());
+        assert!(!d.routine_set_urgent(9, r.id, "x").unwrap(), "another chat's routine");
+        let runs: Vec<i64> = (0..=URGENT_PER_DAY).map(|_| d.run_start(1, 8, "routine", Some(r.id), "claude -p").unwrap()).collect();
+        let day = now() - 60;
+        for &run in &runs[..URGENT_PER_DAY as usize] {
+            assert!(d.run_take_urgent(run, day).unwrap() && d.run_urgent(run).unwrap());
+        }
+        let last = *runs.last().unwrap();
+        assert!(!d.run_take_urgent(last, day).unwrap() && !d.run_urgent(last).unwrap(), "over the day's cap");
+        assert!(d.run_take_urgent(last, now() + 60).unwrap(), "a new day");
     }
 
     #[test]

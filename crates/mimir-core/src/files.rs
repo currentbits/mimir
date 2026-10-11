@@ -162,9 +162,83 @@ pub fn delete(db: &crate::db::Db, chat: i64, rel: &str) -> Result<()> {
     db.file_forget(chat, &key(rel))
 }
 
+/// A file a bot sends to its chat: saved under <home>/media (pruned with the photos after 60 days) as
+/// `sent-<chat>-<random>-<name>`, and named at the end of the reply by a `[[file:…]]` line. The chat apps turn the
+/// line into an upload, the app shows it in place. The random part means a name can't be guessed from another chat.
+pub const SENT_MARK: &str = "[[file:";
+
+/// Save a file to send with this run's reply.
+pub fn send(db: &crate::db::Db, chat: i64, run: i64, name: &str, bytes: &[u8]) -> Result<String> {
+    let name: String = name.chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') { c } else { '_' }).take(80).collect();
+    let saved = format!("sent-{chat}-{}-{}", crate::random_hex(8)?, name.trim_start_matches('.'));
+    let dir = db.dir().join("media");
+    std::fs::create_dir_all(&dir)?;
+    std::fs::write(dir.join(&saved), bytes)?;
+    let key = format!("outbox:{run}");
+    let mut all: Vec<String> = db.setting(&key)?.and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default();
+    if all.len() >= 5 {
+        bail!("at most 5 files with one reply");
+    }
+    all.push(saved);
+    db.set_setting(&key, &serde_json::to_string(&all)?)?;
+    Ok(name)
+}
+
+/// The `[[file:…]]` lines for the files this run sent.
+pub fn sent_lines(db: &crate::db::Db, run: i64) -> String {
+    let all: Vec<String> = db.setting(&format!("outbox:{run}")).ok().flatten().and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default();
+    all.iter().map(|n| format!("\n{SENT_MARK}{n}]]")).collect()
+}
+
+/// A reply's text without its `[[file:…]]` lines, and the files they name.
+pub fn split_sent(text: &str) -> (String, Vec<String>) {
+    let mut files = vec![];
+    let kept: Vec<&str> = text
+        .lines()
+        .filter(|l| match l.trim().strip_prefix(SENT_MARK).and_then(|r| r.strip_suffix("]]")) {
+            Some(n) => {
+                files.push(n.to_string());
+                false
+            }
+            None => true,
+        })
+        .collect();
+    (kept.join("\n").trim_end().to_string(), files)
+}
+
+/// A sent file on disk, if `name` is one this chat sent (and nothing else: no paths, no other chat's files), with the
+/// name it had before it was saved.
+pub fn sent_path(home: &Path, chat: i64, name: &str) -> Option<(PathBuf, String)> {
+    let rest = name.strip_prefix(&format!("sent-{chat}-"))?;
+    let (_, shown) = rest.split_once('-')?;
+    if name.contains(['/', '\\']) || name.contains("..") || shown.is_empty() {
+        return None;
+    }
+    let p = home.join("media").join(name);
+    p.is_file().then(|| (p, shown.to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sent_files_go_with_the_reply_of_their_chat_only() {
+        let home = std::env::temp_dir().join(format!("mimir-sent-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).unwrap();
+        let db = crate::db::Db::open(&home.join("mimir.db")).unwrap();
+        assert_eq!(send(&db, 3, 7, "my report (v2).md", b"hi").unwrap(), "my_report__v2_.md");
+        let lines = sent_lines(&db, 7);
+        let (text, files) = split_sent(&format!("Here it is.{lines}"));
+        assert_eq!(text, "Here it is.");
+        assert_eq!(files.len(), 1);
+        assert_eq!(sent_path(&home, 3, &files[0]).unwrap().1, "my_report__v2_.md");
+        assert!(sent_path(&home, 4, &files[0]).is_none(), "another chat's file");
+        assert!(sent_path(&home, 3, "sent-3-x-../../mimir.db").is_none());
+        assert_eq!(sent_lines(&db, 8), "", "another run");
+        let _ = std::fs::remove_dir_all(&home);
+    }
 
     #[test]
     fn paths_stay_inside_and_files_keep_their_mark() {
