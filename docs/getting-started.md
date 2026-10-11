@@ -62,7 +62,15 @@ The first screen asks which AI to use. Pick the one you already pay for:
 Pick a model if you like (the default is fine), then **Test connection**: it sends one short message so you know it
 works. **Continue** unlocks once it does.
 
-## 3. Your first bot
+## 3. What you want off your plate
+
+Next, tap up to three things you want help with (a morning briefing, your to-dos, email, meetings, looking things up,
+watching pages and prices, a weekly look back), or skip it. At the end your first bot suggests a starter team for
+them on one card: a new bot from a template for each job that has one (with its routines), and skills from the
+library. Untick what you don't want; nothing on it is set up until you press **Set them up and start**, and you can
+change or remove any of it later. A suggestion that needs something not connected yet (your email, say) says so.
+
+## 4. Your first bot
 
 Next, name your first bot and, if you like, say what it should focus on: its **role** ("You're my research
 assistant; keep answers short"). Tap its face to change how it looks. Then the app opens its chat: tell it a few
@@ -72,14 +80,14 @@ Weekly reviewer), which fills in the role and offers the routines that job needs
 Click the bot in the sidebar to talk to it in the app's built-in chat, or press the quick-ask shortcut (⌥Space on a
 Mac, Ctrl+Alt+Space elsewhere) from any app. Right-click a bot for its settings (its page).
 
-## 4. Put it in your messaging app (optional)
+## 5. Put it in your messaging app (optional)
 
 On the bot's page (right-click the bot → **Settings**), add a Telegram bot token (from @BotFather), Slack tokens, or a Discord bot token. Then pair your
 chat: send the bot `pair <CODE>` (the code is on the bot's page), or tap the `t.me/<bot>?start=CODE` link on Telegram.
 No public URL or port forwarding is needed: Mimir connects out to each service. See
 [Bots and chats](bots-and-chats.md).
 
-## 5. Connect your email, calendar and search (optional)
+## 6. Connect your email, calendar and search (optional)
 
 Each takes a few minutes, and bots can do a lot more with them:
 
@@ -90,9 +98,17 @@ Each takes a few minutes, and bots can do a lot more with them:
   links to add events.
 - **Web search** (Settings → Web search): a free Brave Search key, for bots on accounts other than Claude.
 
+Once email or the calendar link is connected, **Settings → Get to know me** offers a one-time, read-only look at
+both: who wrote to you this month and what's on your calendar (senders, subjects and events, never what an email
+says). What it finds waits in **Memory** as suggestions; nothing is kept until you accept it, and what you accept stays
+marked as found rather than told (see [Memory](memory.md#suggestions-from-your-email-and-calendar)).
+
+Until something is connected, bots know it isn't: ask for your email and a bot says where to connect it
+(*Settings → Email*), and the chat shows a button to that setting and a **Try again** for afterwards.
+
 Step by step, provider by provider: [Connect your email, calendar and web search](connect.md).
 
-## 6. Add a few skills
+## 7. Add a few skills
 
 On the **Skills** tab (⌘3), **Mimir's skill library** has ready-made procedures: a morning briefing, inbox triage,
 meeting prep, a weekly review, price and topic watches and more. **Add** the ones you want, and **schedule it** for

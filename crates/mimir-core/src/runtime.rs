@@ -116,6 +116,25 @@ impl Chan {
         }
     }
 
+    /// The files a reply named (`[[file:…]]` lines), uploaded after its text; one that fails is said in the chat.
+    async fn attach(&self, ext: &str, db: &Db, chat: i64, files: &[String]) {
+        for f in files {
+            let Some((path, name)) = crate::files::sent_path(&db.dir(), chat, f) else { continue };
+            let r = match std::fs::read(&path) {
+                Ok(bytes) => match self {
+                    Chan::Telegram(c) => c.upload(ext, &name, bytes).await,
+                    Chan::Slack(c) => c.upload(ext, &name, bytes).await,
+                    Chan::Discord(c) => c.upload(ext, &name, bytes).await,
+                },
+                Err(e) => Err(e.into()),
+            };
+            if let Err(e) = r {
+                eprintln!("{} upload to {ext} failed: {e:#}", self.kind());
+                self.send(ext, &format!("I couldn't attach {name} ({}).", crate::tools::truncate(&format!("{e:#}"), 200))).await;
+            }
+        }
+    }
+
     /// Stream a reply into one message: post the draft once text arrives, then edit it as it grows.
     fn follow(&self, bot: i64, chat_id: i64, ext: &str) -> Follower {
         let (chan, ext, stop) = (self.clone(), ext.to_string(), Arc::new(Notify::new()));
@@ -227,6 +246,8 @@ pub(crate) struct Core {
     /// Wrong pairing codes per chat in the last hour; after a few, that chat's tries are ignored until the hour is up.
     misses: std::sync::Mutex<std::collections::HashMap<String, (u32, i64)>>,
     /// One reply or routine at a time per chat (keeps its CLI --resume session serial); other chats don't wait.
+    /// Telegram topics share their chat's lock, which is why live drafts, TURNS and runs stay keyed by chat while a
+    /// topic has its own conversation.
     locks: std::sync::Mutex<std::collections::HashMap<i64, Arc<Mutex<()>>>>,
     /// Unpaired chats already told how to pair (once each per run, so a stranger can't make it chatty).
     greeted: std::sync::Mutex<std::collections::HashSet<String>>,
@@ -524,6 +545,23 @@ pub(crate) fn paused_note(until: i64) -> String {
     }
 }
 
+/// Whether a chat can be the decisions chat: paired, private, yours (not a guest's), and in a messaging app.
+pub(crate) fn decisions_ok(db: &Db, chat: i64) -> bool {
+    chat != crate::host::LOCAL_CHAT && chat != crate::INCOGNITO_CHAT && db.is_paired(chat).unwrap_or(false) && db.chat_private(chat) && !db.chat_guest(chat)
+}
+
+/// The one chat (setting decisions_chat) that also gets the routines' asks, failed routines and memory suggestions
+/// from every other chat. None if unset, or if that chat can't be it any more (unpaired, or now a guest's).
+pub(crate) fn decisions_chat(db: &Db) -> Option<i64> {
+    let chat = db.setting("decisions_chat").ok()??.parse().ok()?;
+    decisions_ok(db, chat).then_some(chat)
+}
+
+/// A chat's name, for saying where something came from.
+fn chat_name(db: &Db, chat: i64) -> String {
+    db.chats().unwrap_or_default().into_iter().find(|c| c.chat_id == chat).map(|c| c.title).unwrap_or_else(|| format!("chat {chat}"))
+}
+
 /// `quiet_now` at the current local time.
 pub fn quiet(db: &Db) -> bool {
     quiet_now(db, chrono::Local::now())
@@ -596,7 +634,7 @@ impl Core {
                 Ok(())
             }
             Some(Ok(t)) => {
-                self.db.conv_taint(self.bot, chat)?;
+                self.db.conv_taint(self.bot, self.conv(chan, ext, chat)?)?;
                 self.incoming_with(chan, ext, from, "", &crate::with_document(said, name, &t), vec![], sent).await
             }
         }
@@ -701,6 +739,19 @@ impl Core {
         self.db.chat_lookup(chan.kind(), ext).ok().flatten().is_some_and(|chat| self.db.chat_owner(chat).is_ok_and(|o| !o.is_empty() && o == from))
     }
 
+    /// Whether each topic in a private Telegram chat is its own conversation (opt-in: the Bot API for it still shifts).
+    pub(crate) fn topics(&self) -> bool {
+        self.db.setting(&format!("telegram_topics:{}", self.bot)).ok().flatten().as_deref() == Some("on")
+    }
+
+    /// The conversation a message is in: the chat's own, or (Telegram "chat:topic") the topic's.
+    fn conv(&self, chan: &Chan, ext: &str, chat: i64) -> Result<i64> {
+        match ext.split_once(':').filter(|_| chan.kind() == "telegram").and_then(|(_, t)| t.parse().ok()) {
+            Some(topic) => self.db.topic_conv(chat, topic),
+            None => Ok(chat),
+        }
+    }
+
     pub(crate) fn is_paired(&self, chan: &Chan, ext: &str) -> Result<bool> {
         Ok(self.db.chat_lookup(chan.kind(), ext)?.is_some())
     }
@@ -731,12 +782,13 @@ impl Core {
         if let Some(chat) = self.db.chat_lookup(chan.kind(), ext)?
             && self.sender_ok(chat, from)? == Some(true)
         {
-            self.db.conv_taint(self.bot, chat)?;
+            self.db.conv_taint(self.bot, self.conv(chan, ext, chat)?)?;
         }
         self.incoming_with(chan, ext, from, title, text, images, sent).await
     }
 
-    /// Whether this person may talk to the bot in this paired chat, or press its buttons: the person who paired it. In
+    /// Whether this person may talk to the bot in this paired chat: the person who paired it, and in a family group
+    /// everyone in the household (only the person who paired it presses its buttons: see `decide`). In
     /// a group, channel or server everyone else is ignored. A chat paired before Mimir kept who paired it has no owner:
     /// in a direct chat the person writing is the owner; elsewhere (None) it has to be paired again.
     fn sender_ok(&self, chat: i64, from: Sender<'_>) -> Result<Option<bool>> {
@@ -749,7 +801,7 @@ impl Core {
             self.db.chat_set_dm(chat, true)?;
             return Ok(Some(true));
         }
-        Ok(Some(owner == from.id))
+        Ok(Some(owner == from.id || self.db.family_member(chat, from.id)?))
     }
 
     /// A message, possibly with images (photos the person sent).
@@ -835,6 +887,7 @@ impl Core {
                 return Ok(());
             }
         }
+        let conv = self.conv(chan, ext, chat)?;
         let mut command = parse_command(text);
         if let Command::Stop(asked) = command {
             if self.stop(chan, ext, from)? {
@@ -851,8 +904,8 @@ impl Core {
             Command::Memory => {
                 // What bots keep in mind, then what's waiting for you to confirm (bots don't keep those in mind).
                 let scope = format!("chat:{chat}");
-                let mut lines: Vec<String> = self.db.bootstrap(&scope)?.iter().map(|e| e.line()).collect();
-                let unconfirmed: Vec<String> = self.db.search_unconfirmed(&scope)?.iter().map(|e| e.line()).collect();
+                let mut lines: Vec<String> = self.db.bootstrap(&scope, self.bot)?.iter().map(|e| e.line()).collect();
+                let unconfirmed: Vec<String> = self.db.search_unconfirmed(&scope, self.bot)?.iter().map(|e| e.line()).collect();
                 if !unconfirmed.is_empty() {
                     lines.push(format!("\n{}\n{}", tr("Not confirmed yet (saved after reading outside content; check them in the app):"), unconfirmed.join("\n")));
                 }
@@ -864,10 +917,10 @@ impl Core {
                 chan.send(ext, &out).await;
             }
             Command::New => {
-                if let Some(s) = self.db.session(self.bot, chat)? {
+                if let Some(s) = self.db.session(self.bot, conv)? {
                     self.provider.forget_session(&s);
                 }
-                self.db.set_session(self.bot, chat, None)?;
+                self.db.set_session(self.bot, conv, None)?;
                 chan.send(ext, tr("Fresh conversation started (memories kept).")).await;
             }
             Command::Undo(n) => chan.send(ext, &crate::tidy::undo_learned(&self.db, chat, n)?).await,
@@ -880,7 +933,12 @@ impl Core {
                 }
                 // Measured on arrival, so a long reply (say, waiting for an approval) doesn't count as being offline.
                 let late = late_note(sent, crate::db::now());
-                let (core, chan, ext, text) = (self.clone(), chan.clone(), ext.to_string(), text.trim().to_string());
+                // In a family group the bot is told who wrote each message.
+                let text = match self.db.family_speaker(chat, from.id)? {
+                    Some(who) => format!("{who}: {}", text.trim()),
+                    None => text.trim().to_string(),
+                };
+                let (core, chan, ext) = (self.clone(), chan.clone(), ext.to_string());
                 tokio::spawn(async move {
                     // Typing at once, even when this chat is still busy; a wait past a few seconds says why, once.
                     let typing = chan.typing(&ext);
@@ -897,6 +955,7 @@ impl Core {
                     // The reply shows up as it's written: one message, edited as it grows, then formatted.
                     let follower = chan.follow(core.bot, chat, &ext);
                     let mut ctx = ToolCtx::new(core.db.clone(), core.bot, chat);
+                    ctx.conv = conv;
                     ctx.images = images;
                     let (provider, asked) = (core.provider.clone(), text.clone());
                     let task = tokio::spawn(async move { turn(&provider, &ctx, Trigger::Message(&asked)).await });
@@ -924,7 +983,7 @@ impl Core {
                             let partial = crate::live::get(core.bot, chat).unwrap_or_default();
                             crate::live::end(core.bot, chat);
                             let note = if partial.trim().is_empty() { tr("_Stopped before replying._").to_string() } else { format!("{}\n\n{}", partial.trim_end(), tr("_Stopped._")) };
-                            let logged = core.db.run_stop(core.bot, chat, &text).and_then(|_| core.db.log(core.bot, chat, "user", &text, None)).and_then(|_| core.db.log(core.bot, chat, "assistant", &note, None));
+                            let logged = core.db.run_stop(core.bot, chat, &text).and_then(|_| core.db.log(core.bot, conv, "user", &text, None)).and_then(|_| core.db.log(core.bot, conv, "assistant", &note, None));
                             if let Err(e) = logged {
                                 eprintln!("stop: {e:#}");
                             }
@@ -937,7 +996,9 @@ impl Core {
                         None => reply,
                     };
                     let draft = follower.finish().await;
-                    chan.finish(&ext, draft, &reply, &rows).await;
+                    let (reply, files) = crate::files::split_sent(&reply);
+                    chan.finish(&ext, draft, if reply.trim().is_empty() && !files.is_empty() { "📎" } else { &reply }, &rows).await;
+                    chan.attach(&ext, &core.db, chat, &files).await;
                 });
             }
         }
@@ -954,27 +1015,33 @@ impl Core {
         Ok(running.map(|h| h.abort()).is_some())
     }
 
-    /// An Approve/Deny button press. Only the chat the request belongs to can decide it, and in it only the person who
-    /// paired it (an error says so, for the button's reply).
+    /// An Approve/Deny button press. Only the chat the request belongs to can decide it (or the decisions chat it was
+    /// also sent to), and in it only the person who paired it (an error says so, for the button's reply).
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn decide(&self, chan: &Chan, ext: &str, from: Sender<'_>, id: i64, d: Decision) -> Result<Option<Approval>> {
         let approve = d != Decision::Deny;
         match self.db.chat_lookup(chan.kind(), ext)? {
             Some(chat) => {
-                if self.sender_ok(chat, from)? != Some(true) {
+                if self.sender_ok(chat, from)? != Some(true) || self.db.chat_owner(chat)? != from.id {
                     anyhow::bail!(tr("Only the person who paired me here can answer this."));
                 }
+                let mirror = self.db.approval_mirror(id)? == Some(chat) && decisions_ok(&self.db, chat);
+                let scope = (!mirror).then_some(chat);
                 if d == Decision::RestOfRun {
-                    self.db.approval_allow_rest_of_run(id, Some(chat))?;
+                    self.db.approval_allow_rest_of_run(id, scope)?;
                 }
-                let a = self.db.approval_decide(id, approve, Some(chat))?;
+                let a = self.db.approval_decide(id, approve, scope)?;
                 if let Some(a) = &a {
                     crate::tools::after_decision(&self.db, a);
                     if d == Decision::Always {
                         crate::tools::always_allow(&self.db, a)?;
                     }
-                    // The button handler edits its own card.
-                    self.db.approval_mark_closed(a.id)?;
+                    // The button handler edits its own card; the approvals loop closes the other one.
+                    if a.chat_id == chat {
+                        self.db.approval_mark_closed(a.id)?;
+                    } else {
+                        self.db.mirror_mark_closed(a.id)?;
+                    }
                 }
                 Ok(a)
             }
@@ -1114,21 +1181,26 @@ impl Core {
             }
             let routines = self.db.routines(chat)?;
             let mut msg = format!("{}\n", if mine.is_empty() { tr("☀️ **All quiet**") } else { tr("☀️ **Your digest**") });
+            let mut files = vec![];
             for (_, _, rid, text, _) in &mine {
                 let when = routines.iter().find(|r| Some(r.id) == *rid).map(|r| crate::tools::truncate(&r.prompt, 60)).unwrap_or_else(|| tr("A routine").into());
+                let (text, sent) = crate::files::split_sent(text);
+                files.extend(sent);
                 msg.push_str(&format!("\n**{when}**\n{}\n", crate::tools::truncate(text.trim(), 700)));
             }
             if quiet > 0 {
                 let ran = if quiet == 1 { tr("1 quiet check ran; nothing needed you.").into() } else { trf("{n} quiet checks ran; nothing needed you.", &[("n", &quiet.to_string())]) };
                 msg.push_str(&format!("\n{ran}"));
             }
-            self.db.log(self.bot, chat, "assistant", &msg, None)?;
+            let lines: String = files.iter().map(|f| format!("\n{}{f}]]", crate::files::SENT_MARK)).collect();
+            self.db.log(self.bot, chat, "assistant", &format!("{msg}{lines}"), None)?;
             // What routines found on the web is outside content in this conversation too.
             if mine.iter().any(|i| i.4) {
                 self.db.conv_taint(self.bot, chat)?;
             }
             if let Some((c, ext)) = Self::chan_for(chans, chat, &self.db) {
                 c.send(&ext, &msg).await;
+                c.attach(&ext, &self.db, chat, &files).await;
             }
             self.db.digest_mark_sent(&mine.iter().map(|i| i.0).collect::<Vec<_>>())?;
         }
@@ -1166,7 +1238,17 @@ impl Core {
     async fn tell_update(&self, chans: &[Chan]) -> Result<()> {
         let Some(latest) = crate::server_update::latest(&self.db).await else { return Ok(()) };
         let Some(msg) = crate::server_update::to_tell(&self.db, &latest) else { return Ok(()) };
-        let mut best: Option<(i64, Chan, String)> = None;
+        if let Some((_, chan, ext)) = self.latest_private(chans)?
+            && crate::server_update::told(&self.db, &latest)
+        {
+            chan.send(&ext, &msg).await;
+        }
+        Ok(())
+    }
+
+    /// Your most recent private chat this bot can reach in a messaging app (not a group, not a guest's).
+    fn latest_private(&self, chans: &[Chan]) -> Result<Option<(i64, Chan, String)>> {
+        let mut best: Option<(i64, i64, Chan, String)> = None;
         for c in self.db.chats()? {
             if c.chat_id == crate::host::LOCAL_CHAT || c.guest || !self.db.chat_private(c.chat_id) {
                 continue;
@@ -1174,15 +1256,78 @@ impl Core {
             let Some((chan, ext)) = Self::chan_for(chans, c.chat_id, &self.db) else { continue };
             let last = self.db.messages(c.chat_id, 1)?.first().map(|m| m.ts).unwrap_or(0);
             if best.as_ref().is_none_or(|b| last > b.0) {
-                best = Some((last, chan, ext));
+                best = Some((last, c.chat_id, chan, ext));
             }
         }
-        if let Some((_, chan, ext)) = best
-            && crate::server_update::told(&self.db, &latest)
-        {
-            chan.send(&ext, &msg).await;
+        Ok(best.map(|(_, chat, chan, ext)| (chat, chan, ext)))
+    }
+
+    /// Mail tasks (Settings → Email, when on): mail you sent to your +mimir address, or filed in the Mimir folder,
+    /// is a message to this bot, answered in your most recent private chat (or in the app). The bot never reads the
+    /// inbox for this; Mimir looks only at those, and takes only ones from you that DKIM passed (email::task).
+    async fn mail_tasks(&self, chans: &[Chan]) -> Result<()> {
+        let Some(a) = crate::email::account(&self.db) else { return Ok(()) };
+        for (folder, route) in [("INBOX", "to your +mimir address"), (crate::email::TASK_FOLDER, "filed in your Mimir folder")] {
+            let key = format!("mail_task_seen:{folder}");
+            let after = self.db.setting(&key)?.and_then(|v| v.split_once(':').and_then(|(v, u)| Some((v.parse().ok()?, u.parse().ok()?))));
+            let inbox = folder == "INBOX";
+            let (cursor, mails) = match crate::email::new_mail(&a, folder, after, |h| !inbox || crate::email::to_plus(h, &a.user)).await {
+                Ok(r) => r,
+                // No Mimir folder is the usual case.
+                Err(e) => {
+                    if inbox {
+                        eprintln!("mail tasks: {e:#}");
+                    }
+                    continue;
+                }
+            };
+            // Read past before running: a task that crashes or hangs isn't taken again (and done twice).
+            self.db.set_setting(&key, &format!("{}:{}", cursor.0, cursor.1))?;
+            for raw in mails {
+                match crate::email::task(&raw, &a.user, route) {
+                    crate::email::Task::Run { text, outside } => self.mail_task(chans, text, outside).await?,
+                    crate::email::Task::Refused(why) => {
+                        eprintln!("mail tasks: {why}");
+                        let (chat, target) = self.latest_private(chans)?.map_or((crate::host::LOCAL_CHAT, None), |(c, ch, ext)| (c, Some((ch, ext))));
+                        self.db.log(self.bot, chat, "assistant", &why, None)?;
+                        if let Some((c, ext)) = target {
+                            c.send(&ext, &why).await;
+                        }
+                    }
+                    crate::email::Task::Skip => {}
+                }
+            }
         }
         Ok(())
+    }
+
+    async fn mail_task(&self, chans: &[Chan], text: String, outside: bool) -> Result<()> {
+        let (chat, target) = self.latest_private(chans)?.map_or((crate::host::LOCAL_CHAT, None), |(c, ch, ext)| (c, Some((ch, ext))));
+        // What you forwarded is someone else's words: the conversation has read outside content, like a forward in chat.
+        if outside {
+            self.db.conv_taint(self.bot, chat)?;
+        }
+        let _g = self.chat_lock(chat).lock_owned().await;
+        let typing = target.as_ref().and_then(|(c, ext)| c.typing(ext));
+        let (provider, ctx) = (self.provider.clone(), ToolCtx::new(self.db.clone(), self.bot, chat));
+        let out = self.own_task(chat, async move { turn(&provider, &ctx, Trigger::Message(&text)).await }).await;
+        if let Some(t) = typing {
+            t.abort();
+        }
+        let reply = out.unwrap_or_else(|e| crate::friendly_error(&format!("{e:#}")));
+        if let Some((c, ext)) = target {
+            c.send(&ext, &reply).await;
+        }
+        Ok(())
+    }
+
+    /// Also said in the decisions chat, unless that's where it happened (`from`) or it's quiet hours (Needs you has it).
+    // ponytail: dropped in quiet hours rather than queued; queue it for the digest if that's missed
+    async fn tell_decisions(&self, chans: &[Chan], from: Option<i64>, text: &str) {
+        let Some(to) = decisions_chat(&self.db).filter(|to| Some(*to) != from && !quiet(&self.db)) else { return };
+        if let Some((c, ext)) = Self::chan_for(chans, to, &self.db) {
+            c.send(&ext, text).await;
+        }
     }
 
     fn chan_for(chans: &[Chan], chat: i64, db: &Db) -> Option<(Chan, String)> {
@@ -1198,8 +1343,7 @@ impl Core {
             r.delivery = "digest".into();
         }
         // Over a daily cap: pause (it stays due, so it runs once when the day's over) and ask, in Needs you.
-        let day_start = chrono::Local::now().date_naive().and_hms_opt(0, 0, 0).and_then(|t| chrono::TimeZone::from_local_datetime(&chrono::Local, &t).earliest()).map_or(0, |t| t.timestamp());
-        if let Some((key, h)) = self.db.over_cap(&r, day_start)? {
+        if let Some((key, h)) = self.db.over_cap(&r, crate::day_start())? {
             let said = format!("⏸ Paused until tomorrow: {}. You can let it go on today in Mimir's Needs you.", h.why);
             self.db.hold_set(&key, &h)?;
             if let Some((c, ext)) = Self::chan_for(chans, r.chat_id, &self.db).filter(|_| r.delivery == "now") {
@@ -1306,6 +1450,7 @@ impl Core {
                 if r.delivery == "digest" {
                     self.db.digest_add(self.bot, r.chat_id, r.id, &text, false)?;
                 }
+                self.tell_decisions(chans, Some(r.chat_id), &trf("From {chat}: {text}", &[("chat", &chat_name(&self.db, r.chat_id)), ("text", &text)])).await;
                 text
             }
         };
@@ -1313,15 +1458,21 @@ impl Core {
         if text.trim().is_empty() {
             return Ok(());
         }
-        let how = match (r.delivery.as_str(), &target) {
+        // Matched the person's "come through right away if …" (within the day's cap): sent now, whatever its lane.
+        let urgent = run.map(|run| self.db.run_urgent(run)).transpose()?.unwrap_or(false);
+        let how = match (if urgent { "now" } else { r.delivery.as_str() }, &target) {
             ("digest", _) => "in the digest".to_string(),
             ("log", _) => "only in the log".to_string(),
             (_, None) => "in the app".to_string(),
             (_, Some((c, ext))) => {
                 // A result gets one-tap feedback (a reminder, Done or Snooze); a failure doesn't.
-                let rows = if worked { self.result_rows(&r, &text) } else { vec![] };
-                match c.deliver(ext, &text, &rows).await {
-                    Ok(()) => format!("sent to {}", c.kind()),
+                let (said, files) = crate::files::split_sent(&text);
+                let rows = if worked { self.result_rows(&r, &said) } else { vec![] };
+                match c.deliver(ext, &said, &rows).await {
+                    Ok(()) => {
+                        c.attach(ext, &self.db, r.chat_id, &files).await;
+                        format!("sent to {}", c.kind())
+                    }
                     Err(e) => format!("{} to {}: {}", crate::db::NOT_SENT, c.kind(), crate::tools::truncate(&format!("{e:#}"), 200)),
                 }
             }
@@ -1367,8 +1518,17 @@ impl Core {
     async fn scheduler(self: Arc<Self>, chans: Vec<Chan>) -> Result<()> {
         // A routine due before this was Mimir not running; one due since, the computer asleep or a long run.
         let started = crate::db::now();
+        let mut mail_looked = 0;
         loop {
             let now = crate::db::now();
+            // Mail tasks, looked for every two minutes by one bot (the memory bot) for everyone. You sent them, like a
+            // message, so they run while the bot is paused too.
+            if now - mail_looked >= 120 && crate::tidy::memory_bot(&self.db) == Some(self.bot) && self.db.setting("email_tasks").ok().flatten().as_deref() == Some("on") {
+                mail_looked = now;
+                if let Err(e) = self.mail_tasks(&chans).await {
+                    eprintln!("mail tasks: {e:#}");
+                }
+            }
             // Paused by you: nothing runs on its own (routines, digest, weekly review, tidy-up) until it ends.
             if self.db.paused(self.bot, now).unwrap_or_else(|e| { eprintln!("pause: {e:#}"); None }).is_some() {
                 tokio::time::sleep(Duration::from_secs(30)).await;
@@ -1433,7 +1593,17 @@ impl Core {
                     // No chat lock: it reads the chat and calls the AI without a session, so replies needn't wait.
                     let (db, provider, bot, id) = (self.db.clone(), self.provider.clone(), self.bot, chat.chat_id);
                     match self.own_task(id, async move { crate::tidy::run(&db, &provider, bot, id).await }).await {
-                        Ok(n) if n > 0 => eprintln!("tidy-up: {n} memory suggestions for chat {}", chat.chat_id),
+                        Ok(n) if n > 0 => {
+                            eprintln!("tidy-up: {n} memory suggestions for chat {}", chat.chat_id);
+                            let at = [("n", n.to_string()), ("chat", chat.title.clone())];
+                            let at = at.each_ref().map(|(k, v)| (*k, v.as_str()));
+                            let what = if n == 1 {
+                                trf("🧠 1 memory suggestion for {chat}: accept or dismiss it in Mimir's Needs you.", &at)
+                            } else {
+                                trf("🧠 {n} memory suggestions for {chat}: accept or dismiss them in Mimir's Needs you.", &at)
+                            };
+                            self.tell_decisions(&chans, None, &what).await;
+                        }
                         Ok(_) => {}
                         Err(e) => eprintln!("tidy-up for chat {}: {e:#}", chat.chat_id),
                     }
@@ -1458,6 +1628,26 @@ impl Core {
                     None
                 });
                 let _ = self.db.approval_mark_notified(a.id, card.as_deref());
+            }
+            // A routine's ask from any other chat (the app's too) also goes to the decisions chat, saying where it's from.
+            if let Some(to) = decisions_chat(&self.db).filter(|_| !quiet)
+                && let Some((c, ext)) = Self::chan_for(&chans, to, &self.db)
+            {
+                for mut a in self.db.approvals_to_mirror(self.bot, to).unwrap_or_default() {
+                    let id = a.id;
+                    a.summary = format!("{}\n\n{}", a.summary, trf("From: {chat}", &[("chat", &chat_name(&self.db, a.chat_id))]));
+                    let card = c.card(&ext, &a).await.unwrap_or_else(|e| {
+                        eprintln!("approval #{id} card to the decisions chat failed: {e:#}");
+                        None
+                    });
+                    let _ = self.db.approval_mark_mirrored(id, to, card.as_deref());
+                }
+            }
+            for (a, chat, card) in self.db.mirrors_to_close(self.bot).unwrap_or_default() {
+                if let Some((c, ext)) = Self::chan_for(&chans, chat, &self.db) {
+                    c.draft_edit(&ext, &card, &verdict(&a)).await;
+                    let _ = self.db.mirror_mark_closed(a.id);
+                }
             }
             // Decided in the app, the tray or the CLI, or ran out: the card shows the outcome, without buttons.
             for (a, card) in self.db.approvals_to_close(self.bot).unwrap_or_default() {
@@ -1615,6 +1805,40 @@ mod tests {
         }
     }
 
+    /// Against scripts/fake-mail.py: `python3 scripts/fake-mail.py`, then
+    /// `cargo test -p mimir-core fake_mail_tasks -- --ignored`.
+    #[tokio::test]
+    #[ignore]
+    async fn fake_mail_tasks() {
+        let p = std::env::temp_dir().join(format!("mimir-mailtask-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = Db::open(&p).unwrap();
+        for (k, v) in [("email_host", "127.0.0.1"), ("email_port", "1143"), ("email_user", "me@example.com")] {
+            db.set_setting(k, v).unwrap();
+        }
+        crate::host::install_secrets(Arc::new(crate::host::DbSecrets(db.clone())));
+        crate::host::secret_set(crate::email::SECRET, "pw").unwrap();
+        let core = core_on(&db, &fake_ai("200 OK", r#"{"choices":[{"message":{"role":"assistant","content":"Done."}}],"usage":{"prompt_tokens":3,"completion_tokens":2}}"#).await);
+        // Turned on: what's there already isn't a task.
+        core.mail_tasks(&[]).await.unwrap();
+        assert!(db.messages(0, 10).unwrap().is_empty());
+        assert_eq!(db.setting("mail_task_seen:INBOX").unwrap().as_deref(), Some("1:4"));
+        // Mail since: the signed forward runs, the one posing as you is refused, the invoice isn't to +mimir.
+        db.set_setting("mail_task_seen:INBOX", "1:2").unwrap();
+        db.set_setting("mail_task_seen:Mimir", "1:0").unwrap();
+        core.mail_tasks(&[]).await.unwrap();
+        let said: Vec<String> = db.messages(0, 10).unwrap().into_iter().map(|m| format!("{}: {}", m.role, m.content)).collect();
+        assert_eq!(said.len(), 5, "{said:#?}");
+        assert!(said[0].starts_with("user: [By email, to your +mimir address.] Add this to my calendar for the 20th.") && said[0].contains("<document") && said[0].contains("password file"), "{said:#?}");
+        assert!(said[2].starts_with("assistant: An email from your address (“Send the bank details") && said[2].contains("DKIM didn't pass"), "{said:#?}");
+        assert_eq!(said[3], "user: [By email, filed in your Mimir folder.] Remind me to call the dentist at 4");
+        assert!(db.conv_tainted(1, 0).unwrap(), "a forward is outside content");
+        assert_eq!(db.setting("mail_task_seen:INBOX").unwrap().as_deref(), Some("1:4"));
+        // Nothing new: nothing runs again.
+        core.mail_tasks(&[]).await.unwrap();
+        assert_eq!(db.messages(0, 10).unwrap().len(), 5);
+    }
+
     #[tokio::test]
     async fn routine_failures_by_cause() {
         let p = std::env::temp_dir().join(format!("mimir-causes-{}.db", std::process::id()));
@@ -1752,6 +1976,63 @@ mod tests {
         assert!(db.over_cap(&r, 0).unwrap().is_none());
         db.set_setting("cap_routine", "3000").unwrap();
         assert!(db.over_cap(&r, 0).unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn routine_asks_also_go_to_the_decisions_chat_and_close_everywhere() {
+        let p = std::env::temp_dir().join(format!("mimir-decisions-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = Db::open(&p).unwrap();
+        let core = Core {
+            db: db.clone(),
+            bot: 1,
+            provider: Arc::new(Provider::new("claude", None, None, None, std::env::temp_dir()).unwrap()),
+            code: Default::default(),
+            status: Default::default(),
+            misses: Default::default(),
+            locks: Default::default(),
+            greeted: Default::default(),
+        };
+        let tg = Chan::Telegram(Tg::new("t").unwrap());
+        let me = Sender { id: "42", dm: true };
+        // Only your own private chat in a messaging app can be it: not a group, a guest's chat, or the app.
+        for (ext, owner) in [("42", "42"), ("-100", "42"), ("77", "77"), ("5", "42")] {
+            let chat = db.pair_external("telegram", ext, ext).unwrap();
+            db.chat_set_owner(chat, owner).unwrap();
+        }
+        db.chat_set_guest(77, true).unwrap();
+        db.pair(crate::host::LOCAL_CHAT, "This computer").unwrap();
+        assert!(decisions_ok(&db, 42) && !decisions_ok(&db, -100) && !decisions_ok(&db, 77) && !decisions_ok(&db, crate::host::LOCAL_CHAT));
+        db.set_setting("decisions_chat", "77").unwrap();
+        assert_eq!(decisions_chat(&db), None, "a guest's chat is never used, even if saved");
+        db.set_setting("decisions_chat", "42").unwrap();
+        assert_eq!(decisions_chat(&db), Some(42));
+        let ask = |chat, parked| {
+            let id = db.approval_create(1, chat, "email_send", "send it", 3600, "rule", None).unwrap();
+            if parked {
+                db.approval_park(id, "{}", false).unwrap();
+            }
+            id
+        };
+        // A routine's ask in the app chat goes to the decisions chat; a live ask, or one from the decisions chat itself, doesn't.
+        let (app, live) = (ask(crate::host::LOCAL_CHAT, true), ask(5, false));
+        ask(42, true);
+        assert_eq!(db.approvals_to_mirror(1, 42).unwrap().iter().map(|a| a.id).collect::<Vec<_>>(), vec![app]);
+        db.approval_mark_mirrored(app, 42, Some("m1")).unwrap();
+        assert!(db.approvals_to_mirror(1, 42).unwrap().is_empty(), "sent once");
+        // Another chat can't answer it; the decisions chat can, and its own card is the one its button edits.
+        assert!(core.decide(&tg, "5", me, app, Decision::Once).unwrap().is_none());
+        assert_eq!(core.decide(&tg, "42", me, app, Decision::Deny).unwrap().unwrap().status, "denied");
+        assert!(db.mirrors_to_close(1).unwrap().is_empty());
+        // A routine's ask from another chat, answered there: the decisions chat's card closes too.
+        let other = ask(5, true);
+        db.approval_mark_notified(other, Some("c5")).unwrap();
+        db.approval_mark_mirrored(other, 42, Some("m2")).unwrap();
+        assert!(core.decide(&tg, "5", me, other, Decision::Once).unwrap().is_some());
+        assert_eq!(db.mirrors_to_close(1).unwrap().into_iter().map(|(a, c, r)| (a.id, c, r)).collect::<Vec<_>>(), vec![(other, 42, "m2".to_string())]);
+        assert!(db.approvals_to_close(1).unwrap().is_empty(), "the button edited its own card");
+        // The decisions chat can't answer asks that weren't sent to it.
+        assert!(core.decide(&tg, "42", me, live, Decision::Once).unwrap().is_none());
     }
 
     #[tokio::test]

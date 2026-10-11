@@ -204,6 +204,21 @@ impl Host {
         if let Err(e) = db.pair(LOCAL_CHAT, if mode == "server" { "Web chat" } else { "This computer" }) {
             eprintln!("built-in chat: {e:#}");
         }
+        // A copy of the database once a day, after checking it (looked at hourly: a laptop sleeps through the night).
+        {
+            let db = db.clone();
+            rt.spawn(async move {
+                loop {
+                    if crate::backup::due(&db) {
+                        let d = db.clone();
+                        if let Ok(Err(e)) = tokio::task::spawn_blocking(move || crate::backup::snapshot(&d, "")).await {
+                            eprintln!("backup: {e:#}");
+                        }
+                    }
+                    tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+                }
+            });
+        }
         // The bots' computer (self-hosted Linux server): bring it up if it's switched on, and back up if it dies.
         if crate::computer::available() {
             let (db, home) = (db.clone(), home.clone());
@@ -473,6 +488,13 @@ impl Host {
             }
             // The bots' email account (read-only): server, port, address, app password. Saving signs in once first.
             "email_settings" => {
+                // Mail tasks on or off; turned on, mail already there isn't taken (each folder is read from now on).
+                if let Some(on) = arg::<Option<bool>>(a, "tasks")? {
+                    self.db.set_setting("email_tasks", if on { "on" } else { "off" })?;
+                    for f in ["INBOX", crate::email::TASK_FOLDER] {
+                        self.db.set_setting(&format!("mail_task_seen:{f}"), "")?;
+                    }
+                }
                 if let Some(host) = arg::<Option<String>>(a, "host")? {
                     if host.trim().is_empty() {
                         self.db.set_setting("email_host", "")?;
@@ -493,7 +515,7 @@ impl Host {
                     }
                 }
                 ok(match crate::email::account(&self.db) {
-                    Some(acc) => json!({"host": acc.host, "user": acc.user, "smtp": acc.smtp_host, "smtp_port": acc.smtp_port}),
+                    Some(acc) => json!({"host": acc.host, "user": acc.user, "smtp": acc.smtp_host, "smtp_port": acc.smtp_port, "tasks": self.db.setting("email_tasks")?.as_deref() == Some("on")}),
                     None => Value::Null,
                 })
             }
@@ -538,6 +560,9 @@ impl Host {
                 ok(json!({"brave": api_key("brave").is_some(), "searxng_url": self.db.setting("searxng_url")?.unwrap_or_default()}))
             }
             "chats" => ok(self.db.chats()?),
+            // Each topic in a private Telegram chat its own conversation (read per message, so no restart).
+            "telegram_topics" => ok(self.db.setting(&format!("telegram_topics:{}", arg::<i64>(a, "bot_id")?))?.as_deref() == Some("on")),
+            "set_telegram_topics" => ok(self.db.set_setting(&format!("telegram_topics:{}", arg::<i64>(a, "bot_id")?), if arg(a, "on")? { "on" } else { "off" })?),
             // Has this conversation read untrusted content (so changes ask first)? And: start a fresh one.
             "conversation" => ok(json!({"tainted": self.db.conv_tainted(arg(a, "bot_id")?, arg(a, "chat_id")?)?})),
             "new_conversation" => {
@@ -560,10 +585,26 @@ impl Host {
             // Everything Mimir keeps about you, as one JSON file (memories, conversations, meetings, skills, routines,
             // bots without their tokens).
             "export_all" => ok(self.db.export_all()?),
+            // Daily copies of the database (backups/ in the data folder), and putting one back.
+            "backups" => ok(json!({"dir": crate::backup::dir(&self.db), "list": crate::backup::list(&self.db)})),
+            "backup_now" => ok(crate::backup::snapshot(&self.db, "")?),
+            "backup_restore" => {
+                let name: String = arg(a, "name")?;
+                // Bots stopped around it, so nothing writes into the old database mid-restore; started again either way.
+                self.stop_all();
+                let done = crate::backup::restore(&self.db, &name);
+                self.restart_all();
+                ok(done?)
+            }
             // Someone else's chat (a guest: nothing of yours there), or yours.
             "chat_guest" => ok(self.db.chat_set_guest(arg(a, "chat_id")?, arg(a, "guest")?)?),
+            // A guest's chat or a group reads (and adds to) the household's memories; a family group lets everyone in it talk.
+            "chat_household" => ok(self.db.chat_set_household(arg(a, "chat_id")?, arg(a, "on")?)?),
+            "chat_family" => ok(self.db.chat_set_family(arg(a, "chat_id")?, arg(a, "on")?)?),
+            // One bot keeps a memory to itself, or all bots share it again (bot_id 0).
+            "memory_for_bot" => ok(self.db.set_for_bot(&scope(a)?, arg(a, "id")?, arg(a, "bot_id")?)?),
             "entries" => ok(self.db.entries(&scope(a)?)?),
-            "search" => ok(self.db.search(&scope(a)?, &arg::<String>(a, "query")?, 50)?),
+            "search" => ok(self.db.search(&scope(a)?, 0, &arg::<String>(a, "query")?, 50)?),
             "forget" => ok(self.db.forget(&scope(a)?, arg(a, "id")?)?),
             "pin" => ok(self.db.pin(&scope(a)?, arg(a, "id")?, arg(a, "pinned")?)?),
             "background" => ok(self.db.background(&scope(a)?, arg(a, "id")?, arg(a, "on")?)?),
@@ -577,6 +618,12 @@ impl Host {
             "files" => ok(crate::files::list(&self.db, arg(a, "chat_id")?, "")?.into_iter().map(|(path, size)| json!({"path": path, "size": size})).collect::<Vec<_>>()),
             "file" => ok(crate::files::read(&self.db, arg(a, "chat_id")?, &arg::<String>(a, "path")?)?.0),
             "delete_file" => ok(crate::files::delete(&self.db, arg(a, "chat_id")?, &arg::<String>(a, "path")?)?),
+            // A file a bot sent to the chat ([[file:…]] in its reply), as base64, to show or save.
+            "sent_file" => {
+                use base64::Engine;
+                let (path, name) = crate::files::sent_path(&self.home, arg(a, "chat_id")?, &arg::<String>(a, "name")?).context("that file is gone (sent files are kept 60 days)")?;
+                ok(json!({"name": name, "data": base64::engine::general_purpose::STANDARD.encode(std::fs::read(path)?)}))
+            }
             // Mimir's skill library for a chat: each skill, which bots there already have it, and per bot the tools it
             // needs that the bot can't use here (a calendar not linked, a tool off for that bot…).
             "skill_library" => {
@@ -648,6 +695,15 @@ impl Host {
                 &crate::db::Prov::by("you"),
             )?),
             "suggestions" => ok(self.db.suggestions(&scope(a)?)?),
+            // The one-time "get to know me" pass: whether it can run (email or calendar connected) and has; `run` starts it.
+            "know_me" => {
+                if arg::<Option<bool>>(a, "run")?.unwrap_or(false) {
+                    let bot = crate::tidy::memory_bot(&self.db).context("no bots")?;
+                    return ok(crate::tidy::get_to_know(&self.db, &self.provider(bot)?, bot, arg(a, "chat_id")?).await?);
+                }
+                let ready = crate::email::account(&self.db).is_some() || secret_get(crate::calendar::SECRET).is_some();
+                ok(json!({"ready": ready, "done": self.db.setting(crate::tidy::KNOW_ME)?.is_some()}))
+            }
             // Replay past corrections against a suggested preference (on request: it costs model calls).
             "check_suggestion" => {
                 let bot = crate::tidy::memory_bot(&self.db).context("no bots")?;
@@ -892,6 +948,7 @@ impl Host {
                             once: true,
                             watch: String::new(),
                             retries: 0,
+                            urgent: String::new(),
                         }
                     }
                 };
@@ -952,6 +1009,8 @@ impl Host {
             }
             "reset_watch_noise" => ok(self.db.routine_reset_noise(arg(a, "chat_id")?, arg(a, "id")?)?),
             "set_watch" => ok(self.db.routine_set_watch(arg(a, "chat_id")?, arg(a, "id")?, &arg::<String>(a, "watch")?)?),
+            // Only the person sets this (no bot tool does): what the bot read can't widen what comes through.
+            "set_urgent" => ok(self.db.routine_set_urgent(arg(a, "chat_id")?, arg(a, "id")?, &arg::<String>(a, "rule")?)?),
             "set_delivery" => ok(self.db.routine_set_delivery(arg(a, "chat_id")?, arg(a, "id")?, &arg::<String>(a, "delivery")?)?),
             // How full standing memory is (the Memory tab's meter).
             "standing_memory" => {
@@ -1004,6 +1063,21 @@ impl Host {
                     self.db.set_setting("quiet_hours", &h)?;
                 }
                 ok(self.db.setting("quiet_hours")?.unwrap_or_default())
+            }
+            // The private chat that also gets every chat's routine asks, failed routines and memory suggestions: get
+            // without `chat`, set with it (0 = none). Returns the one in use and the chats that can be it.
+            "decisions_chat" => {
+                if let Some(chat) = arg::<Option<i64>>(a, "chat")? {
+                    if chat == 0 {
+                        self.db.set_setting("decisions_chat", "")?;
+                    } else if crate::runtime::decisions_ok(&self.db, chat) {
+                        self.db.set_setting("decisions_chat", &chat.to_string())?;
+                    } else {
+                        bail!("pick one of your own private chats, not a group or a guest's chat");
+                    }
+                }
+                let options: Vec<_> = self.db.chats()?.into_iter().filter(|c| crate::runtime::decisions_ok(&self.db, c.chat_id)).collect();
+                ok(json!({"chat": crate::runtime::decisions_chat(&self.db), "options": options}))
             }
             // The language Mimir writes in, in chat apps: a code from say::LANGS, or "" for the system's (get without
             // `lang`, set with it).
@@ -1104,6 +1178,8 @@ impl Host {
                         json!({"key": key, "bot_id": bot, "routine_id": routine, "routine": prompt, "until": h.until, "why": h.why, "cap": h.waive.is_some()})
                     }).collect::<Vec<_>>(),
                     "suggestions": counts,
+                    // The daily check found the database damaged: restore a backup.
+                    "damage": self.db.setting(crate::backup::DAMAGE)?,
                     "unconfirmed": self.db.unconfirmed_counts()?.into_iter().map(|(chat, n)| json!({"chat_id": chat, "count": n})).collect::<Vec<_>>(),
                     // A newer release than this server runs (looked up by the bots' loops twice a day).
                     "server_update": is_server().then(|| self.db.setting("update_latest").ok().flatten()).flatten()
@@ -1305,8 +1381,8 @@ mod tests {
             }
         }
         let (mut missing, mut seen) = (vec![], 0);
-        for f in std::fs::read_dir(root.join("ui/src")).unwrap() {
-            let path = f.unwrap().path();
+        let files = std::fs::read_dir(root.join("ui/src")).unwrap().chain(std::fs::read_dir(root.join("ui/src/views")).unwrap());
+        for path in files.map(|f| f.unwrap().path()).filter(|p| p.is_file()) {
             let src = std::fs::read_to_string(&path).unwrap();
             // invoke('name'…), invoke<T>('name'…), localInvoke('name'…); not api.ts's own tauriInvoke('api', …).
             for (i, _) in src.match_indices("nvoke").filter(|(i, _)| !src[..*i].ends_with("tauriI")) {

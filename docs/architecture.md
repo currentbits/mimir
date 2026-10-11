@@ -9,7 +9,7 @@ For contributors: how the pieces fit together.
 | `crates/mimir-core` | Everything that isn't a UI shell: the database, bots, providers, tools, channels, routines, meetings |
 | `crates/mimir` | The CLI and the self-hosted server (`server.rs`: HTTP API + web UI) |
 | `crates/mimir-desktop` | The Tauri desktop app: window, tray, keychain, quick ask, notifications, meeting recorder |
-| `ui/` | React + Vite UI, shared by the desktop app and the server's web UI |
+| `ui/` | React + Vite UI, shared by the desktop app and the server's web UI. `src/App.tsx` is the window (sidebar, tabs); each screen is in `src/views/` (chat, memory, skills, routines, activity, inbox, bot, accounts, onboarding, settings, meetings, computer); `types.ts` holds the shapes more than one screen uses and `shared.tsx` the helpers they share |
 
 ### mimir-core modules
 
