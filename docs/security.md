@@ -80,7 +80,8 @@ their own, so a link could otherwise leak data unclicked).
 
 **The server.** The admin token is checked before a request's body is read, compared in constant time, and is at
 least 24 characters. The web UI can't be framed by another site, loads only its own scripts, and nothing is cached.
-The data folder is owner-only.
+The data folder is owner-only. Chat API tokens (for Shortcuts and the like) each reach one bot's built-in chat and
+nothing else, are checked before the body is read too, and only their SHA-256 is stored.
 
 **The bots' computer** runs its browser without Mimir's environment or secrets, with its own home. With docker compose
 it's a separate container (its own user, no data folder, no published ports, a token on its control channel), so a

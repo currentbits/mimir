@@ -145,6 +145,39 @@ fn ok<T: Serialize>(v: T) -> Result<Value> {
     Ok(serde_json::to_value(v)?)
 }
 
+/// A token for the server's chat API (`/v1/chat/completions`): it reaches one bot and nothing else. Only its hash is
+/// kept, so the token is shown once.
+#[derive(Serialize, serde::Deserialize)]
+struct ChatToken {
+    id: String,
+    name: String,
+    bot_id: i64,
+    created: i64,
+    #[serde(skip_serializing_if = "String::is_empty", default)]
+    hash: String,
+}
+// ponytail: one JSON setting, read-modify-write; fine for the handful of tokens one admin makes by hand
+const CHAT_TOKENS: &str = "chat_api_tokens";
+
+fn token_hash(token: &str) -> String {
+    format!("{:x}", <sha2::Sha256 as sha2::Digest>::digest(token.as_bytes()))
+}
+
+fn chat_tokens(db: &Db) -> Result<Vec<ChatToken>> {
+    Ok(db.setting(CHAT_TOKENS)?.map(|s| serde_json::from_str(&s)).transpose()?.unwrap_or_default())
+}
+
+fn set_chat_tokens(db: &Db, t: &[ChatToken]) -> Result<()> {
+    db.set_setting(CHAT_TOKENS, &serde_json::to_string(t)?)
+}
+
+/// The bot a chat API token reaches, if it's one of ours (and the bot still exists).
+pub fn chat_token_bot(db: &Db, token: &str) -> Option<i64> {
+    let h = token_hash(token);
+    let bot = chat_tokens(db).ok()?.into_iter().find(|t| t.hash == h)?.bot_id;
+    db.bot(bot).ok().map(|_| bot)
+}
+
 impl Host {
     pub fn new(db: Db, home: PathBuf, secrets: Arc<dyn SecretStore>, rt: tokio::runtime::Handle, mode: &'static str) -> Self {
         let _ = MODE.set(mode);
@@ -170,6 +203,21 @@ impl Host {
         // The built-in chat exists from the start, so its memories count before the first message.
         if let Err(e) = db.pair(LOCAL_CHAT, if mode == "server" { "Web chat" } else { "This computer" }) {
             eprintln!("built-in chat: {e:#}");
+        }
+        // A copy of the database once a day, after checking it (looked at hourly: a laptop sleeps through the night).
+        {
+            let db = db.clone();
+            rt.spawn(async move {
+                loop {
+                    if crate::backup::due(&db) {
+                        let d = db.clone();
+                        if let Ok(Err(e)) = tokio::task::spawn_blocking(move || crate::backup::snapshot(&d, "")).await {
+                            eprintln!("backup: {e:#}");
+                        }
+                    }
+                    tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+                }
+            });
         }
         // The bots' computer (self-hosted Linux server): bring it up if it's switched on, and back up if it dies.
         if crate::computer::available() {
@@ -370,6 +418,28 @@ impl Host {
                 self.db.bot_delete(id)?;
                 self.stop(id);
                 CHANNEL_SECRETS.iter().try_for_each(|n| self.secrets.set(&key(id, n), ""))?;
+                // Its chat API tokens too, so a later bot given the same id can't be reached with them.
+                set_chat_tokens(&self.db, &chat_tokens(&self.db)?.into_iter().filter(|t| t.bot_id != id).collect::<Vec<_>>())?;
+                ok(())
+            }
+            // Chat API tokens (server): list them, make one (its token is in the answer, once), or delete one.
+            "chat_tokens" => ok(chat_tokens(&self.db)?.into_iter().map(|t| ChatToken { hash: String::new(), ..t }).collect::<Vec<_>>()),
+            "chat_token_add" => {
+                let (bot_id, name): (i64, String) = (arg(a, "bot_id")?, arg(a, "name")?);
+                let name = name.trim().to_string();
+                if name.is_empty() || name.chars().count() > 60 {
+                    bail!("give it a name of up to 60 characters, like the app that will use it");
+                }
+                self.db.bot(bot_id).context("no such bot")?;
+                let token = format!("mimir_{}", crate::random_hex(24)?);
+                let mut all = chat_tokens(&self.db)?;
+                all.push(ChatToken { id: crate::random_hex(6)?, name, bot_id, created: crate::db::now(), hash: token_hash(&token) });
+                set_chat_tokens(&self.db, &all)?;
+                ok(token)
+            }
+            "chat_token_delete" => {
+                let id: String = arg(a, "id")?;
+                set_chat_tokens(&self.db, &chat_tokens(&self.db)?.into_iter().filter(|t| t.id != id).collect::<Vec<_>>())?;
                 ok(())
             }
             // Which API keys are saved, by account kind.
@@ -459,6 +529,17 @@ impl Host {
                 crate::oauth::cancel();
                 ok(())
             }
+            // Mail tasks (forward or cc your bot): on or off. Turned on, mail already there isn't taken (each folder is
+            // read from now on). They use the first mailbox.
+            "email_tasks" => {
+                if let Some(on) = arg::<Option<bool>>(a, "on")? {
+                    self.db.set_setting("email_tasks", if on { "on" } else { "off" })?;
+                    for f in ["INBOX", crate::email::TASK_FOLDER] {
+                        self.db.set_setting(&format!("mail_task_seen:{f}"), "")?;
+                    }
+                }
+                ok(self.db.setting("email_tasks")?.as_deref() == Some("on"))
+            }
             // Adding events to your calendar (calendar_create) over CalDAV: the server, the login and which calendar.
             // Saving signs in and lists the calendars; no password given keeps the saved one (or the email's, same login).
             "caldav_settings" => {
@@ -500,6 +581,9 @@ impl Host {
                 ok(json!({"brave": api_key("brave").is_some(), "searxng_url": self.db.setting("searxng_url")?.unwrap_or_default()}))
             }
             "chats" => ok(self.db.chats()?),
+            // Each topic in a private Telegram chat its own conversation (read per message, so no restart).
+            "telegram_topics" => ok(self.db.setting(&format!("telegram_topics:{}", arg::<i64>(a, "bot_id")?))?.as_deref() == Some("on")),
+            "set_telegram_topics" => ok(self.db.set_setting(&format!("telegram_topics:{}", arg::<i64>(a, "bot_id")?), if arg(a, "on")? { "on" } else { "off" })?),
             // Has this conversation read untrusted content (so changes ask first)? And: start a fresh one.
             "conversation" => ok(json!({"tainted": self.db.conv_tainted(arg(a, "bot_id")?, arg(a, "chat_id")?)?})),
             "new_conversation" => {
@@ -522,10 +606,26 @@ impl Host {
             // Everything Mimir keeps about you, as one JSON file (memories, conversations, meetings, skills, routines,
             // bots without their tokens).
             "export_all" => ok(self.db.export_all()?),
+            // Daily copies of the database (backups/ in the data folder), and putting one back.
+            "backups" => ok(json!({"dir": crate::backup::dir(&self.db), "list": crate::backup::list(&self.db)})),
+            "backup_now" => ok(crate::backup::snapshot(&self.db, "")?),
+            "backup_restore" => {
+                let name: String = arg(a, "name")?;
+                // Bots stopped around it, so nothing writes into the old database mid-restore; started again either way.
+                self.stop_all();
+                let done = crate::backup::restore(&self.db, &name);
+                self.restart_all();
+                ok(done?)
+            }
             // Someone else's chat (a guest: nothing of yours there), or yours.
             "chat_guest" => ok(self.db.chat_set_guest(arg(a, "chat_id")?, arg(a, "guest")?)?),
+            // A guest's chat or a group reads (and adds to) the household's memories; a family group lets everyone in it talk.
+            "chat_household" => ok(self.db.chat_set_household(arg(a, "chat_id")?, arg(a, "on")?)?),
+            "chat_family" => ok(self.db.chat_set_family(arg(a, "chat_id")?, arg(a, "on")?)?),
+            // One bot keeps a memory to itself, or all bots share it again (bot_id 0).
+            "memory_for_bot" => ok(self.db.set_for_bot(&scope(a)?, arg(a, "id")?, arg(a, "bot_id")?)?),
             "entries" => ok(self.db.entries(&scope(a)?)?),
-            "search" => ok(self.db.search(&scope(a)?, &arg::<String>(a, "query")?, 50)?),
+            "search" => ok(self.db.search(&scope(a)?, 0, &arg::<String>(a, "query")?, 50)?),
             "forget" => ok(self.db.forget(&scope(a)?, arg(a, "id")?)?),
             "pin" => ok(self.db.pin(&scope(a)?, arg(a, "id")?, arg(a, "pinned")?)?),
             "background" => ok(self.db.background(&scope(a)?, arg(a, "id")?, arg(a, "on")?)?),
@@ -539,6 +639,12 @@ impl Host {
             "files" => ok(crate::files::list(&self.db, arg(a, "chat_id")?, "")?.into_iter().map(|(path, size)| json!({"path": path, "size": size})).collect::<Vec<_>>()),
             "file" => ok(crate::files::read(&self.db, arg(a, "chat_id")?, &arg::<String>(a, "path")?)?.0),
             "delete_file" => ok(crate::files::delete(&self.db, arg(a, "chat_id")?, &arg::<String>(a, "path")?)?),
+            // A file a bot sent to the chat ([[file:…]] in its reply), as base64, to show or save.
+            "sent_file" => {
+                use base64::Engine;
+                let (path, name) = crate::files::sent_path(&self.home, arg(a, "chat_id")?, &arg::<String>(a, "name")?).context("that file is gone (sent files are kept 60 days)")?;
+                ok(json!({"name": name, "data": base64::engine::general_purpose::STANDARD.encode(std::fs::read(path)?)}))
+            }
             // Mimir's skill library for a chat: each skill, which bots there already have it, and per bot the tools it
             // needs that the bot can't use here (a calendar not linked, a tool off for that bot…).
             "skill_library" => {
@@ -610,6 +716,15 @@ impl Host {
                 &crate::db::Prov::by("you"),
             )?),
             "suggestions" => ok(self.db.suggestions(&scope(a)?)?),
+            // The one-time "get to know me" pass: whether it can run (email or calendar connected) and has; `run` starts it.
+            "know_me" => {
+                if arg::<Option<bool>>(a, "run")?.unwrap_or(false) {
+                    let bot = crate::tidy::memory_bot(&self.db).context("no bots")?;
+                    return ok(crate::tidy::get_to_know(&self.db, &self.provider(bot)?, bot, arg(a, "chat_id")?).await?);
+                }
+                let ready = crate::email::account(&self.db).is_some() || secret_get(crate::calendar::SECRET).is_some();
+                ok(json!({"ready": ready, "done": self.db.setting(crate::tidy::KNOW_ME)?.is_some()}))
+            }
             // Replay past corrections against a suggested preference (on request: it costs model calls).
             "check_suggestion" => {
                 let bot = crate::tidy::memory_bot(&self.db).context("no bots")?;
@@ -867,6 +982,7 @@ impl Host {
                             once: true,
                             watch: String::new(),
                             retries: 0,
+                            urgent: String::new(),
                         }
                     }
                 };
@@ -888,8 +1004,9 @@ impl Host {
                 ok(json!({"reply": reply, "would": would, "looked": looked}))
             }
             // A photo pasted or dropped into the chat: base64 in, a path under <home>/media out.
-            // A PDF or text file dropped into the app's chat: its text, wrapped for the bot as outside content. The
-            // conversation is marked as having read outside content, like a web page.
+            // A PDF, Word, Excel or text file dropped into the app's chat: its text, wrapped for the bot as outside
+            // content. The conversation is marked as having read outside content, like a web page. A scanned PDF
+            // gives {text, images}: its pages saved as photos to send with the message.
             "read_document" => {
                 use base64::Engine;
                 let (bot, chat, name): (i64, i64, String) = (arg(a, "bot_id")?, arg(a, "chat_id")?, arg(a, "name")?);
@@ -897,17 +1014,30 @@ impl Host {
                 if bytes.len() > 20 * 1024 * 1024 {
                     bail!("that file is over 20 MB");
                 }
-                let text = match crate::read_document_text(&name, "", bytes).await {
-                    None => bail!("I can read PDFs and text files, not this kind of file yet"),
+                let said = arg::<String>(a, "text").unwrap_or_default();
+                let text = match crate::read_document_text(&name, "", bytes.clone()).await {
+                    None => bail!("I can read PDFs, Word and Excel files and text files, not this kind of file yet"),
                     Some(r) => r?,
                 };
-                if text.split_whitespace().count() < 5 {
+                let pages = if text.split_whitespace().count() < 5 && crate::is_pdf(&name, "") { crate::read_pdf_pages(bytes).await } else { vec![] };
+                if text.split_whitespace().count() < 5 && pages.is_empty() {
                     bail!("that file has no text I can read (a scanned PDF?); send photos of the pages instead");
                 }
                 if chat != crate::INCOGNITO_CHAT {
                     self.db.conv_taint(bot, chat)?;
                 }
-                ok(crate::with_document(&arg::<String>(a, "text").unwrap_or_default(), &name, &text))
+                if pages.is_empty() {
+                    return ok(crate::with_document(&said, &name, &text));
+                }
+                let dir = self.home.join("media");
+                std::fs::create_dir_all(&dir)?;
+                let mut images = vec![];
+                for (i, p) in pages.iter().enumerate() {
+                    let path = dir.join(format!("{}-{}-p{}.jpg", crate::db::now(), p.len(), i + 1));
+                    std::fs::write(&path, p)?;
+                    images.push(path.display().to_string());
+                }
+                ok(json!({"text": crate::with_scan(&said, &name, images.len()), "images": images}))
             }
             "save_media" => {
                 use base64::Engine;
@@ -927,6 +1057,8 @@ impl Host {
             }
             "reset_watch_noise" => ok(self.db.routine_reset_noise(arg(a, "chat_id")?, arg(a, "id")?)?),
             "set_watch" => ok(self.db.routine_set_watch(arg(a, "chat_id")?, arg(a, "id")?, &arg::<String>(a, "watch")?)?),
+            // Only the person sets this (no bot tool does): what the bot read can't widen what comes through.
+            "set_urgent" => ok(self.db.routine_set_urgent(arg(a, "chat_id")?, arg(a, "id")?, &arg::<String>(a, "rule")?)?),
             "set_delivery" => ok(self.db.routine_set_delivery(arg(a, "chat_id")?, arg(a, "id")?, &arg::<String>(a, "delivery")?)?),
             // How full standing memory is (the Memory tab's meter).
             "standing_memory" => {
@@ -979,6 +1111,21 @@ impl Host {
                     self.db.set_setting("quiet_hours", &h)?;
                 }
                 ok(self.db.setting("quiet_hours")?.unwrap_or_default())
+            }
+            // The private chat that also gets every chat's routine asks, failed routines and memory suggestions: get
+            // without `chat`, set with it (0 = none). Returns the one in use and the chats that can be it.
+            "decisions_chat" => {
+                if let Some(chat) = arg::<Option<i64>>(a, "chat")? {
+                    if chat == 0 {
+                        self.db.set_setting("decisions_chat", "")?;
+                    } else if crate::runtime::decisions_ok(&self.db, chat) {
+                        self.db.set_setting("decisions_chat", &chat.to_string())?;
+                    } else {
+                        bail!("pick one of your own private chats, not a group or a guest's chat");
+                    }
+                }
+                let options: Vec<_> = self.db.chats()?.into_iter().filter(|c| crate::runtime::decisions_ok(&self.db, c.chat_id)).collect();
+                ok(json!({"chat": crate::runtime::decisions_chat(&self.db), "options": options}))
             }
             // The language Mimir writes in, in chat apps: a code from say::LANGS, or "" for the system's (get without
             // `lang`, set with it).
@@ -1079,6 +1226,8 @@ impl Host {
                         json!({"key": key, "bot_id": bot, "routine_id": routine, "routine": prompt, "until": h.until, "why": h.why, "cap": h.waive.is_some()})
                     }).collect::<Vec<_>>(),
                     "suggestions": counts,
+                    // The daily check found the database damaged: restore a backup.
+                    "damage": self.db.setting(crate::backup::DAMAGE)?,
                     "unconfirmed": self.db.unconfirmed_counts()?.into_iter().map(|(chat, n)| json!({"chat_id": chat, "count": n})).collect::<Vec<_>>(),
                     // A newer release than this server runs (looked up by the bots' loops twice a day).
                     "server_update": is_server().then(|| self.db.setting("update_latest").ok().flatten()).flatten()
@@ -1280,8 +1429,8 @@ mod tests {
             }
         }
         let (mut missing, mut seen) = (vec![], 0);
-        for f in std::fs::read_dir(root.join("ui/src")).unwrap() {
-            let path = f.unwrap().path();
+        let files = std::fs::read_dir(root.join("ui/src")).unwrap().chain(std::fs::read_dir(root.join("ui/src/views")).unwrap());
+        for path in files.map(|f| f.unwrap().path()).filter(|p| p.is_file()) {
             let src = std::fs::read_to_string(&path).unwrap();
             // invoke('name'…), invoke<T>('name'…), localInvoke('name'…); not api.ts's own tauriInvoke('api', …).
             for (i, _) in src.match_indices("nvoke").filter(|(i, _)| !src[..*i].ends_with("tauriI")) {
@@ -1349,8 +1498,27 @@ mod tests {
         assert!(host.call("set_rule", &json!({"tool":"rm -rf","action":"allow"})).await.is_err());
         assert!(host.call("nope", &json!({})).await.is_err());
 
+        // A chat API token reaches its bot and only that; the list never shows it; it goes with its bot.
+        let bot = id.as_i64().unwrap();
+        assert!(host.call("chat_token_add", &json!({"bot_id": bot, "name": " "})).await.is_err());
+        assert!(host.call("chat_token_add", &json!({"bot_id": 999, "name": "Shortcuts"})).await.is_err());
+        let token = host.call("chat_token_add", &json!({"bot_id": bot, "name": "Shortcuts"})).await.unwrap();
+        let token = token.as_str().unwrap();
+        assert_eq!(chat_token_bot(&host.db, token), Some(bot));
+        assert_eq!(chat_token_bot(&host.db, &token[..token.len() - 1]), None);
+        let list = host.call("chat_tokens", &json!({})).await.unwrap();
+        assert_eq!((list[0]["name"].as_str(), list[0]["bot_id"].as_i64(), list[0].get("hash")), (Some("Shortcuts"), Some(bot), None));
+        assert!(!list.to_string().contains(token));
+        let other = host.call("chat_token_add", &json!({"bot_id": 1, "name": "HA"})).await.unwrap();
+        host.call("chat_token_delete", &json!({"id": list[0]["id"]})).await.unwrap();
+        assert_eq!(chat_token_bot(&host.db, token), None);
+        host.call("chat_token_add", &json!({"bot_id": bot, "name": "Again"})).await.unwrap();
+
         host.call("delete_bot", &json!({"id": id})).await.unwrap();
         assert_eq!(host.call("bots", &json!({})).await.unwrap().as_array().unwrap().len(), 1);
+        let list = host.call("chat_tokens", &json!({})).await.unwrap();
+        assert_eq!(list.as_array().unwrap().len(), 1, "the deleted bot's token went with it");
+        assert_eq!(chat_token_bot(&host.db, other.as_str().unwrap()), Some(1));
         host.stop_all();
     }
 }

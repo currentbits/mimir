@@ -97,7 +97,9 @@ say what changed.
 - **Logs**: `docker compose logs -f mimir`. **Stop**: `docker compose down` (your data stays).
 - **A new admin token**: `docker compose exec mimir mimir admin-token --new`, then `docker compose restart`. Signed-in
   browsers and connected apps need the new one.
-- **Back up** the `mimir-data` volume: it holds the database (memories, bots, chats) and, on a server, the secrets.
+- **Backups**: Mimir keeps a checked copy of its database every day in `/data/backups` (7 daily, 4 weekly), and
+  Settings → Your data restores one. To restore a copy from elsewhere, put it there as `mimir-<anything>.db`.
+  For a copy off the server, back up the `mimir-data` volume: it holds the database (memories, bots, chats) and the secrets.
   For example `docker run --rm -v mimir_mimir-data:/data -v "$PWD":/out busybox tar czf /out/mimir-backup.tgz /data`
   (the volume's name starts with the folder's name; `docker volume ls` shows it).
 - **Two containers**: `mimir` (bots, web app, your data) and `computer` ([the bots' computer](computer.md): a screen
@@ -129,6 +131,18 @@ would otherwise travel in the clear.
 
 Some things stay on the computer even when connected, because they belong to it: [meeting](meetings.md) recording and
 the meetings list, the quick-ask shortcut, keeping the computer awake.
+
+## Chat from Shortcuts, Home Assistant and other apps
+
+**Settings → Chat API** makes a token for one bot. Give an app that speaks OpenAI's chat API the base URL
+`https://<your server>/v1`, the token as its API key, and any model name. It can then ask that bot
+(`POST /v1/chat/completions`, `GET /v1/models`) and do nothing else: the token doesn't open `/api` or any other bot.
+
+The bot answers in its built-in chat, so what the app asked shows up there. Mimir keeps the conversation itself: only
+the last user message of each request counts, and the app's own history is ignored. `"stream": true` gets the whole
+reply as one chunk once it's done. Anything the bot needs approved waits in Needs you as usual, so set up such a bot
+with the tools it needs allowed. The token is shown once and only its hash is kept; delete it there to cut the app off,
+and deleting a bot deletes its tokens.
 
 ## Moving from the desktop app
 

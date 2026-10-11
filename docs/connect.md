@@ -80,6 +80,25 @@ Emails are other people's words, so a bot that has read your mail treats it as o
 and after reading your mail, opening any web address asks too (a link could carry a code out). See
 [Tools, approvals and safety](tools-and-safety.md).
 
+### Tasks by email
+
+Turn on **Settings → Email → Tasks by email** to give your bot a task from any phone, without an app: forward or CC
+an email to your own address with `+mimir` added (`you+mimir@gmail.com`), or file it in a folder called **Mimir**.
+Write what you want on top ("add this to my calendar", "pay this by Friday"). If you forward nothing, the subject is
+enough ("call the dentist at 4").
+
+- The bot never watches your inbox. Every two minutes Mimir checks only mail sent to `+mimir` and the Mimir folder,
+  and only mail that came in after you turned this on. Your first bot (the one that also tidies up memory) handles it and
+  answers in your most recent private chat with it, or in the app.
+- Only mail **from your own address** counts, and only when **DKIM passes** for its domain. Mimir trusts the check
+  your mail provider stamped on the email when it arrived, not one written into the email itself. Mail from your
+  address that fails the check isn't run, and you're told about it: someone may be pretending to be you.
+- Your note on top is the instruction. Everything you forwarded or quoted below it, and any email attached to it, is
+  **outside content**: the bot reads it but doesn't follow instructions in it, and the conversation counts as having
+  read outside content.
+- Gmail, iCloud and Fastmail deliver `+` addresses to your inbox. If yours doesn't, send the mail to yourself and
+  move it into the Mimir folder.
+
 ## Calendar
 
 Bots can read your calendar, and put things in it through links you click.

@@ -4,6 +4,14 @@ Your bots remember things about you so you don't repeat yourself: facts ("my den
 giving news, use 3 bullets with links") and open tasks ("send Sam the deck by Friday"). Memory belongs to **you** and
 is shared by all your bots. You can see, correct and remove every bit of it in the **Memory** tab.
 
+- **Only one bot.** A memory can be kept by one bot alone: ask it ("just for you: …") and it saves it with `only_me`, or
+  switch a bot-learned memory between *all bots* and *only <bot>* on its card. Your other bots don't see it in their
+  standing memory or searches; a new version stays with that bot.
+- **The household.** Lists and plans you share with people you choose (a shopping list) live in the **Household**:
+  see [Bots and chats](bots-and-chats.md#the-household-and-family-groups). Bots in household chats get it as its own
+  block next to standing memory, and `memory_search` searches it too (marked *household*). What a guest adds arrives
+  as a suggestion in your Needs you.
+
 ## How bots use it
 
 - **Standing memory**: your preferences and the most recent facts and tasks go into every reply's instructions, within
@@ -63,6 +71,16 @@ it belongs to the chat, so a group chat can't read your private chat's files.
 - **Forget** hides it but keeps it under *History*; **Erase** (in History) deletes it and its earlier versions for good.
 - **Import** takes text pasted from another assistant ("List everything you remember about me") and turns it into
   suggestions, skipping what you already have and anything that looks like a key or password.
+
+## Suggestions from your email and calendar
+
+**Settings → Get to know me** shows up once your email or calendar link is connected, and runs once. Your first bot's
+account gets the senders, subjects and dates of the last 30 days of your inbox and your calendar from a month back to
+two weeks ahead (titles and who's invited), with no tools: it can't read an email's text, write, send or mark anything.
+It proposes up to 15 new memories (people you work with, recurring meetings, upcoming deadlines). They arrive as
+suggestions in the Memory tab, never as memories. Because they come from other people's words, they only add (never
+change or retire a memory you have) and stay *unconfirmed* even after you accept them, out of the bots' standing
+instructions until you mark one **Looks right**.
 
 ## The daily tidy-up
 

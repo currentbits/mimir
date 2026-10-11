@@ -11,8 +11,8 @@ to the services you connected.
 | Bot tokens, API keys (including Brave Search's), saved logins, tool-server tokens and sign-ins, the calendar link, the email and calendar app passwords, the Outlook sign-in | The OS keychain (macOS Keychain, Windows Credential Manager, the Linux keyring); on a server, its database; the data folder is owner-only (mode 0700) |
 | Your mailboxes' server names and addresses (not their passwords), the Outlook app's client ID | `~/.mimir/mimir.db` (settings) |
 | The chats' file workspaces (notes, lists, drafts bots keep) | `~/.mimir/files/chat-<id>/`, with earlier versions under `.history/` |
-| Photos you send | `~/.mimir/media/`, deleted after 60 days |
-| A file's text you send (PDF, text file) | In the chat's history, with your message |
+| Photos you send (and a scanned PDF's pages) | `~/.mimir/media/`, deleted after 60 days |
+| A file's text you send (PDF, Word, Excel, text file) | In the chat's history, with your message |
 | Each bot's browser profile (its logins and cookies on sites) | `~/.mimir/browser/`; deleted with the bot |
 | The AI CLIs' own copies of conversations | Claude Code: `~/.claude/projects/` (the folder for Mimir's workspace); Codex: `~/.codex/sessions/`; Grok: `~/.mimir/grok/.grok/sessions/`. Deleted when you start fresh, delete a chat's history or delete the bot |
 | Speech, voice-activity and speaker models (and on Linux the speaker library) | `~/.mimir/whisper/` |
@@ -67,6 +67,10 @@ download clicks with Meterbird; that's the site, not the app.)
 - **Kept for six months**: the details of each action in the run log, corrections and signals. Then they're deleted.
 - **Export everything** (Settings → Your data) saves one JSON file with your memories, conversations, meetings,
   skills, routines, chats and bots (not tokens or keys).
+- **Daily backups**: once a day Mimir checks the database (SQLite's `quick_check`) and keeps a copy in `backups/`
+  in its data folder: the last 7 days and 4 weeks. Settings → Your data → **Restore a backup…** puts one back (a copy
+  of now is kept first). If the check finds damage, no copy is taken and Needs you says so. The copies hold what the
+  database holds (on a server, its secrets too) and stay in the owner-only data folder.
 - **Delete everything**: quit Mimir, delete `~/.mimir` (or your `MIMIR_HOME`), remove the Mimir items from the
   keychain, and delete Mimir's workspace folders in `~/.claude/projects/` and Codex's sessions in `~/.codex/sessions/`.
 

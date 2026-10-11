@@ -10,6 +10,12 @@ losing it. Schedules are in your local time. A routine a bot creates runs at mos
 becomes a routine that runs once, at that time, and is then gone (the Routines tab shows it as *Once · Fri 16 Oct
 09:00*). It can be paused or deleted like any routine.
 
+**Reminders for someone else.** "Remind Sam at 6 to take the bins out" goes to Sam's own chat, if Sam is in your
+[household](bots-and-chats.md#the-household-and-family-groups) (matched by the name of their chat, first name is
+enough). The first time for each person you're asked (its own kind of approval, never "always"); after that it's set up
+straight away. It shows under Sam's chat's Routines. Guests can't set reminders for others. The bot that sets it is the
+one that sends it, so it has to be one Sam paired with.
+
 **Timed off your calendar.** "An hour before each meeting with someone outside, brief me on who they are" runs off the
 calendar you linked in Meetings → Calendar instead of a clock. Where a cron goes, the schedule is
 `calendar:<minutes before>`, optionally `:meetings` (only events with someone else invited) or `:outside` (only ones
@@ -132,6 +138,14 @@ Each routine is sent:
 
 Every run's reply is kept in **Activity**.
 
+**Come through right away if…** A routine that would wait (in the digest, just logged, or in quiet hours) can have
+one line of your own, like "my flight is delayed or cancelled". The AI is told your rule and starts its reply with
+URGENT only when it holds; that result is then sent right away, starting with "🔔 Came through because: my flight is
+delayed or cancelled", instead of waiting. At most 3 results a day come through this way, all bots together; past
+that, the result waits as usual and says it matched. You set the rule in the Routines tab (Edit); a bot can't set or
+change it, so nothing it reads on a web page can widen it. A page can still try to make the AI think your rule holds,
+which is what the daily cap is for. Rehearsals and **Run now** don't use it.
+
 You can reply to what a routine sent ("skip the crypto stuff"), and the same goes for the digest and the weekly review.
 A new routine's first three results end by asking "Anything here you didn't need, or something missing?": reply, and
 the bot rewrites the routine's brief to match (`routine_update`), keeping what you didn't ask to change. You can ask
@@ -157,7 +171,8 @@ weekly review, which are put together from routine results and learned memories.
 
 Set quiet hours under Settings → Daily digest (e.g. 22:00–07:00). They hold everything proactive: routines that would
 message right away go into the digest, the digest and the weekly review wait until quiet hours end, and approval cards
-from routines wait until morning. Replies to your own messages still come.
+from routines wait until morning. Replies to your own messages still come, and so does a result that matches its
+routine's "come through right away if" rule (above).
 
 ## Needs you
 
@@ -169,3 +184,13 @@ answered in time, and memory suggestions.
 Routines run with nobody watching, so an approval a routine needs is **parked** there for 24 hours instead of being
 denied after 5 minutes; when you approve, that exact action runs and the chat says so. The menu-bar / tray icon shows
 the count, and its menu lists what's waiting with Allow and Deny, so you can answer without opening the window.
+
+### One chat for decisions
+
+A parked approval's card goes to the chat its routine belongs to, so one made in the app chat waits until you open
+the app. Settings → Decisions picks one of your own private chats in Telegram, Slack or Discord (never a group or a
+guest's chat) that also gets them: a parked approval from any other chat comes there as a card saying where it's from
+("From: This computer"), a routine that failed for good says so, and new memory suggestions are mentioned (accept or
+dismiss them in Needs you). Answer the card in either place and the other one shows the outcome, without buttons.
+Quiet hours hold these too. Only the bot that asked sends the card, using its own app connection, so that bot needs a
+connection to the same app as the chat.

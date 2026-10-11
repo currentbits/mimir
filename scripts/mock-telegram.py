@@ -2,10 +2,11 @@
 
 POST /bot<token>/<method> handles getMe, getUpdates (long-poll), sendMessage, editMessageText,
 sendChatAction, answerCallbackQuery, sendMessageDraft (private chats, non-zero draft_id; MOCK_NO_DRAFTS=1
-rejects it, like an older API). Every call is appended to calls.jsonl.
+rejects it, like an older API), and multipart uploads (sendPhoto, sendDocument: logged with each part's name and size,
+and a file's name). Every call is appended to calls.jsonl.
 POST /control/push {update} queues an update for getUpdates. getFile + GET /file/bot<token>/<path> serve MOCK_FILE.
 """
-import json, os, sys, threading, time
+import email.parser, json, os, sys, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 LOG = sys.argv[2] if len(sys.argv) > 2 else "calls.jsonl"
@@ -18,7 +19,15 @@ class H(BaseHTTPRequestHandler):
         self.send_response(200); self.send_header("content-type", "application/json"); self.send_header("content-length", str(len(b))); self.end_headers(); self.wfile.write(b)
     def do_POST(self):
         body = self.rfile.read(int(self.headers.get("content-length") or 0)) or b"{}"
-        data = json.loads(body)
+        if self.headers.get("content-type", "").startswith("multipart/form-data"):
+            # An upload: each text part's value, each file part as {"filename", "size"}.
+            msg = email.parser.BytesParser().parsebytes(b"content-type: " + self.headers["content-type"].encode() + b"\r\n\r\n" + body)
+            data = {}
+            for part in msg.get_payload():
+                raw = part.get_payload(decode=True) or b""
+                data[part.get_param("name", header="content-disposition")] = {"filename": part.get_filename(), "size": len(raw)} if part.get_filename() else raw.decode()
+        else:
+            data = json.loads(body)
         if self.path == "/control/push":
             with lock:
                 data["update_id"] = next_id[0]; next_id[0] += 1; updates.append(data)
