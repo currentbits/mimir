@@ -352,10 +352,14 @@ async fn replay(db: &Db, provider: &Provider, bot: i64, chat: i64, pref: &str) -
     let system = format!("{plain} Follow this standing preference:\n<preference>\n{pref}\n</preference>");
     let (mut shown, mut with_is_a) = (vec![], vec![]);
     let outcome: Result<String> = async {
-        for (n, (asked, bad, correction)) in cases.iter().enumerate() {
-            let with = provider.run(&ctx, &system, &[], asked, None).await?;
+        // All the replays at once (one round of waiting, not eight), then the judge.
+        let replies = futures_util::future::try_join_all(
+            cases.iter().flat_map(|(asked, ..)| [provider.run(&ctx, &system, &[], asked, None), provider.run(&ctx, plain, &[], asked, None)]),
+        )
+        .await?;
+        for (n, ((asked, bad, correction), pair)) in cases.iter().zip(replies.chunks(2)).enumerate() {
+            let (with, without) = (&pair[0], &pair[1]);
             add(&with.usage);
-            let without = provider.run(&ctx, plain, &[], asked, None).await?;
             add(&without.usage);
             // Which one is A is a coin toss per case, so the judge can't favour "the new one".
             let a_first = crate::random_hex(1)?.as_bytes()[0] % 2 == 0;

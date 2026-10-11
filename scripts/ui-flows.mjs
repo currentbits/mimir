@@ -1,10 +1,13 @@
-// The app's main flows clicked through in a browser, switching bots mid-reply too (npm i playwright; npx playwright install chromium), against a
-// server set up as for scripts/e2e-flows.py, with MIMIR_UI_DIR=ui/dist: node scripts/ui-flows.mjs
-import pkg from 'playwright'; const { chromium } = pkg
+// The app's main flows clicked through in a browser, switching bots mid-reply too (Playwright from ui/: npm ci there, then
+// npx playwright install chromium), against a server set up as for scripts/e2e-flows.py, with MIMIR_UI_DIR=ui/dist:
+// node scripts/ui-flows.mjs
+import { createRequire } from 'node:module'
 import { execFileSync } from 'node:child_process'
-// Ada and Search on the fake AI (scripts/fake-ai.py on :8899), in a fresh server.
-const api = (cmd, args = {}) => fetch(`http://127.0.0.1:8789/api/${cmd}`, { method: 'POST', headers: { Authorization: 'Bearer testtoken-abcdefghijklmnop', 'Content-Type': 'application/json' }, body: JSON.stringify(args) }).then(r => r.json())
-const fake = { provider: 'openai', model: 'fake', base_url: 'http://127.0.0.1:8899/v1', tools: '', look: '' }
+const { chromium } = createRequire(new URL('../ui/package.json', import.meta.url))('playwright')
+// Ada and Search on the fake AI (scripts/fake-ai.py on :8899), in a fresh server. Other ports: E2E_SERVER, E2E_AI as there.
+const SERVER = `http://${process.env.E2E_SERVER || '127.0.0.1:8789'}`, AI = `http://${process.env.E2E_AI || '127.0.0.1:8899'}`
+const api = (cmd, args = {}) => fetch(`${SERVER}/api/${cmd}`, { method: 'POST', headers: { Authorization: 'Bearer testtoken-abcdefghijklmnop', 'Content-Type': 'application/json' }, body: JSON.stringify(args) }).then(r => r.json())
+const fake = { provider: 'openai', model: 'fake', base_url: `${AI}/v1`, tools: '', look: '' }
 await api('onboarding_done'); await api('set_api_key', { kind: 'openai', key: 'k' })
 await api('save_bot', { bot: { id: 1, name: 'Ada', persona: '', ...fake } })
 if (!(await api('bots')).some(x => x.name === 'Search')) await api('save_bot', { bot: { id: 0, name: 'Search', persona: 'SEO research', ...fake } })
@@ -20,7 +23,7 @@ const tab = name => p.locator('.toolbar').getByText(name, { exact: true }).first
 const say = async text => { const box = p.locator('textarea').first(); await box.fill(text); await box.press('Enter') }
 const until = async (fn, ms = 15000) => { const t = Date.now(); while (Date.now() - t < ms) { if (await fn()) return true; await p.waitForTimeout(300) } return false }
 
-await p.goto('http://127.0.0.1:8789/'); await p.waitForTimeout(1500)
+await p.goto(`${SERVER}/`); await p.waitForTimeout(1500)
 
 // Chat with Ada, then Search: each its own thread
 await bot('Ada').click(); await p.waitForTimeout(500)
@@ -179,3 +182,4 @@ check('a 250-message chat takes 3 more exchanges', (await shown()).includes('OK:
 await p.screenshot({ path: '/tmp/ss/ui-flows-end.png' })
 console.log(errs.length ? errs.join('\n') : 'no page errors')
 console.log(failed ? `${failed} FAILED` : 'ALL PASS'); await b.close()
+process.exitCode = failed || errs.length ? 1 : 0

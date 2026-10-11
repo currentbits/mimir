@@ -328,26 +328,41 @@ const presenceOf = (s?: Status): Presence => !s ? 'off' : online(s).length ? 'li
 /** Bot id → bot, provided by Main. */
 const Bots = createContext<(id: number) => { id: number; name: string }>(id => ({ id, name: `Bot ${id}` }))
 
-/** Poll a loader every `ms` and on demand. */
-function useLoad<T>(load: () => Promise<T>, deps: unknown[], ms = 5000) {
+/** Load once and on demand; with `ms`, again `ms` after each answer. Nothing loads while the page is hidden;
+ *  it loads again when it shows. */
+function useLoad<T>(load: () => Promise<T>, deps: unknown[], ms = 0) {
   const [data, setData] = useState<T | null>(null)
   const [error, setError] = useState<string | null>(null)
   // Each change of what's loaded (another chat, another bot) starts a new generation: an answer for the one before,
   // still on its way, is dropped instead of landing over the new one.
   const gen = useRef(0)
   const mounted = useRef(false)
+  // The last answer as JSON: the same answer again keeps the old state, so nothing redraws.
+  const last = useRef('')
   const reload = useCallback(() => {
     const g = gen.current
-    return load().then(d => { if (g === gen.current) { setData(d); setError(null) } }, e => { if (g === gen.current) setError(String(e)) })
+    return load().then(d => {
+      if (g !== gen.current) return
+      const j = JSON.stringify(d)
+      if (j !== last.current) { last.current = j; setData(d) }
+      setError(null)
+    }, e => { if (g === gen.current) setError(String(e)) })
   }, deps) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     // What was shown for the one before goes too (a banner, a list), rather than standing in until the new one loads.
-    if (mounted.current) { gen.current++; setData(null); setError(null) }
+    if (mounted.current) { gen.current++; last.current = ''; setData(null); setError(null) }
     mounted.current = true
-    reload()
-    if (ms <= 0) return // load once, no polling
-    const t = setInterval(reload, ms)
-    return () => clearInterval(t)
+    // One load at a time: the next is timed from the answer, so a slow server never gets them stacked up.
+    let t = 0, busy = false, done = false
+    const tick = () => {
+      clearTimeout(t)
+      if (busy || done || document.hidden) return
+      busy = true
+      reload().finally(() => { busy = false; if (!done && ms > 0) t = window.setTimeout(tick, ms) })
+    }
+    tick()
+    document.addEventListener('visibilitychange', tick)
+    return () => { done = true; clearTimeout(t); document.removeEventListener('visibilitychange', tick) }
   }, [reload, ms])
   return { data, error, reload }
 }
@@ -706,9 +721,10 @@ function Main() {
   }, [statuses.data, bots.data]) // eslint-disable-line react-hooks/exhaustive-deps
   // What each bot is working on right now (a reply, a routine, a task from another bot, a memory tidy-up).
   const busy = useLoad(() => invoke<Busy[]>('busy'), [], 1500)
-  const chats = useLoad(() => invoke<Chat[]>('chats'), [])
-  const pending = useLoad(() => invoke<Approval[]>('approvals'), [], 1500)
-  const inbox = useLoad(() => invoke<Inbox>('inbox'), [], 3000)
+  const chats = useLoad(() => invoke<Chat[]>('chats'), [], 15000) // someone new writing to a bot adds a chat
+  // Approvals waiting come with the inbox.
+  const inbox = useLoad(() => invoke<Inbox>('inbox'), [], 2000)
+  const approvals = inbox.data?.approvals ?? []
   // Bots that aren't working (an account or a messaging app that won't connect) need you too.
   const troubled = (statuses.data ?? []).flatMap(s => { const t = troubleOf(s); return t ? [{ id: s.bot_id, text: t }] : [] })
   const needs = inboxCount(inbox.data) + troubled.length
@@ -778,7 +794,8 @@ function Main() {
 
   // ⌘F: on the Settings page it searches settings; anywhere else, memory.
   const findIt = () => {
-    const box = document.querySelector<HTMLInputElement>('.settings-search input')
+    // In Settings or a chat, its own search box; elsewhere, Memory's.
+    const box = document.querySelector<HTMLInputElement>('.settings-search input, .chat-search input')
     if (box) { box.focus(); box.select(); return }
     setView('memory')
     setTimeout(() => document.querySelector<HTMLInputElement>('.search input')?.focus(), 50)
@@ -795,7 +812,7 @@ function Main() {
     })).then(u => { off = u }, () => {})
     return () => off?.()
   }, [])
-  // ⌘ on macOS, Ctrl elsewhere: 1–5 sections, 0 Needs you, comma Settings, N new bot, F search memory.
+  // ⌘ on macOS, Ctrl elsewhere: 1–5 sections, 0 Needs you, comma Settings, N new bot, F search (this chat, or memory).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return
@@ -864,7 +881,7 @@ function Main() {
                 }}>
                 {(() => {
                   // Waiting on you beats working: the reply (or routine) can't go on until you answer.
-                  const asks = (pending.data ?? []).some(a => a.bot_id === b.id)
+                  const asks = approvals.some(a => a.bot_id === b.id)
                   const w: Busy | undefined = asks ? { bot_id: b.id, chat_id: 0, trigger: 'ask', step: 'Waiting for your OK' } : busy.data?.find(x => x.bot_id === b.id)
                   return <>
                     <Avatar id={b.id} name={b.name} presence={p} mood={w ? busyMood(w) : undefined} />
@@ -922,7 +939,7 @@ function Main() {
           )}
         </header>
 
-        {view !== 'inbox' && <Approvals list={pending.data ?? []} chats={list} chatName={chatName} onDecided={() => { pending.reload(); inbox.reload() }} />}
+        {view !== 'inbox' && <Approvals list={approvals} chats={list} chatName={chatName} onDecided={inbox.reload} />}
 
         {view === 'chat' ? (
           <ChatView key={`chat-${chat.chat_id}-${incognito && chat.chat_id === LOCAL}-${botChat ? chatBot ?? botList[0]?.id : 'all'}`} only={botChat} chat={chat} bots={botList} onTurn={chats.reload}
@@ -939,7 +956,7 @@ function Main() {
               {view === 'settings' && <SettingsView onComputer={computer.reload} />}
               {view === 'computer' && <ComputerView bots={botList} chats={list} chatName={chatName} />}
               {view === 'meetings' && <MeetingsView bots={botList} onSent={talkTo} />}
-              {view === 'inbox' && <InboxView data={inbox.data} troubled={troubled} reload={() => { inbox.reload(); pending.reload() }} chats={list} chatName={chatName} openBot={openBot} openChat={openChat} />}
+              {view === 'inbox' && <InboxView data={inbox.data} troubled={troubled} reload={inbox.reload} chats={list} chatName={chatName} openBot={openBot} openChat={openChat} />}
               {view === 'bot' && (
                 // Keyed on whether the bot has loaded too: right after "Create bot" the list hasn't caught up yet.
                 <BotPage key={`${botId}:${botList.some(b => b.id === botId)}`} bot={botList.find(b => b.id === botId)} status={statusOf(botId)} canDelete={botList.length > 1}
@@ -1272,7 +1289,10 @@ function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, openBot
   // A bot that was deleted falls back to the first one.
   const botId = chosen !== undefined && bots.some(b => b.id === chosen) ? chosen : bots.some(b => b.id === own) ? own : bots[0]?.id ?? own
   const mine = only ? botId : undefined
-  const log = useLoad(() => incognito ? Promise.resolve([] as Message[]) : invoke<Message[]>('messages', { chatId: chat.chat_id, botId: mine }), [chat.chat_id, incognito, mine], incognito ? 0 : 4000)
+  // The newest 200, or, once you've paged back (or jumped to an old search hit), everything from `from` on. A ref, not a
+  // dep: a changed dep would blank the thread while it reloads.
+  const from = useRef<number | null>(null)
+  const log = useLoad(() => incognito ? Promise.resolve([] as Message[]) : invoke<Message[]>('messages', { chatId: chat.chat_id, botId: mine, fromId: from.current ?? undefined }), [chat.chat_id, incognito, mine], incognito ? 0 : 4000)
   // Incognito messages exist only here; leaving or switching it off drops them.
   const [secret, setSecret] = useState<Message[]>([])
   const cid = incognito ? INCOGNITO : chat.chat_id
@@ -1333,7 +1353,60 @@ function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, openBot
     ownSend.current = false
     seen.current = lastId
   }, [log.data, lastId])
-  const anim = (m: Message) => (m.id > animFrom ? ' msg-in' : m.id > chipsFrom ? ' acts-in' : '')
+  const [lit, setLit] = useState<number | null>(null)
+  const anim = (m: Message) => (m.id > animFrom ? ' msg-in' : m.id > chipsFrom ? ' acts-in' : '') + (m.id === lit ? ' msg-hit' : '')
+
+  // Earlier messages: null until you ask (a full first page means there may be more).
+  const [earlier, setEarlier] = useState<boolean | null>(null)
+  const hasEarlier = !incognito && (earlier ?? (log.data?.length ?? 0) >= 200)
+  // How far the bottom was, so messages going in above don't move what you're looking at.
+  const keep = useRef<number | null>(null)
+  const showEarlier = () => {
+    if (!msgs[0]) return
+    invoke<Message[]>('messages', { chatId: chat.chat_id, botId: mine, beforeId: msgs[0].id }).then(page => {
+      setEarlier(page.length >= 200)
+      if (!page.length) return
+      const el = scroller.current
+      if (el) keep.current = el.scrollHeight - el.scrollTop
+      from.current = page[0].id
+      return log.reload()
+    }, e => setErr(String(e)))
+  }
+  useLayoutEffect(() => {
+    const el = scroller.current
+    if (keep.current === null || !el) return
+    el.scrollTop = el.scrollHeight - keep.current
+    keep.current = null
+  }, [msgs[0]?.id]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Search this chat: a hit loads what's needed and scrolls to it, lit for a moment.
+  const [query, setQuery] = useState('')
+  const [hits, setHits] = useState<{ id: number; ts: number; bot_id: number; role: string; excerpt: string }[] | null>(null)
+  useEffect(() => {
+    const q = query.trim()
+    if (!q || incognito) { setHits(null); return }
+    const t = setTimeout(() => invoke<typeof hits>('chat_search', { chatId: chat.chat_id, botId: mine, query: q }).then(setHits, e => setErr(String(e))), 200)
+    return () => clearTimeout(t)
+  }, [query, chat.chat_id, mine, incognito])
+  const target = useRef<number | null>(null)
+  const jump = (id: number) => {
+    setQuery('')
+    target.current = id
+    setLit(id)
+    setTimeout(() => setLit(l => (l === id ? null : l)), 2400)
+    if (msgs[0] && id >= msgs[0].id) return goTo()
+    from.current = id
+    setEarlier(true)
+    log.reload()
+  }
+  const goTo = () => {
+    const el = target.current !== null && document.getElementById(`m${target.current}`)
+    if (!el) return
+    target.current = null
+    atBottom.current = false
+    el.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  }
+  useLayoutEffect(goTo, [log.data]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const shown = useRef(0)
   useLayoutEffect(() => {
@@ -1354,9 +1427,14 @@ function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, openBot
   }, [working])
   useEffect(() => {
     if (!working) return
-    const t = setInterval(() => invoke<{ draft: string | null; step: string | null; done: { summary: string; ok: boolean; decision: string }[] }>('live', { botId: replier, chatId: cid })
-      .then(l => { setDraft(l?.draft ?? ''); setStep(l?.step ?? null); setDone(l?.done ?? []) }, () => {}), 150)
-    return () => { clearInterval(t); setDraft(''); setStep(null); setDone([]) }
+    // The next look is 150 ms after the last answer, so a slow server doesn't get them stacked up.
+    let t = 0, off = false
+    const poll = () => invoke<{ draft: string | null; step: string | null; done: { summary: string; ok: boolean; decision: string }[] }>('live', { botId: replier, chatId: cid })
+      // done is a new array every time: set it only when it says something new.
+      .then(l => { setDraft(l?.draft ?? ''); setStep(l?.step ?? null); const d = l?.done ?? []; setDone(o => JSON.stringify(o) === JSON.stringify(d) ? o : d) }, () => {})
+      .finally(() => { if (!off) t = window.setTimeout(poll, 150) })
+    t = window.setTimeout(poll, 150)
+    return () => { off = true; clearTimeout(t); setDraft(''); setStep(null); setDone([]) }
   }, [working, replier, cid])
   useLayoutEffect(() => {
     const t = box.current
@@ -1432,15 +1510,15 @@ function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, openBot
   const bubble = (m: Message) => {
     const sched = m.role === 'user' ? m.content.match(SCHEDULED) : null
     if (sched) return (
-      <div className={'msg-trigger' + anim(m)} title={sched[4]}>
+      <div id={`m${m.id}`} className={'msg-trigger' + anim(m)} title={sched[4]}>
         <Icon name={sched[1] === 'quiet check' ? 'moon' : 'clock'} size={13} />
         <span>{sched[1] === 'quiet check' ? 'Quiet check' : 'Routine'} · {schedule(sched[3])} — {sched[4]}</span>
       </div>
     )
-    if (m.role === 'user') return <div className={'msg-user' + anim(m)} title={fullTime(m.ts)}><Said text={m.content} /></div>
+    if (m.role === 'user') return <div id={`m${m.id}`} className={'msg-user' + anim(m)} title={fullTime(m.ts)}><Said text={m.content} /></div>
     const b = botOf(m.bot_id)
     return (
-      <div className={'msg-bot' + anim(m)} style={{ '--pig': pigment(b.id) } as React.CSSProperties}>
+      <div id={`m${m.id}`} className={'msg-bot' + anim(m)} style={{ '--pig': pigment(b.id) } as React.CSSProperties}>
         <Avatar id={b.id} name={b.name} size={26} still />
         <div>
           <div className="msg-head"><b>{b.name}</b><time title={fullTime(m.ts)}>{ago(m.ts)}</time><CopyButton text={m.content} /></div>
@@ -1456,7 +1534,22 @@ function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, openBot
   return (
     <div className="page view-in" ref={scroller} onScroll={onScroll}>
       <div className="chat">
+        {!incognito && (msgs.length > 0 || hasEarlier) && (
+          <div className="chat-search">
+            <label className="search"><Icon name="search" size={14} />
+              <input className="input" type="search" placeholder="Search this chat" aria-label="Search this chat" value={query}
+                onChange={e => setQuery(e.target.value)} onKeyDown={e => { if (e.key === 'Escape') setQuery('') }} /></label>
+            {hits && query.trim() && (
+              <div className="transcript">{hits.length ? hits.map(h => (
+                <button key={h.id} type="button" className="tl hit" onClick={() => jump(h.id)} title={fullTime(h.ts)}>
+                  <span className="mono">{ago(h.ts)}</span><b>{h.role === 'user' ? 'You' : botOf(h.bot_id).name}</b><span>{h.excerpt}</span>
+                </button>
+              )) : <span className="hint">Nothing in this chat matches.</span>}</div>
+            )}
+          </div>
+        )}
         <div className="thread selectable">
+          {hasEarlier && msgs.length > 0 && <button type="button" className="btn btn-sm btn-ghost show-earlier" onClick={showEarlier}>Show earlier messages</button>}
           {msgs.length === 0 && !working && (
             incognito ? (
               <Empty icon="incognito" title="Incognito chat">
