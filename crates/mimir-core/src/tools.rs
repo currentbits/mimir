@@ -318,6 +318,9 @@ pub fn specs() -> Vec<(&'static str, &'static str, Value)> {
             "routine_create",
             "Schedule a task: recurring with cron (5-field, the user's local time, e.g. '0 8 * * Mon-Fri'), or once with at \
              ('2026-10-12 15:00', the user's local time) for reminders and anything for later; a one-off is gone after it runs. \
+             For something tied to the user's calendar, cron can be calendar:<minutes before>, optionally :meetings (only \
+             events with someone else invited) or :outside (only ones with someone from another company): \
+             'calendar:60:outside' runs an hour before each meeting with someone outside, and each run is told the event. \
              prompt is what you will be asked to do each time it fires; the result is sent to this chat. \
              Set quiet=true for watches/check-ins (\"keep an eye on…\", \"only tell me if…\"): it runs read-only and \
              messages the user only when something needs their attention. A quiet check about one web page or feed, or \
@@ -349,6 +352,17 @@ pub fn specs() -> Vec<(&'static str, &'static str, Value)> {
                     "site":{"type":"string","description":"website it acts on, e.g. playtomic.io (browser/web tools)"}
                 },"required":["tool"]}}
             },"required":["steps","actions"]}),
+        ),
+        (
+            "ask_choice",
+            "Ask the person one question with 2 to 4 short answers they can tap instead of typing (which time, which \
+             option, yes or no). The question and its buttons show under your reply, with \"Something else\" for anything \
+             else, and their tap comes back as their next message. So end your reply after this, without repeating the \
+             question or the options. It's not an OK for an action: a tool that needs one asks with its own card.",
+            json!({"type":"object","properties":{
+                "question":{"type":"string"},
+                "options":{"type":"array","items":{"type":"string"},"minItems":2,"maxItems":4,"description":"short answers, a few words each"}
+            },"required":["question","options"]}),
         ),
         (
             "skill_save",
@@ -449,6 +463,11 @@ pub fn specs() -> Vec<(&'static str, &'static str, Value)> {
     ]
 }
 
+/// Where ask_choice leaves its question for the reply being written in this chat.
+pub(crate) fn choice_key(bot: i64, chat: i64) -> String {
+    format!("choice:{bot}:{chat}")
+}
+
 /// How long a bot waits for the person to take over its computer.
 const HANDOFF_SECS: i64 = 600;
 
@@ -483,9 +502,9 @@ fn is_read_only(db: &Db, tool: &str) -> bool {
 /// What a bot may do in a guest's chat: their own memory, routines, files and skills, the web, and calendar links.
 /// Nothing of yours (email, calendar, meetings, saved logins and the browser, tool servers, the computer), and no new
 /// bots in your app.
-const GUEST_TOOLS: [&str; 19] = [
+const GUEST_TOOLS: [&str; 20] = [
     "memory_store", "memory_search", "memory_forget", "chat_search", "routine_create", "routine_update", "routine_list", "routine_delete", "web_fetch", "web_search",
-    "file_list", "file_read", "file_write", "file_delete", "skill_view", "skill_save", "calendar_add", "plan_propose", "ask_bot",
+    "file_list", "file_read", "file_write", "file_delete", "skill_view", "skill_save", "calendar_add", "plan_propose", "ask_bot", "ask_choice",
 ];
 
 fn usable(ctx: &ToolCtx, tool: &str) -> bool {
@@ -499,6 +518,8 @@ fn usable(ctx: &ToolCtx, tool: &str) -> bool {
         // Bots are made only in a conversation with the person (not by a bot working on another's task, nor incognito,
         // where nothing it makes may last).
         && (tool != "bot_create" || (ctx.depth == 0 && !ctx.incognito()))
+        // Buttons need someone to tap them in a messaging app: not a routine, not another bot's task, not the app's chat.
+        && (tool != "ask_choice" || (!ctx.unattended && ctx.depth == 0 && ctx.db.chat_address(ctx.chat_id).ok().flatten().is_some()))
         // Meetings only once there are some (this computer's, or the server's).
         // Meetings are private to you: not in a group, channel or server, where the reply goes to everyone there.
         && (!tool.starts_with("meeting_") || (ctx.db.has_meetings() && ctx.db.chat_private(ctx.chat_id)))
@@ -666,7 +687,8 @@ fn gate(db: &Db, tool: &str, site: Option<&str>, tainted: bool) -> Result<(Strin
     // The browser's and the computer's own actions read pages by nature: they're gated per site, not guarded.
     let browser = crate::ext::split(tool).is_some_and(|(s, _)| s == crate::ext::BROWSER) || tool.starts_with("computer_");
     // plan_propose only ever asks (and refuses on its own after outside content), so asking first would be a double ask.
-    Ok(if action == "allow" && tainted && !is_read_only(db, tool) && !browser && !matches!(tool, "plan_propose" | "skill_save") { ("ask".into(), "guarded") } else { (action, "rule") })
+    // ask_choice only shows the person buttons; what they tap is theirs to pick.
+    Ok(if action == "allow" && tainted && !is_read_only(db, tool) && !browser && !matches!(tool, "plan_propose" | "skill_save" | "ask_choice") { ("ask".into(), "guarded") } else { (action, "rule") })
 }
 
 /// After outside content, a few calls that only look like reading can carry your data out; those ask:
@@ -835,6 +857,7 @@ fn describe(ctx: &ToolCtx, name: &str, args: &Value) -> String {
             args["notes"].as_str().filter(|n| !n.trim().is_empty()).map(|n| format!(" — {n}")).unwrap_or_default()
         ),
         "routine_list" => "List routines".into(),
+        "ask_choice" => format!("Ask \"{}\" with buttons", truncate(args["question"].as_str().unwrap_or(""), 120)),
         "skill_view" => format!("Read skill \"{}\"", args["name"].as_str().unwrap_or("")),
         "skill_save" => format!("Save as a skill: {}", args["title"].as_str().unwrap_or("")),
         "computer_screenshot" => "Look at the computer's screen".into(),
@@ -1034,8 +1057,25 @@ fn calendar_links(title: &str, start: &str, minutes: i64, location: &str, notes:
     Ok(format!("Google Calendar: {google}\nOutlook: {outlook}\n(Nothing is added until the user opens one and saves it.)"))
 }
 
+/// A routine timed off the calendar needs one linked.
+fn calendar_linked(cron: &str) -> Result<()> {
+    if crate::calendar::trigger(cron)?.is_some() && crate::host::secret_get(crate::calendar::SECRET).is_none() {
+        bail!("no calendar is linked yet: the person adds its link in Mimir's Meetings → Calendar first");
+    }
+    Ok(())
+}
+
+/// When a routine runs next, for the bots: a calendar one may have no matching event coming up.
+fn next_run(r: &crate::db::Routine) -> String {
+    match crate::calendar::trigger(&r.cron) {
+        Ok(Some(t)) if r.next_fire >= crate::db::IDLE => format!("({}; no such event in the next week)", t.words()),
+        Ok(Some(t)) => format!("{} ({})", fmt_ts(r.next_fire), t.words()),
+        _ => fmt_ts(r.next_fire),
+    }
+}
+
 /// Calendar events as the bots read them: one line each, in order.
-fn calendar_lines(events: &[crate::calendar::Event]) -> String {
+pub(crate) fn calendar_lines(events: &[crate::calendar::Event]) -> String {
     if events.is_empty() {
         return "Nothing on the calendar then.".into();
     }
@@ -1106,6 +1146,9 @@ fn precheck(ctx: &ToolCtx, name: &str, args: &Value) -> Result<()> {
             {
                 bail!("routines a bot sets run at most every 15 minutes; pick a slower schedule");
             }
+            if let Some(cron) = args["cron"].as_str() {
+                calendar_linked(cron)?;
+            }
             if let Some(w) = args["watch"].as_str() {
                 crate::watch::valid(w)?;
             }
@@ -1133,7 +1176,7 @@ fn precheck(ctx: &ToolCtx, name: &str, args: &Value) -> Result<()> {
                 None if crate::db::min_gap_minutes(s(args, "cron").map_err(|_| anyhow::anyhow!("give cron for a recurring routine, or at for a one-off"))?)? < 15 => {
                     bail!("routines a bot creates run at most every 15 minutes; pick a slower schedule")
                 }
-                None => {}
+                None => calendar_linked(s(args, "cron")?)?,
             }
             if let Some(w) = args["watch"].as_str().filter(|w| !w.trim().is_empty()) {
                 crate::watch::valid(w)?;
@@ -1317,8 +1360,8 @@ pub fn always_allow(db: &Db, a: &crate::db::Approval) -> Result<()> {
 /// The button text for "always" on a chat-app card: the whole tool, or the tool on one site.
 pub fn always_label(a: &crate::db::Approval) -> String {
     let s = match a.site.as_deref() {
-        Some(site) => format!("Always on {site}"),
-        None => format!("Always: {}", describe_tool(&a.tool)),
+        Some(site) => crate::say::trf("Always on {site}", &[("site", site)]),
+        None => crate::say::trf("Always: {tool}", &[("tool", &describe_tool(&a.tool))]),
     };
     // Buttons are short on every app (Slack allows 75 characters).
     truncate(&s, 60)
@@ -1391,8 +1434,10 @@ pub async fn call(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
         crate::live::set_step(ctx.bot_id, ctx.chat_id, None);
     }
     let result = match &out {
+        // A search's addresses, all of them: what a reply's links are checked against (receipts::footer).
+        Ok(r) if name == "web_search" => truncate(&r.lines().map(str::trim).filter(|l| l.starts_with("http")).collect::<Vec<_>>().join("\n"), 2000),
         // A screenshot's file is for the model, not the run log.
-        Ok(r) => truncate(&crate::computer::split_image(r, &ctx.db.dir()).1, 400),
+        Ok(r) =>truncate(&crate::computer::split_image(r, &ctx.db.dir()).1, 400),
         Err(e) => truncate(&format!("{e:#}"), 400),
     };
     let summary = truncate(&describe(ctx, name, args), 300);
@@ -1663,6 +1708,16 @@ async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
             meetings_tool(&ctx.db, name, args)?
         }
         "plan_propose" => propose_plan(ctx, args).await?,
+        "ask_choice" => {
+            let question = truncate(s(args, "question")?.trim(), 300);
+            let options: Vec<String> = args["options"].as_array().into_iter().flatten().filter_map(Value::as_str).map(|o| truncate(o.trim(), 60)).filter(|o| !o.is_empty()).collect();
+            if question.is_empty() || !(2..=4).contains(&options.len()) {
+                bail!("give a question and 2 to 4 short options");
+            }
+            // The reply's channel shows it once the reply is written (runtime::Core::choice_rows), whichever process this runs in.
+            ctx.db.set_setting(&choice_key(ctx.bot_id, ctx.chat_id), &json!({"question": question, "options": options}).to_string())?;
+            "Shown under your reply as buttons. End your reply now; their answer comes as their next message.".into()
+        }
         "computer_handoff" => {
             let reason = s(args, "reason")?.trim().to_string();
             // Let go of the computer first, so the person's clicks make it theirs.
@@ -1787,9 +1842,9 @@ async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
                 ctx.db.routine_set_watch(ctx.chat_id, r.id, w)?;
             }
             if let Some((_, name)) = &to {
-                return Ok(format!("#{} set for {name}: it runs in their own chat, {}", r.id, if r.once { format!("once, {}", fmt_ts(r.next_fire)) } else { format!("next {}", fmt_ts(r.next_fire)) }));
+                return Ok(format!("#{} set for {name}: it runs in their own chat, {}", r.id, if r.once { format!("once, {}", next_run(&r)) } else { format!("next {}", next_run(&r)) }));
             }
-            format!("{} #{} created; {} {}", if quiet { "quiet check" } else if r.once { "one-off" } else { "routine" }, r.id, if r.once { "runs once," } else { "next run" }, fmt_ts(r.next_fire))
+            format!("{} #{} created; {} {}", if quiet { "quiet check" } else if r.once { "one-off" } else { "routine" }, r.id, if r.once { "runs once," } else { "next run" }, next_run(&r))
         }
         "routine_list" => {
             let v = ctx.db.routines(ctx.chat_id)?;
@@ -1797,7 +1852,7 @@ async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
                 "no routines".into()
             } else {
                 v.iter()
-                    .map(|r| format!("#{} [{}]{}{}{} — {}", r.id, if r.once { "once" } else { &r.cron }, if r.quiet { " quiet" } else { "" }, if r.watch.is_empty() { String::new() } else { format!(" watching {}", r.watch) }, if r.paused { " paused".into() } else { format!(" next {}", fmt_ts(r.next_fire)) }, r.prompt))
+                    .map(|r| format!("#{} [{}]{}{}{} — {}", r.id, if r.once { "once" } else { &r.cron }, if r.quiet { " quiet" } else { "" }, if r.watch.is_empty() { String::new() } else { format!(" watching {}", r.watch) }, if r.paused || ctx.db.paused(r.bot_id, crate::db::now()).ok().flatten().is_some() { " paused".into() } else { format!(" next {}", next_run(r)) }, r.prompt))
                     .collect::<Vec<_>>()
                     .join("\n")
             }
@@ -1850,6 +1905,9 @@ async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
             })?;
             if target.id == ctx.bot_id {
                 bail!("{who} is you; do the task yourself");
+            }
+            if ctx.db.paused(target.id, crate::db::now())?.is_some() {
+                bail!("{} is paused by the user; do the task yourself or say it has to wait", target.name);
             }
             let from = ctx.db.bot(ctx.bot_id)?.name;
             let provider = crate::provider::Provider::for_bot(target, ctx.db.dir())?;
@@ -2024,8 +2082,8 @@ fn html_text(html: &str, lines: bool) -> String {
         if rest.starts_with("<script") || rest.starts_with("<style") {
             let close = if rest.starts_with("<script") { "</script>" } else { "</style>" };
             i += rest.find(close).map(|p| p + close.len()).unwrap_or(rest.len());
-        } else if rest.starts_with('<') {
-            let name: String = rest[1..].trim_start_matches('/').chars().take_while(|c| c.is_ascii_alphanumeric()).collect();
+        } else if let Some(tag) = rest.strip_prefix('<') {
+            let name: String = tag.trim_start_matches('/').chars().take_while(|c| c.is_ascii_alphanumeric()).collect();
             i += rest.find('>').map(|p| p + 1).unwrap_or(rest.len());
             out.push(if lines && BLOCKS.contains(&name.as_str()) { '\n' } else { ' ' });
         } else {

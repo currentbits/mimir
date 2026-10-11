@@ -64,6 +64,9 @@ it belongs to the chat, so a group chat can't read your private chat's files.
 ## Changing and removing
 
 - **Edit** a memory in place; the previous wording is kept under *earlier version*.
+- **Under a reply**: a quiet line says what it used ("2 memories · 1 skill · read 3 pages"). Open it for the memories
+  recalled for that reply, each with **Edit** and **Forget**, plus the skills it read and the pages it opened. In the
+  messaging apps, `/why` lists the same for the bot's last reply. Standing memory is in every reply, so it isn't listed.
 - **Move to background** takes it out of standing memory without deleting it (search still finds it).
 - **Forget** hides it but keeps it under *History*; **Erase** (in History) deletes it and its earlier versions for good.
 - **Import** takes text pasted from another assistant ("List everything you remember about me") and turns it into

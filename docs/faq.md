@@ -80,7 +80,8 @@ bar or tray; **Settings → Keep this computer awake** stops idle sleep so routi
 while your laptop is closed, run Mimir on a server you own ([Self-hosting](self-hosting.md)).
 
 **Can I use it from my phone?** Yes: connect a bot to Telegram, Slack or Discord and message it there. A self-hosted
-server also serves the app on the web.
+server also serves the app on the web. On a phone, a tab bar at the bottom moves between Chats (your bots, chats
+and Settings), Needs you, Memory and Routines.
 
 **Does it update itself?** The desktop app does: it downloads a new version in the background, checks it against
 Mimir's signing key, and installs when you choose **Restart to update**.

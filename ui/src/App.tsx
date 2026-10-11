@@ -1,7 +1,7 @@
 import { copyText, inDesktop, insecureServer, invoke, saveDownload, keystore, localInvoke, platform, probe, remoteServer, setWebToken, connectServer, shortcut, trayName, webToken } from './api'
-import { createContext, Fragment, useCallback, useMemo, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { Component, createContext, Fragment, type ReactNode, useCallback, useMemo, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ask, askText, AskHost, tell, Avatar, Empty, Group, Icon, Row, Segmented, Switch, type Presence } from './ui'
-import { ago, ahead, dayLabel, fullDay, fullTime, pigment, PIGMENTS, schedule, setLooks, tok, usd, type Look } from './format'
+import { ago, ahead, dayLabel, fullDay, fullTime, IDLE, pigment, PIGMENTS, schedule, setLooks, tok, usd, type Look } from './format'
 import { Markdown, openLink } from './markdown'
 import { moodOf, type Mood } from './face'
 import { EXTRAS, EYES, SHAPES, traits } from './face-core'
@@ -54,7 +54,11 @@ function LookPicker({ id, look, onChange }: { id: number; look: Look; onChange: 
 }
 type Secrets = { telegram_token: string | null; slack_bot_token: string | null; slack_app_token: string | null; discord_token: string | null }
 type Action = { tool: string; summary: string; decision: string; ok: boolean; result?: string }
-type Message = { id: number; bot_id: number; role: string; content: string; ts: number; actions?: Action[]; run_id?: number }
+/** The note under a reply that promised a reminder and set none (receipts.rs NO_REMINDER): it gets a Set it button. */
+const NO_REMINDER = "I said I'd remind you, but no reminder was set."
+type UsedMemory = { id: number; kind: Kind; title: string; body: string; status: 'active' | 'superseded' | 'forgotten' }
+type Used = { memories: UsedMemory[]; skills: [number, string][]; pages: string[] }
+type Message = { id: number; bot_id: number; role: string; content: string; ts: number; actions?: Action[]; run_id?: number; used?: Used }
 
 /** What a reply did, in a few words: ["memory", "Saved to memory · Dentist"]. Lookups and listings aren't worth a line. */
 function actionLine(a: Action): [string, string] | null {
@@ -67,6 +71,9 @@ function actionLine(a: Action): [string, string] | null {
     : a.tool === 'routine_delete' ? ['clock', 'Deleted a routine']
     : a.tool === 'ask_bot' ? ['user', `Asked ${q(/^Ask (.*?):/)}`]
     : a.tool === 'web_fetch' ? ['globe', `Read ${q(/^Read https?:\/\/([^/\s]+)/) || 'a page'}`]
+    : a.tool === 'web_search' ? ['search', `Searched · ${q(/^Search the web: (.*)$/)}`]
+    : a.tool === 'email_send' ? ['send', a.result?.startsWith('Not done yet') ? `Waiting for your OK · email to ${q(/^Send an email to (.*?): "/)}` : `Sent an email to ${q(/^Send an email to (.*?): "/)}`]
+    : a.tool === 'calendar_create' ? ['clock', a.result?.startsWith('Not done yet') ? 'Waiting for your OK · calendar' : `Added · ${q(/^Add to .*?: (.*?".*?")/) || 'to your calendar'}`]
     : a.tool === 'skill_save' ? ['bolt', `Skill to save · ${q(/^Save as a skill: (.*)$/)}`]
     : a.tool.includes('__') ? [a.tool.startsWith('browser__') ? 'browser' : 'plug', s.split(' (')[0]]
     : null
@@ -79,6 +86,8 @@ function actionLine(a: Action): [string, string] | null {
 function Actions({ actions, chatId, runId, onChange }: { actions: Action[]; chatId: number; runId?: number; onChange: () => void }) {
   const [open, setOpen] = useState<number | null>(null)
   const [handoff, setHandoff] = useState(false)
+  const [skillOpen, setSkillOpen] = useState<number | null>(null)
+  const [undone, setUndone] = useState<number[]>([])
   const lines = actions.map(a => [a, actionLine(a)] as const).filter((l): l is readonly [Action, [string, string]] => !!l[1])
   if (!lines.length) return null
   const shown = lines.slice(0, 4)
@@ -86,10 +95,8 @@ function Actions({ actions, chatId, runId, onChange }: { actions: Action[]; chat
   const routineOf = (a: Action) => a.tool === 'routine_create' && a.ok ? Number(a.result?.match(/#(\d+)/)?.[1]) || null : null
   // A skill the bot proposed because you asked: the chip opens it, to Save or not.
   const skillOf = (a: Action) => a.tool === 'skill_save' && a.ok ? Number(a.result?.match(/skill #(\d+)/)?.[1]) || null : null
-  const [skillOpen, setSkillOpen] = useState<number | null>(null)
   // A memory the bot saved: Undo right on the chip (the same as Undo in Memory → Learned this week).
   const memOf = (a: Action) => a.tool === 'memory_store' && a.ok ? Number(a.result?.match(/^stored #(\d+)/)?.[1]) || null : null
-  const [undone, setUndone] = useState<number[]>([])
   const undo = (id: number) => invoke<boolean>('undo_memory', { chatId, id }).then(ok => { if (ok) setUndone(u => [...u, id]); onChange() }, e => tell(`Couldn't undo that: ${e}`))
   return (
     <>
@@ -119,6 +126,50 @@ function Actions({ actions, chatId, runId, onChange }: { actions: Action[]; chat
       {open && <RoutineCard id={open} chatId={chatId} onChange={onChange} />}
       {skillOpen && <SkillCard id={skillOpen} chatId={chatId} />}
       {handoff && runId && <HandoffCard runId={runId} />}
+    </>
+  )
+}
+
+const count = (n: number, one: string, many = one + 's') => `${n} ${n === 1 ? one : many}`
+
+/** What a reply drew on, as one quiet line; open, each memory can be corrected or forgotten right here. */
+function UsedLine({ used, chatId, onChange }: { used: Used; chatId: number; onChange: () => void }) {
+  const [open, setOpen] = useState(false)
+  const [editing, setEditing] = useState<number | null>(null)
+  const act = (p: Promise<unknown>) => p.then(onChange, e => tell(String(e)))
+  const parts = [
+    used.memories.length && count(used.memories.length, 'memory', 'memories'),
+    used.skills.length && count(used.skills.length, 'skill'),
+    used.pages.length && `read ${count(used.pages.length, 'page')}`,
+  ].filter(Boolean)
+  return (
+    <>
+      <button type="button" className={'msg-used' + (open ? ' on' : '')} aria-expanded={open} onClick={() => setOpen(o => !o)}>
+        {parts.join(' · ')}<Icon name="chevron" size={10} className="chev" />
+      </button>
+      {open && (
+        <div className="routine-card used-card">
+          {used.memories.map(m => (
+            <div key={m.id} className={'used-mem' + (m.status === 'active' ? '' : ' gone')}>
+              <div className="used-head">
+                <span className="mem-title">{m.title}</span>
+                {m.status === 'active' ? editing !== m.id && (
+                  <span className="used-acts">
+                    <button className="btn btn-ghost btn-sm" onClick={() => setEditing(m.id)}>Edit</button>
+                    <button className="btn btn-ghost btn-danger btn-sm" onClick={() => act(invoke('forget', { chatId, id: m.id }))}>Forget</button>
+                  </span>
+                ) : <small>{m.status === 'forgotten' ? 'forgotten since' : 'corrected since'}</small>}
+              </div>
+              {editing === m.id
+                ? <Editor initial={m} submit="Save correction" onCancel={() => setEditing(null)}
+                    onSave={(kind, title, body) => act(invoke('remember', { chatId, kind, title, body, supersedes: m.id })).then(() => setEditing(null))} />
+                : <p className="mem-body">{m.body}</p>}
+            </div>
+          ))}
+          {used.skills.map(([id, name]) => <div key={'s' + id} className="used-row"><Icon name="bolt" size={12} />Skill · {name}</div>)}
+          {used.pages.map((p, i) => <div key={'p' + i} className="used-row"><Icon name="globe" size={12} />{p}</div>)}
+        </div>
+      )}
     </>
   )
 }
@@ -209,6 +260,7 @@ function RoutineCard({ id, chatId, onChange }: { id: number; chatId: number; onC
   const [busy, setBusy] = useState(false)
   const [note, setNote] = useState<string | null>(null)
   const r = rows.data?.find(x => x.id === id)
+  const held = useContext(Paused)(r?.bot_id ?? 0)
   if (!rows.data) return null
   if (!r) return <div className="routine-card gone">This routine has been deleted.</div>
   const runNow = () => {
@@ -221,9 +273,9 @@ function RoutineCard({ id, chatId, onChange }: { id: number; chatId: number; onC
       <div className="rc-head">
         <span className={'ri' + (r.quiet ? ' quiet' : '')}><Icon name={r.quiet ? 'moon' : 'clock'} size={15} /></span>
         <div className="rc-main">
-          <div className="rt">{when(r)}{r.quiet && <span className="badge pending">Quiet</span>}{r.paused && <span className="badge">Paused</span>}{r.delivery === 'digest' && <span className="badge">In digest</span>}{r.delivery === 'log' && <span className="badge">Log only</span>}</div>
+          <div className="rt">{when(r)}{r.quiet && <span className="badge pending">Quiet</span>}{(r.paused || held !== undefined) && <span className="badge">Paused</span>}{r.delivery === 'digest' && <span className="badge">In digest</span>}{r.delivery === 'log' && <span className="badge">Log only</span>}</div>
           <div className="rp selectable">{r.prompt}</div>
-          <div className="rm">{r.paused ? 'Paused' : `Next run ${ahead(r.next_fire)}`} · change it any time in Routines</div>
+          <div className="rm">{r.paused ? 'Paused' : held !== undefined ? `${pausedText(held)} with its bot` : r.next_fire >= IDLE ? 'Runs when a matching event is on the calendar' : `Next run ${ahead(r.next_fire)}`} · change it any time in Routines</div>
         </div>
       </div>
       <div className="rc-actions">
@@ -333,26 +385,41 @@ const presenceOf = (s?: Status): Presence => !s ? 'off' : online(s).length ? 'li
 /** Bot id → bot, provided by Main. */
 const Bots = createContext<(id: number) => { id: number; name: string }>(id => ({ id, name: `Bot ${id}` }))
 
-/** Poll a loader every `ms` and on demand. */
-function useLoad<T>(load: () => Promise<T>, deps: unknown[], ms = 5000) {
+/** Load once and on demand; with `ms`, again `ms` after each answer. Nothing loads while the page is hidden;
+ *  it loads again when it shows. */
+function useLoad<T>(load: () => Promise<T>, deps: unknown[], ms = 0) {
   const [data, setData] = useState<T | null>(null)
   const [error, setError] = useState<string | null>(null)
   // Each change of what's loaded (another chat, another bot) starts a new generation: an answer for the one before,
   // still on its way, is dropped instead of landing over the new one.
   const gen = useRef(0)
   const mounted = useRef(false)
+  // The last answer as JSON: the same answer again keeps the old state, so nothing redraws.
+  const last = useRef('')
   const reload = useCallback(() => {
     const g = gen.current
-    return load().then(d => { if (g === gen.current) { setData(d); setError(null) } }, e => { if (g === gen.current) setError(String(e)) })
+    return load().then(d => {
+      if (g !== gen.current) return
+      const j = JSON.stringify(d)
+      if (j !== last.current) { last.current = j; setData(d) }
+      setError(null)
+    }, e => { if (g === gen.current) setError(String(e)) })
   }, deps) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     // What was shown for the one before goes too (a banner, a list), rather than standing in until the new one loads.
-    if (mounted.current) { gen.current++; setData(null); setError(null) }
+    if (mounted.current) { gen.current++; last.current = ''; setData(null); setError(null) }
     mounted.current = true
-    reload()
-    if (ms <= 0) return // load once, no polling
-    const t = setInterval(reload, ms)
-    return () => clearInterval(t)
+    // One load at a time: the next is timed from the answer, so a slow server never gets them stacked up.
+    let t = 0, busy = false, done = false
+    const tick = () => {
+      clearTimeout(t)
+      if (busy || done || document.hidden) return
+      busy = true
+      reload().finally(() => { busy = false; if (!done && ms > 0) t = window.setTimeout(tick, ms) })
+    }
+    tick()
+    document.addEventListener('visibilitychange', tick)
+    return () => { done = true; clearTimeout(t); document.removeEventListener('visibilitychange', tick) }
   }, [reload, ms])
   return { data, error, reload }
 }
@@ -388,11 +455,21 @@ function SignIn({ onDone }: { onDone: () => void }) {
   )
 }
 
+// One UI bug costs a click, not a dead window.
+class Crashed extends Component<{ children: ReactNode }, { err: string | null }> {
+  state = { err: null as string | null }
+  static getDerivedStateFromError(e: unknown) { return { err: String(e) } }
+  render() {
+    if (!this.state.err) return this.props.children
+    return <div className="empty"><p>Something went wrong on this screen.</p><p className="mono">{this.state.err}</p><button type="button" className="btn btn-primary" onClick={() => location.reload()}>Reload</button></div>
+  }
+}
+
 function App() {
   const [onboarded, setOnboarded] = useState<boolean | null>(null)
   useEffect(() => { invoke<{ onboarded: boolean }>('info').then(i => setOnboarded(i.onboarded), () => setOnboarded(true)) }, [])
   if (onboarded === null) return null
-  return <><AskHost />{onboarded ? <Main /> : <Onboarding onDone={() => setOnboarded(true)} />}</>
+  return <><AskHost />{onboarded ? <Crashed><Main /></Crashed> : <Onboarding onDone={() => setOnboarded(true)} />}</>
 }
 
 // ---------------- onboarding ----------------
@@ -701,9 +778,10 @@ function Main() {
   }, [statuses.data, bots.data]) // eslint-disable-line react-hooks/exhaustive-deps
   // What each bot is working on right now (a reply, a routine, a task from another bot, a memory tidy-up).
   const busy = useLoad(() => invoke<Busy[]>('busy'), [], 1500)
-  const chats = useLoad(() => invoke<Chat[]>('chats'), [])
-  const pending = useLoad(() => invoke<Approval[]>('approvals'), [], 1500)
-  const inbox = useLoad(() => invoke<Inbox>('inbox'), [], 3000)
+  const chats = useLoad(() => invoke<Chat[]>('chats'), [], 15000) // someone new writing to a bot adds a chat
+  // Approvals waiting come with the inbox.
+  const inbox = useLoad(() => invoke<Inbox>('inbox'), [], 2000)
+  const approvals = inbox.data?.approvals ?? []
   // Bots that aren't working (an account or a messaging app that won't connect) need you too.
   const troubled = (statuses.data ?? []).flatMap(s => { const t = troubleOf(s); return t ? [{ id: s.bot_id, text: t }] : [] })
   const needs = inboxCount(inbox.data) + troubled.length
@@ -774,11 +852,25 @@ function Main() {
   const [viaBot, setViaBot] = useState(false)
   const talkTo = (id: number) => { setChatBot(id); setChatId(LOCAL); setIncognito(false); setViaBot(true); setView('chat'); setMenu(null) }
   const botChat = viaBot && view === 'chat' && chat.chat_id === LOCAL
-  const [menu, setMenu] = useState<{ x: number; y: number; id: number } | null>(null)
+  // A bot's right-click menu, or pause choices (for one bot, or all of them: id null).
+  const [menu, setMenu] = useState<{ x: number; y: number; id: number | null; pick?: boolean } | null>(null)
+  const pauses = useLoad(() => invoke<Pause[]>('pause'), [], 5000)
+  const allPause = pauses.data?.find(p => p.bot_id === null)
+  const ownPause = (id: number) => pauses.data?.find(p => p.bot_id === id)
+  const pausedOf = (id: number) => {
+    const u = [allPause, ownPause(id)].flatMap(p => p ? [p.until] : [])
+    return u.length ? (u.includes(0) ? 0 : Math.max(...u)) : undefined
+  }
+  const setPause = (botId: number | null, on: boolean, until = 0) => { setMenu(null); invoke('pause', { botId, on, until }).then(pauses.reload, e => tell(String(e))) }
+  // On a phone the sidebar is a full screen of its own, opened from the tab bar's Chats.
+  const [phoneList, setPhoneList] = useState(false)
+  const phoneTab = phoneList || view === 'chat' ? 'chats' : view
+  const go = (v: View) => { setPhoneList(false); setView(v) }
 
   // ⌘F: on the Settings page it searches settings; anywhere else, memory.
   const findIt = () => {
-    const box = document.querySelector<HTMLInputElement>('.settings-search input')
+    // In Settings or a chat, its own search box; elsewhere, Memory's.
+    const box = document.querySelector<HTMLInputElement>('.settings-search input, .chat-search input')
     if (box) { box.focus(); box.select(); return }
     setView('memory')
     setTimeout(() => document.querySelector<HTMLInputElement>('.search input')?.focus(), 50)
@@ -795,7 +887,7 @@ function Main() {
     })).then(u => { off = u }, () => {})
     return () => off?.()
   }, [])
-  // ⌘ on macOS, Ctrl elsewhere: 1–5 sections, 0 Needs you, comma Settings, N new bot, F search memory.
+  // ⌘ on macOS, Ctrl elsewhere: 1–5 sections, 0 Needs you, comma Settings, N new bot, F search (this chat, or memory).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return
@@ -816,8 +908,10 @@ function Main() {
 
   return (
     <Bots.Provider value={botOf}>
-    <div className="app">
-      <aside className="rail" aria-label="Bots and chats">
+    <Paused.Provider value={pausedOf}>
+    <div className={'app' + (phoneList ? ' list' : '')}>
+      <aside className="rail" aria-label="Bots and chats"
+        onClick={e => { if ((e.target as Element).closest('.rail-item, .rail-label button')) setPhoneList(false) }}>
         <div className="rail-top" data-tauri-drag-region />
         <div className="rail-scroll" ref={railRef}>
           <span className="rail-glide" aria-hidden="true" />
@@ -840,7 +934,16 @@ function Main() {
               <span className="ri-text"><span className="ri-name">Computer</span><span className="ri-sub">{computer.data.running ? 'Watch or take over' : 'Starting…'}</span></span>
             </button>
           )}
-          <div className="rail-label">Bots<button title={`New bot  ${shortcut('N')}`} aria-label="New bot" onClick={() => openBot(0)}><Icon name="plus" size={14} /></button></div>
+          {allPause && (
+            <button className="rail-item" onClick={() => setPause(null, false)} title="Resume all bots">
+              <span className="ri-glyph"><Icon name="pause" size={15} /></span>
+              <span className="ri-text"><span className="ri-name">All bots paused</span><span className="ri-sub">{allPause.until ? `Back ${ahead(allPause.until)}` : 'Click to resume'}</span></span>
+            </button>
+          )}
+          <div className="rail-label">Bots<span>
+            {!allPause && <button title="Pause all bots" aria-label="Pause all bots" onClick={e => { const r = e.currentTarget.getBoundingClientRect(); setMenu({ x: r.left, y: r.bottom + 4, id: null, pick: true }) }}><Icon name="pause" size={13} /></button>}
+            <button title={`New bot  ${shortcut('N')}`} aria-label="New bot" onClick={() => openBot(0)}><Icon name="plus" size={14} /></button>
+          </span></div>
           {botList.map(b => {
             const st = statusOf(b.id)
             const on = online(st)
@@ -864,12 +967,13 @@ function Main() {
                 }}>
                 {(() => {
                   // Waiting on you beats working: the reply (or routine) can't go on until you answer.
-                  const asks = (pending.data ?? []).some(a => a.bot_id === b.id)
+                  const asks = approvals.some(a => a.bot_id === b.id)
                   const w: Busy | undefined = asks ? { bot_id: b.id, chat_id: 0, trigger: 'ask', step: 'Waiting for your OK' } : busy.data?.find(x => x.bot_id === b.id)
                   return <>
                     <Avatar id={b.id} name={b.name} presence={p} mood={w ? busyMood(w) : undefined} />
                     <span className="ri-text"><span className="ri-name">{b.name}</span>
                       <span className={'ri-sub' + (w ? ' busy' : '')}>{w ? busyLabel(w)
+                        : pausedOf(b.id) !== undefined ? pausedText(pausedOf(b.id)!)
                         : on.length ? on.map(c => CHANNEL[c.kind].name).join(' · ') : p === 'err' ? 'Needs attention' : p === 'wait' ? 'Connecting…' : `${LOCAL_NAME} only`}</span></span>
                   </>
                 })()}
@@ -938,7 +1042,7 @@ function Main() {
           )}
         </header>
 
-        {view !== 'inbox' && <Approvals list={pending.data ?? []} chats={list} chatName={chatName} onDecided={() => { pending.reload(); inbox.reload() }} />}
+        {view !== 'inbox' && <Approvals list={approvals} chats={list} chatName={chatName} onDecided={inbox.reload} />}
 
         {view === 'chat' ? (
           <ChatView key={`chat-${chat.chat_id}-${incognito && chat.chat_id === LOCAL}-${botChat ? chatBot ?? botList[0]?.id : 'all'}`} only={botChat} chat={chat} bots={botList} onTurn={chats.reload}
@@ -955,7 +1059,7 @@ function Main() {
               {view === 'settings' && <SettingsView onComputer={computer.reload} />}
               {view === 'computer' && <ComputerView bots={botList} chats={list} chatName={chatName} />}
               {view === 'meetings' && <MeetingsView bots={botList} onSent={talkTo} />}
-              {view === 'inbox' && <InboxView data={inbox.data} troubled={troubled} reload={() => { inbox.reload(); pending.reload() }} chats={list} chatName={chatName} openBot={openBot} openChat={openChat} />}
+              {view === 'inbox' && <InboxView data={inbox.data} troubled={troubled} reload={inbox.reload} chats={list} chatName={chatName} openBot={openBot} openChat={openChat} />}
               {view === 'bot' && (
                 // Keyed on whether the bot has loaded too: right after "Create bot" the list hasn't caught up yet.
                 <BotPage key={`${botId}:${botList.some(b => b.id === botId)}`} bot={botList.find(b => b.id === botId)} status={statusOf(botId)} canDelete={botList.length > 1}
@@ -967,8 +1071,27 @@ function Main() {
           </div>
         )}
       </main>
-      {menu && <BotMenu at={menu} name={botOf(menu.id).name} onChat={() => talkTo(menu.id)} onSettings={() => openBot(menu.id)} onClose={() => setMenu(null)} />}
+      <nav className="tabbar" aria-label="Sections">
+        {([['chats', 'Chats', 'chat'], ['inbox', 'Needs you', 'inbox'], ['memory', 'Memory', 'memory'], ['routines', 'Routines', 'clock']] as const).map(([id, label, icon]) => (
+          <button key={id} className={phoneTab === id ? 'on' : ''} aria-current={phoneTab === id ? 'page' : undefined}
+            onClick={() => id === 'chats' ? setPhoneList(true) : go(id)}>
+            <Icon name={icon} size={20} />{label}
+            {id === 'inbox' && needs > 0 && <span className="badge count">{needs}</span>}
+          </button>
+        ))}
+      </nav>
+      {menu && (menu.pick || menu.id === null
+        ? <Menu key="pick" at={menu} name={menu.id === null ? 'Pause all bots' : `Pause ${botOf(menu.id).name}`} items={pauseChoices(until => setPause(menu.id, true, until))} onClose={() => setMenu(null)} />
+        : (() => {
+          const id = menu.id, name = botOf(id).name
+          return <Menu key="bot" at={menu} name={name} onClose={() => setMenu(null)} items={[
+            ['chat', `Chat with ${name}`, () => talkTo(id)],
+            ['settings', 'Settings', () => openBot(id)],
+            ownPause(id) ? ['play', `Resume ${name}`, () => setPause(id, false)] : ['pause', `Pause ${name}…`, () => setMenu({ ...menu, pick: true })],
+          ]} />
+        })())}
     </div>
+    </Paused.Provider>
     </Bots.Provider>
   )
 }
@@ -1242,9 +1365,27 @@ function CopyButton({ text }: { text: string }) {
   )
 }
 
-/** A bot's right-click menu in the sidebar: chat with it, or its settings. Escape, a click elsewhere or leaving the
- * menu closes it; arrow keys move between its items. */
-function BotMenu({ at, name, onChat, onSettings, onClose }: { at: { x: number; y: number }; name: string; onChat: () => void; onSettings: () => void; onClose: () => void }) {
+/** A pause: the bot, or null for all of them; until when (0: until you resume). */
+type Pause = { bot_id: number | null; until: number }
+/** When a bot's pause ends, if it's paused (its own or everyone's; 0: until you resume). */
+const Paused = createContext<(bot: number) => number | undefined>(() => undefined)
+const pausedText = (until: number) => until ? `Paused · back ${ahead(until)}` : 'Paused'
+/** Pause choices: until you resume, an hour, tomorrow 8:00, Monday 8:00. */
+function pauseChoices(pause: (until: number) => void): MenuItem[] {
+  const at8 = (days: number) => { const d = new Date(); d.setDate(d.getDate() + days); d.setHours(8, 0, 0, 0); return Math.floor(d.getTime() / 1000) }
+  const monday = (8 - new Date().getDay()) % 7 || 7
+  return [
+    ['pause', 'Until I resume', () => pause(0)],
+    ['clock', 'For an hour', () => pause(Math.floor(Date.now() / 1000) + 3600)],
+    ['clock', 'Until tomorrow 8:00', () => pause(at8(1))],
+    ...(monday > 1 ? [['clock', 'Until Monday 8:00', () => pause(at8(monday))] as MenuItem] : []),
+  ]
+}
+
+type MenuItem = [icon: string, label: string, run: () => void]
+/** A small menu at a point (a bot's right-click menu in the sidebar, pause choices). Escape, a click elsewhere or
+ * leaving the menu closes it; arrow keys move between its items. */
+function Menu({ at, name, items, onClose }: { at: { x: number; y: number }; name: string; items: MenuItem[]; onClose: () => void }) {
   const ref = useRef<HTMLDivElement>(null)
   useLayoutEffect(() => {
     const el = ref.current
@@ -1267,8 +1408,7 @@ function BotMenu({ at, name, onChat, onSettings, onClose }: { at: { x: number; y
   }
   return (
     <div ref={ref} className="ctx-menu" role="menu" aria-label={name} onKeyDown={onKey} onContextMenu={e => e.preventDefault()}>
-      <button role="menuitem" onClick={onChat}><Icon name="chat" size={14} />Chat with {name}</button>
-      <button role="menuitem" onClick={onSettings}><Icon name="settings" size={14} />Settings</button>
+      {items.map(([icon, label, run]) => <button key={label} role="menuitem" onClick={run}><Icon name={icon} size={14} />{label}</button>)}
     </div>
   )
 }
@@ -1288,7 +1428,10 @@ function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, openBot
   // A bot that was deleted falls back to the first one.
   const botId = chosen !== undefined && bots.some(b => b.id === chosen) ? chosen : bots.some(b => b.id === own) ? own : bots[0]?.id ?? own
   const mine = only ? botId : undefined
-  const log = useLoad(() => incognito ? Promise.resolve([] as Message[]) : invoke<Message[]>('messages', { chatId: chat.chat_id, botId: mine }), [chat.chat_id, incognito, mine], incognito ? 0 : 4000)
+  // The newest 200, or, once you've paged back (or jumped to an old search hit), everything from `from` on. A ref, not a
+  // dep: a changed dep would blank the thread while it reloads.
+  const from = useRef<number | null>(null)
+  const log = useLoad(() => incognito ? Promise.resolve([] as Message[]) : invoke<Message[]>('messages', { chatId: chat.chat_id, botId: mine, fromId: from.current ?? undefined }), [chat.chat_id, incognito, mine], incognito ? 0 : 4000)
   // Incognito messages exist only here; leaving or switching it off drops them.
   const [secret, setSecret] = useState<Message[]>([])
   const cid = incognito ? INCOGNITO : chat.chat_id
@@ -1349,7 +1492,60 @@ function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, openBot
     ownSend.current = false
     seen.current = lastId
   }, [log.data, lastId])
-  const anim = (m: Message) => (m.id > animFrom ? ' msg-in' : m.id > chipsFrom ? ' acts-in' : '')
+  const [lit, setLit] = useState<number | null>(null)
+  const anim = (m: Message) => (m.id > animFrom ? ' msg-in' : m.id > chipsFrom ? ' acts-in' : '') + (m.id === lit ? ' msg-hit' : '')
+
+  // Earlier messages: null until you ask (a full first page means there may be more).
+  const [earlier, setEarlier] = useState<boolean | null>(null)
+  const hasEarlier = !incognito && (earlier ?? (log.data?.length ?? 0) >= 200)
+  // How far the bottom was, so messages going in above don't move what you're looking at.
+  const keep = useRef<number | null>(null)
+  const showEarlier = () => {
+    if (!msgs[0]) return
+    invoke<Message[]>('messages', { chatId: chat.chat_id, botId: mine, beforeId: msgs[0].id }).then(page => {
+      setEarlier(page.length >= 200)
+      if (!page.length) return
+      const el = scroller.current
+      if (el) keep.current = el.scrollHeight - el.scrollTop
+      from.current = page[0].id
+      return log.reload()
+    }, e => setErr(String(e)))
+  }
+  useLayoutEffect(() => {
+    const el = scroller.current
+    if (keep.current === null || !el) return
+    el.scrollTop = el.scrollHeight - keep.current
+    keep.current = null
+  }, [msgs[0]?.id]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Search this chat: a hit loads what's needed and scrolls to it, lit for a moment.
+  const [query, setQuery] = useState('')
+  const [hits, setHits] = useState<{ id: number; ts: number; bot_id: number; role: string; excerpt: string }[] | null>(null)
+  useEffect(() => {
+    const q = query.trim()
+    if (!q || incognito) { setHits(null); return }
+    const t = setTimeout(() => invoke<typeof hits>('chat_search', { chatId: chat.chat_id, botId: mine, query: q }).then(setHits, e => setErr(String(e))), 200)
+    return () => clearTimeout(t)
+  }, [query, chat.chat_id, mine, incognito])
+  const target = useRef<number | null>(null)
+  const jump = (id: number) => {
+    setQuery('')
+    target.current = id
+    setLit(id)
+    setTimeout(() => setLit(l => (l === id ? null : l)), 2400)
+    if (msgs[0] && id >= msgs[0].id) return goTo()
+    from.current = id
+    setEarlier(true)
+    log.reload()
+  }
+  const goTo = () => {
+    const el = target.current !== null && document.getElementById(`m${target.current}`)
+    if (!el) return
+    target.current = null
+    atBottom.current = false
+    el.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  }
+  useLayoutEffect(goTo, [log.data]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const shown = useRef(0)
   useLayoutEffect(() => {
@@ -1370,9 +1566,14 @@ function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, openBot
   }, [working])
   useEffect(() => {
     if (!working) return
-    const t = setInterval(() => invoke<{ draft: string | null; step: string | null; done: { summary: string; ok: boolean; decision: string }[] }>('live', { botId: replier, chatId: cid })
-      .then(l => { setDraft(l?.draft ?? ''); setStep(l?.step ?? null); setDone(l?.done ?? []) }, () => {}), 150)
-    return () => { clearInterval(t); setDraft(''); setStep(null); setDone([]) }
+    // The next look is 150 ms after the last answer, so a slow server doesn't get them stacked up.
+    let t = 0, off = false
+    const poll = () => invoke<{ draft: string | null; step: string | null; done: { summary: string; ok: boolean; decision: string }[] }>('live', { botId: replier, chatId: cid })
+      // done is a new array every time: set it only when it says something new.
+      .then(l => { setDraft(l?.draft ?? ''); setStep(l?.step ?? null); const d = l?.done ?? []; setDone(o => JSON.stringify(o) === JSON.stringify(d) ? o : d) }, () => {})
+      .finally(() => { if (!off) t = window.setTimeout(poll, 150) })
+    t = window.setTimeout(poll, 150)
+    return () => { off = true; clearTimeout(t); setDraft(''); setStep(null); setDone([]) }
   }, [working, replier, cid])
   useLayoutEffect(() => {
     const t = box.current
@@ -1448,20 +1649,23 @@ function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, openBot
   const bubble = (m: Message) => {
     const sched = m.role === 'user' ? m.content.match(SCHEDULED) : null
     if (sched) return (
-      <div className={'msg-trigger' + anim(m)} title={sched[4]}>
+      <div id={`m${m.id}`} className={'msg-trigger' + anim(m)} title={sched[4]}>
         <Icon name={sched[1] === 'quiet check' ? 'moon' : 'clock'} size={13} />
         <span>{sched[1] === 'quiet check' ? 'Quiet check' : 'Routine'} · {schedule(sched[3])} — {sched[4]}</span>
       </div>
     )
-    if (m.role === 'user') return <div className={'msg-user' + anim(m)} title={fullTime(m.ts)}><Said text={m.content} /></div>
+    if (m.role === 'user') return <div id={`m${m.id}`} className={'msg-user' + anim(m)} title={fullTime(m.ts)}><Said text={m.content} /></div>
     const b = botOf(m.bot_id)
     return (
-      <div className={'msg-bot' + anim(m)} style={{ '--pig': pigment(b.id) } as React.CSSProperties}>
+      <div id={`m${m.id}`} className={'msg-bot' + anim(m)} style={{ '--pig': pigment(b.id) } as React.CSSProperties}>
         <Avatar id={b.id} name={b.name} size={26} still />
         <div>
           <div className="msg-head"><b>{b.name}</b><time title={fullTime(m.ts)}>{ago(m.ts)}</time><CopyButton text={m.content} /></div>
           <div className="msg-body"><Markdown text={m.content} /></div>
+          {/* Only under the latest message: once anything follows, it's been answered one way or another. */}
+          {m.content.includes(NO_REMINDER) && m === msgs[msgs.length - 1] && <button type="button" className="btn btn-sm" onClick={() => send(`@${b.name} Set the reminder you said you would.`)} disabled={working}>Set it</button>}
           {m.actions && <Actions actions={m.actions} chatId={chat.chat_id} runId={m.run_id} onChange={() => { log.reload(); onTurn() }} />}
+          {m.used && <UsedLine used={m.used} chatId={chat.chat_id} onChange={() => log.reload()} />}
         </div>
       </div>
     )
@@ -1472,7 +1676,22 @@ function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, openBot
   return (
     <div className="page view-in" ref={scroller} onScroll={onScroll}>
       <div className="chat">
+        {!incognito && (msgs.length > 0 || hasEarlier) && (
+          <div className="chat-search">
+            <label className="search"><Icon name="search" size={14} />
+              <input className="input" type="search" placeholder="Search this chat" aria-label="Search this chat" value={query}
+                onChange={e => setQuery(e.target.value)} onKeyDown={e => { if (e.key === 'Escape') setQuery('') }} /></label>
+            {hits && query.trim() && (
+              <div className="transcript">{hits.length ? hits.map(h => (
+                <button key={h.id} type="button" className="tl hit" onClick={() => jump(h.id)} title={fullTime(h.ts)}>
+                  <span className="mono">{ago(h.ts)}</span><b>{h.role === 'user' ? 'You' : botOf(h.bot_id).name}</b><span>{h.excerpt}</span>
+                </button>
+              )) : <span className="hint">Nothing in this chat matches.</span>}</div>
+            )}
+          </div>
+        )}
         <div className="thread selectable">
+          {hasEarlier && msgs.length > 0 && <button type="button" className="btn btn-sm btn-ghost show-earlier" onClick={showEarlier}>Show earlier messages</button>}
           {msgs.length === 0 && !working && (
             incognito ? (
               <Empty icon="incognito" title="Incognito chat">
@@ -2322,7 +2541,7 @@ function RoutineForm({ draft, setDraft, bots, onCancel, onSave, inline, skills =
           )}
           {w.mode === 'custom' && <input className="input mono" aria-label="Cron schedule" value={w.cron} placeholder="30 8 * * Mon-Fri" onChange={e => when({ cron: e.target.value })} />}
         </div>
-        {w.mode === 'custom' && <span className="hint">{readable !== cron ? `Runs: ${readable}` : 'Cron format: minute hour day-of-month month weekday, e.g. 30 8 * * Mon-Fri'}</span>}
+        {w.mode === 'custom' && <span className="hint">{readable !== cron ? `Runs: ${readable}` : 'Cron format: minute hour day-of-month month weekday, e.g. 30 8 * * Mon-Fri; or calendar:60:outside for an hour before each meeting with someone outside'}</span>}
       </div>
       <div className="quiet-row">
         <Switch label="Quiet" checked={draft.quiet} onChange={quiet => setDraft({ ...draft, quiet })} />
@@ -2357,6 +2576,7 @@ function RoutinesView({ chatId, bots }: { chatId: number; bots: Bot[] }) {
   const rows = useLoad(() => invoke<Routine[]>('routines', { chatId }), [chatId])
   const stats = useLoad(() => invoke<RoutineStats[]>('routine_stats', { chatId }), [chatId], 30000)
   const botOf = useContext(Bots)
+  const pausedOf = useContext(Paused)
   const [err, setErr] = useState<string | null>(null)
   const [draft, setDraft] = useState<RoutineDraft | null>(null)
   const [editing, setEditing] = useState<{ id: number; draft: RoutineDraft } | null>(null)
@@ -2390,17 +2610,18 @@ function RoutinesView({ chatId, bots }: { chatId: number; bots: Bot[] }) {
           <div className="group">
             {list.map(r => {
               const b = botOf(r.bot_id)
+              const held = pausedOf(r.bot_id)
               if (editing?.id === r.id) return (
                 <RoutineForm key={r.id} inline skills={skillRows.data ?? []} draft={editing.draft} setDraft={d => setEditing({ id: r.id, draft: d })} bots={bots} onCancel={() => setEditing(null)}
                   onSave={() => update(r, { cron: toCron(editing.draft.when), prompt: editing.draft.prompt, quiet: editing.draft.quiet, delivery: editing.draft.delivery, watch: editing.draft.quiet ? editing.draft.watch : '' })} />
               )
               return (
-                <div className={'routine' + (r.paused ? ' paused' : '')} key={r.id}>
+                <div className={'routine' + (r.paused || held !== undefined ? ' paused' : '')} key={r.id}>
                   <span className={'ri' + (r.quiet ? ' quiet' : '')}><Icon name={r.quiet ? 'moon' : 'clock'} /></span>
                   <div>
-                    <div className="rt">{when(r)}{r.quiet && <span className="badge pending" title="Read-only; speaks up only when something needs your attention">Quiet</span>}{r.paused && <span className="badge">Paused</span>}{r.delivery === 'digest' && <span className="badge" title="Collected into your daily digest">In digest</span>}{r.delivery === 'log' && <span className="badge" title="Not sent; see Activity">Log only</span>}{r.quiet && r.watch && <span className="badge" title="Mimir looks first and only runs the AI when this changed">Watching {r.watch === 'mail' ? 'mail' : (() => { try { return new URL(r.watch).host } catch { return r.watch } })()}</span>}</div>
+                    <div className="rt">{when(r)}{r.quiet && <span className="badge pending" title="Read-only; speaks up only when something needs your attention">Quiet</span>}{(r.paused || held !== undefined) && <span className="badge">Paused</span>}{r.delivery === 'digest' && <span className="badge" title="Collected into your daily digest">In digest</span>}{r.delivery === 'log' && <span className="badge" title="Not sent; see Activity">Log only</span>}{r.quiet && r.watch && <span className="badge" title="Mimir looks first and only runs the AI when this changed">Watching {r.watch === 'mail' ? 'mail' : (() => { try { return new URL(r.watch).host } catch { return r.watch } })()}</span>}</div>
                     <div className="rp selectable">{r.prompt}</div>
-                    <div className="rm"><Avatar id={b.id} name={b.name} size={16} still /><span>{b.name}</span><span>·</span><span>{r.paused ? 'Won’t run until you turn it back on' : `${r.once ? 'Runs' : 'Next run'} ${ahead(r.next_fire)}${r.once ? ', then it’s gone' : ''}`}</span></div>
+                    <div className="rm"><Avatar id={b.id} name={b.name} size={16} still /><span>{b.name}</span><span>·</span><span>{r.paused ? 'Won’t run until you turn it back on' : held !== undefined ? `${pausedText(held)} with ${b.name}; ${r.once ? 'it runs once then' : 'runs in between are skipped, not caught up'}` : r.next_fire >= IDLE ? 'No matching event on the calendar this week' : `${r.once ? 'Runs' : 'Next run'} ${ahead(r.next_fire)}${r.once ? ', then it’s gone' : ''}`}</span></div>
                     <RoutineHealth s={stats.data?.find(x => x.id === r.id)} onReset={() => invoke('reset_watch_noise', { chatId, id: r.id }).then(stats.reload, e => setErr(String(e)))} />
                     {rehearsal?.id === r.id && (rehearsal.r ? <RehearsalResult r={rehearsal.r} onClose={() => setRehearsal(null)} /> : <p className="hint">Rehearsing… it runs for real, but anything it would send or change is only described.</p>)}
                   </div>
@@ -2883,6 +3104,7 @@ function SettingsView({ onComputer }: { onComputer: () => void }) {
       {inDesktop && !remoteServer() && <AppSettings />}
       {inDesktop && <UpdateSettings />}
       <DigestSettings />
+      <LanguageSettings />
       <LimitsSettings />
       <ApiKeySettings />
       <WebSearchSettings />
@@ -3257,6 +3479,25 @@ function ComputerView({ bots, chats, chatName }: { bots: Bot[]; chats: Chat[]; c
   )
 }
 
+/** The language Mimir itself writes in on Telegram, Slack and Discord (bots answer in yours either way). */
+function LanguageSettings() {
+  const [l, setL] = useState<{ lang: string; system: string; langs: [string, string][] } | null>(null)
+  useEffect(() => { invoke<typeof l>('language').then(setL, () => {}) }, [])
+  if (!l) return null
+  const name = (code: string) => l.langs.find(([c]) => c === code)?.[1] ?? code
+  return (
+    <Group title="Language" note="What Mimir itself says in Telegram, Slack and Discord: pairing, approval cards, errors, the digest and the weekly list. Your bots answer in the language you write in either way.">
+      <Row icon={<Icon name="globe" size={15} />} title="Mimir writes in">
+        <select className="select" style={{ width: 'auto' }} aria-label="Language" value={l.lang}
+          onChange={e => invoke<typeof l>('language', { lang: e.target.value }).then(setL, () => {})}>
+          <option value="">{`System (${name(l.system)})`}</option>
+          {l.langs.map(([c, n]) => <option key={c} value={c}>{n}</option>)}
+        </select>
+      </Row>
+    </Group>
+  )
+}
+
 /** Desktop only: the app is the bots' home, so it should be running. */
 /** When routines in the digest lane deliver their one message of the day. */
 function DigestSettings() {
@@ -3312,10 +3553,12 @@ function LimitsSettings() {
   const [win, setWin] = useState<Windows | null>(null)
   const [msg, setMsg] = useState<string | null>(null)
   const [models, setModels] = useState<{ kind: string; model: string }[]>([])
+  const [fresh, setFresh] = useState<number | null>(null)
   useEffect(() => {
     invoke<{ kind: string; model: string }[]>('routine_model').then(setModels, () => {})
     invoke<Caps>('caps').then(setCaps, () => {})
     invoke<Windows | null>('ai_windows').then(setWin, () => {})
+    invoke<number>('fresh_after_hours').then(setFresh, () => {})
   }, [])
   const save = (k: keyof Caps, v: string) => invoke<Caps>('caps', { [k]: v.trim() ? Math.max(0, Math.round(Number(v) * 1000)) : 0 }).then(c => { setCaps(c); setMsg(null) }, e => setMsg(String(e)))
   const field = (k: keyof Caps, title: string, desc: string) => (
@@ -3329,6 +3572,11 @@ function LimitsSettings() {
       {field('routine', 'Each routine', 'What one routine may use in a day.')}
       {field('bot', 'Each bot', 'What one bot may use in a day, replies included; only its routines pause.')}
       {field('day', 'All bots together', 'Everything, every bot, in a day.')}
+      <Row icon={<Icon name="clock" size={15} />} title="Fresh start after a quiet spell"
+        desc="When a Telegram, Slack or Discord chat has been quiet this long, the next message starts a new conversation with a short note on where you left off. Each reply re-sends less. 0: never.">
+        {fresh !== null && <><input className="input mono" type="number" min={0} max={720} aria-label="Fresh start after" style={{ width: 72 }} defaultValue={fresh}
+          onBlur={e => invoke<number>('fresh_after_hours', { hours: Math.max(0, Math.round(Number(e.target.value) || 0)) }).then(setFresh, er => setMsg(String(er)))} /><span className="hint">hours</span></>}
+      </Row>
       {models.map(m => (
         <Row key={m.kind} icon={<Icon name="wand" size={15} />} title={models.length > 1 ? `Model for routines (${KIND_NAME[m.kind] ?? m.kind})` : 'Model for routines'}
           desc="A lighter model of the same account (e.g. haiku, gpt-5-mini) makes every routine cheaper, and your plan's windows last longer. Use a routine's Test run to see if it's good enough. Blank: the bot's own model.">
