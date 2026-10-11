@@ -41,6 +41,10 @@ What's shared and what isn't:
   same.
 - **Quick ask**: ⌥Space (Mac) or Ctrl+Alt+Space (Windows, Linux) opens a Spotlight-style panel from any app. It's the
   same built-in chat, so the exchange is there afterwards.
+- **Push-to-talk** (desktop app): in the chat box or quick ask, hold ⌥ (Mac) or Ctrl (Windows, Linux) on its own and
+  speak; let go and the words appear in the box, ready to edit and send. whisper.cpp transcribes them on your computer
+  (the speech model downloads once, the first time); nothing is sent until you send it. The microphone is the one
+  chosen for meetings.
 - **Telegram, Slack, Discord.** One bot can be on all three at once. Each connects *out* (long-polling, Socket Mode,
   the Gateway), so you don't need a public address. A chat that has been quiet for 12 hours starts a new conversation
   with its next message, opening with a short "where we left off" quoted from Mimir's log. Each reply then re-sends
@@ -138,7 +142,9 @@ or Dutch so far, by default the computer's language (a server's: its `LANG`). Th
 Send a photo on Telegram, Slack or Discord (up to 4 at once there), or paste or drop one into the app's chat, and the
 bot looks at it with your own AI (big photos are shrunk to what each model accepts). Voice notes (Slack's audio clips,
 Discord's voice messages) are transcribed with your OpenAI-compatible key
-(Settings → AI keys) and echoed back ("🎙️ I heard: …").
+(Settings → AI keys) if you've added one, else by whisper.cpp where the bot runs (built into the desktop app; on a
+server, an installed `whisper-cli`), and echoed back ("🎙️ I heard: …"). Telegram's and Discord's voice notes need
+nothing else; Slack's audio clips need `ffmpeg` installed for whisper.cpp.
 
 Send a **PDF**, a **Word** or **Excel** file (`.docx`, `.xlsx`) or a text file (`.txt`, `.md`, `.csv`, `.json`) on any of the apps, or drop or paste one into the app's
 chat (up to 20 MB), and the bot reads its text; the
@@ -154,6 +160,18 @@ Bots send files back too, with `send_file`: a file from the chat's workspace, or
 upload in Slack (needs the `files:write` scope), an attachment on Discord (invite the bot with Attach Files), and in
 the app's chat, shown in place. In your own direct chat it just goes; in a group, channel or guest's chat it asks you
 first. At most 5 files with one reply.
+
+## Pinned cards
+
+A bot can keep a card pinned at the top of a chat in the app, for things you come back to: a shopping list, bills due,
+a project's state. It's quieter than a message. Ask ("add oat milk to my shopping list") and the bot rewrites the card
+with `card_write`; a routine can update one on each run instead of messaging you (Routines → Send it → *Update a
+card*). In Telegram, Slack or Discord the bot reads the card when you ask what's on it.
+
+Cards hold only text, checklists (`- [ ] item`), tables and links. Mimir refuses HTML in them, and the app never shows
+a card as HTML anyway. Tick an item and it's saved as your edit: the card shows *you* as its last change, and the bot
+sees your ticks the next time it reads or rewrites the card. Each card folds away from its title, and the bin removes
+it. A chat holds up to 20 cards.
 
 ## Incognito
 

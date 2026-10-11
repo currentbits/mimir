@@ -109,7 +109,7 @@ What happens next depends on why:
 A routine that keeps failing the same way is **one** item in Needs you ("4 times"), and once it works again its
 failures leave Needs you by themselves. A one-off (a reminder) that fails this way is kept and tried again, not lost.
 
-Activity shows where each result went: *sent to telegram*, *in the digest*, *only in the log*, *in the app*. When the
+Activity shows where each result went: *sent to telegram*, *in the digest*, *on its card*, *only in the log*, *in the app*. When the
 messaging app didn't take it (tried twice), that's an item in Needs you, and the result is still in Activity.
 
 Every run starts a fresh conversation with the AI, so a routine that runs every 15 minutes doesn't grow its context
@@ -142,6 +142,10 @@ Each routine is sent:
 - **right away**: a message and a notification;
 - **in your daily digest**: one message a day at the time you set (Settings → Daily digest), with a line like "4 quiet
   checks ran; nothing needed you";
+- **on a card**: nothing is sent; the result replaces a card pinned at the top of the chat in the app (bills due,
+  this week's to-buy list). A first line `# Title` names the card. Each run is shown the card as it is now, including
+  items you ticked, and told to keep your ticks unless an item is done with. Remove the card and the next run makes a
+  new one. See [Pinned cards](bots-and-chats.md#pinned-cards).
 - **just logged**: nothing is sent; Activity shows what it found.
 
 Every run's reply is kept in **Activity**.

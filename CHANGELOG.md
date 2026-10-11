@@ -4,6 +4,10 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 
 ## Unreleased
 
+- **Push-to-talk:** in the chat or quick ask, hold ⌥ (Ctrl on Windows and Linux) and speak; let go and the words are
+  in the box, not sent. Transcribed on your computer by the same whisper.cpp as meetings.
+- **Voice notes without an API key:** with no OpenAI key, Telegram and Discord voice notes are transcribed by
+  whisper.cpp on your computer.
 - **Word and Excel files and scanned PDFs:** send a `.docx` or `.xlsx` and the bot reads it (Excel sheet by sheet).
   A scanned PDF's pages go to the bot as photos, so a scanned contract or letter no longer needs photographing.
 - **A starter team in the first minutes:** the first run asks what you want off your plate (tap up to three), and your

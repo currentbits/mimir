@@ -2,7 +2,7 @@
 //! AI when something changed, with what changed. An unchanged check costs a fetch, not a model run.
 
 use crate::db::{Db, Routine};
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use std::collections::HashSet;
 use std::time::Duration;
 
@@ -31,9 +31,18 @@ pub fn valid(watch: &str) -> Result<()> {
 /// How it is now: a page's text a line per paragraph or entry, or one line per unread email.
 async fn look(db: &Db, watch: &str) -> Result<String> {
     if watch == "mail" {
-        let a = crate::email::account(db).context("no mailbox is connected (Settings → Email)")?;
-        let mails = crate::email::search(&a, "INBOX", &crate::email::criteria(None, None, None, true)?, 50).await?;
-        return Ok(mails.iter().map(|m| format!("#{} {} · {}", m.uid, m.from, m.subject)).collect::<Vec<_>>().join("\n"));
+        let all = crate::email::accounts(db);
+        if all.is_empty() {
+            bail!("no mailbox is connected (Settings → Email)");
+        }
+        let mut lines = vec![];
+        for a in &all {
+            let mails = crate::email::search(a, "INBOX", &crate::email::criteria(None, None, None, true)?, 50).await?;
+            // The mailbox in front only when there are several: one mailbox's lines stay as they were.
+            let who = if all.len() > 1 { format!("{} ", a.user) } else { String::new() };
+            lines.extend(mails.iter().map(|m| format!("{who}#{} {} · {}", m.uid, m.from, m.subject)));
+        }
+        return Ok(lines.join("\n"));
     }
     let http = reqwest::Client::builder().timeout(Duration::from_secs(30)).redirect(crate::tools::public_redirects()).build()?;
     let res = http.get(watch).send().await?.error_for_status()?;

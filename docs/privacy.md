@@ -8,8 +8,8 @@ to the services you connected.
 | What | Where |
 |---|---|
 | Memories, bots, chats (searchable by your bots with `chat_search`), routines, runs, approvals, meetings (transcripts, your notes, speaker names, summaries) | `~/.mimir/mimir.db` (one SQLite file; `MIMIR_HOME` moves it) |
-| Bot tokens, API keys (including Brave Search's), saved logins, tool-server tokens, the calendar link, the email and calendar app passwords | The OS keychain (macOS Keychain, Windows Credential Manager, the Linux keyring); on a server, its database; the data folder is owner-only (mode 0700) |
-| Your email account's server names and address (not its password) | `~/.mimir/mimir.db` (settings) |
+| Bot tokens, API keys (including Brave Search's), saved logins, tool-server tokens and sign-ins, the calendar link, the email and calendar app passwords, the Outlook sign-in | The OS keychain (macOS Keychain, Windows Credential Manager, the Linux keyring); on a server, its database; the data folder is owner-only (mode 0700) |
+| Your mailboxes' server names and addresses (not their passwords), the Outlook app's client ID | `~/.mimir/mimir.db` (settings) |
 | The chats' file workspaces (notes, lists, drafts bots keep) | `~/.mimir/files/chat-<id>/`, with earlier versions under `.history/` |
 | Photos you send (and a scanned PDF's pages) | `~/.mimir/media/`, deleted after 60 days |
 | A file's text you send (PDF, Word, Excel, text file) | In the chat's history, with your message |
@@ -27,7 +27,8 @@ to the services you connected.
   and the model's provider, or nowhere for a local model.
 - **The daily tidy-up** reads a chat's recent conversation with all your bots, on the AI account of the bot that does
   the tidy-up (Settings). So a conversation with a bot on a local model reaches that account too, if it's a cloud one.
-- **Voice notes** from Telegram are transcribed with your OpenAI-compatible key.
+- **Voice notes** are transcribed with your OpenAI-compatible key if you added one, else on the computer the bot runs
+  on. **Push-to-talk** in the app always transcribes on your computer.
 - **Messaging apps** carry the messages you exchange there (Telegram, Slack, Discord).
 - **Meetings**: transcription and speaker separation run on your computer. A transcript leaves only when a bot reads it
   (it then goes to that bot's AI account like any other message). Without the built-in engine, the OpenAI-compatible

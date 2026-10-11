@@ -296,6 +296,56 @@ impl Meeting {
     }
 }
 
+/// Push-to-talk: the microphone while a key is held, then its words, by whisper.cpp here (nothing leaves the
+/// computer, nothing is sent: the words go into the box).
+#[derive(Default)]
+pub struct Dictation {
+    buf: Arc<Mutex<Buf>>,
+    stop: Mutex<Option<std::sync::mpsc::Sender<()>>>,
+}
+
+impl Dictation {
+    pub fn start(&self, db: &Db) -> Result<(), String> {
+        let mut stop = self.stop.lock().unwrap();
+        if stop.is_some() {
+            return Ok(());
+        }
+        *self.buf.lock().unwrap() = Buf::default();
+        // The stream isn't Send (CoreAudio): it lives on its own thread until the sender is dropped.
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let (buf, mic) = (self.buf.clone(), db.setting("meeting_mic").ok().flatten());
+        std::thread::spawn(move || {
+            let stream = open_mic(buf, mic.as_deref());
+            let _ = ready_tx.send(stream.as_ref().map(|_| ()).map_err(Clone::clone));
+            let _ = rx.recv();
+            drop(stream);
+        });
+        ready_rx.recv_timeout(Duration::from_secs(5)).map_err(|_| "the microphone didn't respond".to_string())?.map_err(|e| format!("couldn't record: {e}. {PERMISSION}"))?;
+        *stop = Some(tx);
+        // The speech model, the first time: fetched while you talk.
+        let (home, model) = (db.dir(), transcribe::model_name(db));
+        tauri::async_runtime::spawn(async move {
+            if let Err(e) = transcribe::ensure_model(&home, &model).await {
+                eprintln!("speech model: {e:#}");
+            }
+        });
+        Ok(())
+    }
+
+    /// Stop listening; the words ("" if nothing was said, or it wasn't listening).
+    pub async fn stop(&self, db: &Db) -> Result<String, String> {
+        let Some(tx) = self.stop.lock().unwrap().take() else { return Ok(String::new()) };
+        drop(tx);
+        let b = std::mem::take(&mut *self.buf.lock().unwrap());
+        if !b.samples.is_empty() && !b.heard {
+            return Err(format!("your microphone sent pure silence. {MIC_SILENT}"));
+        }
+        let audio = transcribe::resample_16k(&b.samples, b.rate);
+        transcribe::transcribe_samples(&db.dir(), &transcribe::model_name(db), &audio).await.map_err(|e| format!("{e:#}"))
+    }
+}
+
 /// Transcribe both sources' new audio and add the lines (yours first when they overlap in a chunk).
 async fn flush(db: &Db, home: &std::path::Path, model: &str, status: &Arc<Mutex<Status>>, mic: &Arc<Mutex<Buf>>, sys: &Arc<Mutex<Buf>>) {
     let started_at = status.lock().unwrap().started_at;

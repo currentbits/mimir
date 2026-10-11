@@ -21,15 +21,16 @@ For contributors: how the pieces fit together.
 | `telegram`, `slack`, `discord` | The messaging apps (outbound connections, streaming replies) |
 | `provider` | AI accounts: starts `claude -p` / `codex exec` / `grok -p`, or calls an OpenAI-compatible API; streams replies |
 | `chatgpt` | Sign in with ChatGPT: OAuth (PKCE, dynamic registration), the plan's tokens, and replies on the Responses API |
+| `oauth` | OAuth sign-in with PKCE for tool servers and Outlook: the browser's return trip (or a pasted address), tokens in the secret store, refreshing |
 | `lib.rs` (`turn`) | One run: builds the instructions (role, standing memory, skills), calls the provider, records the run; `/skill` commands (`skill_command`) |
 | `tools` | Tool definitions, the allow / ask / deny gate, taint, plans, and the built-in tools' code |
 | `mcp` | The MCP server the CLIs start for each run (`<app> mcp --bot B --chat C --run R`, plus `--read-only` for quiet checks, `--no-tools`, `--depth` for hand-offs), exposing Mimir's tools |
-| `ext` | Tool servers (MCP clients over stdio and Streamable HTTP), the browser, saved logins |
+| `ext` | Tool servers (MCP clients over stdio and Streamable HTTP, MCP's OAuth sign-in for remote ones), the browser, saved logins |
 | `tidy` | The daily memory tidy-up (on `tidy_model` if set): corrections, skills from good runs, fixes for skills that went wrong, weekly upkeep (retire / merge / move to background), the weekly review; teaching a skill from a source or a SKILL.md |
 | `computer` | The bots' computer (Xvfb, xdotool, scrot, Chromium), self-hosted Linux only; recording a showing for teach by showing (page details through Chromium's DevTools port) |
 | `transcribe` | Speech to text (whisper.cpp built in, or `whisper-cli`, or an API), voice activity, speaker separation |
 | `calendar` | iCal links: parsing, recurrence (`rrule`), the meeting on now, events between dates (`calendar_list`) |
-| `email` | IMAP (async-imap, mail-parser): search, read, drafts by APPEND, all EXAMINE/PEEK; SMTP sending (lettre); every operation within 60 s |
+| `email` | The mailbox list; IMAP (async-imap, mail-parser): search, read, drafts by APPEND, all EXAMINE/PEEK; SMTP sending (lettre); app passwords or Outlook's XOAUTH2; every operation within 60 s |
 | `files` | The per-chat file workspace: path checks, versions under `.history/`, outside-content marks keyed by canonical name and modification time |
 | `library` | Mimir's skill library: the SKILL.md files in `crates/mimir-core/skills/`, compiled in, with what each needs and a suggested schedule |
 | `fmt`, `live`, `openrouter` | Message formatting per app, "what it's doing now", OpenRouter sign-in |

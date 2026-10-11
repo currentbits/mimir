@@ -701,7 +701,7 @@ impl Core {
     /// one is someone else's words: outside content.
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn incoming_voice(self: &Arc<Self>, chan: &Chan, ext: &str, from: Sender<'_>, bytes: Vec<u8>, name: &str, forwarded: bool, sent: Option<i64>) -> Result<()> {
-        match crate::provider::transcribe(bytes, name).await {
+        match crate::transcribe::voice_note(&self.db, bytes, name).await {
             Some(Ok(text)) if !text.is_empty() => {
                 chan.send(ext, &trf("🎙️ I heard: “{text}”", &[("text", &text)])).await;
                 if forwarded {
@@ -712,7 +712,7 @@ impl Core {
             }
             Some(Ok(_)) => chan.send(ext, tr("I couldn't make out any words in that voice note.")).await,
             Some(Err(e)) => chan.send(ext, &trf("I couldn't transcribe that voice note ({error}). Could you type it?", &[("error", &format!("{e:#}"))])).await,
-            None => chan.send(ext, tr("To understand voice notes I need an OpenAI API key for transcription (Settings → AI keys in Mimir). Until then, could you type it?")).await,
+            None => chan.send(ext, tr("To understand voice notes I need whisper.cpp where Mimir runs, or an OpenAI API key (Settings → AI keys in Mimir). Until then, could you type it?")).await,
         }
         Ok(())
     }
@@ -1506,6 +1506,7 @@ impl Core {
         let how = match (if urgent { "now" } else { r.delivery.as_str() }, &target) {
             ("digest", _) => "in the digest".to_string(),
             ("log", _) => "only in the log".to_string(),
+            ("card", _) => if worked { "on its card" } else { "only in the log" }.to_string(),
             (_, None) => "in the app".to_string(),
             (_, Some((c, ext))) => {
                 // A result gets one-tap feedback (a reminder, Done or Snooze); a failure doesn't.
@@ -1860,11 +1861,9 @@ mod tests {
         let p = std::env::temp_dir().join(format!("mimir-mailtask-{}.db", std::process::id()));
         let _ = std::fs::remove_file(&p);
         let db = Db::open(&p).unwrap();
-        for (k, v) in [("email_host", "127.0.0.1"), ("email_port", "1143"), ("email_user", "me@example.com")] {
-            db.set_setting(k, v).unwrap();
-        }
+        db.set_setting("email_accounts", r#"[{"host":"127.0.0.1","port":1143,"user":"me@example.com"}]"#).unwrap();
         crate::host::install_secrets(Arc::new(crate::host::DbSecrets(db.clone())));
-        crate::host::secret_set(crate::email::SECRET, "pw").unwrap();
+        crate::host::secret_set("email_password:me@example.com", "pw").unwrap();
         let core = core_on(&db, &fake_ai("200 OK", r#"{"choices":[{"message":{"role":"assistant","content":"Done."}}],"usage":{"prompt_tokens":3,"completion_tokens":2}}"#).await);
         // Turned on: what's there already isn't a task.
         core.mail_tasks(&[]).await.unwrap();

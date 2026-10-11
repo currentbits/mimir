@@ -94,6 +94,54 @@ export function SignInChatGPT({ onDone, place }: { onDone: () => void; place: (c
   return place(<button type="button" className="btn" disabled={busy} onClick={go}><Icon name="bolt" size={14} />{busy ? 'Starting…' : 'Continue with ChatGPT'}</button>, error)
 }
 
+/** An OAuth sign-in in the browser (a tool server, Outlook): like ChatGPT's. `start` returns the address to open; the
+ *  desktop app waits for the browser to come back (`wait`), a server takes the address it ended up on (`paste`). */
+export function SignInBrowser<T>({ label, what, start, wait, paste, onDone, disabled }: {
+  label: string; what: string; start: () => Promise<{ url: string; paste: boolean }>; wait: string; paste: string; onDone: (r: T) => void; disabled?: boolean
+}) {
+  const [flow, setFlow] = useState<{ url: string; paste: boolean } | null>(null)
+  const [pasted, setPasted] = useState('')
+  const [err, setErr] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const run = useRef(0)
+  const done = (r: T) => { run.current++; setFlow(null); setPasted(''); onDone(r) }
+  const fail = (e: unknown) => { setBusy(false); setErr(String(e)) }
+  const go = async () => {
+    const me = ++run.current
+    setBusy(true); setErr(null)
+    try {
+      const f = await start()
+      setFlow(f); setBusy(false)
+      if (inDesktop) localInvoke('open_url', { url: f.url }).catch(() => {})
+      if (!f.paste) { const r = await invoke<T>(wait); if (me === run.current) done(r) }
+    } catch (e) { if (me === run.current) { setFlow(null); fail(e) } }
+  }
+  const finish = () => { setErr(null); setBusy(true); invoke<T>(paste, { url: pasted.trim() }).then(r => { setBusy(false); done(r) }, fail) }
+  const cancel = () => { run.current++; setFlow(null); setPasted(''); invoke('sign_in_cancel').catch(() => {}) }
+  const error = err && <span className="error" style={{ margin: 0 }}>{err}</span>
+  if (flow && !flow.paste) return (
+    <span className="connect-wait" role="status"><span className="typing" aria-hidden="true"><i /><i /><i /></span>
+      Sign in to {what} in your browser… <a href={flow.url} onClick={openLink}>Open it again</a>
+      <button type="button" className="btn btn-sm btn-ghost" onClick={cancel}>Cancel</button></span>
+  )
+  if (flow) return (
+    <div style={{ display: 'grid', gap: 6 }}>
+      <span className="hint">1. <a href={flow.url} target="_blank" rel="noreferrer" onClick={openLink}>Sign in to {what}</a>{inDesktop ? ' (it opened in your browser)' : ''}.
+        2. Your browser then lands on a page that doesn’t load, at an address starting with <code>http://</code>. Copy that whole address and paste it here.</span>
+      <div className="er">
+        <input className="input" placeholder="http://127.0.0.1:…?code=…" value={pasted} onChange={e => setPasted(e.target.value)} autoComplete="off" aria-label="The address your browser ended up on" autoFocus />
+        <button type="button" className="btn" disabled={!pasted.trim() || busy} onClick={finish}>{busy ? 'Finishing…' : 'Finish'}</button>
+        <button type="button" className="btn btn-ghost" onClick={cancel}>Cancel</button>
+      </div>
+      {error}
+    </div>
+  )
+  return <>
+    <button type="button" className="btn" disabled={busy || disabled} onClick={go}>{busy ? 'Starting…' : label}</button>
+    {error}
+  </>
+}
+
 /** Sign in to Grok for Mimir with a device code: open the page, confirm the code, and this notices when it's done. */
 export function SignInGrok({ onDone }: { onDone: () => void }) {
   const [login, setLogin] = useState<{ url: string; code: string } | null>(null)

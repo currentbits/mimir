@@ -1,14 +1,15 @@
 // A small Markdown renderer for bot replies. Builds React elements (never raw HTML), so a reply
 // can't inject markup. Covers what chat models actually write: paragraphs, lists, headings,
-// quotes, code, bold/italic, links.
+// quotes, code, bold/italic, links, checklists and tables.
 import { Icon, tell } from './ui'
 import { memo, useEffect, useState, type ReactNode } from 'react'
 import { inDesktop, invoke, localInvoke, saveDownload } from './api'
 
 type Block =
   | { kind: 'p' | 'h' | 'quote'; text: string }
-  | { kind: 'ul' | 'ol'; items: string[] }
+  | { kind: 'ul' | 'ol'; items: { text: string; line: number }[] }
   | { kind: 'code'; text: string }
+  | { kind: 'table'; rows: string[][] }
 
 const BULLET = /^\s*[-*•]\s+(.*)$/
 const NUMBER = /^\s*\d+[.)]\s+(.*)$/
@@ -33,14 +34,24 @@ function blocks(md: string): Block[] {
     else if (list) {
       flush()
       const re = list === 'ul' ? BULLET : NUMBER
-      const items: string[] = []
+      const items: { text: string; line: number }[] = []
       for (; i < lines.length; i++) {
         const m = lines[i].match(re)
-        if (m) items.push(m[1])
-        else if (/^\s{2,}\S/.test(lines[i]) && items.length) items[items.length - 1] += ' ' + lines[i].trim()
+        if (m) items.push({ text: m[1], line: i })
+        else if (/^\s{2,}\S/.test(lines[i]) && items.length) items[items.length - 1].text += ' ' + lines[i].trim()
         else { i--; break }
       }
       out.push({ kind: list, items })
+    }
+    else if (line.trim().startsWith('|')) {
+      flush()
+      const rows: string[][] = []
+      for (; i < lines.length && lines[i].trim().startsWith('|'); i++) {
+        // The |---|---| line under the header says nothing itself.
+        if (!/^[\s|:-]+$/.test(lines[i])) rows.push(lines[i].trim().replace(/^\||\|$/g, '').split('|').map(c => c.trim()))
+      }
+      i--
+      out.push({ kind: 'table', rows })
     }
     else if (/^>\s?/.test(line)) { flush(); out.push({ kind: 'quote', text: line.replace(/^>\s?/, '') }) }
     else if (!line.trim()) flush()
@@ -89,9 +100,19 @@ function breaks(s: string, key: number): ReactNode[] {
   return s.split('\n').flatMap((part, i) => i ? [<br key={`${key}-${i}`} />, part] : [part])
 }
 
+const BOX = /^\[([ xX])\]\s+(.*)$/s
+
 // memo: a chat redraws on every poll, and its old replies haven't changed.
-export const Markdown = memo(function Markdown({ text, caret }: { text: string; caret?: boolean }) {
+// onTick: checklist items can be ticked (a pinned card), with the line's number and text as written.
+export const Markdown = memo(function Markdown({ text, caret, onTick }: { text: string; caret?: boolean; onTick?: (line: number, was: string) => void }) {
   const bs = blocks(text)
+  const src = text.replace(/\r/g, '').split('\n')
+  const item = (it: { text: string; line: number }) => {
+    const box = it.text.match(BOX)
+    if (!box) return inline(it.text)
+    const on = box[1] !== ' '
+    return <label className={`md-check${on ? ' done' : ''}`}><input type="checkbox" checked={on} disabled={!onTick} onChange={() => onTick?.(it.line, src[it.line])} />{inline(box[2])}</label>
+  }
   return (
     <div className="md">
       {bs.map((b, i) => {
@@ -100,8 +121,14 @@ export const Markdown = memo(function Markdown({ text, caret }: { text: string; 
           case 'h': return <p key={i} className="md-h">{inline(b.text)}{end}</p>
           case 'quote': return <blockquote key={i}>{inline(b.text)}{end}</blockquote>
           case 'code': return <pre key={i}><code>{b.text}</code>{end}</pre>
-          case 'ul': return <ul key={i}>{b.items.map((t, j) => <li key={j}>{inline(t)}{j === b.items.length - 1 && end}</li>)}</ul>
-          case 'ol': return <ol key={i}>{b.items.map((t, j) => <li key={j}>{inline(t)}{j === b.items.length - 1 && end}</li>)}</ol>
+          case 'ul': return <ul key={i} className={b.items.every(t => BOX.test(t.text)) ? 'md-checks' : undefined}>{b.items.map((t, j) => <li key={j}>{item(t)}{j === b.items.length - 1 && end}</li>)}</ul>
+          case 'ol': return <ol key={i}>{b.items.map((t, j) => <li key={j}>{item(t)}{j === b.items.length - 1 && end}</li>)}</ol>
+          case 'table': return (
+            <div key={i} className="md-table"><table>
+              <thead><tr>{b.rows[0]?.map((c, j) => <th key={j}>{inline(c)}</th>)}</tr></thead>
+              <tbody>{b.rows.slice(1).map((r, j) => <tr key={j}>{r.map((c, k) => <td key={k}>{inline(c)}</td>)}</tr>)}</tbody>
+            </table>{end}</div>
+          )
           default: return <p key={i}>{inline(b.text)}{end}</p>
         }
       })}

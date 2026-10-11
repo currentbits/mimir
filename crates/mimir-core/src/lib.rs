@@ -69,6 +69,7 @@ pub mod ext;
 pub mod fmt;
 pub mod host;
 pub mod live;
+pub mod oauth;
 pub mod openrouter;
 mod discord;
 mod slack;
@@ -810,6 +811,25 @@ fn urgent_body(reply: &str) -> Option<&str> {
     first.trim_matches(|c: char| !c.is_alphanumeric()).eq_ignore_ascii_case("URGENT").then(|| rest.trim())
 }
 
+/// What a card-lane routine is told: its reply replaces the card, which reads like this now (the person's ticks in it).
+fn card_brief(ctx: &ToolCtx, r: &db::Routine) -> Result<String> {
+    let now = match ctx.db.routine_card(r.id)? {
+        Some(k) => {
+            // Someone else's words, if a page-reading run wrote it.
+            if k.tainted {
+                ctx.pre_taint();
+            }
+            let who = if k.by_you { "the person ticked items on it since" } else { "as you last wrote it" };
+            format!(" It reads now ({who}); keep their ticks unless an item is done with:\n<card>\n{}\n</card>", k.body.replace('<', "‹").replace('>', "›"))
+        }
+        None => String::new(),
+    };
+    Ok(format!(
+        "\n\n[Your reply replaces this routine's card, pinned in the person's chat; nothing is sent. Write the whole card: a first line \
+         \"# Title\", then text, checklists (- [ ] item / - [x] item), tables and links. No HTML.{now}]"
+    ))
+}
+
 async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) -> Result<(String, db::Usage)> {
     let scope = ctx.scope();
     let (text, is_routine, quiet) = match &trigger {
@@ -822,7 +842,8 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
             // A routine can just run a skill: its prompt is "/skill-name …".
             let prompt = skill_command(&ctx.db, &scope, ctx.bot_id, &r.prompt).unwrap_or_else(|| r.prompt.clone());
             let urgent = urgent_rule(r, ctx).map(|u| format!("\n\n[This result waits to be sent, unless the person's own rule holds now: \"{u}\". Only if it does, make the first line of your reply exactly URGENT.]")).unwrap_or_default();
-            (format!("[Scheduled {} #{} \"{}\"{}] {prompt}{urgent}", if r.quiet { "quiet check" } else { "routine" }, r.id, r.cron, late(r.next_fire, db::now())), true, r.quiet)
+            let card = if r.delivery == "card" { card_brief(ctx, r)? } else { String::new() };
+            (format!("[Scheduled {} #{} \"{}\"{}] {prompt}{urgent}{card}", if r.quiet { "quiet check" } else { "routine" }, r.id, r.cron, late(r.next_fire, db::now())), true, r.quiet)
         }
     };
     // "/skill-name …" from the person: use that skill (the message is kept as they wrote it).
@@ -1121,6 +1142,10 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
             }
         }
         Trigger::Routine(_) if lane == "log" => {}
+        // Quieter than a message: the result replaces its pinned card.
+        Trigger::Routine(r) if lane == "card" => {
+            ctx.db.card_from_routine(r, &reply.text, ctx.is_tainted())?;
+        }
         _ => {
             // A new routine's first results ask what to trim, so the brief gets tuned by a reply rather than left as
             // first written (the bot changes it with routine_update).

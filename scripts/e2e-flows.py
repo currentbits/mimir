@@ -119,6 +119,30 @@ check("urgent: the run counts towards the day's cap", q("SELECT urgent, delivere
       q("SELECT urgent, delivered FROM runs WHERE routine_id=?", rt["id"]))
 api("delete_routine", {"chatId": 0, "id": rt["id"]})
 
+# Pinned cards: a bot writes one, you tick an item (your edit), a routine's result replaces its own card
+r = send(1, "put it on a CARD")
+cards = api("cards", {"chatId": 0})
+check("card_write: the card is pinned in the chat", [k["title"] for k in cards] == ["Shopping"], (r, cards))
+k = api("card_tick", {"chatId": 0, "id": cards[0]["id"], "line": 1, "text": "- [ ] eggs"})
+check("card_tick: written back as your edit", k["by_you"] and "- [x] eggs" in k["body"], k)
+rt = api("add_routine", {"chatId": 0, "botId": 1, "cron": "0 9 * * *", "prompt": "list bills due"})
+api("set_delivery", {"chatId": 0, "id": rt["id"], "delivery": "card"})
+before = len(api("messages", {"chatId": 0, "botId": 1}))
+with sqlite3.connect(DB) as c:
+    c.execute("UPDATE routines SET next_fire=strftime('%s','now') - 1 WHERE id=?", (rt["id"],))
+mine = []
+for _ in range(90):
+    mine = [k for k in api("cards", {"chatId": 0}) if k["routine_id"] == rt["id"]]
+    if mine: break
+    time.sleep(0.5)
+check("card lane: the routine's result is its card", mine and mine[0]["body"].startswith("OK:") and mine[0]["title"] == "list bills due", mine)
+time.sleep(1)
+check("card lane: nothing is sent to the chat", len(api("messages", {"chatId": 0, "botId": 1})) == before)
+check("card lane: the run says where it went", q("SELECT delivered FROM runs WHERE routine_id=? ORDER BY id DESC LIMIT 1", rt["id"]) == [("on its card",)],
+      q("SELECT delivered FROM runs WHERE routine_id=?", rt["id"]))
+api("delete_routine", {"chatId": 0, "id": rt["id"]})
+check("card_delete", api("card_delete", {"chatId": 0, "id": cards[0]["id"]}) and len(api("cards", {"chatId": 0})) == 1)
+
 # Deleting a bot takes its routines and runs with it; memories stay
 api("add_routine", {"chatId": 0, "botId": scout[0][0], "cron": "0 9 * * *", "prompt": "check prices", "quiet": True})
 api("delete_bot", {"id": scout[0][0]})
