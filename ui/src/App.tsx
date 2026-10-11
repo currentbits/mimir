@@ -179,7 +179,7 @@ function Said({ text }: { text: string }) {
   // A reply to one of the bot's messages (Telegram's swipe-to-reply): the quote above what they wrote.
   const re = text.match(/^<replying_to_your_message>([\s\S]*?)<\/replying_to_your_message>\n/)
   if (re) return <><span className="msg-quote">{re[1]}</span><Said text={text.slice(re[0].length)} /></>
-  const doc = text.match(/^([\s\S]*?)\n\n\[Attached: (.+?)\. Its text follows/)
+  const doc = text.match(/^([\s\S]*?)\n\n\[Attached: (.+?)(?:\. Its text follows|, a scanned document:)/)
   if (!doc) return <>{text}</>
   return <>{doc[1] !== '(I sent you a file.)' && <>{doc[1]}<br /></>}<span className="msg-file"><Icon name="file" size={13} />{doc[2]}</span></>
 }
@@ -1556,14 +1556,14 @@ function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, openBot
 
   // Photos pasted or dropped into the composer, shown as thumbnails until sent.
   const [photos, setPhotos] = useState<{ url: string; data: string; ext: string }[]>([])
-  // A PDF or text file to send with the message (one at a time); the bot gets its text.
+  // A PDF, Word, Excel or text file to send with the message (one at a time); the bot gets its text.
   const [doc, setDoc] = useState<{ name: string; data: string } | null>(null)
   const [dragging, setDragging] = useState(false)
   const addPhotos = (files: Iterable<File>) => {
     for (const f of files) {
       const ext = ({ 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' } as Record<string, string>)[f.type]
       if (!ext) {
-        if (f.type === 'application/pdf' || f.type.startsWith('text/') || /\.(pdf|txt|md|csv|json|log)$/i.test(f.name)) {
+        if (f.type === 'application/pdf' || f.type.startsWith('text/') || /\.(pdf|docx|xlsx|txt|md|csv|json|log)$/i.test(f.name)) {
           const r = new FileReader()
           r.onload = () => { const url = String(r.result); setDoc({ name: f.name, data: url.slice(url.indexOf(',') + 1) }) }
           r.readAsDataURL(f)
@@ -1613,9 +1613,11 @@ function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, openBot
     if (!images) { setPending(null); return }
     // The file's text goes with the message, marked as outside content (the conversation is marked too).
     const said = images.length ? `📷 ${t || '(I sent you a photo.)'}` : t
-    const message = file ? await invoke<string>('read_document', { botId: to, chatId: LOCAL, name: file.name, data: file.data, text: said }).catch(e => { setErr(String(e)); setFailed(t); return null }) : said
-    if (message === null) { setPending(null); return }
-    invoke<string>('send_local', { botId: to, text: message, images })
+    // A scanned PDF comes back as its pages, saved as photos to go with the message.
+    const read = file ? await invoke<string | { text: string; images: string[] }>('read_document', { botId: to, chatId: LOCAL, name: file.name, data: file.data, text: said }).catch(e => { setErr(String(e)); setFailed(t); return null }) : said
+    if (read === null) { setPending(null); return }
+    const [message, pages] = typeof read === 'string' ? [read, []] : [read.text, read.images]
+    invoke<string>('send_local', { botId: to, text: message, images: [...images, ...pages] })
       .then(() => flash('happy'), e => { if (/stopped/i.test(String(e))) flash('surprised', 900); else { setErr(String(e)); setFailed(t) } })
       // Swap the pending bubbles for the saved messages in one frame: no flash in between.
       .finally(() => { ownSend.current = true; log.reload().finally(() => { setPending(null); setTo(null) }); conv.reload(); onTurn(); if (only && to !== botId) onBot?.(to) })

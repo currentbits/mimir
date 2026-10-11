@@ -31,6 +31,10 @@ getrandom = "0.3.4"
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
 # Text of PDFs people send their bots.
 pdf-extract = "0.12.1"
+# The pictures in a scanned PDF's pages (pdf-extract's own PDF reader).
+lopdf = { version = "0.42", default-features = false }
+# Word and Excel files are zipped XML.
+zip = { version = "4.6", default-features = false, features = ["deflate-flate2"] }
 url = "2"
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls", "http2", "multipart"] }
 rusqlite = { version = "0.40.2", features = ["bundled"] }

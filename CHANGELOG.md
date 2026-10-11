@@ -4,6 +4,8 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 
 ## Unreleased
 
+- **Word and Excel files and scanned PDFs:** send a `.docx` or `.xlsx` and the bot reads it (Excel sheet by sheet).
+  A scanned PDF's pages go to the bot as photos, so a scanned contract or letter no longer needs photographing.
 - **Email providers that send on port 587 work:** Settings → Email has an *Outgoing port* next to the outgoing server.
   Empty is 465 as before; 587 (or any other port) uses STARTTLS. Saving used to set it back to 465 every time.
 

@@ -132,8 +132,8 @@ static NL: &[(&str, &str)] = &[
     ("{n} days ago", "{n} dagen geleden"),
     // Files and voice notes.
     (
-        "I can read text, photos, voice notes, PDFs and text files, but not this kind of file yet. Could you describe it or send a photo?",
-        "Ik kan tekst, foto's, spraakberichten, pdf's en tekstbestanden lezen, maar dit soort bestand nog niet. Kun je het beschrijven of er een foto van sturen?",
+        "I can read text, photos, voice notes, PDFs, Word and Excel files and text files, but not this kind of file yet. Could you describe it or send a photo?",
+        "Ik kan tekst, foto's, spraakberichten, pdf's, Word- en Excel-bestanden en tekstbestanden lezen, maar dit soort bestand nog niet. Kun je het beschrijven of er een foto van sturen?",
     ),
     ("That file has no text I can read (a scanned PDF?). Send photos of the pages instead.", "In dat bestand staat geen tekst die ik kan lezen (een gescande pdf?). Stuur liever foto's van de pagina's."),
     ("That file is over 20 MB, more than I take. Could you send a smaller one?", "Dat bestand is groter dan 20 MB, meer dan ik aanneem. Kun je een kleiner bestand sturen?"),
