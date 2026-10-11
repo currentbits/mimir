@@ -165,6 +165,35 @@ pub struct Message {
     /// Replies: the run that wrote it (to open what another bot did for it).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub run_id: Option<i64>,
+    /// Replies: what the reply drew on ("2 memories · 1 skill · read 3 pages").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub used: Option<Used>,
+}
+
+/// What one run drew on: the memories recalled for it, the skills it read, the pages it opened.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct Used {
+    pub memories: Vec<UsedMemory>,
+    /// (id, name)
+    pub skills: Vec<(i64, String)>,
+    /// What each page read says ("Read https://…").
+    pub pages: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct UsedMemory {
+    pub id: i64,
+    pub kind: String,
+    pub title: String,
+    pub body: String,
+    /// "active", or "superseded"/"forgotten" since the reply.
+    pub status: &'static str,
+}
+
+impl Used {
+    pub fn is_empty(&self) -> bool {
+        self.memories.is_empty() && self.skills.is_empty() && self.pages.is_empty()
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1382,6 +1411,45 @@ impl Db {
         let list = ids.iter().map(i64::to_string).collect::<Vec<_>>().join(",");
         self.c().execute("UPDATE runs SET recalled=?2 WHERE id=?1", params![run, list])?;
         Ok(())
+    }
+
+    /// What a run drew on (under each reply in the app, and `/why` in the messaging apps).
+    pub fn run_used(&self, run: i64) -> Result<Used> {
+        let c = self.c();
+        let (chat, recalled): (i64, Option<String>) = c.query_row("SELECT chat_id, recalled FROM runs WHERE id=?1", [run], |r| Ok((r.get(0)?, r.get(1)?))).optional()?.unwrap_or((0, None));
+        let mut memories = vec![];
+        // Only the run's own chat's (as when blaming a reply).
+        let mut st = c.prepare("SELECT id, type, title, body, superseded_by IS NOT NULL, invalid FROM entries WHERE id=?1 AND scope=?2")?;
+        for id in recalled.unwrap_or_default().split(',').filter_map(|s| s.parse::<i64>().ok()) {
+            if let Some(m) = st
+                .query_row(params![id, format!("chat:{chat}")], |r| {
+                    let status = if r.get::<_, bool>(5)? { "forgotten" } else if r.get::<_, bool>(4)? { "superseded" } else { "active" };
+                    Ok(UsedMemory { id: r.get(0)?, kind: r.get(1)?, title: r.get(2)?, body: r.get(3)?, status })
+                })
+                .optional()?
+            {
+                memories.push(m);
+            }
+        }
+        let skills = c
+            .prepare("SELECT DISTINCT s.id, s.name FROM skill_uses u JOIN skills s ON s.id = u.skill_id WHERE u.run_id=?1 ORDER BY s.id")?
+            .query_map([run], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<Result<_, _>>()?;
+        let pages = c
+            .prepare("SELECT summary FROM tool_calls WHERE run_id=?1 AND ok=1 AND tool IN ('web_fetch', 'browser__browser_navigate', 'computer_open') ORDER BY id")?
+            .query_map([run], |r| r.get(0))?
+            .collect::<Result<_, _>>()?;
+        Ok(Used { memories, skills, pages })
+    }
+
+    /// `/why`: what this bot's last reply in the chat drew on.
+    pub fn last_reply_used(&self, bot: i64, chat: i64) -> Result<Option<Used>> {
+        let run: Option<i64> = self
+            .c()
+            .query_row("SELECT run_id FROM messages WHERE bot_id=?1 AND chat_id=?2 AND role='assistant' ORDER BY id DESC LIMIT 1", [bot, chat], |r| r.get(0))
+            .optional()?
+            .flatten();
+        run.map(|r| self.run_used(r)).transpose()
     }
 
     /// The person corrected the bot's last reply here: count it against the memories that reply recalled.
@@ -2700,7 +2768,7 @@ impl Db {
         let c = self.c();
         let mut st = c.prepare("SELECT bot_id, role, content, ts, run_id, id FROM messages WHERE chat_id=?1 AND (?3 IS NULL OR bot_id=?3) ORDER BY id DESC LIMIT ?2")?;
         let mut v: Vec<(Message, Option<i64>)> = st
-            .query_map(params![chat, n as i64, bot], |r| Ok((Message { id: r.get(5)?, bot_id: r.get(0)?, role: r.get(1)?, content: r.get(2)?, ts: r.get(3)?, actions: vec![], run_id: None }, r.get(4)?)))?
+            .query_map(params![chat, n as i64, bot], |r| Ok((Message { id: r.get(5)?, bot_id: r.get(0)?, role: r.get(1)?, content: r.get(2)?, ts: r.get(3)?, actions: vec![], run_id: None, used: None }, r.get(4)?)))?
             .collect::<Result<_, _>>()?;
         v.reverse();
         // One query for every reply's actions.
@@ -2717,6 +2785,15 @@ impl Db {
             }
             if let Some(a) = run.filter(|_| m.role == "assistant").and_then(|r| by_run.remove(&r)) {
                 m.actions = a;
+            }
+        }
+        drop(acts);
+        drop(st);
+        drop(c);
+        // ponytail: three small queries per reply; one joined query if long chats load slowly.
+        for (m, _) in v.iter_mut() {
+            if let Some(run) = m.run_id {
+                m.used = Some(self.run_used(run)?).filter(|u| !u.is_empty());
             }
         }
         Ok(v.into_iter().map(|(m, _)| m).collect())
@@ -3574,6 +3651,16 @@ mod tests {
         assert_eq!(d.blame_last_reply(1, 7, "no, wrong").unwrap(), 1, "only this chat's memory");
         let count = |scope: &str, id| d.entries(scope).unwrap().into_iter().find(|e| e.id == id).unwrap().missteps;
         assert_eq!((count("chat:7", used), count("chat:8", other)), (1, 0));
+        // What the reply used, under it and for /why: this chat's memory only, and what happened to it since.
+        let skill = d.skill_propose("chat:7", 1, "Book padel", "When booking padel", "1. Open the site", None).unwrap().unwrap();
+        d.skill_used(skill, Some(run)).unwrap();
+        d.tool_call_log(Some(run), 7, "web_fetch", "Read https://paarl.example", "allow", true, "ok").unwrap();
+        d.tool_call_log(Some(run), 7, "web_fetch", "Read https://down.example", "allow", false, "404").unwrap();
+        let u = d.messages(7, 1).unwrap().pop().unwrap().used.unwrap();
+        assert_eq!((u.memories.len(), u.memories[0].id, u.skills.len(), u.pages.clone()), (1, used, 1, vec!["Read https://paarl.example".to_string()]));
+        d.forget("chat:7", used).unwrap();
+        assert_eq!(d.last_reply_used(1, 7).unwrap().unwrap().memories[0].status, "forgotten");
+        assert!(d.last_reply_used(2, 7).unwrap().is_none(), "another bot's reply");
         // A standing preference the correction is about gets one too (it's in every reply, never "recalled").
         let bullets = d.store("chat:7", "convention", "News format", "Give tech news as three bullet points", "", None).unwrap();
         let tone = d.store("chat:7", "convention", "Tone", "Keep it friendly", "", None).unwrap();

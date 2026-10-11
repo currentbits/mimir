@@ -255,7 +255,7 @@ pub fn skill_slug(name: &str) -> String {
 pub fn skill_menu_name(name: &str) -> Option<String> {
     let cmd: String = skill_slug(name).replace('-', "_").chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_').take(32).collect();
     let cmd = cmd.trim_matches('_').to_string();
-    let builtin = ["start", "help", "memory", "routines", "new", "stop", "undo"].contains(&cmd.as_str()) || cmd.starts_with("pair");
+    let builtin = ["start", "help", "memory", "routines", "new", "stop", "undo", "why"].contains(&cmd.as_str()) || cmd.starts_with("pair");
     (!cmd.is_empty() && !builtin).then_some(cmd)
 }
 

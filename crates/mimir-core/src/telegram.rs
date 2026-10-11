@@ -142,6 +142,7 @@ impl Tg {
         let base = json!([
             {"command": "memory", "description": "What I remember about you"},
             {"command": "routines", "description": "What I do on a schedule"},
+            {"command": "why", "description": "What my last reply used"},
             {"command": "new", "description": "Start a fresh conversation (memories kept)"},
             {"command": "stop", "description": "Stop the reply I'm writing"}
         ]);

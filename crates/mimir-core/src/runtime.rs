@@ -238,6 +238,8 @@ pub(crate) enum Command<'a> {
     Pair(&'a str),
     Start,
     Memory,
+    /// "/why": what the last reply drew on.
+    Why,
     Routines,
     New,
     /// "/stop", or a bare "stop" while a reply is being written.
@@ -279,6 +281,28 @@ pub(crate) struct Sender<'a> {
     pub dm: bool,
 }
 
+/// `/why`: the memories, skills and pages the last reply used, with how to fix a memory that steered it wrong.
+fn why(used: Option<crate::db::Used>) -> String {
+    let Some(u) = used.filter(|u| !u.is_empty()) else {
+        return "My last reply didn't use any memories, skills or pages.".into();
+    };
+    let mut out = vec!["My last reply used:".to_string()];
+    for m in &u.memories {
+        let gone = match m.status { "forgotten" => " (forgotten since)", "superseded" => " (corrected since)", _ => "" };
+        out.push(format!("• #{} {}: {}{gone}", m.id, m.title, crate::tools::truncate(&m.body, 200)));
+    }
+    for (_, name) in &u.skills {
+        out.push(format!("• skill: {name}"));
+    }
+    for p in &u.pages {
+        out.push(format!("• {}", crate::tools::truncate(p, 200)));
+    }
+    if let Some(m) = u.memories.iter().find(|m| m.status == "active") {
+        out.push(format!("\nIf a memory is wrong, tell me (\"forget #{}\", or what's true now), or fix it in the app under Memory.", m.id));
+    }
+    out.join("\n")
+}
+
 /// Pairing works as "/pair CODE" or "pair CODE" (Slack reserves leading slashes).
 pub(crate) fn parse_command(text: &str) -> Command<'_> {
     let t = text.trim();
@@ -296,6 +320,7 @@ pub(crate) fn parse_command(text: &str) -> Command<'_> {
     match lower.as_str() {
         "/start" | "/help" => Command::Start,
         "/memory" => Command::Memory,
+        "/why" => Command::Why,
         "/routines" => Command::Routines,
         "/new" => Command::New,
         "/stop" => Command::Stop(true),
@@ -685,7 +710,7 @@ impl Core {
                 chan.send(ext, if guest {
                     "Paired ✅ as a guest: I keep your own memory and reminders here, and I can search the web for you. I can't see the email, calendar or meetings of the person who runs me. Commands: /memory, /routines, /new, /stop"
                 } else {
-                    "Paired ✅ Talk to me normally. Commands: /memory, /routines, /new, /stop, /undo"
+                    "Paired ✅ Talk to me normally. Commands: /memory, /routines, /new, /stop, /undo, /why"
                 }).await;
             } else {
                 {
@@ -739,7 +764,7 @@ impl Core {
             command = Command::Chat;
         }
         match command {
-            Command::Start => chan.send(ext, "Hi! Just talk to me. /memory shows what I remember, /routines lists schedules, /new starts a fresh conversation, /stop cuts off a reply I'm writing, /undo N takes back something from my weekly list of what I learned.").await,
+            Command::Start => chan.send(ext, "Hi! Just talk to me. /memory shows what I remember, /routines lists schedules, /why shows what my last reply used, /new starts a fresh conversation, /stop cuts off a reply I'm writing, /undo N takes back something from my weekly list of what I learned.").await,
             Command::Memory => {
                 // What bots keep in mind, then what's waiting for you to confirm (bots don't keep those in mind).
                 let scope = format!("chat:{chat}");
@@ -750,6 +775,7 @@ impl Core {
                 }
                 chan.send(ext, &if lines.is_empty() { "Nothing remembered yet.".into() } else { lines.join("\n") }).await;
             }
+            Command::Why => chan.send(ext, &why(self.db.last_reply_used(self.bot, chat)?)).await,
             Command::Routines => {
                 let out = crate::tools::call(&ToolCtx::new(self.db.clone(), self.bot, chat), "routine_list", &json!({})).await?;
                 chan.send(ext, &out).await;
@@ -1554,6 +1580,7 @@ mod tests {
         assert!(matches!(parse_command("Pair AB12"), Command::Pair("AB12")));
         assert!(matches!(parse_command("pairing is fun"), Command::Chat));
         assert!(matches!(parse_command("/memory"), Command::Memory));
+        assert!(matches!(parse_command("/why"), Command::Why));
         assert!(matches!(parse_command("what's in my memory?"), Command::Chat));
         assert!(matches!(parse_command("/stop"), Command::Stop(true)));
         assert!(matches!(parse_command("/undo 2"), Command::Undo(2)));
