@@ -1169,6 +1169,22 @@ mod tests {
         }
     }
 
+    /// A data folder of the test's own, removed at the end (Host::new tidies tmp/ and media/ in it).
+    struct Home(std::path::PathBuf);
+    impl Home {
+        fn new(name: &str) -> Home {
+            let dir = std::env::temp_dir().join(format!("mimir-test-{name}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            Home(dir)
+        }
+    }
+    impl Drop for Home {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
     /// Every command the UI sends is one the host or the desktop app handles: a name with no handler is a button
     /// that does nothing.
     #[test]
@@ -1210,9 +1226,8 @@ mod tests {
 
     #[tokio::test]
     async fn the_skill_library() {
-        let p = std::env::temp_dir().join(format!("mimir-library-{}.db", std::process::id()));
-        let _ = std::fs::remove_file(&p);
-        let host = Host::new(Db::open(&p).unwrap(), std::env::temp_dir(), Arc::new(Mem(Default::default())), tokio::runtime::Handle::current(), "server");
+        let home = Home::new("library");
+        let host = Host::new(Db::open(&home.0.join("mimir.db")).unwrap(), home.0.clone(), Arc::new(Mem(Default::default())), tokio::runtime::Handle::current(), "server");
         let lib = host.call("skill_library", &json!({"chat_id": 0})).await.unwrap();
         let lib = lib.as_array().unwrap();
         assert_eq!(lib.len(), crate::library::all().len());
@@ -1232,22 +1247,23 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch() {
-        let p = std::env::temp_dir().join(format!("mimir-host-{}.db", std::process::id()));
-        let _ = std::fs::remove_file(&p);
-        let db = Db::open(&p).unwrap();
-        let host = Host::new(db, std::env::temp_dir(), Arc::new(Mem(Default::default())), tokio::runtime::Handle::current(), "server");
+        let home = Home::new("host");
+        let mem = Arc::new(Mem(Default::default()));
+        let host = Host::new(Db::open(&home.0.join("mimir.db")).unwrap(), home.0.clone(), mem.clone(), tokio::runtime::Handle::current(), "server");
 
         assert_eq!(host.call("info", &json!({})).await.unwrap()["mode"], "server");
         let bot = json!({"id":0,"name":"Ops","persona":"","provider":"claude","model":"","base_url":"","tools":""});
         // A misspelled field inside an argument is an error, not dropped; `bots`' channel flags sent back are fine.
-        assert!(host.call("save_bot", &json!({"bot": bot, "secrets": {"discordToken": "x"}})).await.is_err());
+        assert!(host.call("save_bot", &json!({"bot": bot, "secrets": {"slackBotToken": "x"}})).await.is_err());
         let mut typo = bot.clone();
         typo["baseUrl"] = json!("");
         assert!(host.call("save_bot", &json!({"bot": typo})).await.is_err());
-        let id = host.call("save_bot", &json!({"bot": bot, "secrets": {"discord_token": "x"}})).await.unwrap();
+        // Half a Slack pair: the token is stored, but no channel starts (a test opens no connections).
+        let id = host.call("save_bot", &json!({"bot": bot, "secrets": {"slack_bot_token": " x "}})).await.unwrap();
+        assert_eq!(mem.get(&key(id.as_i64().unwrap(), SLACK_BOT)).as_deref(), Some("x"));
         let bots = host.call("bots", &json!({})).await.unwrap();
         assert_eq!(bots[1]["name"], "Ops");
-        assert_eq!((bots[1]["has_discord"].as_bool(), bots[0]["has_discord"].as_bool()), (Some(true), Some(false)));
+        assert_eq!((bots[1]["has_slack"].as_bool(), bots[0]["has_slack"].as_bool()), (Some(false), Some(false)));
         assert_eq!(host.call("save_bot", &json!({"bot": bots[1], "secrets": {}})).await.unwrap(), id);
         // Saving starts the bot; asking for statuses starts any not running yet (one a bot made in its tool process).
         assert_eq!(host.call("statuses", &json!({})).await.unwrap().as_array().unwrap().len(), 2);

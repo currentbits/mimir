@@ -597,6 +597,8 @@ const BOOTSTRAP_RECENT: usize = 10;
 
 /// (id, chat, routine, text) of an unsent digest item.
 /// (id, chat, routine, text, from a run that read outside content)
+/// A hold that hasn't ended: (its key, the bot, the routine if it's one routine's, the hold).
+pub type HoldRow = (String, i64, Option<i64>, Hold);
 pub type DigestItem = (i64, i64, Option<i64>, String, bool);
 
 fn user_version(c: &Connection) -> Result<i64> {
@@ -3066,7 +3068,7 @@ impl Db {
     }
 
     /// Every hold that hasn't ended, for Needs you: (its key, the bot, the routine if it's one routine's, the hold).
-    pub fn holds(&self, now: i64) -> Result<Vec<(String, i64, Option<i64>, Hold)>> {
+    pub fn holds(&self, now: i64) -> Result<Vec<HoldRow>> {
         let v: Vec<(String, String)> = {
             let c = self.c();
             let mut st = c.prepare("SELECT key, value FROM settings WHERE key LIKE 'hold:%'")?;
