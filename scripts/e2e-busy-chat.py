@@ -1,6 +1,7 @@
 """A Telegram message to a bot that's busy (issue #12), end to end against scripts/mock-telegram.py and fake-ai.py:
 a slow routine in the same chat (typing at once, one "Finishing a routine first…", then the reply), and a reply
-waiting on an approval (another chat isn't held up; the same chat hears "Finishing my last reply first…").
+waiting on an approval (another chat isn't held up). Then steering (issue #90): a message sent mid-reply changes the
+reply in progress (the draft says it changed course, one reply takes both in), and /stop still cuts one off.
 
     cargo build -p mimir && cp $CARGO_TARGET_DIR/debug/mimir /tmp/busy/mimir   # worktrees share the target: copy it out
     python3 scripts/e2e-busy-chat.py /tmp/busy
@@ -74,7 +75,7 @@ try:
     check("same chat: reply once the routine is done", got, texts(t))
     check("same chat: note sent once", sum("Finishing" in x for x in texts(t)) == 1, texts(t))
 
-    # 2. A reply in chat 42 waiting on an approval: chat 43 isn't held up; another message in 42 is told why it waits.
+    # 2. A reply in chat 42 waiting on an approval: chat 43 isn't held up.
     t = time.time(); msg(f"DELETE ROUTINE {rid}")
     a = until(lambda: q("SELECT id, tg_message_id FROM approvals WHERE status='pending' AND chat_id=42"), 15)
     check("chat 42 turn waits on approval", a, q("SELECT * FROM approvals"))
@@ -84,12 +85,31 @@ try:
     t = time.time(); msg("hello two", 43)
     check("other chat: reply while 42 waits on approval", until(lambda: any("OK: hello two" in x for x in texts(t, 43)), 10), texts(t, 43))
     check("other chat: no busy note", not any("Finishing" in x for x in texts(t, 43)), texts(t, 43))
-    t = time.time(); msg("hello three")
-    note = until(lambda: [x for x in texts(t) if "Finishing my last reply first" in x], 10)
-    check("same chat: told the last reply comes first", note, texts(t))
+    t = time.time()
     push({"callback_query": {"id": "cb1", "from": {"id": 42}, "data": f"ap:{a[0][0]}:y", "message": {"message_id": int(a[0][1] or 0), "chat": {"id": 42}}}})
-    got = until(lambda: any("OK: hello three" in x for x in texts(t)), 20)
-    check("same chat: reply after the approved one", got and any("DONE routine_delete" in x for x in texts(t - 20)), texts(t - 20))
+    check("same chat: the approved one finishes", until(lambda: any("DONE routine_delete" in x for x in texts(t)), 20), texts(t))
+
+    # 3. Steering: a message sent while the reply is being written changes it, instead of waiting its turn.
+    time.sleep(1)
+    t = time.time(); msg("SLOW 4 plan my month")
+    check("slow reply started", until(lambda: "plan my month" in ai(), 10), ai())
+    time.sleep(1); msg("actually, only this week")
+    check("draft says it changed course", until(lambda: any("Changing course" in x for x in texts(t)), 6), texts(t))
+    got = until(lambda: [x for x in texts(t) if x.startswith("OK:")], 20)
+    check("one reply, taking both in", got and "only this week" in got[-1], texts(t))
+    time.sleep(1)
+    check("no second reply, no busy note", sum(x.startswith("OK:") for x in texts(t)) == 1 and not any("Finishing" in x for x in texts(t)), texts(t))
+    said = [r[0] for r in q("SELECT content FROM messages WHERE chat_id=42 ORDER BY id DESC LIMIT 3")][::-1]
+    check("both messages in the chat's log, then the reply", said[:2] == ["SLOW 4 plan my month", "actually, only this week"] and said[2].startswith("OK:"), said)
+
+    # 4. Stop still works, steered or not: what was asked (both messages) is kept.
+    t = time.time(); msg("SLOW 8 a long one")
+    until(lambda: "a long one" in ai(), 10)
+    time.sleep(0.5); msg("and another thing")
+    time.sleep(1); msg("/stop")
+    check("stopped", until(lambda: any("Stopped" in x for x in texts(t)), 8), texts(t))
+    said = [r[0] for r in q("SELECT content FROM messages WHERE chat_id=42 ORDER BY id DESC LIMIT 3")][::-1]
+    check("stop keeps both messages", said[:2] == ["SLOW 8 a long one", "and another thing"] and "Stopped" in said[2], said)
 finally:
     for p in procs:
         p.kill()

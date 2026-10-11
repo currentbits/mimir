@@ -924,18 +924,27 @@ impl Host {
                 }
                 Box::pin(self.call("stop", &json!({"bot_id": bot, "chat_id": chat}))).await
             }
+            // A message sent while the app's reply is being written: true if that reply takes it in (it changes
+            // course), false if nothing there takes one now (send it as a message of its own).
+            "steer" => {
+                let (bot, chat, text): (i64, i64, String) = (arg(a, "bot_id")?, arg(a, "chat_id")?, arg(a, "text")?);
+                ok(chat != crate::INCOGNITO_CHAT && !text.trim().is_empty() && crate::live::steer(bot, chat, text.trim()))
+            }
             // Stop the reply in progress: kill the turn, keep what was asked and written so far.
             "stop" => {
                 let (bot, chat): (i64, i64) = (arg(a, "bot_id")?, arg(a, "chat_id")?);
                 let Some((handle, asked)) = self.running.lock().unwrap().remove(&(bot, chat)) else { return ok(false) };
                 let partial = crate::live::get(bot, chat).unwrap_or_default();
+                let steered = crate::live::steered(bot, chat);
                 handle.abort();
                 crate::live::end(bot, chat);
                 if chat == crate::INCOGNITO_CHAT {
                     return ok(partial);
                 }
                 self.db.run_stop(bot, chat, &asked)?;
-                self.db.log(bot, chat, "user", &asked, None)?;
+                for t in std::iter::once(&asked).chain(&steered) {
+                    self.db.log(bot, chat, "user", t, None)?;
+                }
                 let note = if partial.trim().is_empty() { "_Stopped before replying._".to_string() } else { format!("{}\n\n_Stopped._", partial.trim_end()) };
                 self.db.log(bot, chat, "assistant", &note, None)?;
                 ok(true)
