@@ -8,7 +8,7 @@ task. Any other bot looks at your latest message for a word in capitals and call
 replies "DONE <tool>: <the tool's result>":
 
     ASK SEARCH → ask_bot    MAKE BOT → bot_create    ROUTINE → routine_create    REMEMBER → memory_store
-    FORGET <n> → memory_forget(n)    FILE → file_write    LIST FILES → file_list    DELETE ROUTINE <n> → routine_delete(n)
+    FORGET <n> → memory_forget(n)    CHOOSE → ask_choice    FILE → file_write    LIST FILES → file_list    DELETE ROUTINE <n> → routine_delete(n)
 
 Anything else gets "OK: <your message>". A message with SLOW in it is answered after 3 seconds (any bot), for
 switching away mid-reply. Each request is logged to stdout.
@@ -30,6 +30,7 @@ SCRIPT = [
     ("ROUTINE", "routine_create", lambda m: {"cron": "0 8 * * *", "prompt": "Brief me on tech news"}),
     ("REMEMBER", "memory_store", lambda m: {"type": "knowledge", "title": "Dentist", "body": "Dr. Lee in Stellenbosch", "source": "user said"}),
     ("FORGET", "memory_forget", lambda m: {"id": int(re.search(r"FORGET (\d+)", m).group(1))}),
+    ("CHOOSE", "ask_choice", lambda m: {"question": "Which day?", "options": ["Thursday", "Friday"]}),
     ("LIST FILES", "file_list", lambda m: {}),
     ("FILE", "file_write", lambda m: {"path": "notes/trip.md", "content": "- passport\n", "mode": "create"}),
 ]
