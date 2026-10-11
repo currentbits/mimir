@@ -2598,6 +2598,7 @@ function BotPage({ bot, status, canDelete, onSaved, onDeleted, onChat }: {
   const edit = (patch: Partial<Bot>) => { setB({ ...b, ...patch }); setMsg(null) }
   const chan = (kind: string) => status?.channels.find(c => c.kind === kind)
   const toolServers = useLoad(() => invoke<{ servers: ToolServer[] }>('tool_servers'), [], 60000)
+  const topics = useLoad(() => bot ? invoke<boolean>('telegram_topics', { botId: bot.id }) : Promise.resolve(false), [bot?.id], 60000)
   const serverTools: [string, string][] = (toolServers.data?.servers ?? []).filter(s => !s.preset).map(s => [`${s.name}__*`, `Use ${s.name}`])
   const ALL = [...Object.keys(TOOL_LABEL), 'browser__*', ...serverTools.map(([t]) => t)]
   const enabled = b.tools.trim() ? b.tools.split(',').map(t => t.trim()) : ALL
@@ -2695,6 +2696,11 @@ function BotPage({ bot, status, canDelete, onSaved, onDeleted, onChat }: {
           hint="Message @BotFather, send /newbot, and paste the token it gives you.">
           <input className="input" type="password" aria-label="Telegram bot token" placeholder="123456:ABC…" value={typed('telegram_token')} onChange={e => type('telegram_token', e.target.value)} autoComplete="off" />
         </ChannelRow>
+        {bot && has('has_telegram_token') && (
+          <Row title="Each topic is its own conversation" desc="If you turn on topics in your private chat with this bot on Telegram, each topic gets its own conversation and /new. Memories and routines are shared. Telegram is still changing this feature.">
+            <Switch label="Each topic is its own conversation" checked={!!topics.data} onChange={on => invoke('set_telegram_topics', { botId: bot.id, on }).then(topics.reload, e => setErr(String(e)))} />
+          </Row>
+        )}
         <ChannelRow icon="slack" title="Slack" st={chan('slack')} has={has('has_slack')} onRemove={() => save({ ...NO_SECRETS, slack_bot_token: '', slack_app_token: '' })}
           hint="Create a Slack app with Socket Mode and Interactivity on; scopes chat:write, im:history, app_mentions:read, files:read, channels:history, groups:history; events message.im and app_mention (add message.channels and message.groups so it follows a thread without another @-mention).">
           <input className="input" type="password" aria-label="Slack bot token" placeholder="Bot token (xoxb-…)" value={typed('slack_bot_token')} onChange={e => type('slack_bot_token', e.target.value)} autoComplete="off" />

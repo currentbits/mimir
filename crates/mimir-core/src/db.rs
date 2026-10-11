@@ -496,6 +496,11 @@ CREATE TABLE IF NOT EXISTS routines(
 );
 ";
 
+/// The chat part of a Telegram address ("chat" or "chat:topic").
+pub(crate) fn tg_chat(external: &str) -> &str {
+    external.split(':').next().unwrap_or(external)
+}
+
 pub fn now() -> i64 {
     Local::now().timestamp()
 }
@@ -1387,13 +1392,14 @@ impl Db {
     /// The person corrected the bot's last reply here: count it against the memories that reply recalled.
     /// `said`: the correction itself. Besides the memories recalled for the reply, preferences in the standing
     /// instructions that it's about (they shape every reply, so they never show up as "recalled") get a misstep too.
-    pub fn blame_last_reply(&self, bot: i64, chat: i64, said: &str) -> Result<usize> {
+    /// `conv`: the conversation the reply was in (`ToolCtx::conv`).
+    pub fn blame_last_reply(&self, bot: i64, chat: i64, conv: i64, said: &str) -> Result<usize> {
         let c = self.c();
         let recalled: Option<String> = c
             .query_row(
                 "SELECT r.recalled FROM messages m JOIN runs r ON r.id = m.run_id
                  WHERE m.bot_id=?1 AND m.chat_id=?2 AND m.role='assistant' ORDER BY m.id DESC LIMIT 1",
-                [bot, chat],
+                [bot, conv],
                 |r| r.get(0),
             )
             .optional()?
@@ -2438,10 +2444,11 @@ impl Db {
         Ok(v)
     }
 
-    /// The chat id for an inbound message, if that chat was paired. Telegram ids are used as-is.
+    /// The chat id for an inbound message, if that chat was paired. Telegram ids are used as-is ("chat:topic" is
+    /// that chat: a topic is its own conversation, see `topic_conv`, in the same chat).
     pub fn chat_lookup(&self, channel: &str, external: &str) -> Result<Option<i64>> {
         if channel == "telegram" {
-            let id: i64 = external.parse()?;
+            let id: i64 = tg_chat(external).parse()?;
             return Ok(self.is_paired(id)?.then_some(id));
         }
         Ok(self
@@ -2511,7 +2518,7 @@ impl Db {
 
     pub fn pair_external(&self, channel: &str, external: &str, title: &str) -> Result<i64> {
         if channel == "telegram" {
-            let id: i64 = external.parse()?;
+            let id: i64 = tg_chat(external).parse()?;
             self.pair(id, title)?;
             return Ok(id);
         }
@@ -2524,6 +2531,19 @@ impl Db {
         let id: i64 = c.query_row("SELECT max(?1, coalesce(max(chat_id) + 1, ?1)) FROM chats WHERE chat_id >= ?1", [BASE], |r| r.get(0))?;
         c.execute("INSERT INTO chats(chat_id, title, channel, external) VALUES (?1,?2,?3,?4)", params![id, title, channel, external])?;
         Ok(id)
+    }
+
+    /// A Telegram topic's own conversation (session, taint, history; memory and routines stay the chat's): an id
+    /// from a range no chat uses (Telegram's are below 2^52, other apps' from 9e15), made when the topic is first used.
+    pub fn topic_conv(&self, chat: i64, topic: i64) -> Result<i64> {
+        const BASE: i64 = 8_000_000_000_000_000;
+        let c = self.c();
+        let key = format!("topic:{chat}:{topic}");
+        c.execute(
+            "INSERT OR IGNORE INTO settings(key, value) SELECT ?1, max(?2, coalesce(max(CAST(value AS INTEGER)) + 1, ?2)) FROM settings WHERE key LIKE 'topic:%'",
+            params![key, BASE],
+        )?;
+        Ok(c.query_row("SELECT CAST(value AS INTEGER) FROM settings WHERE key=?1", [key], |r| r.get(0))?)
     }
 
     /// Where to send messages for a chat: (channel, external id). None for the local chat.
@@ -3567,17 +3587,17 @@ mod tests {
         let d = db();
         let used = d.store("chat:7", "knowledge", "Office", "Office is in Paarl", "", None).unwrap();
         let other = d.store("chat:8", "knowledge", "Office", "Office is in Paarl", "", None).unwrap();
-        assert_eq!(d.blame_last_reply(1, 7, "no").unwrap(), 0, "no reply yet");
+        assert_eq!(d.blame_last_reply(1, 7, 7, "no").unwrap(), 0, "no reply yet");
         let run = d.run_start(1, 7, "message", None, "test").unwrap();
         d.run_recalled(run, &[used, other]).unwrap();
         d.log(1, 7, "assistant", "See you at the Paarl office", Some(run)).unwrap();
-        assert_eq!(d.blame_last_reply(1, 7, "no, wrong").unwrap(), 1, "only this chat's memory");
+        assert_eq!(d.blame_last_reply(1, 7, 7, "no, wrong").unwrap(), 1, "only this chat's memory");
         let count = |scope: &str, id| d.entries(scope).unwrap().into_iter().find(|e| e.id == id).unwrap().missteps;
         assert_eq!((count("chat:7", used), count("chat:8", other)), (1, 0));
         // A standing preference the correction is about gets one too (it's in every reply, never "recalled").
         let bullets = d.store("chat:7", "convention", "News format", "Give tech news as three bullet points", "", None).unwrap();
         let tone = d.store("chat:7", "convention", "Tone", "Keep it friendly", "", None).unwrap();
-        assert_eq!(d.blame_last_reply(1, 7, "Please, no bullet points for this").unwrap(), 2, "the recalled memory and the bullets rule");
+        assert_eq!(d.blame_last_reply(1, 7, 7, "Please, no bullet points for this").unwrap(), 2, "the recalled memory and the bullets rule");
         assert_eq!((count("chat:7", bullets), count("chat:7", tone)), (1, 0));
         // Lines in a prompt carry the date they were saved.
         let today = chrono::Local::now().format("%Y-%m-%d").to_string();

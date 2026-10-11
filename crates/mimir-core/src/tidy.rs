@@ -1181,7 +1181,7 @@ mod tests {
             db.log(1, 0, role, text, None).unwrap();
             if role == "user" && text.contains("bullet") {
                 db.signal_add(1, 0, "correction", text).unwrap();
-                db.blame_last_reply(1, 0, text).unwrap();
+                db.blame_last_reply(1, 0, 0, text).unwrap();
             }
         }
         super::run(&db, &provider, 1, 0).await.unwrap();

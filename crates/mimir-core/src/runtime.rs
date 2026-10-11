@@ -224,7 +224,8 @@ pub(crate) struct Core {
     status: SharedStatus,
     /// Wrong pairing codes per chat in the last hour; after a few, that chat's tries are ignored until the hour is up.
     misses: std::sync::Mutex<std::collections::HashMap<String, (u32, i64)>>,
-    // ponytail: one turn at a time per bot (keeps CLI --resume sessions serial); per-chat locks if a bot gets busy
+    // ponytail: one turn at a time per bot (keeps CLI --resume sessions serial); per-chat locks if a bot gets busy.
+    // It's also why live drafts, TURNS and runs can stay keyed by chat while a Telegram topic has its own conversation.
     lock: Mutex<()>,
     /// Unpaired chats already told how to pair (once each per run, so a stranger can't make it chatty).
     greeted: std::sync::Mutex<std::collections::HashSet<String>>,
@@ -488,7 +489,7 @@ impl Core {
                 Ok(())
             }
             Some(Ok(t)) => {
-                self.db.conv_taint(self.bot, chat)?;
+                self.db.conv_taint(self.bot, self.conv(chan, ext, chat)?)?;
                 self.incoming_with(chan, ext, from, "", &crate::with_document(said, name, &t), vec![], sent).await
             }
         }
@@ -593,6 +594,19 @@ impl Core {
         self.db.chat_lookup(chan.kind(), ext).ok().flatten().is_some_and(|chat| self.db.chat_owner(chat).is_ok_and(|o| !o.is_empty() && o == from))
     }
 
+    /// Whether each topic in a private Telegram chat is its own conversation (opt-in: the Bot API for it still shifts).
+    pub(crate) fn topics(&self) -> bool {
+        self.db.setting(&format!("telegram_topics:{}", self.bot)).ok().flatten().as_deref() == Some("on")
+    }
+
+    /// The conversation a message is in: the chat's own, or (Telegram "chat:topic") the topic's.
+    fn conv(&self, chan: &Chan, ext: &str, chat: i64) -> Result<i64> {
+        match ext.split_once(':').filter(|_| chan.kind() == "telegram").and_then(|(_, t)| t.parse().ok()) {
+            Some(topic) => self.db.topic_conv(chat, topic),
+            None => Ok(chat),
+        }
+    }
+
     pub(crate) fn is_paired(&self, chan: &Chan, ext: &str) -> Result<bool> {
         Ok(self.db.chat_lookup(chan.kind(), ext)?.is_some())
     }
@@ -623,7 +637,7 @@ impl Core {
         if let Some(chat) = self.db.chat_lookup(chan.kind(), ext)?
             && self.sender_ok(chat, from)? == Some(true)
         {
-            self.db.conv_taint(self.bot, chat)?;
+            self.db.conv_taint(self.bot, self.conv(chan, ext, chat)?)?;
         }
         self.incoming_with(chan, ext, from, title, text, images, sent).await
     }
@@ -727,6 +741,7 @@ impl Core {
                 return Ok(());
             }
         }
+        let conv = self.conv(chan, ext, chat)?;
         let mut command = parse_command(text);
         if let Command::Stop(asked) = command {
             if self.stop(chan, ext, from)? {
@@ -755,10 +770,10 @@ impl Core {
                 chan.send(ext, &out).await;
             }
             Command::New => {
-                if let Some(s) = self.db.session(self.bot, chat)? {
+                if let Some(s) = self.db.session(self.bot, conv)? {
                     self.provider.forget_session(&s);
                 }
-                self.db.set_session(self.bot, chat, None)?;
+                self.db.set_session(self.bot, conv, None)?;
                 chan.send(ext, "Fresh conversation started (memories kept).").await;
             }
             Command::Undo(n) => chan.send(ext, &crate::tidy::undo_learned(&self.db, chat, n)?).await,
@@ -773,6 +788,7 @@ impl Core {
                     // The reply shows up as it's written: one message, edited as it grows, then formatted.
                     let follower = chan.follow(core.bot, chat, &ext);
                     let mut ctx = ToolCtx::new(core.db.clone(), core.bot, chat);
+                    ctx.conv = conv;
                     ctx.images = images;
                     let (provider, asked) = (core.provider.clone(), text.clone());
                     let task = tokio::spawn(async move { turn(&provider, &ctx, Trigger::Message(&asked)).await });
@@ -790,7 +806,7 @@ impl Core {
                             let partial = crate::live::get(core.bot, chat).unwrap_or_default();
                             crate::live::end(core.bot, chat);
                             let note = if partial.trim().is_empty() { "_Stopped before replying._".to_string() } else { format!("{}\n\n_Stopped._", partial.trim_end()) };
-                            let logged = core.db.run_stop(core.bot, chat, &text).and_then(|_| core.db.log(core.bot, chat, "user", &text, None)).and_then(|_| core.db.log(core.bot, chat, "assistant", &note, None));
+                            let logged = core.db.run_stop(core.bot, chat, &text).and_then(|_| core.db.log(core.bot, conv, "user", &text, None)).and_then(|_| core.db.log(core.bot, conv, "assistant", &note, None));
                             if let Err(e) = logged {
                                 eprintln!("stop: {e:#}");
                             }

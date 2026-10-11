@@ -82,6 +82,13 @@ Chat commands: `/memory`, `/routines`, `/new`, `/stop` (a bare "stop" works too 
 (take back something it learned; see [Memory](memory.md#learned-this-week)), and `/<skill>` for each of the bot's
 skills (see [Skills](skills.md)). Everything else is plain language.
 
+**Telegram topics** (opt-in): with topics turned on in your private chat with the bot, switch on "Each topic is its
+own conversation" under Telegram on the bot's page. Each topic then has its own conversation, its own "read outside
+content" state and its own `/new`, and replies land in the topic you wrote in. Memories, routines and pairing stay
+shared by the whole chat, and routine results and approval cards arrive in the main thread. The app's chat view shows
+only the main thread. One reply is written at a time per bot, so `/stop` stops it whichever topic it's in. This is
+opt-in because Telegram is still changing the feature.
+
 ## Photos, voice notes and files
 
 Send a photo on Telegram, Slack or Discord (up to 4 at once there), or paste or drop one into the app's chat, and the

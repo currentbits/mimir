@@ -16,6 +16,9 @@ pub struct ToolCtx {
     pub db: Db,
     pub bot_id: i64,
     pub chat_id: i64,
+    /// The conversation within the chat (session, taint, history, live draft): the chat itself, or a Telegram
+    /// topic's own (`Db::topic_conv`). Memory, routines and approvals stay the chat's.
+    pub conv: i64,
     pub http: reqwest::Client,
     /// Run log id for this turn, so tool calls (even from an MCP subprocess) land on the right run.
     pub run_id: Option<i64>,
@@ -62,6 +65,7 @@ impl ToolCtx {
             db,
             bot_id,
             chat_id,
+            conv: chat_id,
             http,
             run_id: None,
             stream: false,
@@ -86,7 +90,7 @@ impl ToolCtx {
             let _ = self.db.run_taint(r);
         }
         if self.sticky {
-            let _ = self.db.conv_taint(self.bot_id, self.chat_id);
+            let _ = self.db.conv_taint(self.bot_id, self.conv);
         }
     }
     /// Start already tainted (the conversation read something untrusted earlier).
@@ -117,6 +121,9 @@ impl ToolCtx {
         let mut a = vec!["mcp".to_string(), "--bot".into(), self.bot_id.to_string(), "--chat".into(), self.chat_id.to_string()];
         if let Some(r) = self.run_id {
             a.extend(["--run".into(), r.to_string()]);
+        }
+        if self.conv != self.chat_id {
+            a.extend(["--conv".into(), self.conv.to_string()]);
         }
         if self.tools_off {
             a.push("--no-tools".into());
