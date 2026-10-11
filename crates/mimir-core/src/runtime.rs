@@ -1012,7 +1012,8 @@ impl Core {
             }
             Ok(()) => {
                 let typing = target.as_ref().and_then(|(c, ext)| c.typing(ext));
-                let out = turn(&self.provider, &ToolCtx::new(self.db.clone(), self.bot, r.chat_id), Trigger::Routine(&r)).await;
+                let (provider, ctx, routine) = (self.provider.clone(), ToolCtx::new(self.db.clone(), self.bot, r.chat_id), r.clone());
+                let out = self.own_task(r.chat_id, async move { turn(&provider, &ctx, Trigger::Routine(&routine)).await }).await;
                 if let Some(t) = typing {
                     t.abort();
                 }
@@ -1091,6 +1092,21 @@ impl Core {
         Ok(())
     }
 
+    /// A routine or tidy-up turn in its own task, the way a message's runs: a crash in it fails that run (its open
+    /// run log entry says so), instead of stopping the scheduler and with it the whole bot.
+    async fn own_task<T: Send + 'static>(&self, chat: i64, work: impl Future<Output = Result<T>> + Send + 'static) -> Result<T> {
+        match tokio::spawn(work).await {
+            Ok(out) => out,
+            Err(e) => {
+                let e = anyhow::anyhow!("Mimir crashed during this run ({e})");
+                if let Ok(Some(run)) = self.db.running_run(self.bot, chat) {
+                    let _ = self.db.run_finish(run, Err(&format!("{e:#}")));
+                }
+                Err(e)
+            }
+        }
+    }
+
     async fn scheduler(self: Arc<Self>, chans: Vec<Chan>) -> Result<()> {
         // A routine due before this was Mimir not running; one due since, the computer asleep or a long run.
         let started = crate::db::now();
@@ -1152,7 +1168,8 @@ impl Core {
                 let now = crate::db::now();
                 for chat in self.db.chats().unwrap_or_default().into_iter().filter(|c| crate::tidy::is_due(&self.db, c.chat_id, now)) {
                     // No chat lock: it reads the chat and calls the AI without a session, so replies needn't wait.
-                    match crate::tidy::run(&self.db, &self.provider, self.bot, chat.chat_id).await {
+                    let (db, provider, bot, id) = (self.db.clone(), self.provider.clone(), self.bot, chat.chat_id);
+                    match self.own_task(id, async move { crate::tidy::run(&db, &provider, bot, id).await }).await {
                         Ok(n) if n > 0 => eprintln!("tidy-up: {n} memory suggestions for chat {}", chat.chat_id),
                         Ok(_) => {}
                         Err(e) => eprintln!("tidy-up for chat {}: {e:#}", chat.chat_id),
@@ -1216,12 +1233,14 @@ pub async fn serve(db: Db, bot: i64, provider: Arc<Provider>, channels: Channels
     if let Some(t) = channels.discord {
         chans.push(Chan::Discord(Discord::new(&t)?));
     }
+    // Started again after a crash: what happened stays on show.
+    let crashed = status.lock().unwrap_or_else(|e| e.into_inner()).error.take();
     *status.lock().unwrap_or_else(|e| e.into_inner()) = Status {
         bot_id: bot,
         provider: provider.name(),
         pair_code: (!chans.is_empty()).then(|| code.clone()),
         channels: chans.iter().map(|c| ChannelStatus { kind: c.kind().into(), ..Default::default() }).collect(),
-        error: None,
+        error: crashed,
     };
     if !chans.is_empty() {
         eprintln!("bot #{bot} via {}; pair a chat by sending:  /pair {code}", provider.name());
@@ -1374,6 +1393,30 @@ mod tests {
         assert!(db.routines(0).unwrap().iter().any(|x| x.id == once.id && x.next_fire > now + 3000));
         ok.run_routine(&[], once.clone()).await.unwrap();
         assert!(!db.routines(0).unwrap().iter().any(|x| x.id == once.id));
+    }
+
+    #[tokio::test]
+    async fn a_crash_in_a_routine_fails_that_run_only() {
+        let p = std::env::temp_dir().join(format!("mimir-crash-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = Db::open(&p).unwrap();
+        let core = core_on(&db, "http://127.0.0.1:9/v1");
+        let r = db.routine_create(1, 0, "0 8 * * *", "brief me", false).unwrap();
+        let d = db.clone();
+        let out = core
+            .own_task(0, async move {
+                d.run_start(1, 0, "routine", Some(r.id), "test")?;
+                if r.id > 0 {
+                    panic!("boom");
+                }
+                Ok(())
+            })
+            .await;
+        assert!(out.unwrap_err().to_string().contains("boom"));
+        // The run it left open is a failed run, in Needs you, and the caller (the scheduler) carries on.
+        let failed = db.runs_failed(0).unwrap();
+        assert!(failed.len() == 1 && failed[0].error.as_deref().unwrap().contains("crashed"), "{failed:?}");
+        assert_eq!(core.own_task(0, async { Ok(7) }).await.unwrap(), 7);
     }
 
     #[tokio::test]

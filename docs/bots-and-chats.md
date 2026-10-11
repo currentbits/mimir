@@ -36,6 +36,9 @@ What's shared and what isn't:
   working. **Stop** cuts a reply off; what was written so far stays, marked *Stopped*. A reply still being written in
   Telegram, Slack or Discord can be stopped from the app too: open it under **Activity**. "Start fresh" (or `/new`)
   begins a new conversation. When a reply saved a memory, its "Saved to memory" chip has **Undo**.
+  A chat opens on its newest 200 messages; **Show earlier messages** at the top pages back. **Search this chat**
+  (⌘F / Ctrl+F) finds older messages by their words, and a hit jumps to it. Telegram, Slack and Discord chats have the
+  same.
 - **Quick ask**: ⌥Space (Mac) or Ctrl+Alt+Space (Windows, Linux) opens a Spotlight-style panel from any app. It's the
   same built-in chat, so the exchange is there afterwards.
 - **Telegram, Slack, Discord.** One bot can be on all three at once. Each connects *out* (long-polling, Socket Mode,
