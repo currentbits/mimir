@@ -46,10 +46,12 @@ check("Search's own chat opens with the answer", await until(async () => (await 
 await bot('Ada').click(); await p.waitForTimeout(500)
 await say('SLOW are you there'); await p.waitForTimeout(500)
 await bot('Search').click(); await p.waitForTimeout(600)
-await bot('Ada').click(); await p.waitForTimeout(1800)
-check('a reply in progress shows after coming back', (await p.locator('.msg-bot .typing, .msg-bot .steps').count()) > 0 && await p.locator('.composer textarea').isDisabled())
+// The composer stays usable while the reply is written (steering): it asks for what to add instead.
+const placeholder = () => p.locator('.composer textarea').getAttribute('placeholder')
+await bot('Ada').click()
+check('a reply in progress shows after coming back', await until(async () => (await p.locator('.msg-bot .typing, .msg-bot .steps').count()) > 0 && (await placeholder())?.startsWith('Add to what you asked'), 2500))
 check('and it arrives', await until(async () => (await main()).includes('OK: SLOW are you there')))
-check('the composer unlocks after it', await until(async () => !(await p.locator('.composer textarea').isDisabled()), 5000))
+check('the composer is back to a new message after it', await until(async () => (await placeholder())?.startsWith('Message Ada'), 5000))
 
 // Delegation from the app
 await say('please ASK SEARCH')
