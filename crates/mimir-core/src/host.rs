@@ -961,6 +961,13 @@ impl Host {
                 ok(self.db.setting("quiet_hours")?.unwrap_or_default())
             }
             // The weekly "what I learned" message in chat apps: on unless switched off (get without `on`, set with it).
+            // Idle hours before a messaging chat's next message starts a new session (get without `hours`; 0 = never).
+            "fresh_after_hours" => {
+                if let Some(h) = arg::<Option<i64>>(a, "hours")? {
+                    self.db.set_setting("fresh_after_hours", &h.clamp(0, 24 * 30).to_string())?;
+                }
+                ok(self.db.setting("fresh_after_hours")?.and_then(|v| v.parse::<i64>().ok()).unwrap_or(crate::FRESH_AFTER_HOURS))
+            }
             "weekly_review" => {
                 if let Some(on) = arg::<Option<bool>>(a, "on")? {
                     self.db.set_setting("weekly_review", if on { "on" } else { "off" })?;

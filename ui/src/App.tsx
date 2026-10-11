@@ -3276,10 +3276,12 @@ function LimitsSettings() {
   const [win, setWin] = useState<Windows | null>(null)
   const [msg, setMsg] = useState<string | null>(null)
   const [models, setModels] = useState<{ kind: string; model: string }[]>([])
+  const [fresh, setFresh] = useState<number | null>(null)
   useEffect(() => {
     invoke<{ kind: string; model: string }[]>('routine_model').then(setModels, () => {})
     invoke<Caps>('caps').then(setCaps, () => {})
     invoke<Windows | null>('ai_windows').then(setWin, () => {})
+    invoke<number>('fresh_after_hours').then(setFresh, () => {})
   }, [])
   const save = (k: keyof Caps, v: string) => invoke<Caps>('caps', { [k]: v.trim() ? Math.max(0, Math.round(Number(v) * 1000)) : 0 }).then(c => { setCaps(c); setMsg(null) }, e => setMsg(String(e)))
   const field = (k: keyof Caps, title: string, desc: string) => (
@@ -3293,6 +3295,11 @@ function LimitsSettings() {
       {field('routine', 'Each routine', 'What one routine may use in a day.')}
       {field('bot', 'Each bot', 'What one bot may use in a day, replies included; only its routines pause.')}
       {field('day', 'All bots together', 'Everything, every bot, in a day.')}
+      <Row icon={<Icon name="clock" size={15} />} title="Fresh start after a quiet spell"
+        desc="When a Telegram, Slack or Discord chat has been quiet this long, the next message starts a new conversation with a short note on where you left off. Each reply re-sends less. 0: never.">
+        {fresh !== null && <><input className="input mono" type="number" min={0} max={720} aria-label="Fresh start after" style={{ width: 72 }} defaultValue={fresh}
+          onBlur={e => invoke<number>('fresh_after_hours', { hours: Math.max(0, Math.round(Number(e.target.value) || 0)) }).then(setFresh, er => setMsg(String(er)))} /><span className="hint">hours</span></>}
+      </Row>
       {models.map(m => (
         <Row key={m.kind} icon={<Icon name="wand" size={15} />} title={models.length > 1 ? `Model for routines (${KIND_NAME[m.kind] ?? m.kind})` : 'Model for routines'}
           desc="A lighter model of the same account (e.g. haiku, gpt-5-mini) makes every routine cheaper, and your plan's windows last longer. Use a routine's Test run to see if it's good enough. Blank: the bot's own model.">
