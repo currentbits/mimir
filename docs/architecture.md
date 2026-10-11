@@ -135,15 +135,23 @@ One SQLite file in the data folder (`~/.mimir`, or `MIMIR_HOME`). Schema changes
 
 `.github/workflows/release.yml` builds the installers when a version tag is pushed:
 
-1. Set `version` in `crates/mimir-desktop/tauri.conf.json` (the tag must match it; the workflow checks).
-2. `git tag v0.1.0 && git push origin v0.1.0`.
-3. The workflow drafts a GitHub release and attaches the `.dmg`, `.exe`/`.msi`, `.deb`/`.rpm` and `.AppImage`
-   (macOS on Apple silicon; Linux built on Ubuntu 22.04 so it runs on older systems).
-4. Read the draft over, paste the "Unreleased" section of `CHANGELOG.md` into its notes (installed apps show them
-   with the update), rename that section to the version, and publish.
+1. Set `version` under `[workspace.package]` in the root `Cargo.toml`. It's the only place: every crate inherits it
+   and the desktop app takes it from its crate (`tauri.conf.json` has no version). Rename the "Unreleased" section of
+   `CHANGELOG.md` to the version (`## 0.1.6`) and commit.
+2. `git tag v0.1.6 && git push origin v0.1.6`.
+3. The workflow checks the tag against `cargo metadata` and that `CHANGELOG.md` has the section, then drafts a GitHub
+   release with that section as its notes and attaches the `.dmg`, `.exe`/`.msi`, `.deb`/`.rpm` and `.AppImage`
+   (macOS on Apple silicon; Linux built on Ubuntu 22.04 so it runs on older systems). Installed apps show the section
+   with the update.
+4. Read the draft over and publish.
 
-The Mac app is ad-hoc signed (`signingIdentity: "-"`), which Apple silicon needs to open a downloaded app at all;
-it isn't notarized, and Windows builds aren't signed.
+**Signing.** With the Apple secrets set (`APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`,
+`APPLE_API_ISSUER`, `APPLE_API_KEY`, `APPLE_API_KEY_P8`), CI signs the Mac app with Developer ID, notarizes the app and
+the `.dmg`, and only then adds "signed and notarized by Apple" to the notes. Without them the app is ad-hoc signed
+(`signingIdentity: "-"`, which Apple silicon needs to open a downloaded app at all) and the notes don't mention
+notarization: sign and notarize on a Mac with the Developer ID certificate instead, and replace the Mac assets (and
+their signatures in `latest.json`) before publishing. The released Mac apps so far were done that way. Windows builds
+aren't signed.
 
 **Updates** (`crates/mimir-desktop/src/update.rs`, Tauri's updater plugin). Apps read `latest.json` from the newest
 *published* release (`plugins.updater.endpoints` in `tauri.conf.json`; drafts aren't served), so publishing the draft is
