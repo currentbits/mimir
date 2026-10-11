@@ -9,7 +9,7 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview",
-    "tauri": "TAURI_APP_PATH=../crates/mimir-desktop TAURI_FRONTEND_PATH=. tauri"
+    "tauri": "cd ../crates/mimir-desktop && tauri"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.12.1",

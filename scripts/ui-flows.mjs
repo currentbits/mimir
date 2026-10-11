@@ -66,7 +66,7 @@ check('bot made after approving', await until(async () => (await p.locator('.rai
 await say('set a ROUTINE')
 await until(async () => (await main()).includes('DONE routine_create'))
 await tab('Routines').click(); await p.waitForTimeout(1000)
-check('routine listed', (await p.locator('.routine').count()) === 1)
+check('routine listed', await until(async () => (await p.locator('.routine').count()) === 1))
 const sw = p.locator('.routine [role=switch], .routine input[type=checkbox]').first()
 await sw.click(); await p.waitForTimeout(800)
 check('pause shows Paused', (await p.locator('.routine').innerText()).includes('Paused'))
@@ -87,30 +87,30 @@ await tab('Chat').click(); await p.waitForTimeout(500)
 await say('REMEMBER my dentist')
 await until(async () => (await main()).includes('DONE memory_store'))
 await tab('Memory').click(); await p.waitForTimeout(1000)
-check('memory listed', (await main()).includes('Dr. Lee in Stellenbosch'))
+check('memory listed', await until(async () => (await main()).includes('Dr. Lee in Stellenbosch')))
 const forgetBtn = p.getByRole('button', { name: /^Forget Dentist$/ }).first()
 check('Forget button there', (await forgetBtn.count()) > 0)
 if (await forgetBtn.count()) { await forgetBtn.click(); await p.waitForTimeout(400); if (await p.locator('.ask-box').count()) await p.locator('.ask-box button.btn-primary, .ask-box button.btn-danger-solid').click(); await p.waitForTimeout(800) }
 check('forgotten memory leaves the list', await until(async () => (await p.getByRole('button', { name: /^Forget Dentist$/ }).count()) === 0, 5000))
 
 // Skills: add one from the library
-await tab('Skills').click(); await p.waitForTimeout(1200)
+// The library loads in seconds on a busy CI runner: wait for it rather than a fixed time.
+await tab('Skills').click()
 const add = p.getByRole('button', { name: /^Add/ }).first()
-// The library loads after the tab opens: a slow runner needs more than a fixed wait.
-check('library Add button', await until(async () => (await add.count()) > 0, 8000))
-if (await add.count()) { await add.click(); await p.waitForTimeout(1200) }
-check('skill added', await until(async () => (await main()).match(/Morning briefing|Inbox triage|added/i) !== null, 5000))
+check('library Add button', await until(async () => (await add.count()) > 0))
+if (await add.count()) await add.click()
+check('skill added', await until(async () => (await main()).match(/Morning briefing|Inbox triage|added/i) !== null))
 
 // Activity has the runs
 await tab('Activity').click(); await p.waitForTimeout(1200)
-check('activity lists runs', (await p.locator('.run').count()) > 3)
+check('activity lists runs', await until(async () => (await p.locator('.run').count()) > 3))
 
 // Delete the new bot from its page
 await p.locator('.rail-item', { hasText: 'Scout' }).first().click({ button: 'right' }); await p.waitForTimeout(300)
 await p.getByRole('menuitem', { name: 'Settings' }).click(); await p.waitForTimeout(800)
 await p.getByRole('button', { name: 'Delete bot' }).click(); await p.waitForTimeout(200)
 await p.locator('.ask-box').getByRole('button', { name: 'Delete bot' }).click(); await p.waitForTimeout(1200)
-check('bot deleted', (await p.locator('.rail-item', { hasText: 'Scout' }).count()) === 0)
+check('bot deleted', await until(async () => (await p.locator('.rail-item', { hasText: 'Scout' }).count()) === 0))
 
 const settings = async name => { await bot(name).click({ button: 'right' }); await p.waitForTimeout(300); await p.getByRole('menuitem', { name: 'Settings' }).click(); await p.waitForTimeout(800) }
 
@@ -151,7 +151,7 @@ await p.locator('.main input').first().fill('Searcher')
 const save = p.locator('.main').getByRole('button', { name: /^Save/ }).first()
 check('bot page has a Save button', (await save.count()) > 0)
 if (await save.count()) { await save.click(); await p.waitForTimeout(1200) }
-check('rename shows in the sidebar', (await p.locator('.rail-item', { hasText: 'Searcher' }).count()) > 0)
+check('rename shows in the sidebar', await until(async () => (await p.locator('.rail-item', { hasText: 'Searcher' }).count()) > 0))
 
 // "@Name" from a bot's own thread moves to that bot's thread, with the message on its way
 await bot('Ada').click(); await p.waitForTimeout(500)
