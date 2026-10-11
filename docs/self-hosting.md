@@ -92,7 +92,9 @@ say what changed.
 - **Logs**: `docker compose logs -f mimir`. **Stop**: `docker compose down` (your data stays).
 - **A new admin token**: `docker compose exec mimir mimir admin-token --new`, then `docker compose restart`. Signed-in
   browsers and connected apps need the new one.
-- **Back up** the `mimir-data` volume: it holds the database (memories, bots, chats) and, on a server, the secrets.
+- **Backups**: Mimir keeps a checked copy of its database every day in `/data/backups` (7 daily, 4 weekly), and
+  Settings → Your data restores one. To restore a copy from elsewhere, put it there as `mimir-<anything>.db`.
+  For a copy off the server, back up the `mimir-data` volume: it holds the database (memories, bots, chats) and the secrets.
   For example `docker run --rm -v mimir_mimir-data:/data -v "$PWD":/out busybox tar czf /out/mimir-backup.tgz /data`
   (the volume's name starts with the folder's name; `docker volume ls` shows it).
 - **Two containers**: `mimir` (bots, web app, your data) and `computer` ([the bots' computer](computer.md): a screen

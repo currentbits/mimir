@@ -8,6 +8,7 @@ macro_rules! skill_shape {
     };
 }
 
+pub mod backup;
 pub mod chatgpt;
 pub mod computer;
 pub mod db;
