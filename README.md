@@ -1,19 +1,20 @@
 # Mimir
 
-A free app that runs AI assistants for you, on **your own** AI subscription (Claude, ChatGPT, Grok, or any API
-key). You message them in Telegram, Slack, Discord or the desktop app; they remember you, work on a schedule, use your
-email, calendar and the web, and ask before they act. Mimir has no AI and no servers of its own. Website:
+A free app that runs AI assistants for you, on **your own** AI subscription (Claude, ChatGPT, Grok, or any API key).
+You message (or talk to) them in Telegram, Slack, Discord or the desktop app; they remember you, work on a schedule,
+use your email, calendar and the web, and ask before they act. Mimir has no AI and no servers of its own. Website:
 [heymimir.app](https://heymimir.app).
 
-- **Bots that know you, and learn.** They remember facts, preferences and tasks (shared by all your bots, all visible
-  and correctable), search your earlier conversations, and learn skills: from tasks that went well, from your
-  corrections, when you say "save that as a skill", from a link or SKILL.md, or by watching you do it once on their
-  computer. Run one with `/book-padel`, from a routine, or share it with all your bots. Every change is a proposal;
-  nothing changes until you accept.
-- **Routines.** "Every weekday at 7:30, brief me on tech news." Quiet checks that only speak up when something changes,
-  and that don't run the AI at all while a watched page or inbox stays the same. Daily caps, a rehearsal before a
-  routine runs for real, and failures handled by cause (wait for the plan's limit, retry the network). A daily digest
-  and quiet hours.
+- **Bots that know you, and learn.** They remember facts, preferences and tasks (shared by all your bots or kept for
+  one, plus a household everyone shares; all visible and correctable), search your earlier conversations, and learn
+  skills: from tasks that went well, from your corrections, when you say "save that as a skill", from a link or
+  SKILL.md, or by watching you do it once on their computer. Run one with `/book-padel`, from a routine, or share it
+  with all your bots. Every change is a proposal; nothing changes until you accept.
+- **Routines.** "Every weekday at 7:30, brief me on tech news." Or started by something happening: an hour before each
+  meeting with someone from outside, when an invoice email arrives, or by a webhook. Quiet checks that only speak up
+  when something changes, and that don't run the AI at all while a watched page or inbox stays the same. Daily caps, a
+  rehearsal before a routine runs for real, and failures handled by cause (wait for the plan's limit, retry the
+  network). A daily digest and quiet hours.
 - **Tools, safely.** Web pages, a real browser with saved logins the AI never sees, any MCP tool server, and on your
   server a computer bots use like a person. Every action is allowed, asked or denied by your rules; after reading
   anything from outside, changes always ask.
