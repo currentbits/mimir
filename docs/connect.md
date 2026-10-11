@@ -11,7 +11,11 @@ server's private database when you [self-host](self-hosting.md); they never go i
 
 Bots can search and read your inbox, write drafts, and send an email when you approve it. They use IMAP and SMTP, the
 standard mail protocols, with an **app password**: a separate password just for Mimir that you can revoke any time,
-without changing your real one.
+without changing your real one. Outlook and Microsoft 365 sign in with Microsoft instead ([below](#outlook)).
+
+You can add **more than one mailbox** (work and personal, say). Bots search all of them unless you name one, show which
+mailbox each email is in, and send or draft from the one you say (the first one otherwise). The approval card says
+which mailbox an email goes out from.
 
 ### 1. Make an app password
 
@@ -23,8 +27,7 @@ without changing your real one.
 | **Proton Mail** | Install Proton Mail Bridge; it shows a password for the account (not tried with Mimir yet) | `127.0.0.1` (port `1143`) | `127.0.0.1` (port `1025`) |
 | Any other | Your provider's help: "IMAP settings" | usually `imap.<domain>` | usually `smtp.<domain>` |
 
-**Outlook, Hotmail and Microsoft 365 mail don't work yet:** Microsoft turned off app passwords for mail apps and
-requires its own sign-in (OAuth), which Mimir doesn't do yet. Your Outlook *calendar* link does work (below).
+Outlook, Hotmail and Microsoft 365 have no app passwords for mail any more: see [Outlook](#outlook).
 
 ### 2. Add it in Mimir
 
@@ -32,7 +35,31 @@ requires its own sign-in (OAuth), which Mimir doesn't do yet. Your Outlook *cale
 app password. The outgoing server is worked out from the incoming one (`imap.gmail.com` → `smtp.gmail.com`); fill in
 *Outgoing server* only if yours is different. The outgoing port is 465 (SSL/TLS) when left empty; put 587 in
 *Outgoing port* if your provider says 587 or STARTTLS (any port but 465 uses STARTTLS). **Save** signs in once to check, and shows how many messages are in your
-inbox.
+inbox. **Add another mailbox** adds the next one; the same address again replaces it.
+
+### Outlook
+
+Microsoft turned off app passwords for mail, so Mimir signs in with Microsoft (OAuth with PKCE) and uses that for
+IMAP and SMTP (XOAUTH2). Mimir doesn't ship its own Microsoft app yet, so you register one, once. It's free and takes
+about five minutes:
+
+1. Open the [Microsoft Entra admin center](https://entra.microsoft.com) (or the Azure portal) with any Microsoft
+   account → **App registrations** → **New registration**.
+2. Name it "Mimir". *Supported account types*: "Accounts in any organizational directory and personal Microsoft
+   accounts" (or only your organisation, for a work account).
+3. *Redirect URI*: platform **Public client/native (mobile & desktop)**, address `http://localhost`. Register.
+4. Copy the **Application (client) ID** from its overview page.
+5. In Mimir, **Settings → Email → Outlook / Microsoft 365**: paste the client ID and click **Sign in with Microsoft**.
+   If you chose "only your organisation", paste its **Directory (tenant) ID** too.
+
+Microsoft asks you to allow reading and sending your mail (`IMAP.AccessAsUser.All`, `SMTP.Send`). At work, your admin
+may have to allow the app, and SMTP sign-in has to be on for your mailbox (it often is; admins can turn it off). The
+sign-in is kept in the keychain and renewed on its own; if it ends (you changed your password, or revoked it), the bot
+says so and **Sign in with Microsoft** again replaces it. On a [self-hosted server](self-hosting.md), the browser comes
+back to an address that doesn't load: copy it from the address bar and paste it in Mimir, as with ChatGPT.
+
+Gmail isn't done this way: Google requires a security review for apps that read mail, so Gmail keeps the app
+password, which works well.
 
 ### What bots can then do
 

@@ -1,5 +1,6 @@
 """A fake mail server for testing email tools without a real account: IMAP on 127.0.0.1:1143 and SMTP on 127.0.0.1:1025,
-both plain (Mimir only allows that to this computer), any login accepted.
+both plain (Mimir only allows that to this computer), any login accepted. XOAUTH2 (Outlook's sign-in) works too, and
+only takes the token "tok-1".
 
     python3 scripts/fake-mail.py [--files-sent] [dir]
 
@@ -8,7 +9,7 @@ tests). Commands go to <dir>/cmds.txt and smtp.txt, the sent message to sent.eml
 copy) to appended-<folder>.eml. --files-sent acts like Gmail, which files sent mail in Sent itself; without it, like
 iCloud, which doesn't. Default dir: /tmp/fake-mail.
 """
-import os, re, socketserver, sys, threading
+import base64, os, re, socketserver, sys, threading
 
 args = [a for a in sys.argv[1:] if not a.startswith("--")]
 FILES_SENT = "--files-sent" in sys.argv
@@ -33,6 +34,10 @@ class Imap(socketserver.StreamRequestHandler):
             line = line.decode().rstrip("\r\n"); open(f"{DIR}/cmds.txt", "a").write(line + "\n")
             tag, _, rest = line.partition(" "); cmd = rest.upper()
             if cmd.startswith("LOGIN"): self.w(f"{tag} OK LOGIN done\r\n")
+            elif cmd.startswith("AUTHENTICATE XOAUTH2"):
+                self.w("+ \r\n"); sasl = base64.b64decode(self.rfile.readline().strip()).decode()
+                if "auth=Bearer tok-1\x01" in sasl: self.w(f"{tag} OK AUTHENTICATE done\r\n")
+                else: self.w("+ eyJzdGF0dXMiOiI0MDEifQ==\r\n"); self.rfile.readline(); self.w(f"{tag} NO AUTHENTICATE failed\r\n")
             elif cmd.startswith(("EXAMINE", "SELECT")):
                 box = rest.split(" ", 1)[1].strip('"')
                 n = len(M) if box == "INBOX" else len(sent) if FILES_SENT else 0
@@ -75,7 +80,7 @@ class Smtp(socketserver.StreamRequestHandler):
             line = self.rfile.readline().decode(errors="replace")
             if not line: return
             log.write(line); log.flush(); c = line.strip().upper()
-            if c.startswith(("EHLO", "HELO")): self.w("250-fake\r\n250-AUTH PLAIN LOGIN\r\n250 8BITMIME\r\n")
+            if c.startswith(("EHLO", "HELO")): self.w("250-fake\r\n250-AUTH PLAIN LOGIN XOAUTH2\r\n250 8BITMIME\r\n")
             elif c.startswith("AUTH"): self.w("235 ok\r\n")
             elif c.startswith(("MAIL", "RCPT", "RSET", "NOOP")): self.w("250 ok\r\n")
             elif c == "DATA":

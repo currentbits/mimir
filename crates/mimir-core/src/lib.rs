@@ -68,6 +68,7 @@ pub mod ext;
 pub mod fmt;
 pub mod host;
 pub mod live;
+pub mod oauth;
 pub mod openrouter;
 mod discord;
 mod slack;

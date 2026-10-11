@@ -8,8 +8,8 @@ to the services you connected.
 | What | Where |
 |---|---|
 | Memories, bots, chats (searchable by your bots with `chat_search`), routines, runs, approvals, meetings (transcripts, your notes, speaker names, summaries) | `~/.mimir/mimir.db` (one SQLite file; `MIMIR_HOME` moves it) |
-| Bot tokens, API keys (including Brave Search's), saved logins, tool-server tokens, the calendar link, the email and calendar app passwords | The OS keychain (macOS Keychain, Windows Credential Manager, the Linux keyring); on a server, its database; the data folder is owner-only (mode 0700) |
-| Your email account's server names and address (not its password) | `~/.mimir/mimir.db` (settings) |
+| Bot tokens, API keys (including Brave Search's), saved logins, tool-server tokens and sign-ins, the calendar link, the email and calendar app passwords, the Outlook sign-in | The OS keychain (macOS Keychain, Windows Credential Manager, the Linux keyring); on a server, its database; the data folder is owner-only (mode 0700) |
+| Your mailboxes' server names and addresses (not their passwords), the Outlook app's client ID | `~/.mimir/mimir.db` (settings) |
 | The chats' file workspaces (notes, lists, drafts bots keep) | `~/.mimir/files/chat-<id>/`, with earlier versions under `.history/` |
 | Photos you send | `~/.mimir/media/`, deleted after 60 days |
 | A file's text you send (PDF, text file) | In the chat's history, with your message |

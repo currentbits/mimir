@@ -117,7 +117,17 @@ online at a URL. Paste its setup line (`npx -y @modelcontextprotocol/server-file
 to it once to list its tools, so a broken setup isn't saved. Tokens in its environment or headers go to the keychain
 (server: the private database), never the config. Its tools follow the same rules: tools the server marks read-only are
 allowed, the rest ask. Each bot can switch servers on or off. Remote servers use MCP's Streamable HTTP transport;
-servers that only offer the older SSE transport, or need an OAuth sign-in, aren't supported.
+servers that only offer the older SSE transport aren't supported.
+
+**Signing in.** A hosted server that wants a sign-in (Notion `https://mcp.notion.com/mcp`, Linear
+`https://mcp.linear.app/mcp` and the like) answers Mimir's first try with "wants you to sign in", and Settings shows
+**Sign in to …**. Mimir follows MCP's authorization spec: it finds the server's sign-in service from its metadata,
+registers itself there (dynamic client registration), and signs you in in your browser with PKCE. You never type a
+password into Mimir. The tokens go to the keychain (server: the private database) and are renewed on their own;
+**Sign in again** on the server's row replaces them, and removing the server forgets them. A server that doesn't let
+apps register themselves (GitHub's hosted one, for example) takes a token in a header instead: add
+`Authorization` with `Bearer <your token>`. A header always wins over a sign-in. On a self-hosted server you paste the
+address your browser ended up on, as with ChatGPT.
 
 ## The run log
 
