@@ -129,8 +129,8 @@ routine that asks the new bot. Bots on another bot's task, and incognito chats, 
 
 ## When a bot can't help
 
-- *"My AI account isn't signed in"*: open the bot's page and check its AI account (for Claude/ChatGPT, run `claude` or
-  `codex` once in a terminal and sign in).
+- *"My AI account isn't signed in"*: open the bot's page and check its AI account (for ChatGPT, *Continue with ChatGPT* in
+  Settings → AI keys; for Claude or the Codex CLI, run `claude` or `codex` once in a terminal and sign in).
 - A local model that can't use tools (e.g. `gemma3`) can chat but can't remember things or run routines; `qwen3` and
   `llama3.1` can.
 - Nothing arrives in Telegram: check the token on the bot's page, and that the chat is paired (`pair <CODE>`).
