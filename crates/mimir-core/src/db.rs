@@ -108,6 +108,8 @@ pub struct Chat {
 }
 
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]
+// Sent by the UI: a misspelled field is an error, not silently dropped.
+#[serde(deny_unknown_fields)]
 pub struct Bot {
     pub id: i64,
     pub name: String,
@@ -433,10 +435,18 @@ pub struct Hold {
 /// Daily token caps (none when unset): each routine, each bot, all bots together.
 pub const CAPS: [&str; 3] = ["cap_routine", "cap_bot", "cap_day"];
 
-const SCHEMA: &str = "
+/// Set on every open (outside the migration's transaction, where journal_mode can't change).
+const PRAGMAS: &str = "
 PRAGMA journal_mode=WAL;
 -- Deleted rows are overwritten, not left in free pages (what incognito chats asked, erased memories).
 PRAGMA secure_delete=ON;
+";
+
+/// The schema version this build writes (`PRAGMA user_version`). A schema change bumps it and adds a step to
+/// `migrate`; each step runs once per database.
+const VERSION: i64 = 2;
+
+const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS entries(
   id INTEGER PRIMARY KEY,
   scope TEXT NOT NULL,
@@ -556,6 +566,7 @@ pub type SkillMenu = (i64, Vec<(String, String)>);
 /// A past message found by chat_search.
 #[derive(Debug, Clone)]
 pub struct ChatHit {
+    pub id: i64,
     pub ts: i64,
     pub bot_id: i64,
     pub role: String,
@@ -586,172 +597,262 @@ const BOOTSTRAP_RECENT: usize = 10;
 
 /// (id, chat, routine, text) of an unsent digest item.
 /// (id, chat, routine, text, from a run that read outside content)
+/// A hold that hasn't ended: (its key, the bot, the routine if it's one routine's, the hold).
+pub type HoldRow = (String, i64, Option<i64>, Hold);
 pub type DigestItem = (i64, i64, Option<i64>, String, bool);
 
+fn user_version(c: &Connection) -> Result<i64> {
+    Ok(c.query_row("PRAGMA user_version", [], |r| r.get(0))?)
+}
+
+/// A database a newer Mimir wrote: refused whole, never half-migrated by an older build.
+fn check_not_newer(c: &Connection) -> Result<()> {
+    if user_version(c)? > VERSION {
+        let by: Option<String> =
+            c.query_row("SELECT value FROM settings WHERE key='schema_written_by'", [], |r| r.get(0)).optional().ok().flatten();
+        let by = by.map(|v| format!("Mimir {v}")).unwrap_or_else(|| "a newer Mimir".into());
+        bail!("This data was written by {by}, and this app is Mimir {}. Update the app to open it.", env!("CARGO_PKG_VERSION"));
+    }
+    Ok(())
+}
+
+/// Copies the database aside before it's migrated (`mimir.db.before-<version>`), keeping the last 2.
+fn backup_before(c: &Connection, path: &Path) -> Result<()> {
+    let dir = path.parent().unwrap_or(Path::new("."));
+    let prefix = format!("{}.before-", path.file_name().and_then(|n| n.to_str()).unwrap_or("mimir.db"));
+    let target = dir.join(format!("{prefix}{VERSION}"));
+    // An existing copy is the older one: a second process racing this upgrade would copy the upgraded file over it.
+    if !target.exists() {
+        c.execute("VACUUM INTO ?1", [target.to_string_lossy()]).context("copying the database aside before upgrading it")?;
+    }
+    let mut old: Vec<(i64, std::path::PathBuf)> = std::fs::read_dir(dir)?
+        .flatten()
+        .filter_map(|e| Some((e.file_name().to_str()?.strip_prefix(&prefix)?.parse().ok()?, e.path())))
+        .collect();
+    old.sort();
+    for (_, p) in old.iter().rev().skip(2) {
+        let _ = std::fs::remove_file(p);
+    }
+    Ok(())
+}
+
+/// Brings a database up to `VERSION`, one step per version it's behind. Runs inside one transaction.
+fn migrate(c: &Connection) -> Result<()> {
+    // Another process may have migrated it while this one waited for the lock.
+    check_not_newer(c)?;
+    let v = user_version(c)?;
+    if v < 1 {
+        migrate_v1(c)?;
+    }
+    if v < 2 {
+        migrate_v2(c)?;
+    }
+    c.execute(
+        "INSERT INTO settings(key, value) VALUES ('schema_written_by', ?1) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        [env!("CARGO_PKG_VERSION")],
+    )?;
+    c.execute_batch(&format!("PRAGMA user_version = {VERSION}"))?;
+    Ok(())
+}
+
+/// Version 1: the schema as of Mimir 0.1.5, from an empty file or any older build (they kept no version and
+/// checked every column on each open).
+fn migrate_v1(c: &Connection) -> Result<()> {
+    c.execute_batch(SCHEMA)?;
+    // Additive columns on DBs created by older builds.
+    let add_col = |table: &str, col: &str, decl: &str| -> Result<()> {
+        if !c.prepare(&format!("SELECT 1 FROM pragma_table_info('{table}') WHERE name='{col}'"))?.exists([])? {
+            c.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {col} {decl}"))?;
+        }
+        Ok(())
+    };
+    add_col("chats", "title", "TEXT NOT NULL DEFAULT ''")?;
+    add_col("bots", "look", "TEXT NOT NULL DEFAULT ''")?;
+    add_col("chats", "owner", "TEXT NOT NULL DEFAULT ''")?;
+    add_col("suggestions", "tainted", "INTEGER NOT NULL DEFAULT 0")?;
+    add_col("chats", "dm", "INTEGER NOT NULL DEFAULT 0")?;
+    add_col("chats", "guest", "INTEGER NOT NULL DEFAULT 0")?;
+    // Chats paired by one of Telegram's shared senders (an anonymous admin, a channel) would answer everyone
+    // behind that id: they need pairing again by a person.
+    c.execute("UPDATE chats SET owner='' WHERE owner IN ('1087968824', '136817688', '777000')", [])?;
+    add_col("approvals", "tainted", "INTEGER NOT NULL DEFAULT 0")?;
+    add_col("routines", "paused", "INTEGER NOT NULL DEFAULT 0")?;
+    add_col("routines", "tainted", "INTEGER NOT NULL DEFAULT 0")?;
+    add_col("messages", "run_id", "INTEGER")?;
+    // Full-text search over past conversations (chat_search). Built once from existing messages.
+    let fresh = !c.prepare("SELECT 1 FROM sqlite_master WHERE name='messages_fts'")?.exists([])?;
+    c.execute_batch(
+        "CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(content, content='messages', content_rowid='id');
+         CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
+           INSERT INTO messages_fts(rowid, content) VALUES (new.id, new.content);
+         END;
+         CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
+           INSERT INTO messages_fts(messages_fts, rowid, content) VALUES ('delete', old.id, old.content);
+         END;",
+    )?;
+    if fresh {
+        c.execute_batch("INSERT INTO messages_fts(messages_fts) VALUES('rebuild')")?;
+    }
+    // Deleted text leaves the search indexes at once (not only when their segments merge later).
+    let _ = c.execute_batch("INSERT INTO entries_fts(entries_fts, rank) VALUES('secure-delete', 1); INSERT INTO messages_fts(messages_fts, rank) VALUES('secure-delete', 1);");
+    // The approval card's message on its channel (Telegram message id, Slack ts, Discord id), to close it later.
+    add_col("approvals", "card_ref", "TEXT")?;
+    add_col("entries", "pinned", "INTEGER NOT NULL DEFAULT 0")?;
+    add_col("entries", "origin", "TEXT NOT NULL DEFAULT ''")?;
+    add_col("entries", "bot_id", "INTEGER")?;
+    add_col("entries", "run_id", "INTEGER")?;
+    add_col("entries", "tainted", "INTEGER NOT NULL DEFAULT 0")?;
+    add_col("runs", "tainted", "INTEGER NOT NULL DEFAULT 0")?;
+    add_col("approvals", "kind", "TEXT NOT NULL DEFAULT 'rule'")?;
+    add_col("approvals", "site", "TEXT")?;
+    add_col("approvals", "parked_args", "TEXT")?;
+    add_col("runs", "reply", "TEXT")?;
+    // Memories search pulled into the turn ("3,17"), so a correction of the reply can count against them.
+    add_col("runs", "recalled", "TEXT")?;
+    add_col("entries", "missteps", "INTEGER NOT NULL DEFAULT 0")?;
+    add_col("routines", "delivery", "TEXT NOT NULL DEFAULT 'now'")?;
+    add_col("entries", "background", "INTEGER NOT NULL DEFAULT 0")?;
+    c.execute_batch(
+        "CREATE TABLE IF NOT EXISTS skills(id INTEGER PRIMARY KEY, scope TEXT NOT NULL, bot_id INTEGER NOT NULL, name TEXT NOT NULL,
+           description TEXT NOT NULL, body TEXT NOT NULL, run_id INTEGER, created_at INTEGER NOT NULL,
+           status TEXT NOT NULL DEFAULT 'proposed' CHECK(status IN ('proposed','active','dismissed','removed')))",
+    )?;
+    // Skills that improve with use: why a proposal was made, what kind it is, what it replaces; and every use.
+    add_col("skills", "reason", "TEXT NOT NULL DEFAULT ''")?;
+    add_col("skills", "kind", "TEXT NOT NULL DEFAULT 'learned'")?;
+    add_col("skills", "replaces", "TEXT NOT NULL DEFAULT ''")?;
+    c.execute_batch("CREATE TABLE IF NOT EXISTS skill_uses(skill_id INTEGER NOT NULL, run_id INTEGER, ts INTEGER NOT NULL)")?;
+    // When search last brought a memory up (memories nobody looks up any more can leave standing memory).
+    add_col("entries", "last_recalled", "INTEGER")?;
+    // When a memory stops being true ("away until Friday"): past it, it leaves standing memory; search still finds it.
+    add_col("entries", "valid_until", "INTEGER")?;
+    // When something learned was taken back (Undo): how often learning gets it wrong.
+    add_col("entries", "undone_at", "INTEGER")?;
+    // What the person wrote that started the run (chat messages only), so a tool can tell their own words apart.
+    add_col("runs", "asked", "TEXT")?;
+    add_col("suggestions", "check_note", "TEXT")?;
+    // The run an approval belongs to, so "allow all like this" can cover the rest of that reply.
+    add_col("approvals", "run_id", "INTEGER")?;
+    // Meetings and calls you transcribed: who said what (you = your microphone, others = the call's sound).
+    c.execute_batch(
+        "CREATE TABLE IF NOT EXISTS meetings(id INTEGER PRIMARY KEY, title TEXT NOT NULL, started_at INTEGER NOT NULL, ended_at INTEGER NOT NULL);
+         CREATE TABLE IF NOT EXISTS meeting_lines(id INTEGER PRIMARY KEY, meeting_id INTEGER NOT NULL, ts INTEGER NOT NULL, who TEXT NOT NULL, text TEXT NOT NULL);",
+    )?;
+    // What the person jotted down during the call.
+    add_col("meetings", "notes", "TEXT NOT NULL DEFAULT ''")?;
+    // Names for the speakers told apart ({"others:2": "Sam"}).
+    add_col("meetings", "speakers", "TEXT NOT NULL DEFAULT '{}'")?;
+    // Who was invited (from the calendar), a JSON list of names.
+    add_col("meetings", "attendees", "TEXT NOT NULL DEFAULT '[]'")?;
+    // The notes a bot wrote after the call (summary, decisions, action items).
+    add_col("meetings", "summary", "TEXT NOT NULL DEFAULT ''")?;
+    // A task handed to another bot (ask_bot): the run that asked, so the hand-off can be followed.
+    add_col("runs", "parent_run", "INTEGER")?;
+    // A correction, kept whole so a proposed preference can be replayed against it: what was asked, the reply
+    // the person pushed back on, and what they said.
+    c.execute_batch(
+        "CREATE TABLE IF NOT EXISTS cases(id INTEGER PRIMARY KEY, bot_id INTEGER NOT NULL, chat_id INTEGER NOT NULL,
+           asked TEXT NOT NULL, bad TEXT NOT NULL, correction TEXT NOT NULL, ts INTEGER NOT NULL)",
+    )?;
+    // 'demote' joined the suggestion actions; SQLite can't alter a CHECK, so older DBs rebuild the table once.
+    let sugg: String = c.query_row("SELECT sql FROM sqlite_master WHERE name='suggestions'", [], |r| r.get(0))?;
+    if !sugg.contains("'demote'") {
+        let new = sugg.replace("'forget')", "'forget','demote')");
+        c.execute_batch(&format!(
+            "ALTER TABLE suggestions RENAME TO suggestions_old; {new}; INSERT INTO suggestions SELECT * FROM suggestions_old; DROP TABLE suggestions_old;"
+        ))?;
+    }
+    c.execute_batch(
+        "CREATE TABLE IF NOT EXISTS digest_items(id INTEGER PRIMARY KEY, bot_id INTEGER NOT NULL, chat_id INTEGER NOT NULL,
+           routine_id INTEGER, text TEXT NOT NULL, ts INTEGER NOT NULL, sent_at INTEGER)",
+    )?;
+    add_col("digest_items", "tainted", "INTEGER NOT NULL DEFAULT 0")?;
+    c.execute_batch("CREATE TABLE IF NOT EXISTS inbox_dismissed(kind TEXT NOT NULL, ref INTEGER NOT NULL, PRIMARY KEY(kind, ref))")?;
+    // Files in a chat's workspace that Mimir wrote, and whether each holds outside content.
+    c.execute_batch("CREATE TABLE IF NOT EXISTS files(chat_id INTEGER NOT NULL, path TEXT NOT NULL, tainted INTEGER NOT NULL, PRIMARY KEY(chat_id, path))")?;
+    // The file's modification time when Mimir last wrote it: changed since (by hand, or deleted and made again) means
+    // it isn't only what Mimir wrote.
+    add_col("files", "mtime", "INTEGER NOT NULL DEFAULT 0")?;
+    // What the person did that says how they want things done: `correction` (pushed back on a reply),
+    // `stopped` (cut a reply off), `denied` (said no to an action).
+    c.execute_batch(
+        "CREATE TABLE IF NOT EXISTS signals(id INTEGER PRIMARY KEY, bot_id INTEGER NOT NULL, chat_id INTEGER NOT NULL,
+           kind TEXT NOT NULL, detail TEXT NOT NULL, ts INTEGER NOT NULL)",
+    )?;
+    c.execute_batch("CREATE TABLE IF NOT EXISTS site_rules(tool TEXT NOT NULL, host TEXT NOT NULL, action TEXT NOT NULL CHECK(action IN ('allow','ask','deny')), PRIMARY KEY(tool, host))")?;
+    // Chats from non-Telegram channels: (channel, external id) → allocated chat_id. Telegram rows keep their native id.
+    add_col("chats", "channel", "TEXT NOT NULL DEFAULT 'telegram'")?;
+    add_col("chats", "external", "TEXT")?;
+    c.execute_batch("CREATE UNIQUE INDEX IF NOT EXISTS chats_external ON chats(channel, external) WHERE external IS NOT NULL")?;
+    // Multi-bot: rows from single-bot builds belong to bot 1.
+    for t in ["routines", "runs", "approvals", "messages"] {
+        add_col(t, "bot_id", "INTEGER NOT NULL DEFAULT 1")?;
+    }
+    add_col("routines", "quiet", "INTEGER NOT NULL DEFAULT 0")?;
+    // A one-off (a reminder): runs at next_fire, then it's gone.
+    add_col("routines", "once", "INTEGER NOT NULL DEFAULT 0")?;
+    // The change gate: what a quiet check watches, and how it looked when last checked (watch.rs).
+    add_col("routines", "watch", "TEXT NOT NULL DEFAULT ''")?;
+    add_col("routines", "watch_seen", "TEXT")?;
+    // Shapes of a watched page's lines that change on every load (watch.rs), one per line.
+    add_col("routines", "watch_noise", "TEXT NOT NULL DEFAULT ''")?;
+    add_col("routines", "retries", "INTEGER NOT NULL DEFAULT 0")?;
+    add_col("runs", "delivered", "TEXT")?;
+    add_col("runs", "cache_read", "INTEGER NOT NULL DEFAULT 0")?;
+    add_col("runs", "estimated", "INTEGER NOT NULL DEFAULT 0")?;
+    c.execute(
+        "INSERT OR IGNORE INTO bots(id, name, provider, model, base_url, created_at) VALUES (1, 'Mimir',
+           coalesce((SELECT value FROM settings WHERE key='provider'), 'claude'),
+           coalesce((SELECT value FROM settings WHERE key='model'), ''),
+           coalesce((SELECT value FROM settings WHERE key='base_url'), ''), ?1)",
+        [now()],
+    )?;
+    c.execute_batch(
+        "INSERT OR IGNORE INTO sessions(bot_id, chat_id, session) SELECT 1, chat_id, claude_session FROM chats WHERE claude_session IS NOT NULL;
+         UPDATE chats SET claude_session = NULL WHERE claude_session IS NOT NULL;",
+    )?;
+    Ok(())
+}
+
+/// Version 2: indexes for the messages poll (a chat's actions since a run) and a chat's latest messages.
+fn migrate_v2(c: &Connection) -> Result<()> {
+    c.execute_batch(
+        "CREATE INDEX IF NOT EXISTS tool_calls_chat ON tool_calls(chat_id, run_id);
+         CREATE INDEX IF NOT EXISTS messages_chat ON messages(chat_id, id);",
+    )?;
+    Ok(())
+}
+
 impl Db {
+    /// Opens the database, migrating it first if an older Mimir wrote it. An up-to-date database only reads its
+    /// version: the tools process opens it on every turn, and mustn't compete with the app for the write lock.
     pub fn open(path: &Path) -> Result<Self> {
         let c = Connection::open(path)?;
         c.busy_timeout(Duration::from_secs(5))?;
-        c.execute_batch(SCHEMA)?;
-        // Migrations: additive columns on DBs created by older builds.
-        let add_col = |table: &str, col: &str, decl: &str| -> Result<()> {
-            if !c.prepare(&format!("SELECT 1 FROM pragma_table_info('{table}') WHERE name='{col}'"))?.exists([])? {
-                c.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {col} {decl}"))?;
+        c.execute_batch(PRAGMAS)?;
+        check_not_newer(&c)?;
+        if user_version(&c)? < VERSION {
+            if c.prepare("SELECT 1 FROM sqlite_master WHERE name='entries'")?.exists([])? {
+                backup_before(&c, path)?;
             }
-            Ok(())
-        };
-        add_col("chats", "title", "TEXT NOT NULL DEFAULT ''")?;
-        add_col("bots", "look", "TEXT NOT NULL DEFAULT ''")?;
-        add_col("chats", "owner", "TEXT NOT NULL DEFAULT ''")?;
-        add_col("suggestions", "tainted", "INTEGER NOT NULL DEFAULT 0")?;
-        add_col("chats", "dm", "INTEGER NOT NULL DEFAULT 0")?;
-        add_col("chats", "guest", "INTEGER NOT NULL DEFAULT 0")?;
-        // Chats paired by one of Telegram's shared senders (an anonymous admin, a channel) would answer everyone
-        // behind that id: they need pairing again by a person.
-        c.execute("UPDATE chats SET owner='' WHERE owner IN ('1087968824', '136817688', '777000')", [])?;
-        add_col("approvals", "tainted", "INTEGER NOT NULL DEFAULT 0")?;
-        add_col("routines", "paused", "INTEGER NOT NULL DEFAULT 0")?;
-        add_col("routines", "tainted", "INTEGER NOT NULL DEFAULT 0")?;
-        add_col("messages", "run_id", "INTEGER")?;
-        // Full-text search over past conversations (chat_search). Built once from existing messages.
-        let fresh = !c.prepare("SELECT 1 FROM sqlite_master WHERE name='messages_fts'")?.exists([])?;
-        c.execute_batch(
-            "CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(content, content='messages', content_rowid='id');
-             CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
-               INSERT INTO messages_fts(rowid, content) VALUES (new.id, new.content);
-             END;
-             CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
-               INSERT INTO messages_fts(messages_fts, rowid, content) VALUES ('delete', old.id, old.content);
-             END;",
-        )?;
-        if fresh {
-            c.execute_batch("INSERT INTO messages_fts(messages_fts) VALUES('rebuild')")?;
+            c.execute_batch("BEGIN IMMEDIATE")?;
+            if let Err(e) = migrate(&c) {
+                let _ = c.execute_batch("ROLLBACK");
+                return Err(e.context(format!("upgrading the database {}", path.display())));
+            }
+            c.execute_batch("COMMIT")?;
         }
-        // Deleted text leaves the search indexes at once (not only when their segments merge later).
-        let _ = c.execute_batch("INSERT INTO entries_fts(entries_fts, rank) VALUES('secure-delete', 1); INSERT INTO messages_fts(messages_fts, rank) VALUES('secure-delete', 1);");
-        // The approval card's message on its channel (Telegram message id, Slack ts, Discord id), to close it later.
-        add_col("approvals", "card_ref", "TEXT")?;
-        add_col("entries", "pinned", "INTEGER NOT NULL DEFAULT 0")?;
-        add_col("entries", "origin", "TEXT NOT NULL DEFAULT ''")?;
-        add_col("entries", "bot_id", "INTEGER")?;
-        add_col("entries", "run_id", "INTEGER")?;
-        add_col("entries", "tainted", "INTEGER NOT NULL DEFAULT 0")?;
-        add_col("runs", "tainted", "INTEGER NOT NULL DEFAULT 0")?;
-        add_col("approvals", "kind", "TEXT NOT NULL DEFAULT 'rule'")?;
-        add_col("approvals", "site", "TEXT")?;
-        add_col("approvals", "parked_args", "TEXT")?;
-        add_col("runs", "reply", "TEXT")?;
-        // Memories search pulled into the turn ("3,17"), so a correction of the reply can count against them.
-        add_col("runs", "recalled", "TEXT")?;
-        add_col("entries", "missteps", "INTEGER NOT NULL DEFAULT 0")?;
-        add_col("routines", "delivery", "TEXT NOT NULL DEFAULT 'now'")?;
-        add_col("entries", "background", "INTEGER NOT NULL DEFAULT 0")?;
-        c.execute_batch(
-            "CREATE TABLE IF NOT EXISTS skills(id INTEGER PRIMARY KEY, scope TEXT NOT NULL, bot_id INTEGER NOT NULL, name TEXT NOT NULL,
-               description TEXT NOT NULL, body TEXT NOT NULL, run_id INTEGER, created_at INTEGER NOT NULL,
-               status TEXT NOT NULL DEFAULT 'proposed' CHECK(status IN ('proposed','active','dismissed','removed')))",
-        )?;
-        // Skills that improve with use: why a proposal was made, what kind it is, what it replaces; and every use.
-        add_col("skills", "reason", "TEXT NOT NULL DEFAULT ''")?;
-        add_col("skills", "kind", "TEXT NOT NULL DEFAULT 'learned'")?;
-        add_col("skills", "replaces", "TEXT NOT NULL DEFAULT ''")?;
-        c.execute_batch("CREATE TABLE IF NOT EXISTS skill_uses(skill_id INTEGER NOT NULL, run_id INTEGER, ts INTEGER NOT NULL)")?;
-        // When search last brought a memory up (memories nobody looks up any more can leave standing memory).
-        add_col("entries", "last_recalled", "INTEGER")?;
-        // When a memory stops being true ("away until Friday"): past it, it leaves standing memory; search still finds it.
-        add_col("entries", "valid_until", "INTEGER")?;
-        // When something learned was taken back (Undo): how often learning gets it wrong.
-        add_col("entries", "undone_at", "INTEGER")?;
-        // What the person wrote that started the run (chat messages only), so a tool can tell their own words apart.
-        add_col("runs", "asked", "TEXT")?;
-        add_col("suggestions", "check_note", "TEXT")?;
-        // The run an approval belongs to, so "allow all like this" can cover the rest of that reply.
-        add_col("approvals", "run_id", "INTEGER")?;
-        // Meetings and calls you transcribed: who said what (you = your microphone, others = the call's sound).
-        c.execute_batch(
-            "CREATE TABLE IF NOT EXISTS meetings(id INTEGER PRIMARY KEY, title TEXT NOT NULL, started_at INTEGER NOT NULL, ended_at INTEGER NOT NULL);
-             CREATE TABLE IF NOT EXISTS meeting_lines(id INTEGER PRIMARY KEY, meeting_id INTEGER NOT NULL, ts INTEGER NOT NULL, who TEXT NOT NULL, text TEXT NOT NULL);",
-        )?;
-        // What the person jotted down during the call.
-        add_col("meetings", "notes", "TEXT NOT NULL DEFAULT ''")?;
-        // Names for the speakers told apart ({"others:2": "Sam"}).
-        add_col("meetings", "speakers", "TEXT NOT NULL DEFAULT '{}'")?;
-        // Who was invited (from the calendar), a JSON list of names.
-        add_col("meetings", "attendees", "TEXT NOT NULL DEFAULT '[]'")?;
-        // The notes a bot wrote after the call (summary, decisions, action items).
-        add_col("meetings", "summary", "TEXT NOT NULL DEFAULT ''")?;
-        // A task handed to another bot (ask_bot): the run that asked, so the hand-off can be followed.
-        add_col("runs", "parent_run", "INTEGER")?;
-        // A correction, kept whole so a proposed preference can be replayed against it: what was asked, the reply
-        // the person pushed back on, and what they said.
-        c.execute_batch(
-            "CREATE TABLE IF NOT EXISTS cases(id INTEGER PRIMARY KEY, bot_id INTEGER NOT NULL, chat_id INTEGER NOT NULL,
-               asked TEXT NOT NULL, bad TEXT NOT NULL, correction TEXT NOT NULL, ts INTEGER NOT NULL)",
-        )?;
-        // 'demote' joined the suggestion actions; SQLite can't alter a CHECK, so older DBs rebuild the table once.
-        let sugg: String = c.query_row("SELECT sql FROM sqlite_master WHERE name='suggestions'", [], |r| r.get(0))?;
-        if !sugg.contains("'demote'") {
-            let new = sugg.replace("'forget')", "'forget','demote')");
-            c.execute_batch(&format!(
-                "BEGIN; ALTER TABLE suggestions RENAME TO suggestions_old; {new}; INSERT INTO suggestions SELECT * FROM suggestions_old; DROP TABLE suggestions_old; COMMIT;"
-            ))?;
-        }
-        c.execute_batch(
-            "CREATE TABLE IF NOT EXISTS digest_items(id INTEGER PRIMARY KEY, bot_id INTEGER NOT NULL, chat_id INTEGER NOT NULL,
-               routine_id INTEGER, text TEXT NOT NULL, ts INTEGER NOT NULL, sent_at INTEGER)",
-        )?;
-        add_col("digest_items", "tainted", "INTEGER NOT NULL DEFAULT 0")?;
-        c.execute_batch("CREATE TABLE IF NOT EXISTS inbox_dismissed(kind TEXT NOT NULL, ref INTEGER NOT NULL, PRIMARY KEY(kind, ref))")?;
-        // Files in a chat's workspace that Mimir wrote, and whether each holds outside content.
-        c.execute_batch("CREATE TABLE IF NOT EXISTS files(chat_id INTEGER NOT NULL, path TEXT NOT NULL, tainted INTEGER NOT NULL, PRIMARY KEY(chat_id, path))")?;
-        // The file's modification time when Mimir last wrote it: changed since (by hand, or deleted and made again) means
-        // it isn't only what Mimir wrote.
-        add_col("files", "mtime", "INTEGER NOT NULL DEFAULT 0")?;
-        // What the person did that says how they want things done: `correction` (pushed back on a reply),
-        // `stopped` (cut a reply off), `denied` (said no to an action).
-        c.execute_batch(
-            "CREATE TABLE IF NOT EXISTS signals(id INTEGER PRIMARY KEY, bot_id INTEGER NOT NULL, chat_id INTEGER NOT NULL,
-               kind TEXT NOT NULL, detail TEXT NOT NULL, ts INTEGER NOT NULL)",
-        )?;
-        c.execute_batch("CREATE TABLE IF NOT EXISTS site_rules(tool TEXT NOT NULL, host TEXT NOT NULL, action TEXT NOT NULL CHECK(action IN ('allow','ask','deny')), PRIMARY KEY(tool, host))")?;
-        // Chats from non-Telegram channels: (channel, external id) → allocated chat_id. Telegram rows keep their native id.
-        add_col("chats", "channel", "TEXT NOT NULL DEFAULT 'telegram'")?;
-        add_col("chats", "external", "TEXT")?;
-        c.execute_batch("CREATE UNIQUE INDEX IF NOT EXISTS chats_external ON chats(channel, external) WHERE external IS NOT NULL")?;
-        // Multi-bot: rows from single-bot builds belong to bot 1.
-        for t in ["routines", "runs", "approvals", "messages"] {
-            add_col(t, "bot_id", "INTEGER NOT NULL DEFAULT 1")?;
-        }
-        add_col("routines", "quiet", "INTEGER NOT NULL DEFAULT 0")?;
-        // A one-off (a reminder): runs at next_fire, then it's gone.
-        add_col("routines", "once", "INTEGER NOT NULL DEFAULT 0")?;
-        // The change gate: what a quiet check watches, and how it looked when last checked (watch.rs).
-        add_col("routines", "watch", "TEXT NOT NULL DEFAULT ''")?;
-        add_col("routines", "watch_seen", "TEXT")?;
-        // Shapes of a watched page's lines that change on every load (watch.rs), one per line.
-        add_col("routines", "watch_noise", "TEXT NOT NULL DEFAULT ''")?;
-        add_col("routines", "retries", "INTEGER NOT NULL DEFAULT 0")?;
-        add_col("runs", "delivered", "TEXT")?;
-        add_col("runs", "cache_read", "INTEGER NOT NULL DEFAULT 0")?;
-        add_col("runs", "estimated", "INTEGER NOT NULL DEFAULT 0")?;
-        c.execute(
-            "INSERT OR IGNORE INTO bots(id, name, provider, model, base_url, created_at) VALUES (1, 'Mimir',
-               coalesce((SELECT value FROM settings WHERE key='provider'), 'claude'),
-               coalesce((SELECT value FROM settings WHERE key='model'), ''),
-               coalesce((SELECT value FROM settings WHERE key='base_url'), ''), ?1)",
-            [now()],
-        )?;
-        c.execute_batch(
-            "INSERT OR IGNORE INTO sessions(bot_id, chat_id, session) SELECT 1, chat_id, claude_session FROM chats WHERE claude_session IS NOT NULL;
-             UPDATE chats SET claude_session = NULL WHERE claude_session IS NOT NULL;",
-        )?;
-        // Runs left 'running' by a crash (older than the max turn length) are closed out.
-        c.execute(
+        let dir = path.parent().map(Path::to_path_buf).unwrap_or_else(|| ".".into());
+        Ok(Db(Arc::new(Mutex::new(c)), Arc::new(dir)))
+    }
+
+    /// Closes out runs a crash left 'running' (older than the max turn length). Once at startup, not on every open.
+    pub fn close_interrupted(&self) -> Result<()> {
+        self.c().execute(
             "UPDATE runs SET status='error', error='interrupted', ended_at=started_at WHERE status='running' AND started_at < ?1",
             [now() - 900],
         )?;
-        let dir = path.parent().map(Path::to_path_buf).unwrap_or_else(|| ".".into());
-        Ok(Db(Arc::new(Mutex::new(c)), Arc::new(dir)))
+        Ok(())
     }
 
     /// The data directory (MIMIR_HOME) this database lives in.
@@ -2627,13 +2728,13 @@ impl Db {
         let c = self.c();
         let mut st = c.prepare(
             "SELECT m.ts, m.bot_id, m.role, snippet(messages_fts, 0, '', '', '…', 40), (m.role = 'assistant' AND coalesce(r.tainted, 1)) OR (m.role = 'user' AND m.content LIKE '%<document name=%'),
-               m.role = 'user' AND m.content LIKE '[Scheduled%'
+               m.role = 'user' AND m.content LIKE '[Scheduled%', m.id
              FROM messages_fts JOIN messages m ON m.id = messages_fts.rowid LEFT JOIN runs r ON r.id = m.run_id
              WHERE messages_fts MATCH ?1 AND m.chat_id = ?2 AND (?3 IS NULL OR m.run_id IS NOT ?3) AND m.ts BETWEEN ?5 AND ?6
              ORDER BY bm25(messages_fts) LIMIT ?4",
         )?;
         let v = st
-            .query_map(params![q, chat, exclude_run, limit as i64, range.0, range.1], |r| Ok(ChatHit { ts: r.get(0)?, bot_id: r.get(1)?, role: r.get(2)?, excerpt: r.get(3)?, tainted: r.get(4)?, routine: r.get(5)? }))?
+            .query_map(params![q, chat, exclude_run, limit as i64, range.0, range.1], |r| Ok(ChatHit { id: r.get(6)?, ts: r.get(0)?, bot_id: r.get(1)?, role: r.get(2)?, excerpt: r.get(3)?, tainted: r.get(4)?, routine: r.get(5)? }))?
             .collect::<Result<_, _>>()?;
         Ok(v)
     }
@@ -2691,23 +2792,27 @@ impl Db {
     }
 
     pub fn messages(&self, chat: i64, n: usize) -> Result<Vec<Message>> {
-        self.messages_of(chat, None, n)
+        self.messages_of(chat, None, None, 0, n)
     }
 
     /// The last `n` messages of a chat, oldest first; with `bot`, only that bot's conversation in it (what you said to
-    /// it and what it said), as when you open a bot from the sidebar.
-    pub fn messages_of(&self, chat: i64, bot: Option<i64>, n: usize) -> Result<Vec<Message>> {
+    /// it and what it said), as when you open a bot from the sidebar. Paging: only ids below `before`, and none below `from`.
+    pub fn messages_of(&self, chat: i64, bot: Option<i64>, before: Option<i64>, from: i64, n: usize) -> Result<Vec<Message>> {
         let c = self.c();
-        let mut st = c.prepare("SELECT bot_id, role, content, ts, run_id, id FROM messages WHERE chat_id=?1 AND (?3 IS NULL OR bot_id=?3) ORDER BY id DESC LIMIT ?2")?;
+        let mut st = c.prepare(
+            "SELECT bot_id, role, content, ts, run_id, id FROM messages WHERE chat_id=?1 AND (?3 IS NULL OR bot_id=?3)
+               AND (?4 IS NULL OR id < ?4) AND id >= ?5 ORDER BY id DESC LIMIT ?2",
+        )?;
         let mut v: Vec<(Message, Option<i64>)> = st
-            .query_map(params![chat, n as i64, bot], |r| Ok((Message { id: r.get(5)?, bot_id: r.get(0)?, role: r.get(1)?, content: r.get(2)?, ts: r.get(3)?, actions: vec![], run_id: None }, r.get(4)?)))?
+            .query_map(params![chat, n as i64, bot, before, from], |r| Ok((Message { id: r.get(5)?, bot_id: r.get(0)?, role: r.get(1)?, content: r.get(2)?, ts: r.get(3)?, actions: vec![], run_id: None }, r.get(4)?)))?
             .collect::<Result<_, _>>()?;
         v.reverse();
         // One query for every reply's actions.
         let first = v.iter().filter_map(|(_, r)| *r).min().unwrap_or(i64::MAX);
-        let mut acts = c.prepare("SELECT run_id, tool, summary, decision, ok, substr(result, 1, 200) FROM tool_calls WHERE chat_id=?1 AND run_id >= ?2 ORDER BY id")?;
+        let last = v.iter().filter_map(|(_, r)| *r).max().unwrap_or(0);
+        let mut acts = c.prepare("SELECT run_id, tool, summary, decision, ok, substr(result, 1, 200) FROM tool_calls WHERE chat_id=?1 AND run_id BETWEEN ?2 AND ?3 ORDER BY id")?;
         let mut by_run: std::collections::HashMap<i64, Vec<Action>> = Default::default();
-        for row in acts.query_map(params![chat, first], |r| Ok((r.get::<_, i64>(0)?, Action { tool: r.get(1)?, summary: r.get(2)?, decision: r.get(3)?, ok: r.get(4)?, result: r.get(5)? })))? {
+        for row in acts.query_map(params![chat, first, last], |r| Ok((r.get::<_, i64>(0)?, Action { tool: r.get(1)?, summary: r.get(2)?, decision: r.get(3)?, ok: r.get(4)?, result: r.get(5)? })))? {
             let (run, a) = row?;
             by_run.entry(run).or_default().push(a);
         }
@@ -2975,7 +3080,7 @@ impl Db {
     }
 
     /// Every hold that hasn't ended, for Needs you: (its key, the bot, the routine if it's one routine's, the hold).
-    pub fn holds(&self, now: i64) -> Result<Vec<(String, i64, Option<i64>, Hold)>> {
+    pub fn holds(&self, now: i64) -> Result<Vec<HoldRow>> {
         let v: Vec<(String, String)> = {
             let c = self.c();
             let mut st = c.prepare("SELECT key, value FROM settings WHERE key LIKE 'hold:%'")?;
@@ -3159,6 +3264,55 @@ mod tests {
         let p = std::env::temp_dir().join(format!("mimir-test-{}-{n}.db", std::process::id()));
         let _ = std::fs::remove_file(&p);
         Db::open(&p).unwrap()
+    }
+
+    #[test]
+    fn schema_version_ladder() {
+        let dir = std::env::temp_dir().join(format!("mimir-ladder-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("mimir.db");
+        // A database as 0.1.4 left it: no version, a column it didn't have yet.
+        drop(Db::open(&p).unwrap());
+        Connection::open(&p).unwrap().execute_batch("PRAGMA user_version = 0; ALTER TABLE runs DROP COLUMN estimated; DELETE FROM settings;").unwrap();
+
+        let d = Db::open(&p).unwrap();
+        assert_eq!(user_version(&d.c()).unwrap(), VERSION);
+        assert!(d.c().prepare("SELECT estimated FROM runs").is_ok(), "migrated");
+        assert!(dir.join(format!("mimir.db.before-{VERSION}")).exists(), "copied aside first");
+        drop(d);
+
+        // Up to date: opens while another process holds the write lock, so it wrote nothing.
+        let other = Connection::open(&p).unwrap();
+        other.execute_batch("BEGIN IMMEDIATE").unwrap();
+        let t = std::time::Instant::now();
+        drop(Db::open(&p).unwrap());
+        assert!(t.elapsed() < Duration::from_secs(1), "waited for the write lock");
+        other.execute_batch("ROLLBACK").unwrap();
+
+        // Only the last 2 copies are kept.
+        for v in [-3, -2, -1] {
+            std::fs::write(dir.join(format!("mimir.db.before-{v}")), "").unwrap();
+        }
+        Connection::open(&p).unwrap().execute_batch("PRAGMA user_version = 0").unwrap();
+        drop(Db::open(&p).unwrap());
+        let mut kept: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().filter_map(|e| e.file_name().into_string().ok()).filter(|n| n.contains(".before-")).collect();
+        kept.sort();
+        assert_eq!(kept, vec!["mimir.db.before--1".to_string(), format!("mimir.db.before-{VERSION}")]);
+
+        // Version 1 → 2 adds the indexes.
+        Connection::open(&p).unwrap().execute_batch("DROP INDEX tool_calls_chat; DROP INDEX messages_chat; PRAGMA user_version = 1").unwrap();
+        let d = Db::open(&p).unwrap();
+        let n: i64 = d.c().query_row("SELECT count(*) FROM sqlite_master WHERE name IN ('tool_calls_chat', 'messages_chat')", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 2);
+        drop(d);
+
+        // Written by a newer Mimir: refused, untouched.
+        Connection::open(&p).unwrap().execute_batch("PRAGMA user_version = 99; UPDATE settings SET value='9.9.9' WHERE key='schema_written_by'").unwrap();
+        let err = Db::open(&p).err().unwrap().to_string();
+        assert!(err.contains("Mimir 9.9.9") && err.contains("Update the app"), "{err}");
+        assert_eq!(user_version(&Connection::open(&p).unwrap()).unwrap(), 99);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -3449,6 +3603,21 @@ mod tests {
         // A time range: only messages in it.
         assert!(d.chat_search(7, "12th", None, (now() + 3600, i64::MAX), 10).unwrap().is_empty());
         assert!(!d.chat_search(7, "12th", None, (now() - 3600, now() + 3600), 10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn earlier_messages_page_back() {
+        let d = db();
+        for i in 0..5 {
+            d.log(1, 7, "user", &format!("m{i}"), None).unwrap();
+        }
+        let text = |v: Vec<Message>| v.into_iter().map(|m| m.content).collect::<Vec<_>>().join(" ");
+        let last = d.messages_of(7, None, None, 0, 2).unwrap();
+        assert_eq!(text(last.clone()), "m3 m4");
+        assert_eq!(text(d.messages_of(7, None, Some(last[0].id), 0, 2).unwrap()), "m1 m2", "the page before");
+        // A search hit's id: everything from it on.
+        let hit = d.chat_search(7, "m1", None, (0, i64::MAX), 1).unwrap()[0].id;
+        assert_eq!(text(d.messages_of(7, None, None, hit, 100).unwrap()), "m1 m2 m3 m4");
     }
 
     #[test]

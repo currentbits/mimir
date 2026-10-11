@@ -3,8 +3,9 @@
 //! Put it behind a TLS proxy (Caddy/Traefik) for anything beyond localhost.
 
 use anyhow::{Context, Result};
-use axum::extract::{DefaultBodyLimit, Path, State};
+use axum::extract::{DefaultBodyLimit, Path, Request, State};
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
+use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -13,6 +14,7 @@ use mimir_core::host::{DbSecrets, Host};
 use serde_json::{Value, json};
 use std::path::PathBuf;
 use std::sync::Arc;
+use tower_http::compression::CompressionLayer;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
 
@@ -75,7 +77,12 @@ async fn api(State(app): State<App>, Path(cmd): Path<String>, body: axum::body::
 
 /// Every response: the web UI can't be framed by another site (clickjacking an Approve button), loads only its own
 /// scripts, and browsers don't guess content types.
-async fn harden(mut r: Response) -> Response {
+async fn harden(req: Request, next: Next) -> Response {
+    let asset = req.uri().path().starts_with("/assets/");
+    let mut r = next.run(req).await;
+    // Vite names each built file after its content, so a browser may keep one forever. Not a missing one, which the
+    // fallback answers with index.html.
+    let keep = asset && r.status().is_success() && r.headers().get(header::CONTENT_TYPE).is_none_or(|t| !t.as_bytes().starts_with(b"text/html"));
     let h = r.headers_mut();
     h.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
     h.insert(
@@ -84,8 +91,9 @@ async fn harden(mut r: Response) -> Response {
     );
     h.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
     h.insert(header::REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
-    // Nothing a browser or a proxy in between should keep: the UI updates with the server, and answers are private.
-    h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    // Anything else, nothing a browser or a proxy in between should keep: index.html updates with the server, and
+    // answers are private.
+    h.insert(header::CACHE_CONTROL, HeaderValue::from_static(if keep { "public, max-age=31536000, immutable" } else { "no-store" }));
     r
 }
 
@@ -124,7 +132,7 @@ pub async fn run(db: Db, home: PathBuf, listen: &str) -> Result<()> {
         None => eprintln!("web UI not found (set MIMIR_UI_DIR to ui/dist); serving the API only"),
     }
 
-    let app = app.layer(axum::middleware::map_response(harden));
+    let app = app.layer(CompressionLayer::new()).layer(axum::middleware::from_fn(harden));
     let listener = tokio::net::TcpListener::bind(listen).await.with_context(|| format!("can't listen on {listen}"))?;
     eprintln!("mimir server on http://{listen}");
     if fresh {

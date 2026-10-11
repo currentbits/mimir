@@ -49,6 +49,9 @@ const SEP: &str = "__";
 /// A configured server: a command, a `url` (remote), or `preset: "playwright"` (the browser
 /// command, built per bot at start). Env and header values live in the secret store.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+// Sent by the UI: a misspelled field is an error, not silently dropped. The saved list parses with this too, so a
+// field removed later stays as an ignored one.
+#[serde(deny_unknown_fields)]
 pub struct ServerConf {
     pub name: String,
     #[serde(default)]
@@ -93,6 +96,8 @@ fn yes() -> bool {
 
 /// A saved login: the value lives in the secret store, never in the database or a prompt.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+// Like ServerConf: unknown fields are an error, here and in the saved list.
+#[serde(deny_unknown_fields)]
 pub struct VaultEntry {
     pub name: String,
     /// Sites it may be typed into (exact host or subdomain).
@@ -311,7 +316,9 @@ struct Http {
 impl Client {
     async fn start(conf: &ServerConf, db: &Db, bot: i64) -> Result<Self> {
         let (io, secrets_file) = if conf.url.is_empty() {
-            spawn(conf, db, bot)?
+            // Off the async threads: bringing up the bots' computer can take seconds.
+            let (conf, db) = (conf.clone(), db.clone());
+            tokio::task::spawn_blocking(move || spawn(&conf, &db, bot)).await??
         } else {
             let headers = values_of(&conf.name, "header", &conf.headers);
             (Io::Http(Http { client: reqwest::Client::builder().timeout(TIMEOUT).build()?, url: conf.url.clone(), headers, session: None, version: None }), None)
