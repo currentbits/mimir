@@ -4,6 +4,14 @@ Your bots remember things about you so you don't repeat yourself: facts ("my den
 giving news, use 3 bullets with links") and open tasks ("send Sam the deck by Friday"). Memory belongs to **you** and
 is shared by all your bots. You can see, correct and remove every bit of it in the **Memory** tab.
 
+- **Only one bot.** A memory can be kept by one bot alone: ask it ("just for you: …") and it saves it with `only_me`, or
+  switch a bot-learned memory between *all bots* and *only <bot>* on its card. Your other bots don't see it in their
+  standing memory or searches; a new version stays with that bot.
+- **The household.** Lists and plans you share with people you choose (a shopping list) live in the **Household**:
+  see [Bots and chats](bots-and-chats.md#the-household-and-family-groups). Bots in household chats get it as its own
+  block next to standing memory, and `memory_search` searches it too (marked *household*). What a guest adds arrives
+  as a suggestion in your Needs you.
+
 ## How bots use it
 
 - **Standing memory**: your preferences and the most recent facts and tasks go into every reply's instructions, within
@@ -56,6 +64,9 @@ it belongs to the chat, so a group chat can't read your private chat's files.
 ## Changing and removing
 
 - **Edit** a memory in place; the previous wording is kept under *earlier version*.
+- **Under a reply**: a quiet line says what it used ("2 memories · 1 skill · read 3 pages"). Open it for the memories
+  recalled for that reply, each with **Edit** and **Forget**, plus the skills it read and the pages it opened. In the
+  messaging apps, `/why` lists the same for the bot's last reply. Standing memory is in every reply, so it isn't listed.
 - **Move to background** takes it out of standing memory without deleting it (search still finds it).
 - **Forget** hides it but keeps it under *History*; **Erase** (in History) deletes it and its earlier versions for good.
 - **Import** takes text pasted from another assistant ("List everything you remember about me") and turns it into

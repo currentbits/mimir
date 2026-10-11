@@ -1,9 +1,13 @@
-// The app's main flows clicked through in a browser, switching bots mid-reply too (npm i playwright; npx playwright install chromium), against a
-// server set up as for scripts/e2e-flows.py, with MIMIR_UI_DIR=ui/dist: node scripts/ui-flows.mjs
-import pkg from 'playwright'; const { chromium } = pkg
-// Ada and Search on the fake AI (scripts/fake-ai.py on :8899), in a fresh server.
-const api = (cmd, args = {}) => fetch(`http://127.0.0.1:8789/api/${cmd}`, { method: 'POST', headers: { Authorization: 'Bearer testtoken-abcdefghijklmnop', 'Content-Type': 'application/json' }, body: JSON.stringify(args) }).then(r => r.json())
-const fake = { provider: 'openai', model: 'fake', base_url: 'http://127.0.0.1:8899/v1', tools: '', look: '' }
+// The app's main flows clicked through in a browser, switching bots mid-reply too (Playwright from ui/: npm ci there, then
+// npx playwright install chromium), against a server set up as for scripts/e2e-flows.py, with MIMIR_UI_DIR=ui/dist:
+// node scripts/ui-flows.mjs
+import { createRequire } from 'node:module'
+import { execFileSync } from 'node:child_process'
+const { chromium } = createRequire(new URL('../ui/package.json', import.meta.url))('playwright')
+// Ada and Search on the fake AI (scripts/fake-ai.py on :8899), in a fresh server. Other ports: E2E_SERVER, E2E_AI as there.
+const SERVER = `http://${process.env.E2E_SERVER || '127.0.0.1:8789'}`, AI = `http://${process.env.E2E_AI || '127.0.0.1:8899'}`
+const api = (cmd, args = {}) => fetch(`${SERVER}/api/${cmd}`, { method: 'POST', headers: { Authorization: 'Bearer testtoken-abcdefghijklmnop', 'Content-Type': 'application/json' }, body: JSON.stringify(args) }).then(r => r.json())
+const fake = { provider: 'openai', model: 'fake', base_url: `${AI}/v1`, tools: '', look: '' }
 await api('onboarding_done'); await api('set_api_key', { kind: 'openai', key: 'k' })
 await api('save_bot', { bot: { id: 1, name: 'Ada', persona: '', ...fake } })
 if (!(await api('bots')).some(x => x.name === 'Search')) await api('save_bot', { bot: { id: 0, name: 'Search', persona: 'SEO research', ...fake } })
@@ -19,7 +23,7 @@ const tab = name => p.locator('.toolbar').getByText(name, { exact: true }).first
 const say = async text => { const box = p.locator('textarea').first(); await box.fill(text); await box.press('Enter') }
 const until = async (fn, ms = 15000) => { const t = Date.now(); while (Date.now() - t < ms) { if (await fn()) return true; await p.waitForTimeout(300) } return false }
 
-await p.goto('http://127.0.0.1:8789/'); await p.waitForTimeout(1500)
+await p.goto(`${SERVER}/`); await p.waitForTimeout(1500)
 
 // Chat with Ada, then Search: each its own thread
 await bot('Ada').click(); await p.waitForTimeout(500)
@@ -62,7 +66,7 @@ check('bot made after approving', await until(async () => (await p.locator('.rai
 await say('set a ROUTINE')
 await until(async () => (await main()).includes('DONE routine_create'))
 await tab('Routines').click(); await p.waitForTimeout(1000)
-check('routine listed', (await p.locator('.routine').count()) === 1)
+check('routine listed', await until(async () => (await p.locator('.routine').count()) === 1))
 const sw = p.locator('.routine [role=switch], .routine input[type=checkbox]').first()
 await sw.click(); await p.waitForTimeout(800)
 check('pause shows Paused', (await p.locator('.routine').innerText()).includes('Paused'))
@@ -83,29 +87,30 @@ await tab('Chat').click(); await p.waitForTimeout(500)
 await say('REMEMBER my dentist')
 await until(async () => (await main()).includes('DONE memory_store'))
 await tab('Memory').click(); await p.waitForTimeout(1000)
-check('memory listed', (await main()).includes('Dr. Lee in Stellenbosch'))
+check('memory listed', await until(async () => (await main()).includes('Dr. Lee in Stellenbosch')))
 const forgetBtn = p.getByRole('button', { name: /^Forget Dentist$/ }).first()
 check('Forget button there', (await forgetBtn.count()) > 0)
 if (await forgetBtn.count()) { await forgetBtn.click(); await p.waitForTimeout(400); if (await p.locator('.ask-box').count()) await p.locator('.ask-box button.btn-primary, .ask-box button.btn-danger-solid').click(); await p.waitForTimeout(800) }
 check('forgotten memory leaves the list', await until(async () => (await p.getByRole('button', { name: /^Forget Dentist$/ }).count()) === 0, 5000))
 
 // Skills: add one from the library
-await tab('Skills').click(); await p.waitForTimeout(1200)
+// The library loads in seconds on a busy CI runner: wait for it rather than a fixed time.
+await tab('Skills').click()
 const add = p.getByRole('button', { name: /^Add/ }).first()
-check('library Add button', (await add.count()) > 0)
-if (await add.count()) { await add.click(); await p.waitForTimeout(1200) }
-check('skill added', (await main()).match(/Morning briefing|Inbox triage|added/i) !== null)
+check('library Add button', await until(async () => (await add.count()) > 0))
+if (await add.count()) await add.click()
+check('skill added', await until(async () => (await main()).match(/Morning briefing|Inbox triage|added/i) !== null))
 
 // Activity has the runs
 await tab('Activity').click(); await p.waitForTimeout(1200)
-check('activity lists runs', (await p.locator('.run').count()) > 3)
+check('activity lists runs', await until(async () => (await p.locator('.run').count()) > 3))
 
 // Delete the new bot from its page
 await p.locator('.rail-item', { hasText: 'Scout' }).first().click({ button: 'right' }); await p.waitForTimeout(300)
 await p.getByRole('menuitem', { name: 'Settings' }).click(); await p.waitForTimeout(800)
 await p.getByRole('button', { name: 'Delete bot' }).click(); await p.waitForTimeout(200)
 await p.locator('.ask-box').getByRole('button', { name: 'Delete bot' }).click(); await p.waitForTimeout(1200)
-check('bot deleted', (await p.locator('.rail-item', { hasText: 'Scout' }).count()) === 0)
+check('bot deleted', await until(async () => (await p.locator('.rail-item', { hasText: 'Scout' }).count()) === 0))
 
 const settings = async name => { await bot(name).click({ button: 'right' }); await p.waitForTimeout(300); await p.getByRole('menuitem', { name: 'Settings' }).click(); await p.waitForTimeout(800) }
 
@@ -146,7 +151,7 @@ await p.locator('.main input').first().fill('Searcher')
 const save = p.locator('.main').getByRole('button', { name: /^Save/ }).first()
 check('bot page has a Save button', (await save.count()) > 0)
 if (await save.count()) { await save.click(); await p.waitForTimeout(1200) }
-check('rename shows in the sidebar', (await p.locator('.rail-item', { hasText: 'Searcher' }).count()) > 0)
+check('rename shows in the sidebar', await until(async () => (await p.locator('.rail-item', { hasText: 'Searcher' }).count()) > 0))
 
 // "@Name" from a bot's own thread moves to that bot's thread, with the message on its way
 await bot('Ada').click(); await p.waitForTimeout(500)
@@ -160,6 +165,22 @@ for (const t of ['Memory', 'Skills', 'Routines', 'Activity', 'Chat']) {
   if (await tab(t).count()) { await tab(t).click(); await p.waitForTimeout(500) }
   await bot('Searcher').click(); await p.waitForTimeout(500)
 }
+// A chat past the 200 messages the UI loads (issue #7): replies alternate a lookup (no chip) and a saved memory (a chip),
+// so each exchange shifts which reply sits where. Three more exchanges: no page errors, the window still there.
+const db = `${process.env.MIMIR_HOME || '/tmp/flow-home'}/mimir.db`
+const seed = `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 250),
+  c AS (SELECT chat_id, bot_id FROM messages WHERE content LIKE '%hello Ada%' LIMIT 1)`
+execFileSync('sqlite3', [db, `${seed} INSERT INTO tool_calls(run_id, chat_id, tool, summary, decision, ok, result, ts)
+  SELECT 900000 + i, c.chat_id, CASE i % 4 WHEN 0 THEN 'memory_store' ELSE 'memory_search' END, 'Remember "Seed ' || i || '": x', 'allow', 1, 'stored #1', 0 FROM n, c WHERE i % 2 = 0;
+${seed} INSERT INTO messages(chat_id, bot_id, role, content, ts, run_id)
+  SELECT c.chat_id, c.bot_id, CASE i % 2 WHEN 1 THEN 'user' ELSE 'assistant' END, 'seed ' || i, strftime('%s', 'now'), CASE i % 2 WHEN 0 THEN 900000 + i END FROM n, c;`])
+const before = errs.length
+await bot('Ada').click(); await tab('Chat').click(); await p.waitForTimeout(1000)
+const shown = () => p.locator('.main').innerText({ timeout: 2000 }).catch(() => '')
+for (const k of [1, 2, 3]) { await say(`long chat ${k}`).catch(() => {}); await until(async () => (await shown()).includes(`OK: long chat ${k}`), 8000); await p.waitForTimeout(4500) }
+check('a 250-message chat takes 3 more exchanges', (await shown()).includes('OK: long chat 3') && errs.length === before, errs.slice(before).join(' | '))
+
 await p.screenshot({ path: '/tmp/ss/ui-flows-end.png' })
 console.log(errs.length ? errs.join('\n') : 'no page errors')
 console.log(failed ? `${failed} FAILED` : 'ALL PASS'); await b.close()
+process.exitCode = failed || errs.length ? 1 : 0

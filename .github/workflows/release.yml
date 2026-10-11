@@ -1,6 +1,6 @@
 # A version tag (git tag v0.1.0 && git push origin v0.1.0) builds the desktop installers for macOS, Windows and Linux
-# onto a draft GitHub release. Read it over, then publish it by hand. Bump "version" in
-# crates/mimir-desktop/tauri.conf.json first: the tag has to match it.
+# onto a draft GitHub release. Read it over, then publish it by hand. First bump [workspace.package] version in the root
+# Cargo.toml (the tag has to match it) and rename CHANGELOG.md's "Unreleased" to that version: it becomes the notes.
 # Updates: with the TAURI_SIGNING_PRIVATE_KEY (+ _PASSWORD) secrets set, each build also signs its update files and the
 # release gets latest.json, which installed apps read once the release is published (drafts aren't served).
 name: release
@@ -16,14 +16,21 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with: { persist-credentials: false }
-      - name: The tag matches the app's version
+      - name: The tag matches every crate's version
         run: |
-          v=$(python3 -c "import json; print(json.load(open('crates/mimir-desktop/tauri.conf.json'))['version'])")
-          [ "$GITHUB_REF_NAME" = "v$v" ] || { echo "::error::tag $GITHUB_REF_NAME, but tauri.conf.json says $v"; exit 1; }
+          vs=$(cargo metadata --no-deps --format-version 1 | python3 -c "import json,sys; print(' '.join(sorted({p['version'] for p in json.load(sys.stdin)['packages']})))")
+          [ "$GITHUB_REF_NAME" = "v$vs" ] || { echo "::error::tag $GITHUB_REF_NAME, but the crates say $vs"; exit 1; }
+      # The notes: CHANGELOG.md's section for this version, then a line under "---" for downloads (latest.json, which
+      # installed apps show with the update, gets only the part above it). The Mac job adds the notarization sentence,
+      # and only once it has notarized.
       - name: Draft the release
         env: { GH_TOKEN: '${{ github.token }}' }
         run: |
-          gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --draft --verify-tag --title "Mimir $GITHUB_REF_NAME" --notes "Installers for macOS (Apple silicon), Windows and Linux. The Mac app is signed and notarized by Apple. The Windows installer isn't code-signed yet: choose More info, then Run anyway the first time. How to use Mimir: https://heymimir.app/docs/"
+          v=${GITHUB_REF_NAME#v}
+          awk -v h="## $v" '$0 == h || index($0, h " ") == 1 {on=1; next} on && /^## / {exit} on' CHANGELOG.md > notes.md
+          grep -q '[^[:space:]]' notes.md || { echo "::error::CHANGELOG.md has no \"## $v\" section"; exit 1; }
+          printf '\n---\n\nInstallers for macOS (Apple silicon), Windows and Linux. The Windows installer isn'"'"'t code-signed yet: choose More info, then Run anyway the first time. How to use Mimir: https://heymimir.app/docs/\n' >> notes.md
+          gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --draft --verify-tag --title "Mimir $GITHUB_REF_NAME" --notes-file notes.md
 
   installers:
     needs: draft
@@ -43,7 +50,7 @@ jobs:
       - name: Linux libraries (WebKitGTK, tray, keyring, audio, whisper.cpp build, AppImage)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libdbus-1-dev libasound2-dev libclang-dev cmake xdg-utils
-      # Not `npm run tauri`: its POSIX-style variables don't work in Windows' cmd.
+      # TAURI_APP_PATH points `npx tauri` at the app from ui/ (what `npm run tauri` does with a cd).
       - name: Build the app and its installers
         shell: bash
         working-directory: ui
@@ -82,6 +89,7 @@ jobs:
           APPLE_API_KEY: '${{ secrets.APPLE_API_KEY }}'
           APPLE_API_KEY_P8: '${{ secrets.APPLE_API_KEY_P8 }}'
           APPLE_SIGNING_IDENTITY: '${{ secrets.APPLE_SIGNING_IDENTITY }}'
+          GH_TOKEN: '${{ github.token }}'
         run: |
           # (The app inside is signed and notarized already; the image itself needn't be signed to be notarized.)
           [ -n "$APPLE_API_KEY_P8" ] && [ -n "$APPLE_SIGNING_IDENTITY" ] || { echo "No Apple notarization secrets: skipped."; exit 0; }
@@ -91,6 +99,10 @@ jobs:
             xcrun stapler staple "$dmg"
           done
           rm -f "$RUNNER_TEMP/AuthKey.p8"
+          # Only now do the notes say so.
+          gh release view "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --json body -q .body > notes.md
+          sed -i '' 's/^Installers for macOS (Apple silicon), Windows and Linux\./& The Mac app is signed and notarized by Apple./' notes.md
+          gh release edit "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --notes-file notes.md
       - name: Attach them to the draft release
         shell: bash
         env: { GH_TOKEN: '${{ github.token }}' }
@@ -124,7 +136,7 @@ jobs:
           ls sigs/*.sig >/dev/null 2>&1 || { echo "No update signatures (TAURI_SIGNING_PRIVATE_KEY isn't set): no latest.json."; exit 0; }
           gh release view "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --json body -q .body > notes.txt
           python3 - <<'PY'
-          import datetime, glob, json, os
+          import datetime, glob, json, os, re
           tag, repo = os.environ["GITHUB_REF_NAME"], os.environ["GITHUB_REPOSITORY"]
           kinds = [(".app.tar.gz.sig", ["darwin-aarch64-app", "darwin-aarch64"]), ("-setup.exe.sig", ["windows-x86_64-nsis", "windows-x86_64"]),
                    (".msi.sig", ["windows-x86_64-msi"]), (".AppImage.sig", ["linux-x86_64-appimage"]),
@@ -136,7 +148,7 @@ jobs:
                   if name.endswith(suffix):
                       for k in keys:
                           platforms[k] = {"signature": open(f).read().strip(), "url": f"https://github.com/{repo}/releases/download/{tag}/{name[:-4]}"}
-          manifest = {"version": tag.lstrip("v"), "notes": open("notes.txt").read().strip(),
+          manifest = {"version": tag.lstrip("v"), "notes": re.split(r"\r?\n---\r?\n", open("notes.txt").read())[0].strip(),
                       "pub_date": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "platforms": platforms}
           json.dump(manifest, open("latest.json", "w"), indent=1)
           print(json.dumps({k: v["url"] for k, v in platforms.items()}, indent=1))
