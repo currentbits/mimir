@@ -140,6 +140,7 @@ async fn serve(db: Db, home: PathBuf) -> Result<()> {
     if channels.telegram.is_none() && channels.slack.is_none() && channels.discord.is_none() {
         eprintln!("no channel configured (TELEGRAM_BOT_TOKEN / SLACK_BOT_TOKEN+SLACK_APP_TOKEN / DISCORD_BOT_TOKEN); running routines only");
     }
+    db.close_interrupted()?;
     let provider = Arc::new(Provider::from_env(home)?);
     runtime::serve(db, cli_bot(), provider, channels, Default::default()).await
 }

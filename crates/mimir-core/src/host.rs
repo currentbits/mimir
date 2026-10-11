@@ -149,7 +149,7 @@ impl Host {
     pub fn new(db: Db, home: PathBuf, secrets: Arc<dyn SecretStore>, rt: tokio::runtime::Handle, mode: &'static str) -> Self {
         let _ = MODE.set(mode);
         install_secrets(secrets.clone());
-        if let Err(e) = db.incognito_leftovers().and_then(|_| db.prune_old()) {
+        if let Err(e) = db.incognito_leftovers().and_then(|_| db.prune_old()).and_then(|_| db.close_interrupted()) {
             eprintln!("cleanup: {e:#}");
         }
         // Private files a crash left behind (a run's instructions), and photos and files older than 60 days.
