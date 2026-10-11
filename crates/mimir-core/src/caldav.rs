@@ -26,7 +26,7 @@ pub fn guess(email_host: &str) -> &'static str {
 
 /// The password: its own, or the email app password when it's the same login (iCloud and Fastmail share them).
 pub(crate) fn password(db: &crate::db::Db, user: &str) -> Option<String> {
-    crate::host::secret_get(SECRET).filter(|p| !p.is_empty()).or_else(|| crate::email::account(db).filter(|a| a.user.eq_ignore_ascii_case(user)).map(|a| a.pass().to_string()))
+    crate::host::secret_get(SECRET).filter(|p| !p.is_empty()).or_else(|| crate::email::accounts(db).into_iter().find(|a| a.user.eq_ignore_ascii_case(user) && a.oauth.is_none()).map(|a| a.pass().to_string()))
 }
 
 pub fn account(db: &crate::db::Db) -> Option<Cal> {

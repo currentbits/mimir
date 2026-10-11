@@ -1,7 +1,9 @@
 //! External MCP tool servers (e.g. the Playwright browser), proxied through our policy gate,
 //! plus the credential vault. External tools are named `<server>__<tool>`; their lists are cached
 //! in settings so building a prompt never starts a browser. A server process lives for one turn.
-//! Remote servers (a URL) speak MCP's Streamable HTTP: POST each message, read JSON or SSE back.
+//! Remote servers (a URL) speak MCP's Streamable HTTP: POST each message, read JSON or SSE back. One that wants a
+//! sign-in gets MCP's OAuth (sign_in below): Mimir finds its authorization server, registers itself there and signs in
+//! with PKCE; the tokens live in the secret store under `oauth:mcp:<server>` (see oauth.rs).
 //!
 //! Vault: the model only ever writes a secret's NAME (e.g. GITHUB_PASSWORD); Playwright's
 //! `--secrets` swaps in the value inside the browser and redacts it from responses. Our gate adds
@@ -183,8 +185,139 @@ pub fn delete_server(db: &Db, name: &str) -> Result<()> {
             map.keys().try_for_each(|k| crate::host::secret_set(&secret_name(kind, name, k), ""))?;
         }
     }
+    crate::oauth::sign_out(&oauth_key(name))?;
     list.retain(|s| s.name != name);
     set_servers(db, &list)
+}
+
+// ---------------- signing in to a remote server (MCP authorization, 2025-06-18) ----------------
+
+fn oauth_key(server: &str) -> String {
+    format!("oauth:mcp:{server}")
+}
+
+/// Signed in to this server (it may have ended since; the next use says so).
+pub fn signed_in(server: &str) -> bool {
+    crate::oauth::load(&oauth_key(server)).is_some()
+}
+
+/// The server a sign-in in progress is for: saved once the sign-in is done.
+static SIGNING_IN: std::sync::Mutex<Option<ServerConf>> = std::sync::Mutex::new(None);
+
+/// https, or plain http to this computer only (a server of your own, a test).
+fn secure(url: &str) -> bool {
+    url.starts_with("https://") || ["http://localhost", "http://127.0.0.1", "http://[::1]"].iter().any(|p| url.starts_with(p))
+}
+
+async fn get_json(http: &reqwest::Client, url: &str) -> Option<Value> {
+    if !secure(url) {
+        return None;
+    }
+    let r = http.get(url).header("Accept", "application/json").send().await.ok()?;
+    if !r.status().is_success() {
+        return None;
+    }
+    r.json().await.ok()
+}
+
+/// Where the metadata for `base` lives under a well-known name: `https://h/.well-known/<name><path>` (RFC 8414, 9728).
+fn well_known(base: &url::Url, name: &str) -> String {
+    let path = base.path().trim_end_matches('/');
+    format!("{}/.well-known/{name}{path}", base.origin().ascii_serialization())
+}
+
+/// Begin signing in to a remote server (one that answered 401): find its authorization server from the server's
+/// metadata, register Mimir as an app there (dynamic client registration), and return the address to open.
+/// `listen`: the browser comes back to this computer (desktop); else the person pastes the address (a server).
+pub async fn sign_in(conf: ServerConf, listen: bool) -> Result<String> {
+    validate(&conf)?;
+    if conf.url.is_empty() {
+        bail!("only a server with a URL signs in");
+    }
+    let http = reqwest::Client::builder().timeout(Duration::from_secs(20)).build()?;
+    let server = url::Url::parse(&conf.url)?;
+    // The server's 401 says where its metadata is; else the well-known places (path first, then the root).
+    let probe = http
+        .post(&conf.url)
+        .header("Accept", "application/json, text/event-stream")
+        .header("Content-Type", "application/json")
+        .body(json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": PROTOCOL, "capabilities": {}, "clientInfo": {"name": "mimir", "version": env!("CARGO_PKG_VERSION")}}}).to_string())
+        .send()
+        .await
+        .with_context(|| format!("couldn't reach {}", conf.url))?;
+    let hinted = probe.headers().get_all(reqwest::header::WWW_AUTHENTICATE).iter().filter_map(|v| v.to_str().ok()).find_map(resource_metadata);
+    let mut places: Vec<String> = hinted.into_iter().collect();
+    places.push(well_known(&server, "oauth-protected-resource"));
+    places.push(format!("{}/.well-known/oauth-protected-resource", server.origin().ascii_serialization()));
+    let mut prm = None;
+    for p in places {
+        if let Some(v) = get_json(&http, &p).await.filter(|v| v["authorization_servers"].is_array()) {
+            prm = Some(v);
+            break;
+        }
+    }
+    // An older server (spec 2025-03-26) is its own authorization server.
+    let issuer = prm.as_ref().and_then(|v| v["authorization_servers"][0].as_str().map(String::from)).unwrap_or_else(|| server.origin().ascii_serialization());
+    let issuer = url::Url::parse(&issuer).context("the server names an authorization server that isn't a URL")?;
+    let root = issuer.origin().ascii_serialization();
+    let path = issuer.path().trim_end_matches('/');
+    let mut meta = None;
+    for p in [well_known(&issuer, "oauth-authorization-server"), well_known(&issuer, "openid-configuration"), format!("{root}{path}/.well-known/openid-configuration")] {
+        if let Some(v) = get_json(&http, &p).await.filter(|v| v["authorization_endpoint"].is_string() && v["token_endpoint"].is_string()) {
+            meta = Some(v);
+            break;
+        }
+    }
+    let meta = meta.with_context(|| format!("{} wants a sign-in, but doesn't say where (no OAuth metadata); give it a token in a header instead", conf.name))?;
+    let (authorize, token) = (meta["authorization_endpoint"].as_str().unwrap_or(""), meta["token_endpoint"].as_str().unwrap_or("").to_string());
+    if !secure(authorize) || !secure(&token) {
+        bail!("{}'s sign-in addresses must start with https://", conf.name);
+    }
+    if meta["code_challenge_methods_supported"].as_array().is_some_and(|m| !m.iter().any(|x| x == "S256")) {
+        bail!("{}'s sign-in doesn't support PKCE (S256), which Mimir needs", conf.name);
+    }
+    let register = meta["registration_endpoint"].as_str().filter(|r| secure(r)).with_context(|| {
+        format!("{} doesn't let apps register themselves for a sign-in; make a token in its settings and add it as a header (Authorization: Bearer …)", conf.name)
+    })?;
+    let redirect = crate::oauth::redirect(listen, "127.0.0.1", "/callback").await?;
+    let reg: Value = http
+        .post(register)
+        .json(&json!({"client_name": "Mimir", "redirect_uris": [redirect.uri], "grant_types": ["authorization_code", "refresh_token"], "response_types": ["code"], "token_endpoint_auth_method": "none"}))
+        .send()
+        .await?
+        .error_for_status()
+        .with_context(|| format!("{} didn't let Mimir register for a sign-in", conf.name))?
+        .json()
+        .await?;
+    let client_id = reg["client_id"].as_str().context("the registration gave no client id")?.to_string();
+    let scope = prm.as_ref().and_then(|v| v["scopes_supported"].as_array()).map(|a| a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" ")).filter(|s| !s.is_empty());
+    let resource = prm.as_ref().and_then(|v| v["resource"].as_str().map(String::from)).unwrap_or_else(|| conf.url.clone());
+    // A token is only ever asked for this server: metadata naming another site is refused (RFC 9728, 3.3).
+    if url::Url::parse(&resource).map(|r| r.origin()) != Ok(server.origin()) {
+        bail!("{}'s sign-in metadata is for {resource}, not this server", conf.name);
+    }
+    let saved = crate::oauth::Saved { token_url: token, client_id, client_secret: reg["client_secret"].as_str().map(String::from), scope, resource: Some(resource), refresh: String::new() };
+    let url = crate::oauth::begin(&oauth_key(&conf.name), &conf.name, authorize, saved, redirect, &[])?;
+    *SIGNING_IN.lock().unwrap() = Some(conf);
+    Ok(url)
+}
+
+/// `resource_metadata="…"` from a WWW-Authenticate header.
+fn resource_metadata(h: &str) -> Option<String> {
+    let i = h.find("resource_metadata=")? + "resource_metadata=".len();
+    let rest = h[i..].trim_start_matches('"');
+    Some(rest.split(['"', ',']).next()?.trim().to_string()).filter(|s| !s.is_empty())
+}
+
+/// The sign-in to a tool server is in progress (not another kind).
+pub fn signing_in() -> bool {
+    crate::oauth::pending_key().is_some_and(|k| k.starts_with("oauth:mcp:"))
+}
+
+/// After the sign-in: save the server (listing its tools with the new token). Returns its tool count.
+pub async fn signed_in_save(db: &Db) -> Result<usize> {
+    let conf = SIGNING_IN.lock().unwrap().take().context("no tool server sign-in in progress")?;
+    save_server(db, conf).await
 }
 
 pub fn cached_tools(db: &Db, server: &str) -> Vec<ExtTool> {
@@ -311,6 +444,8 @@ struct Http {
     headers: Vec<(String, String)>,
     session: Option<String>,
     version: Option<String>,
+    /// Signed in (oauth.rs): the key its tokens live under, and the server's name for messages.
+    oauth: Option<(String, String)>,
 }
 
 impl Client {
@@ -321,7 +456,10 @@ impl Client {
             tokio::task::spawn_blocking(move || spawn(&conf, &db, bot)).await??
         } else {
             let headers = values_of(&conf.name, "header", &conf.headers);
-            (Io::Http(Http { client: reqwest::Client::builder().timeout(TIMEOUT).build()?, url: conf.url.clone(), headers, session: None, version: None }), None)
+            // A token typed in as a header wins over a sign-in.
+            let key = oauth_key(&conf.name);
+            let oauth = (signed_in(&conf.name) && !headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("authorization"))).then(|| (key, conf.name.clone()));
+            (Io::Http(Http { client: reqwest::Client::builder().timeout(TIMEOUT).build()?, url: conf.url.clone(), headers, session: None, version: None, oauth }), None)
         };
         let mut c = Client { io, next: 0 };
         let init = c.request("initialize", json!({"protocolVersion": PROTOCOL, "capabilities": {}, "clientInfo": {"name": "mimir", "version": env!("CARGO_PKG_VERSION")}})).await;
@@ -458,24 +596,42 @@ fn sse_events(buf: &mut Vec<u8>) -> Vec<String> {
 impl Http {
     /// POST one message. Keeps the session id the server hands out on initialize.
     async fn post(&mut self, msg: &Value) -> Result<reqwest::Response> {
-        let mut req = self.client.post(&self.url).header("Accept", "application/json, text/event-stream").header("Content-Type", "application/json").body(msg.to_string());
-        for (k, v) in &self.headers {
-            req = req.header(k, v);
-        }
-        if let Some(s) = &self.session {
-            req = req.header("Mcp-Session-Id", s);
-        }
-        if let Some(v) = &self.version {
-            req = req.header("MCP-Protocol-Version", v);
-        }
-        let res = req.send().await.with_context(|| format!("couldn't reach {}", self.url))?;
+        let mut retried = false;
+        let res = loop {
+            let mut req = self.client.post(&self.url).header("Accept", "application/json, text/event-stream").header("Content-Type", "application/json").body(msg.to_string());
+            for (k, v) in &self.headers {
+                req = req.header(k, v);
+            }
+            if let Some((key, name)) = &self.oauth {
+                req = req.bearer_auth(crate::oauth::access_token(key, name).await?);
+            }
+            if let Some(s) = &self.session {
+                req = req.header("Mcp-Session-Id", s);
+            }
+            if let Some(v) = &self.version {
+                req = req.header("MCP-Protocol-Version", v);
+            }
+            let res = req.send().await.with_context(|| format!("couldn't reach {}", self.url))?;
+            // The access token was refused before it ran out (revoked, rotated): refresh once and try again.
+            if res.status() == reqwest::StatusCode::UNAUTHORIZED
+                && !retried
+                && let Some((key, _)) = &self.oauth
+            {
+                crate::oauth::forget_access(key);
+                retried = true;
+                continue;
+            }
+            break res;
+        };
         if let Some(s) = res.headers().get("mcp-session-id").and_then(|v| v.to_str().ok()) {
             self.session = Some(s.into());
         }
-        // ponytail: no OAuth; servers that need a login take a token header (Authorization: Bearer …).
         match res.status() {
             s if s.is_success() => Ok(res),
-            s @ (reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN) => bail!("{} refused the request ({s}); it needs a token, e.g. an Authorization header", self.url),
+            s @ reqwest::StatusCode::UNAUTHORIZED if self.oauth.is_some() => bail!("{} refused the sign-in ({s}); sign in again in Settings → Tool servers", self.url),
+            // The UI offers Sign in on "wants you to sign in".
+            s @ reqwest::StatusCode::UNAUTHORIZED => bail!("{} wants you to sign in ({s}), or a token in a header (Authorization: Bearer …)", self.url),
+            s @ reqwest::StatusCode::FORBIDDEN => bail!("{} refused the request ({s}); the token or sign-in doesn't allow it", self.url),
             s => bail!("{} answered {s}: {}", self.url, crate::tools::truncate(&res.text().await.unwrap_or_default(), 300)),
         }
     }
@@ -653,6 +809,49 @@ mod tests {
         let res = c.request("tools/call", json!({"name": tool, "arguments": {"repoName": "modelcontextprotocol/modelcontextprotocol"}})).await.unwrap();
         assert_ne!(res["isError"], true, "{res}");
         println!("{n} tools; {tool} → {}", crate::tools::truncate(&res.to_string(), 200));
+    }
+
+    #[test]
+    fn sign_in_discovery_addresses() {
+        let h = r#"Bearer error="invalid_token", resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource/mcp""#;
+        assert_eq!(resource_metadata(h).as_deref(), Some("https://mcp.example.com/.well-known/oauth-protected-resource/mcp"));
+        assert_eq!(resource_metadata("Bearer realm=x"), None);
+        let u = url::Url::parse("https://mcp.example.com/mcp/").unwrap();
+        assert_eq!(well_known(&u, "oauth-protected-resource"), "https://mcp.example.com/.well-known/oauth-protected-resource/mcp");
+        let root = url::Url::parse("https://auth.example.com").unwrap();
+        assert_eq!(well_known(&root, "oauth-authorization-server"), "https://auth.example.com/.well-known/oauth-authorization-server");
+        assert!(secure("https://a.example") && secure("http://127.0.0.1:9/x") && !secure("http://evil.example"));
+    }
+
+    /// Against scripts/fake-mcp-oauth.py: the whole sign-in (metadata, registration, PKCE, token) then a tool list
+    /// with the token, a refresh when it runs out, and a 401 retry. `python3 scripts/fake-mcp-oauth.py` then
+    /// `cargo test -p mimir-core fake_mcp_oauth -- --ignored`.
+    #[tokio::test]
+    #[ignore]
+    async fn fake_mcp_oauth() {
+        let _one = crate::oauth::SERIAL.lock().await;
+        let p = std::env::temp_dir().join(format!("mimir-mcp-oauth-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = Db::open(&p).unwrap();
+        crate::host::install_secrets(std::sync::Arc::new(crate::host::DbSecrets(db.clone())));
+        let conf = ServerConf { name: "fake".into(), url: "http://127.0.0.1:8977/mcp".into(), ..Default::default() };
+        let err = format!("{:#}", save_server(&db, conf.clone()).await.unwrap_err());
+        assert!(err.contains("wants you to sign in"), "{err}");
+        let url = sign_in(conf, true).await.unwrap();
+        assert!(signing_in());
+        // The fake authorization page approves at once and sends the browser back.
+        let page = reqwest::get(&url).await.unwrap().text().await.unwrap();
+        assert!(page.contains("Signed in to fake"), "{page}");
+        crate::oauth::finish().await.unwrap();
+        assert_eq!(signed_in_save(&db).await.unwrap(), 1);
+        assert!(signed_in("fake"));
+        // Tokens last 2 s on the fake: after 3 the next call refreshes first. Then the fake revokes it: 401, one retry.
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        assert_eq!(refresh(&db, &servers(&db)[0]).await.unwrap(), 1);
+        reqwest::Client::new().post("http://127.0.0.1:8977/revoke").send().await.unwrap();
+        assert_eq!(refresh(&db, &servers(&db)[0]).await.unwrap(), 1, "refused token: refreshed and retried");
+        delete_server(&db, "fake").unwrap();
+        assert!(!signed_in("fake"));
     }
 
     #[test]
