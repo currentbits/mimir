@@ -2,15 +2,74 @@
 
 What changed for people using Mimir. The newest release is at the top; "Unreleased" is what the next one brings.
 
-## Unreleased
+## 0.2.0
 
+### Talking to your bots
+- **Change course mid-reply:** send "actually, only this week" while a bot is still answering and the reply in progress
+  takes it in, instead of waiting until it's done. The chat shows *Changing course…* until the new answer starts.
+- **Tap instead of type:** in Telegram, Slack and Discord a bot can ask with 2 to 4 buttons (plus **Something else**),
+  and routine and reminder results have one-tap feedback buttons.
+- **Bots send files and screenshots back:** a file from the chat's workspace, or a screenshot of its computer's screen
+  after a booking or a filled-in form, comes with the reply.
+- **Receipts under replies:** in a messaging chat, each thing that really happened gets a line ("Sent an email to …",
+  "Reminder set for …") and the pages and searches it used. A reply that says it sent or booked something it didn't
+  gets a note: *Not done in this reply*.
+- **What a reply used:** under each reply in the app, "2 memories · 1 skill · read 3 pages". Open it to edit or forget
+  a memory that steered it wrong. In a messaging app, `/why` lists the same.
+- **A busy bot doesn't leave other chats in silence:** it shows it's typing everywhere at once and works on each chat
+  in turn.
+- **A fresh start after a quiet spell:** a Telegram, Slack or Discord chat that's been quiet for 12 hours starts a new
+  session, opening with where you left off.
+- **Telegram topics:** turn on *Each topic is its own conversation* on a bot's page, and every topic in your private
+  chat with it gets its own conversation.
+- **Slack threads say which message:** a reply in a thread reaches the bot with the message that started it.
+- **Mimir in Dutch:** Settings → Language. Pairing, approval cards, errors, the digest and the Telegram menu follow it.
+  Bots already answered in your language.
+- **Chats show earlier messages, and you can search them.**
+- **On a phone:** a tab bar at the bottom (Chats, Needs you, Memory, Routines) with the sidebar as the Chats screen.
+  Before, the web UI on a phone had no way to get to your bots.
 - **Push-to-talk:** in the chat or quick ask, hold ⌥ (Ctrl on Windows and Linux) and speak; let go and the words are
   in the box, not sent. Transcribed on your computer by the same whisper.cpp as meetings.
 - **Voice notes without an API key:** with no OpenAI key, Telegram and Discord voice notes are transcribed by
   whisper.cpp on your computer.
 - **Word and Excel files and scanned PDFs:** send a `.docx` or `.xlsx` and the bot reads it (Excel sheet by sheet).
   A scanned PDF's pages go to the bot as photos, so a scanned contract or letter no longer needs photographing.
-- **A starter team in the first minutes:** the first run asks what you want off your plate (tap up to three), and your
+
+### Memory
+- **Memories for one bot only:** "just for you: …", or switch a memory between *all bots* and *only <bot>* on its card.
+- **The Household:** shared memories and lists (shopping, plans, who does what) your bots read and add to, and family
+  group chats that use them.
+- **Pinned cards:** a bot keeps a card at the top of a chat up to date, like a shopping list or bills due. "Add oat milk
+  to my shopping list" rewrites the card instead of sending a message.
+
+### Routines
+- **Started by email or a webhook:** a routine's schedule can be `mail:from:acme.com subject:invoice`, so it runs when
+  matching mail arrives (mail that doesn't match costs no AI), or `webhook` on your server (GitHub-compatible
+  signatures). "Tell me when the invoice from Acme comes in" sets one up.
+- **Timed off your calendar:** `calendar:60` runs an hour before each event; `calendar:60:meetings` only when someone
+  else is invited, `calendar:60:outside` only when someone from outside is. "Brief me on who they are before each
+  outside meeting" now works.
+- **Urgent results come through right away, on your rule:** a routine that waits for the digest or quiet hours can carry
+  one line, "Come through right away if my flight is delayed". At most 3 a day.
+- **Approvals on your phone:** Settings → Decisions sends every routine approval to one private chat as well, so one
+  from the app chat doesn't wait until you open the app.
+- **A fallback account at the usage limit:** on a bot's page, under *When it hits a usage limit*, routines move to
+  another account while the bot's own is at its limit, and come back when it resets.
+- **Pause:** all bots (next to **Bots** in the sidebar) or one (its right-click menu), until you resume, for an hour,
+  until tomorrow or until Monday. Nothing runs on its own meanwhile; you can still ask them directly.
+
+### Email, tools and your server
+- **Tasks by email:** forward or CC mail to `you+mimir@…`, or file it in a **Mimir** folder, and your note on top is
+  the task.
+- **More than one mailbox, and Outlook** (with your own Microsoft sign-in).
+- **Tool servers that need a sign-in:** hosted MCP servers such as Notion and Linear sign in from Settings.
+- **A chat API:** `mimir server` answers OpenAI-style `/v1/chat/completions` for Shortcuts, Home Assistant and the like,
+  with a token per client that reaches one bot (Settings → Chat API).
+- **Backups you can restore:** Mimir checks its database every day and keeps 7 daily and 4 weekly copies. Settings →
+  Your data → **Restore a backup…**; damage shows in Needs you.
+
+### First run
+- **A starter team in the first minutes:** in the first minutes:** the first run asks what you want off your plate (tap up to three), and your
   first bot suggests bots, routines and library skills for them on one card. Untick what you don't want, and the rest
   is set up when you start.
 - **Get to know me** (Settings, once email or the calendar link is connected): one read-only look at who wrote to you
@@ -20,6 +79,17 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
   The chat shows a button to that setting and a **Try again** for afterwards.
 - **Email providers that send on port 587 work:** Settings → Email has an *Outgoing port* next to the outgoing server.
   Empty is 465 as before; 587 (or any other port) uses STARTTLS. Saving used to set it back to 465 every time.
+
+### Faster and steadier
+- **Faster replies:** the tools process starts in about 25 ms instead of 1.3 s, and the app launches faster.
+- **The app asks less:** it polls only the view you're looking at, one request at a time, and not at all while hidden.
+  The web UI is compressed and cached.
+- **A crash in one routine fails that run, not the whole bot,** and a bot that crashes starts again by itself.
+- **A chat past 200 messages no longer goes blank.**
+- A database from a newer Mimir is refused with a clear message instead of being half-upgraded.
+- The quick-ask panel sees bots added, renamed or deleted since it opened, and its bot can't be changed mid-answer.
+- Guest/Yours on a chat and "Open in Mimir" say so when they fail; a second "are you sure?" no longer leaves the first
+  one hanging.
 
 ## 0.1.5
 
@@ -51,9 +121,6 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
   - A slow Save no longer pulls you back to the bot you left.
   - Deleting the bot you were chatting with no longer leaves its chat behind.
   - Delete, Dismiss, Run now and a few switches now say so when they fail.
-  - The quick-ask panel sees bots added, renamed or deleted since it opened, and its bot can't be changed mid-answer.
-  - Guest/Yours on a chat and "Open in Mimir" say so when they fail; a second "are you sure?" no longer leaves the first
-    one hanging.
 
 - **Quiet checks that cost almost nothing:** a quiet check can watch a page, a feed or your inbox. Mimir looks first and
   runs the AI only when something changed, with just what changed. Unchanged checks show as free. Times, counters
