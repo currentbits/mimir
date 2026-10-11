@@ -114,6 +114,19 @@ You can reply to what a routine sent ("skip the crypto stuff"), and the same goe
 A new routine's first three results end by asking "Anything here you didn't need, or something missing?": reply, and
 the bot rewrites the routine's brief to match (`routine_update`), keeping what you didn't ask to change. You can ask
 for changes any time after that too ("move the news to 9", "make it shorter").
+
+In Telegram, Slack and Discord a result also comes with buttons, so you can tap instead of typing. Mimir handles taps
+itself, with no AI turn:
+
+- **A one-off** (a reminder): **Done**, **Snooze 1h** (it comes again in an hour) or **Tomorrow** (same time
+  tomorrow).
+- **A routine**: **👍**, **👎**, **Less like this**, **Pause** (pauses the routine), **For tomorrow…** (asks what to
+  change; your reply goes to the bot like any other reply).
+
+👍, 👎 and Less like this never edit the routine. They are evidence for the memory tidy-up, which proposes changes for
+you to accept, the same as when you correct a reply ([Memory](memory.md)). Each message's buttons work once, and in a
+group only the person who paired the chat can press them. Results that go into the digest, and failures, have no
+buttons.
 A routine runs in its own session, so on Claude, Codex and Grok the bot's next turn gets that last message with your
 reply. If the routine had read a web page, that turn counts as having read it too; so does a reply to the digest or the
 weekly review, which are put together from routine results and learned memories.
