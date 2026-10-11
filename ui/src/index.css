@@ -681,9 +681,29 @@ kbd, .keys { font: 500 11.5px var(--sans); color: var(--text-2); padding: 3px 7p
 .quick-q { margin: 0 0 8px; font-size: 12.5px; color: var(--text-3); }
 .quick-foot { display: flex; align-items: center; justify-content: space-between; margin: 12px 0 0 -8px; font-size: 11px; color: var(--text-3); }
 
+.tabbar { display: none; }
 @media (max-width: 760px) {
-  .app { grid-template-columns: 1fr; }
-  .rail { display: none; }
+  /* Phone: one screen at a time (the sidebar is the Chats tab's screen), a tab bar to move between them. */
+  .app { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr) auto; }
+  .rail, .app.list .main { display: none; }
+  .app.list .rail { display: flex; border-right: 0; }
+  .rail-top { height: max(14px, env(safe-area-inset-top)); }
+  /* The section switcher gets its own row (it scrolls sideways) so the chat's name still fits. */
+  .toolbar { height: auto; min-height: 52px; flex-wrap: wrap; row-gap: 8px; padding: max(8px, env(safe-area-inset-top)) 16px 8px; }
+  .toolbar .segmented { flex: 1 0 100%; overflow-x: auto; scrollbar-width: none; }
+  .rail-item { min-height: 48px; padding: 8px 10px; }
+  .rail-label button { width: 36px; height: 36px; }
+  .tabbar {
+    display: grid; grid-template-columns: repeat(4, 1fr);
+    padding-bottom: env(safe-area-inset-bottom);
+    border-top: 0.5px solid var(--line-strong); background: var(--rail);
+  }
+  .tabbar button {
+    position: relative; min-height: 56px; display: grid; justify-items: center; align-content: center; gap: 3px;
+    border: 0; background: none; color: var(--text-3); font-size: 11px; font-weight: 500;
+  }
+  .tabbar button.on { color: var(--text); }
+  .tabbar .badge { position: absolute; top: 6px; left: calc(50% + 8px); }
   .presets, .stats, .provider-cards, .tool-grid { grid-template-columns: 1fr; }
   .tool-grid .row:nth-child(odd) { border-right: 0; }
   .runrow { grid-template-columns: 8px 1fr 70px 14px; }
