@@ -50,7 +50,15 @@ For contributors: how the pieces fit together.
 Both run the same `Host`. The desktop calls it in-process through one Tauri command (`api`); the server exposes it as
 `POST /api/<cmd>` with a bearer token. The UI's `invoke()` goes to whichever is active, so the same React app is the
 desktop UI and the web UI. A few commands are handled by the desktop itself, before the host, because they belong to
-this computer: `meeting` (recording, the meetings list), `keep_awake`, `quick_shortcut`, `selftest`.
+this computer (`api` in `mimir-desktop/src/main.rs`):
+- `meeting`: recording, the meetings list, the microphone and calendar settings;
+- `keep_awake`, `open_at_login`, `quick_shortcut`, `show_main`;
+- `copy_text`, `save_download`, `open_url`: what the webview can't do itself (clipboard after a wait, downloads, links
+  in the browser);
+- `remote_token`: the admin token of the server the app is connected to, kept in the keychain;
+- `local_bots`: runs this computer's bots, or stops them while the app shows a server;
+- `update_status`, `update_check`, `update_install`, `update_auto`;
+- `selftest`, `selftest_report`: the launch test (`MIMIR_SELFTEST=1`).
 
 ## Meetings
 
@@ -187,6 +195,10 @@ Test hooks and opt-in tests:
   prints what was saved. With PulseAudio null sinks in a container, this tests the whole meeting pipeline on Linux.
 - `MIMIR_WHISPER_DEBUG=1`: prints voice-activity stretches and chunk timings.
 - `scripts/mock-telegram.py`: a fake Telegram Bot API; set `MIMIR_TELEGRAM_API` to it.
+- `scripts/fake-mail.py`: a fake IMAP (port 1143) and SMTP (port 1025) server, any login accepted, with a planted
+  instruction in one message for outside-content tests. Point a bot's email at `127.0.0.1`.
+- `scripts/e2e-busy-chat.py <dir>`: a Telegram message to a busy bot gets an answer, not silence. Starts its own
+  `mock-telegram.py` and `fake-ai.py`; wants a `mimir` binary in `<dir>`.
 - `scripts/learning-eval.py <mimir binary> [model] [--control] [--web]`: does learning work end to end? A simulated
   person with three hidden preferences talks to a real bot for three "days", correcting it; the tidy-up runs between
   days. Prints how many replies broke a preference each day (with learning it should drop to about zero by day 2).
