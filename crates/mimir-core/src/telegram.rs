@@ -53,6 +53,19 @@ impl Tg {
         Ok(v["result"].clone())
     }
 
+    /// A file the bot sends: a photo (shown inline) or a document.
+    pub(crate) async fn upload(&self, chat: &str, name: &str, bytes: Vec<u8>) -> Result<()> {
+        let (method, field) = if crate::is_photo(name) { ("sendPhoto", "photo") } else { ("sendDocument", "document") };
+        let form = reqwest::multipart::Form::new().text("chat_id", chat.to_string()).part(field, reqwest::multipart::Part::bytes(bytes).file_name(name.to_string()));
+        let v: Value = self.http.post(format!("{}/{method}", self.base)).multipart(form).send().await.map_err(|e| e.without_url())?.json().await.map_err(|e| e.without_url())?;
+        if v["ok"].as_bool() != Some(true) {
+            bail!("telegram {method}: {}", v["description"]);
+        }
+        Ok(())
+    }
+
+    /// Markdown → Telegram HTML, split between blocks under the 4096-char cap. If Telegram
+    /// rejects the markup, that piece goes out as plain text instead of being lost.
     /// Markdown → Telegram HTML, split between blocks under the 4096-char cap. If Telegram rejects the markup, that piece
     /// goes out as plain text instead of being lost. Buttons go under the last part. With a streamed draft, the draft is replaced by the first part.
     pub(crate) async fn finish(&self, chat: &str, draft: Option<&str>, text: &str, rows: &[Row]) -> Result<()> {

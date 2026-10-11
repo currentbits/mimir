@@ -138,6 +138,14 @@ Each routine is sent:
 
 Every run's reply is kept in **Activity**.
 
+**Come through right away if…** A routine that would wait (in the digest, just logged, or in quiet hours) can have
+one line of your own, like "my flight is delayed or cancelled". The AI is told your rule and starts its reply with
+URGENT only when it holds; that result is then sent right away, starting with "🔔 Came through because: my flight is
+delayed or cancelled", instead of waiting. At most 3 results a day come through this way, all bots together; past
+that, the result waits as usual and says it matched. You set the rule in the Routines tab (Edit); a bot can't set or
+change it, so nothing it reads on a web page can widen it. A page can still try to make the AI think your rule holds,
+which is what the daily cap is for. Rehearsals and **Run now** don't use it.
+
 You can reply to what a routine sent ("skip the crypto stuff"), and the same goes for the digest and the weekly review.
 A new routine's first three results end by asking "Anything here you didn't need, or something missing?": reply, and
 the bot rewrites the routine's brief to match (`routine_update`), keeping what you didn't ask to change. You can ask
@@ -163,7 +171,8 @@ weekly review, which are put together from routine results and learned memories.
 
 Set quiet hours under Settings → Daily digest (e.g. 22:00–07:00). They hold everything proactive: routines that would
 message right away go into the digest, the digest and the weekly review wait until quiet hours end, and approval cards
-from routines wait until morning. Replies to your own messages still come.
+from routines wait until morning. Replies to your own messages still come, and so does a result that matches its
+routine's "come through right away if" rule (above).
 
 ## Needs you
 

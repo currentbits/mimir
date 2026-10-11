@@ -317,6 +317,16 @@ pub fn specs() -> Vec<(&'static str, &'static str, Value)> {
             json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}),
         ),
         (
+            "send_file",
+            "Send a file to this chat with your reply, as the proof of work: a file from the workspace (path), or a \
+             screenshot of your computer's screen as it is now (screenshot=true; after a booking or a form, say). It \
+             arrives after your reply as a photo or document. Up to 5 per reply.",
+            json!({"type":"object","properties":{
+                "path":{"type":"string","description":"a workspace file, like notes/trip.md"},
+                "screenshot":{"type":"boolean","description":"send your computer's screen instead"}
+            }}),
+        ),
+        (
             "memory_forget",
             "Invalidate a memory by id (when the user asks to forget it or it is wrong and has no replacement).",
             json!({"type":"object","properties":{"id":{"type":"integer"}},"required":["id"]}),
@@ -509,9 +519,9 @@ fn is_read_only(db: &Db, tool: &str) -> bool {
 /// What a bot may do in a guest's chat: their own memory, routines, files and skills, the web, and calendar links.
 /// Nothing of yours (email, calendar, meetings, saved logins and the browser, tool servers, the computer), and no new
 /// bots in your app.
-const GUEST_TOOLS: [&str; 20] = [
+const GUEST_TOOLS: [&str; 21] = [
     "memory_store", "memory_search", "memory_forget", "chat_search", "routine_create", "routine_update", "routine_list", "routine_delete", "web_fetch", "web_search",
-    "file_list", "file_read", "file_write", "file_delete", "skill_view", "skill_save", "calendar_add", "plan_propose", "ask_bot", "ask_choice",
+    "file_list", "file_read", "file_write", "file_delete", "skill_view", "skill_save", "calendar_add", "plan_propose", "ask_bot", "ask_choice", "send_file",
 ];
 
 fn usable(ctx: &ToolCtx, tool: &str) -> bool {
@@ -522,6 +532,9 @@ fn usable(ctx: &ToolCtx, tool: &str) -> bool {
         && (!tool.starts_with("computer_") || (crate::computer::usable(&ctx.db) && !ctx.incognito()))
         && (!ctx.read_only || is_read_only(&ctx.db, tool))
         && (tool != "ask_bot" || ctx.depth == 0)
+        // A file goes with the reply to the person: not from a task handed over by another bot, nor incognito (it's kept
+        // on disk to show in the chat).
+        && (tool != "send_file" || (ctx.depth == 0 && !ctx.incognito()))
         // Bots are made only in a conversation with the person (not by a bot working on another's task, nor incognito,
         // where nothing it makes may last).
         && (tool != "bot_create" || (ctx.depth == 0 && !ctx.incognito()))
@@ -694,8 +707,8 @@ fn gate(db: &Db, tool: &str, site: Option<&str>, tainted: bool) -> Result<(Strin
     // The browser's and the computer's own actions read pages by nature: they're gated per site, not guarded.
     let browser = crate::ext::split(tool).is_some_and(|(s, _)| s == crate::ext::BROWSER) || tool.starts_with("computer_");
     // plan_propose only ever asks (and refuses on its own after outside content), so asking first would be a double ask.
-    // ask_choice only shows the person buttons; what they tap is theirs to pick.
-    Ok(if action == "allow" && tainted && !is_read_only(db, tool) && !browser && !matches!(tool, "plan_propose" | "skill_save" | "ask_choice") { ("ask".into(), "guarded") } else { (action, "rule") })
+    // ask_choice only shows the person buttons; what they tap is theirs to pick. send_file goes to them, like the reply.
+    Ok(if action == "allow" && tainted && !is_read_only(db, tool) && !browser && !matches!(tool, "plan_propose" | "skill_save" | "ask_choice" | "send_file") { ("ask".into(), "guarded") } else { (action, "rule") })
 }
 
 /// After outside content, a few calls that only look like reading can carry your data out; those ask:
@@ -830,6 +843,10 @@ fn describe(ctx: &ToolCtx, name: &str, args: &Value) -> String {
         "file_read" => format!("Read {}", args["path"].as_str().unwrap_or("?")),
         "file_write" => format!("{} {}: {}", match args["mode"].as_str() { Some("append") => "Add to", Some("replace") => "Rewrite", _ => "Create" }, args["path"].as_str().unwrap_or("?"), truncate(args["content"].as_str().unwrap_or(""), 300)),
         "file_delete" => format!("Delete the file {}", args["path"].as_str().unwrap_or("?")),
+        "send_file" => match args["path"].as_str().filter(|_| args["screenshot"].as_bool() != Some(true)) {
+            Some(p) => format!("Send the file {p} to this chat"),
+            None => "Send a screenshot of the computer's screen to this chat".into(),
+        },
         // Who it's to first, then the whole text: what you approve is what goes.
         "email_send" => format!(
             "Send an email to {}{}: \"{}\" — {}",
@@ -981,7 +998,7 @@ async fn propose_plan(ctx: &ToolCtx, args: &Value) -> Result<String> {
 
 /// Limits on what a bot may ask for, checked before any approval card.
 /// Where web_search goes: Brave Search with its key, else a SearXNG address; None when neither is set up.
-fn search_service(db: &Db) -> Option<(&'static str, String)> {
+pub(crate) fn search_service(db: &Db) -> Option<(&'static str, String)> {
     match crate::host::api_key("brave") {
         Some(k) => Some(("brave", k)),
         None => db.setting("searxng_url").ok().flatten().filter(|u| !u.is_empty()).map(|u| ("searxng", u)),
@@ -1401,10 +1418,17 @@ pub async fn call(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
     let (decision, why) = always_ask(name, decision, why, ctx.is_tainted());
     // A reminder for someone else goes to their chat: the first time for each person, you're asked (never "always").
     let to = if name == "routine_create" { remind_target(ctx, args)? } else { None };
-    let (mut decision, why) = match to {
+    let (decision, why) = match to {
         Some((to, _)) if decision != "deny" && !reminds_ok(&ctx.db, to) => ("ask".to_string(), if ctx.is_tainted() { "guarded" } else { "remind" }),
         _ => (decision, why),
     };
+    // A file in your own direct chat is like the reply; in a group, channel or guest's chat others see it: it asks, every time.
+    let (decision, why) = if name == "send_file" && decision == "allow" && (ctx.db.chat_guest(ctx.chat_id) || !ctx.db.chat_private(ctx.chat_id)) {
+        ("ask".to_string(), if ctx.is_tainted() { "guarded" } else { "send" })
+    } else {
+        (decision, why)
+    };
+    let mut decision = decision;
     // A rehearsal: what would change or send something, or ask the person, says what it would do instead.
     let would_ask = decision == "ask";
     if decision != "deny" && (would_ask || !is_read_only(&ctx.db, name)) && ctx.rehearsing() {
@@ -1644,6 +1668,21 @@ async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
             let p = s(args, "path")?;
             crate::files::delete(&ctx.db, ctx.chat_id, p)?;
             format!("deleted {p}")
+        }
+        "send_file" => {
+            let run = ctx.run_id.context("files go with a reply; there's none to send this with")?;
+            let (name, bytes) = if args["screenshot"].as_bool() == Some(true) {
+                if !(usable(ctx, "computer_screenshot") && ctx.db.bot(ctx.bot_id)?.allows("computer_screenshot")) {
+                    bail!("you have no computer to take a screenshot of");
+                }
+                ("screen.jpg".to_string(), tokio::task::spawn_blocking(crate::computer::screenshot_jpeg).await??)
+            } else {
+                let p = s(args, "path").map_err(|_| anyhow::anyhow!("give a workspace path, or screenshot=true"))?;
+                let (text, _) = crate::files::read(&ctx.db, ctx.chat_id, p)?;
+                (p.rsplit('/').next().unwrap_or(p).to_string(), text.into_bytes())
+            };
+            let name = crate::files::send(&ctx.db, ctx.chat_id, run, &name, &bytes)?;
+            format!("{name} will be sent to the chat with your reply. Don't paste its contents too.")
         }
         "email_send" => {
             let a = crate::email::account(&ctx.db).context("no email account set up (Settings → Email)")?;
@@ -2725,6 +2764,31 @@ mod tests {
         let out = call(&you, "routine_create", &args).await.unwrap();
         assert!(out.contains("set for Sam Jones"), "{out}");
         assert!(db.routines(200).unwrap().iter().any(|r| r.prompt == "Time to take the bins out") && db.routines(100).unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn files_go_to_your_own_chat_and_ask_in_a_group() {
+        let home = std::env::temp_dir().join(format!("mimir-sendfile-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).unwrap();
+        let db = Db::open(&home.join("mimir.db")).unwrap();
+        // Telegram: a private chat has a positive id, a group a negative one.
+        for chat in [42, -42] {
+            db.pair_external("telegram", &chat.to_string(), "t").unwrap();
+            crate::files::write(&db, chat, "notes/done.md", "booked", "create", false).unwrap();
+        }
+        let dm = ToolCtx::new(db.clone(), 1, 42).with_run(Some(5));
+        // After outside content too: it goes to the person, like the reply.
+        dm.pre_taint();
+        assert!(call(&dm, "send_file", &json!({"path": "notes/done.md"})).await.unwrap().contains("done.md will be sent"));
+        let (_, files) = crate::files::split_sent(&crate::files::sent_lines(&db, 5));
+        assert_eq!(std::fs::read_to_string(crate::files::sent_path(&home, 42, &files[0]).unwrap().0).unwrap(), "booked");
+        let group = ToolCtx::new(db.clone(), 1, -42).with_run(Some(6));
+        let r = tokio::time::timeout(Duration::from_millis(1500), call(&group, "send_file", &json!({"path": "notes/done.md"}))).await;
+        assert!(r.is_err(), "waits for an OK");
+        assert!(db.approvals_pending().unwrap().iter().any(|a| a.tool == "send_file" && a.kind == "send"));
+        assert!(!usable(&ToolCtx::new(db.clone(), 1, crate::INCOGNITO_CHAT), "send_file"));
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[tokio::test]

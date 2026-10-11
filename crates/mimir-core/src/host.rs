@@ -418,6 +418,13 @@ impl Host {
             }
             // The bots' email account (read-only): server, port, address, app password. Saving signs in once first.
             "email_settings" => {
+                // Mail tasks on or off; turned on, mail already there isn't taken (each folder is read from now on).
+                if let Some(on) = arg::<Option<bool>>(a, "tasks")? {
+                    self.db.set_setting("email_tasks", if on { "on" } else { "off" })?;
+                    for f in ["INBOX", crate::email::TASK_FOLDER] {
+                        self.db.set_setting(&format!("mail_task_seen:{f}"), "")?;
+                    }
+                }
                 if let Some(host) = arg::<Option<String>>(a, "host")? {
                     if host.trim().is_empty() {
                         self.db.set_setting("email_host", "")?;
@@ -438,7 +445,7 @@ impl Host {
                     }
                 }
                 ok(match crate::email::account(&self.db) {
-                    Some(acc) => json!({"host": acc.host, "user": acc.user, "smtp": acc.smtp_host, "smtp_port": acc.smtp_port}),
+                    Some(acc) => json!({"host": acc.host, "user": acc.user, "smtp": acc.smtp_host, "smtp_port": acc.smtp_port, "tasks": self.db.setting("email_tasks")?.as_deref() == Some("on")}),
                     None => Value::Null,
                 })
             }
@@ -530,6 +537,12 @@ impl Host {
             "files" => ok(crate::files::list(&self.db, arg(a, "chat_id")?, "")?.into_iter().map(|(path, size)| json!({"path": path, "size": size})).collect::<Vec<_>>()),
             "file" => ok(crate::files::read(&self.db, arg(a, "chat_id")?, &arg::<String>(a, "path")?)?.0),
             "delete_file" => ok(crate::files::delete(&self.db, arg(a, "chat_id")?, &arg::<String>(a, "path")?)?),
+            // A file a bot sent to the chat ([[file:…]] in its reply), as base64, to show or save.
+            "sent_file" => {
+                use base64::Engine;
+                let (path, name) = crate::files::sent_path(&self.home, arg(a, "chat_id")?, &arg::<String>(a, "name")?).context("that file is gone (sent files are kept 60 days)")?;
+                ok(json!({"name": name, "data": base64::engine::general_purpose::STANDARD.encode(std::fs::read(path)?)}))
+            }
             // Mimir's skill library for a chat: each skill, which bots there already have it, and per bot the tools it
             // needs that the bot can't use here (a calendar not linked, a tool off for that bot…).
             "skill_library" => {
@@ -601,6 +614,15 @@ impl Host {
                 &crate::db::Prov::by("you"),
             )?),
             "suggestions" => ok(self.db.suggestions(&scope(a)?)?),
+            // The one-time "get to know me" pass: whether it can run (email or calendar connected) and has; `run` starts it.
+            "know_me" => {
+                if arg::<Option<bool>>(a, "run")?.unwrap_or(false) {
+                    let bot = crate::tidy::memory_bot(&self.db).context("no bots")?;
+                    return ok(crate::tidy::get_to_know(&self.db, &self.provider(bot)?, bot, arg(a, "chat_id")?).await?);
+                }
+                let ready = crate::email::account(&self.db).is_some() || secret_get(crate::calendar::SECRET).is_some();
+                ok(json!({"ready": ready, "done": self.db.setting(crate::tidy::KNOW_ME)?.is_some()}))
+            }
             // Replay past corrections against a suggested preference (on request: it costs model calls).
             "check_suggestion" => {
                 let bot = crate::tidy::memory_bot(&self.db).context("no bots")?;
@@ -845,6 +867,7 @@ impl Host {
                             once: true,
                             watch: String::new(),
                             retries: 0,
+                            urgent: String::new(),
                         }
                     }
                 };
@@ -905,6 +928,8 @@ impl Host {
             }
             "reset_watch_noise" => ok(self.db.routine_reset_noise(arg(a, "chat_id")?, arg(a, "id")?)?),
             "set_watch" => ok(self.db.routine_set_watch(arg(a, "chat_id")?, arg(a, "id")?, &arg::<String>(a, "watch")?)?),
+            // Only the person sets this (no bot tool does): what the bot read can't widen what comes through.
+            "set_urgent" => ok(self.db.routine_set_urgent(arg(a, "chat_id")?, arg(a, "id")?, &arg::<String>(a, "rule")?)?),
             "set_delivery" => ok(self.db.routine_set_delivery(arg(a, "chat_id")?, arg(a, "id")?, &arg::<String>(a, "delivery")?)?),
             // How full standing memory is (the Memory tab's meter).
             "standing_memory" => {

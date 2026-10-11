@@ -438,6 +438,12 @@ async fn read_pdf_apart(exe: &std::path::Path, bytes: Vec<u8>) -> anyhow::Result
     tokio::time::timeout(std::time::Duration::from_secs(60), work).await.map_err(|_| anyhow::anyhow!("couldn't read that PDF in time"))?
 }
 
+/// A file sent as a photo (shown in place) rather than a document.
+pub fn is_photo(name: &str) -> bool {
+    let n = name.to_lowercase();
+    [".jpg", ".jpeg", ".png", ".gif", ".webp"].iter().any(|e| n.ends_with(e))
+}
+
 /// A file whose text a bot can read: a PDF or a plain-text file (by type or name).
 pub fn readable_document(name: &str, mime: &str) -> bool {
     let lower = name.to_lowercase();
@@ -529,6 +535,37 @@ pub fn friendly_error(e: &str) -> String {
     format!("⚠️ {what} {fix}\n\n_{}_", tools::truncate(e.lines().next().unwrap_or(e), 160))
 }
 
+/// What the person hasn't connected yet, and where to: asked for one, a bot says so in the setting's own words (the app
+/// turns "Settings → Email" into a button) instead of guessing, and tries again once it's connected. Only where those
+/// would be offered at all: a chat with the person alone, not a guest's, not incognito, not a task from another bot.
+pub(crate) fn not_connected(ctx: &ToolCtx) -> String {
+    if ctx.depth > 0 || ctx.incognito() || ctx.db.chat_guest(ctx.chat_id) || !ctx.db.chat_private(ctx.chat_id) {
+        return String::new();
+    }
+    let db = &ctx.db;
+    let missing: Vec<&str> = [
+        (email::account(db).is_none(), "email (search, read, draft, send): Settings → Email"),
+        (
+            host::secret_get(calendar::SECRET).is_none() && caldav::account(db).is_none(),
+            "your calendar: Settings → Calendar to add events, or the calendar link in Meetings to read it",
+        ),
+        (tools::search_service(db).is_none(), "web search: Settings → Web search"),
+        (!ext::servers(db).iter().any(|s| s.name == ext::BROWSER), "a web browser (pages that need clicks or a login): Settings → Browser"),
+    ]
+    .into_iter()
+    .filter_map(|(m, s)| m.then_some(s))
+    .collect();
+    if missing.is_empty() {
+        return String::new();
+    }
+    format!(
+        "\n\n<not_connected>\nNot connected yet:\n- {}\nIf a request needs one of these, don't guess or work around it: say in a sentence that it isn't \
+         connected yet and where to connect it, in those exact words (like Settings → Email), and that you'll do it once it is. \
+         When they say it's connected, try again.\n</not_connected>",
+        missing.join("\n- ")
+    )
+}
+
 /// What a quiet check replies when nothing needs the user's attention.
 const NOTHING: &str = "NOTHING";
 
@@ -543,6 +580,25 @@ pub(crate) fn is_nothing(reply: &str) -> bool {
     reply.trim().trim_matches(|c: char| !c.is_alphanumeric()).eq_ignore_ascii_case(NOTHING)
 }
 
+/// Midnight today, local time.
+pub(crate) fn day_start() -> i64 {
+    let t = chrono::Local::now().date_naive().and_hms_opt(0, 0, 0);
+    t.and_then(|t| chrono::TimeZone::from_local_datetime(&chrono::Local, &t).earliest()).map_or(0, |t| t.timestamp())
+}
+
+/// The person's rule for coming through right away, when this run's result would otherwise wait (the digest, the
+/// log, or quiet hours, which turn "now" into the digest). A rehearsal doesn't use up the day's.
+fn urgent_rule<'a>(r: &'a db::Routine, ctx: &ToolCtx) -> Option<&'a str> {
+    (!r.urgent.is_empty() && r.delivery != "now" && !ctx.rehearsal).then_some(r.urgent.as_str())
+}
+
+/// A reply whose first line is URGENT: the rest of it.
+fn urgent_body(reply: &str) -> Option<&str> {
+    let reply = reply.trim_start();
+    let (first, rest) = reply.split_once('\n').unwrap_or((reply, ""));
+    first.trim_matches(|c: char| !c.is_alphanumeric()).eq_ignore_ascii_case("URGENT").then(|| rest.trim())
+}
+
 async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) -> Result<(String, db::Usage)> {
     let scope = ctx.scope();
     let (text, is_routine, quiet) = match &trigger {
@@ -554,7 +610,8 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
         Trigger::Routine(r) => {
             // A routine can just run a skill: its prompt is "/skill-name …".
             let prompt = skill_command(&ctx.db, &scope, ctx.bot_id, &r.prompt).unwrap_or_else(|| r.prompt.clone());
-            (format!("[Scheduled {} #{} \"{}\"{}] {prompt}", if r.quiet { "quiet check" } else { "routine" }, r.id, r.cron, late(r.next_fire, db::now())), true, r.quiet)
+            let urgent = urgent_rule(r, ctx).map(|u| format!("\n\n[This result waits to be sent, unless the person's own rule holds now: \"{u}\". Only if it does, make the first line of your reply exactly URGENT.]")).unwrap_or_default();
+            (format!("[Scheduled {} #{} \"{}\"{}] {prompt}{urgent}", if r.quiet { "quiet check" } else { "routine" }, r.id, r.cron, late(r.next_fire, db::now())), true, r.quiet)
         }
     };
     // "/skill-name …" from the person: use that skill (the message is kept as they wrote it).
@@ -685,6 +742,7 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
     } else {
         ""
     };
+    let missing = not_connected(ctx);
     let family = if ctx.db.chat_family(ctx.chat_id) {
         "\n\nThis is a family group: several people of the household talk to you here, and each message starts with who \
          wrote it (\"Sam: …\"). Answer that person."
@@ -704,7 +762,7 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
         String::new()
     };
     let system = format!(
-        "Your name is {}. {PERSONA}{role}{guest}{family}{}{team}{logins}{plans}{skills}\n\nCurrent local time: {}.\n{}{household}",
+        "Your name is {}. {PERSONA}{role}{guest}{family}{}{team}{logins}{plans}{skills}{missing}\n\nCurrent local time: {}.\n{}{household}",
         bot.name,
         if quiet { QUIET } else { "" },
         chrono::Local::now().format("%A %Y-%m-%d %H:%M %Z"),
@@ -807,6 +865,25 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
     if quiet && is_nothing(&reply.text) {
         return Ok((String::new(), reply.usage));
     }
+    // A result that matched the person's rule comes through now, within the day's cap (the run is marked, so the
+    // scheduler sends it); over the cap it waits as usual, saying so.
+    let mut lane = match &trigger {
+        Trigger::Routine(r) => r.delivery.as_str(),
+        _ => "",
+    };
+    if let Trigger::Routine(r) = &trigger
+        && let Some(rule) = urgent_rule(r, ctx)
+        && let Some(body) = urgent_body(&reply.text).map(str::to_string)
+    {
+        if let Some(run) = ctx.run_id
+            && ctx.db.run_take_urgent(run, day_start())?
+        {
+            reply.text = format!("🔔 _Came through because: {rule}_\n\n{body}");
+            lane = "now";
+        } else {
+            reply.text = format!("{body}\n\n_This matched \"{rule}\", but {} already came through today._", db::URGENT_PER_DAY);
+        }
+    }
     // What the reply says, against what the run did: receipts, sources and notes under it (the asking bot checks a
     // handed-over task's reply as its own; a rehearsal did nothing by design).
     if !matches!(trigger, Trigger::Delegated { .. })
@@ -818,17 +895,21 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
             reply.text = format!("{}\n\n{lines}", reply.text.trim_end());
         }
     }
+    // Files it sent go at the end, as [[file:…]] lines: the chat apps upload them, the app shows them.
+    if let Some(run) = ctx.run_id {
+        reply.text.push_str(&files::sent_lines(&ctx.db, run));
+    }
     match &trigger {
         Trigger::Delegated { .. } => {}
         // Routines in the digest or log-only lane don't land in the chat as they run.
-        Trigger::Routine(r) if r.delivery == "digest" => {
+        Trigger::Routine(r) if lane == "digest" => {
             ctx.db.digest_add(ctx.bot_id, ctx.chat_id, r.id, &reply.text, ctx.is_tainted())?;
             // What it found came from outside: the conversation it lands in has read it too.
             if ctx.is_tainted() {
                 ctx.db.conv_taint(ctx.bot_id, ctx.conv)?;
             }
         }
-        Trigger::Routine(r) if r.delivery == "log" => {}
+        Trigger::Routine(_) if lane == "log" => {}
         _ => {
             // A new routine's first results ask what to trim, so the brief gets tuned by a reply rather than left as
             // first written (the bot changes it with routine_update).
@@ -855,10 +936,33 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
 mod tests {
 
     #[test]
+    fn urgent_first_line() {
+        assert_eq!(super::urgent_body("URGENT\nFlight BA12 is delayed 3h."), Some("Flight BA12 is delayed 3h."));
+        assert_eq!(super::urgent_body("\n**Urgent:**\nx"), Some("x"));
+        assert_eq!(super::urgent_body("Nothing urgent today.\nURGENT"), None, "only the first line counts");
+    }
+
+    #[test]
     fn a_late_run_is_told() {
         let now = super::db::now();
         assert_eq!(super::late(now - 60, now), "", "on time");
         assert!(super::late(now - 3 * 3600, now).starts_with(", due at "), "hours late");
+    }
+
+    #[test]
+    fn a_bot_is_told_what_isnt_connected_where_it_could_be_used() {
+        let p = std::env::temp_dir().join(format!("mimir-missing-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let d = super::db::Db::open(&p).unwrap();
+        let ctx = super::ToolCtx::new(d.clone(), 1, super::host::LOCAL_CHAT);
+        let note = super::not_connected(&ctx);
+        assert!(note.contains("Settings → Email") && note.contains("Settings → Web search"), "{note}");
+        d.set_setting("searxng_url", "https://search.example").unwrap();
+        assert!(!super::not_connected(&ctx).contains("Web search"), "connected: not mentioned");
+        let mut delegated = ctx.clone();
+        delegated.depth = 1;
+        assert_eq!(super::not_connected(&delegated), "", "not for another bot's task");
+        assert_eq!(super::not_connected(&super::ToolCtx::new(d, 1, -42)), "", "not in a group");
     }
 
     #[test]

@@ -116,6 +116,25 @@ impl Chan {
         }
     }
 
+    /// The files a reply named (`[[file:…]]` lines), uploaded after its text; one that fails is said in the chat.
+    async fn attach(&self, ext: &str, db: &Db, chat: i64, files: &[String]) {
+        for f in files {
+            let Some((path, name)) = crate::files::sent_path(&db.dir(), chat, f) else { continue };
+            let r = match std::fs::read(&path) {
+                Ok(bytes) => match self {
+                    Chan::Telegram(c) => c.upload(ext, &name, bytes).await,
+                    Chan::Slack(c) => c.upload(ext, &name, bytes).await,
+                    Chan::Discord(c) => c.upload(ext, &name, bytes).await,
+                },
+                Err(e) => Err(e.into()),
+            };
+            if let Err(e) = r {
+                eprintln!("{} upload to {ext} failed: {e:#}", self.kind());
+                self.send(ext, &format!("I couldn't attach {name} ({}).", crate::tools::truncate(&format!("{e:#}"), 200))).await;
+            }
+        }
+    }
+
     /// Stream a reply into one message: post the draft once text arrives, then edit it as it grows.
     fn follow(&self, bot: i64, chat_id: i64, ext: &str) -> Follower {
         let (chan, ext, stop) = (self.clone(), ext.to_string(), Arc::new(Notify::new()));
@@ -977,7 +996,9 @@ impl Core {
                         None => reply,
                     };
                     let draft = follower.finish().await;
-                    chan.finish(&ext, draft, &reply, &rows).await;
+                    let (reply, files) = crate::files::split_sent(&reply);
+                    chan.finish(&ext, draft, if reply.trim().is_empty() && !files.is_empty() { "📎" } else { &reply }, &rows).await;
+                    chan.attach(&ext, &core.db, chat, &files).await;
                 });
             }
         }
@@ -1160,21 +1181,26 @@ impl Core {
             }
             let routines = self.db.routines(chat)?;
             let mut msg = format!("{}\n", if mine.is_empty() { tr("☀️ **All quiet**") } else { tr("☀️ **Your digest**") });
+            let mut files = vec![];
             for (_, _, rid, text, _) in &mine {
                 let when = routines.iter().find(|r| Some(r.id) == *rid).map(|r| crate::tools::truncate(&r.prompt, 60)).unwrap_or_else(|| tr("A routine").into());
+                let (text, sent) = crate::files::split_sent(text);
+                files.extend(sent);
                 msg.push_str(&format!("\n**{when}**\n{}\n", crate::tools::truncate(text.trim(), 700)));
             }
             if quiet > 0 {
                 let ran = if quiet == 1 { tr("1 quiet check ran; nothing needed you.").into() } else { trf("{n} quiet checks ran; nothing needed you.", &[("n", &quiet.to_string())]) };
                 msg.push_str(&format!("\n{ran}"));
             }
-            self.db.log(self.bot, chat, "assistant", &msg, None)?;
+            let lines: String = files.iter().map(|f| format!("\n{}{f}]]", crate::files::SENT_MARK)).collect();
+            self.db.log(self.bot, chat, "assistant", &format!("{msg}{lines}"), None)?;
             // What routines found on the web is outside content in this conversation too.
             if mine.iter().any(|i| i.4) {
                 self.db.conv_taint(self.bot, chat)?;
             }
             if let Some((c, ext)) = Self::chan_for(chans, chat, &self.db) {
                 c.send(&ext, &msg).await;
+                c.attach(&ext, &self.db, chat, &files).await;
             }
             self.db.digest_mark_sent(&mine.iter().map(|i| i.0).collect::<Vec<_>>())?;
         }
@@ -1212,7 +1238,17 @@ impl Core {
     async fn tell_update(&self, chans: &[Chan]) -> Result<()> {
         let Some(latest) = crate::server_update::latest(&self.db).await else { return Ok(()) };
         let Some(msg) = crate::server_update::to_tell(&self.db, &latest) else { return Ok(()) };
-        let mut best: Option<(i64, Chan, String)> = None;
+        if let Some((_, chan, ext)) = self.latest_private(chans)?
+            && crate::server_update::told(&self.db, &latest)
+        {
+            chan.send(&ext, &msg).await;
+        }
+        Ok(())
+    }
+
+    /// Your most recent private chat this bot can reach in a messaging app (not a group, not a guest's).
+    fn latest_private(&self, chans: &[Chan]) -> Result<Option<(i64, Chan, String)>> {
+        let mut best: Option<(i64, i64, Chan, String)> = None;
         for c in self.db.chats()? {
             if c.chat_id == crate::host::LOCAL_CHAT || c.guest || !self.db.chat_private(c.chat_id) {
                 continue;
@@ -1220,13 +1256,67 @@ impl Core {
             let Some((chan, ext)) = Self::chan_for(chans, c.chat_id, &self.db) else { continue };
             let last = self.db.messages(c.chat_id, 1)?.first().map(|m| m.ts).unwrap_or(0);
             if best.as_ref().is_none_or(|b| last > b.0) {
-                best = Some((last, chan, ext));
+                best = Some((last, c.chat_id, chan, ext));
             }
         }
-        if let Some((_, chan, ext)) = best
-            && crate::server_update::told(&self.db, &latest)
-        {
-            chan.send(&ext, &msg).await;
+        Ok(best.map(|(_, chat, chan, ext)| (chat, chan, ext)))
+    }
+
+    /// Mail tasks (Settings → Email, when on): mail you sent to your +mimir address, or filed in the Mimir folder,
+    /// is a message to this bot, answered in your most recent private chat (or in the app). The bot never reads the
+    /// inbox for this; Mimir looks only at those, and takes only ones from you that DKIM passed (email::task).
+    async fn mail_tasks(&self, chans: &[Chan]) -> Result<()> {
+        let Some(a) = crate::email::account(&self.db) else { return Ok(()) };
+        for (folder, route) in [("INBOX", "to your +mimir address"), (crate::email::TASK_FOLDER, "filed in your Mimir folder")] {
+            let key = format!("mail_task_seen:{folder}");
+            let after = self.db.setting(&key)?.and_then(|v| v.split_once(':').and_then(|(v, u)| Some((v.parse().ok()?, u.parse().ok()?))));
+            let inbox = folder == "INBOX";
+            let (cursor, mails) = match crate::email::new_mail(&a, folder, after, |h| !inbox || crate::email::to_plus(h, &a.user)).await {
+                Ok(r) => r,
+                // No Mimir folder is the usual case.
+                Err(e) => {
+                    if inbox {
+                        eprintln!("mail tasks: {e:#}");
+                    }
+                    continue;
+                }
+            };
+            // Read past before running: a task that crashes or hangs isn't taken again (and done twice).
+            self.db.set_setting(&key, &format!("{}:{}", cursor.0, cursor.1))?;
+            for raw in mails {
+                match crate::email::task(&raw, &a.user, route) {
+                    crate::email::Task::Run { text, outside } => self.mail_task(chans, text, outside).await?,
+                    crate::email::Task::Refused(why) => {
+                        eprintln!("mail tasks: {why}");
+                        let (chat, target) = self.latest_private(chans)?.map_or((crate::host::LOCAL_CHAT, None), |(c, ch, ext)| (c, Some((ch, ext))));
+                        self.db.log(self.bot, chat, "assistant", &why, None)?;
+                        if let Some((c, ext)) = target {
+                            c.send(&ext, &why).await;
+                        }
+                    }
+                    crate::email::Task::Skip => {}
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn mail_task(&self, chans: &[Chan], text: String, outside: bool) -> Result<()> {
+        let (chat, target) = self.latest_private(chans)?.map_or((crate::host::LOCAL_CHAT, None), |(c, ch, ext)| (c, Some((ch, ext))));
+        // What you forwarded is someone else's words: the conversation has read outside content, like a forward in chat.
+        if outside {
+            self.db.conv_taint(self.bot, chat)?;
+        }
+        let _g = self.chat_lock(chat).lock_owned().await;
+        let typing = target.as_ref().and_then(|(c, ext)| c.typing(ext));
+        let (provider, ctx) = (self.provider.clone(), ToolCtx::new(self.db.clone(), self.bot, chat));
+        let out = self.own_task(chat, async move { turn(&provider, &ctx, Trigger::Message(&text)).await }).await;
+        if let Some(t) = typing {
+            t.abort();
+        }
+        let reply = out.unwrap_or_else(|e| crate::friendly_error(&format!("{e:#}")));
+        if let Some((c, ext)) = target {
+            c.send(&ext, &reply).await;
         }
         Ok(())
     }
@@ -1253,8 +1343,7 @@ impl Core {
             r.delivery = "digest".into();
         }
         // Over a daily cap: pause (it stays due, so it runs once when the day's over) and ask, in Needs you.
-        let day_start = chrono::Local::now().date_naive().and_hms_opt(0, 0, 0).and_then(|t| chrono::TimeZone::from_local_datetime(&chrono::Local, &t).earliest()).map_or(0, |t| t.timestamp());
-        if let Some((key, h)) = self.db.over_cap(&r, day_start)? {
+        if let Some((key, h)) = self.db.over_cap(&r, crate::day_start())? {
             let said = format!("⏸ Paused until tomorrow: {}. You can let it go on today in Mimir's Needs you.", h.why);
             self.db.hold_set(&key, &h)?;
             if let Some((c, ext)) = Self::chan_for(chans, r.chat_id, &self.db).filter(|_| r.delivery == "now") {
@@ -1369,15 +1458,21 @@ impl Core {
         if text.trim().is_empty() {
             return Ok(());
         }
-        let how = match (r.delivery.as_str(), &target) {
+        // Matched the person's "come through right away if …" (within the day's cap): sent now, whatever its lane.
+        let urgent = run.map(|run| self.db.run_urgent(run)).transpose()?.unwrap_or(false);
+        let how = match (if urgent { "now" } else { r.delivery.as_str() }, &target) {
             ("digest", _) => "in the digest".to_string(),
             ("log", _) => "only in the log".to_string(),
             (_, None) => "in the app".to_string(),
             (_, Some((c, ext))) => {
                 // A result gets one-tap feedback (a reminder, Done or Snooze); a failure doesn't.
-                let rows = if worked { self.result_rows(&r, &text) } else { vec![] };
-                match c.deliver(ext, &text, &rows).await {
-                    Ok(()) => format!("sent to {}", c.kind()),
+                let (said, files) = crate::files::split_sent(&text);
+                let rows = if worked { self.result_rows(&r, &said) } else { vec![] };
+                match c.deliver(ext, &said, &rows).await {
+                    Ok(()) => {
+                        c.attach(ext, &self.db, r.chat_id, &files).await;
+                        format!("sent to {}", c.kind())
+                    }
                     Err(e) => format!("{} to {}: {}", crate::db::NOT_SENT, c.kind(), crate::tools::truncate(&format!("{e:#}"), 200)),
                 }
             }
@@ -1423,8 +1518,17 @@ impl Core {
     async fn scheduler(self: Arc<Self>, chans: Vec<Chan>) -> Result<()> {
         // A routine due before this was Mimir not running; one due since, the computer asleep or a long run.
         let started = crate::db::now();
+        let mut mail_looked = 0;
         loop {
             let now = crate::db::now();
+            // Mail tasks, looked for every two minutes by one bot (the memory bot) for everyone. You sent them, like a
+            // message, so they run while the bot is paused too.
+            if now - mail_looked >= 120 && crate::tidy::memory_bot(&self.db) == Some(self.bot) && self.db.setting("email_tasks").ok().flatten().as_deref() == Some("on") {
+                mail_looked = now;
+                if let Err(e) = self.mail_tasks(&chans).await {
+                    eprintln!("mail tasks: {e:#}");
+                }
+            }
             // Paused by you: nothing runs on its own (routines, digest, weekly review, tidy-up) until it ends.
             if self.db.paused(self.bot, now).unwrap_or_else(|e| { eprintln!("pause: {e:#}"); None }).is_some() {
                 tokio::time::sleep(Duration::from_secs(30)).await;
@@ -1699,6 +1803,40 @@ mod tests {
             locks: Default::default(),
             greeted: Default::default(),
         }
+    }
+
+    /// Against scripts/fake-mail.py: `python3 scripts/fake-mail.py`, then
+    /// `cargo test -p mimir-core fake_mail_tasks -- --ignored`.
+    #[tokio::test]
+    #[ignore]
+    async fn fake_mail_tasks() {
+        let p = std::env::temp_dir().join(format!("mimir-mailtask-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = Db::open(&p).unwrap();
+        for (k, v) in [("email_host", "127.0.0.1"), ("email_port", "1143"), ("email_user", "me@example.com")] {
+            db.set_setting(k, v).unwrap();
+        }
+        crate::host::install_secrets(Arc::new(crate::host::DbSecrets(db.clone())));
+        crate::host::secret_set(crate::email::SECRET, "pw").unwrap();
+        let core = core_on(&db, &fake_ai("200 OK", r#"{"choices":[{"message":{"role":"assistant","content":"Done."}}],"usage":{"prompt_tokens":3,"completion_tokens":2}}"#).await);
+        // Turned on: what's there already isn't a task.
+        core.mail_tasks(&[]).await.unwrap();
+        assert!(db.messages(0, 10).unwrap().is_empty());
+        assert_eq!(db.setting("mail_task_seen:INBOX").unwrap().as_deref(), Some("1:4"));
+        // Mail since: the signed forward runs, the one posing as you is refused, the invoice isn't to +mimir.
+        db.set_setting("mail_task_seen:INBOX", "1:2").unwrap();
+        db.set_setting("mail_task_seen:Mimir", "1:0").unwrap();
+        core.mail_tasks(&[]).await.unwrap();
+        let said: Vec<String> = db.messages(0, 10).unwrap().into_iter().map(|m| format!("{}: {}", m.role, m.content)).collect();
+        assert_eq!(said.len(), 5, "{said:#?}");
+        assert!(said[0].starts_with("user: [By email, to your +mimir address.] Add this to my calendar for the 20th.") && said[0].contains("<document") && said[0].contains("password file"), "{said:#?}");
+        assert!(said[2].starts_with("assistant: An email from your address (“Send the bank details") && said[2].contains("DKIM didn't pass"), "{said:#?}");
+        assert_eq!(said[3], "user: [By email, filed in your Mimir folder.] Remind me to call the dentist at 4");
+        assert!(db.conv_tainted(1, 0).unwrap(), "a forward is outside content");
+        assert_eq!(db.setting("mail_task_seen:INBOX").unwrap().as_deref(), Some("1:4"));
+        // Nothing new: nothing runs again.
+        core.mail_tasks(&[]).await.unwrap();
+        assert_eq!(db.messages(0, 10).unwrap().len(), 5);
     }
 
     #[tokio::test]

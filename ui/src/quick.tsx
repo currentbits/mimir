@@ -3,7 +3,7 @@
 import { getCurrentWindow, LogicalSize } from '@tauri-apps/api/window'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { invoke, localInvoke } from './api'
-import { Markdown } from './markdown'
+import { Markdown, splitSent } from './markdown'
 import { Avatar, Icon } from './ui'
 import { pigment, setLooks } from './format'
 
@@ -85,7 +85,7 @@ export function QuickAsk() {
         <div className="quick-body">
           {asked && <p className="quick-q">{asked}</p>}
           {err ? <p className="error">{err}</p>
-            : shown ? <div className="msg-body"><Markdown text={shown} caret={pending} /></div>
+            : shown ? <div className="msg-body"><Markdown text={splitSent(shown)[0]} caret={pending} /></div>
             : <span className="typing" aria-label="Thinking"><i /><i /><i /></span>}
           <div className="quick-foot">
             <button type="button" className="btn btn-sm btn-ghost" onClick={() => localInvoke('show_main').catch(e => setErr(String(e)))}><Icon name="chat" size={13} />Open in Mimir</button>
