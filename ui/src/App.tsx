@@ -1135,7 +1135,7 @@ function Main() {
               {view === 'settings' && <SettingsView onComputer={computer.reload} find={find} />}
               {view === 'computer' && <ComputerView bots={botList} chats={list} chatName={chatName} />}
               {view === 'meetings' && <MeetingsView bots={botList} onSent={talkTo} />}
-              {view === 'inbox' && <InboxView data={inbox.data} troubled={troubled} reload={inbox.reload} chats={list} chatName={chatName} openBot={openBot} openChat={openChat} />}
+              {view === 'inbox' && <InboxView data={inbox.data} troubled={troubled} reload={inbox.reload} chats={list} chatName={chatName} openBot={openBot} openChat={openChat} openSettings={() => setView('settings')} />}
               {view === 'bot' && (
                 // Keyed on whether the bot has loaded too: right after "Create bot" the list hasn't caught up yet.
                 <BotPage key={`${botId}:${botList.some(b => b.id === botId)}`} bot={botList.find(b => b.id === botId)} status={statusOf(botId)} canDelete={botList.length > 1}
@@ -1273,8 +1273,8 @@ function Approvals({ list, chats, chatName, onDecided }: { list: Approval[]; cha
 type Hold = { key: string; bot_id: number; routine_id: number | null; routine?: string | null; until: number; why: string; cap: boolean }
 /** One item per usage limit: every bot on that AI login waits for the same reset. */
 const holdGroups = (hs: Hold[]) => Object.values(hs.reduce<Record<string, Hold[]>>((g, h) => { const k = h.cap || h.routine_id ? h.key : `limit:${h.until}`; (g[k] ??= []).push(h); return g }, {}))
-type Inbox = { approvals: Approval[]; missed: Approval[]; failed: Run[]; holds?: Hold[]; suggestions: { chat_id: number; count: number }[]; unconfirmed?: { chat_id: number; count: number }[]; server_update?: { current: string; latest: string; how: string } | null }
-const inboxCount = (i: Inbox | null) => i ? (i.server_update ? 1 : 0) + i.approvals.length + i.missed.length + i.failed.length + holdGroups(i.holds ?? []).length + i.suggestions.reduce((n, s) => n + s.count, 0) + (i.unconfirmed ?? []).reduce((n, s) => n + s.count, 0) : 0
+type Inbox = { approvals: Approval[]; missed: Approval[]; failed: Run[]; holds?: Hold[]; suggestions: { chat_id: number; count: number }[]; unconfirmed?: { chat_id: number; count: number }[]; server_update?: { current: string; latest: string; how: string } | null; damage?: string | null }
+const inboxCount = (i: Inbox | null) => i ? (i.server_update ? 1 : 0) + (i.damage ? 1 : 0) + i.approvals.length + i.missed.length + i.failed.length + holdGroups(i.holds ?? []).length + i.suggestions.reduce((n, s) => n + s.count, 0) + (i.unconfirmed ?? []).reduce((n, s) => n + s.count, 0) : 0
 
 /** A failed run in plain words, with the fix that most likely helps. */
 function failure(error: string | null, status?: Run['status'], delivered?: string | null): { title: string; fix: 'bot' | 'chat' | 'routines' | null; fixLabel?: string } {
@@ -1290,8 +1290,8 @@ function failure(error: string | null, status?: Run['status'], delivered?: strin
   return { title: 'Something went wrong', fix: 'chat', fixLabel: 'Open the chat' }
 }
 
-function InboxView({ data, troubled, reload, chats, chatName, openBot, openChat }: {
-  data: Inbox | null; troubled: { id: number; text: string }[]; reload: () => unknown; chats: Chat[]; chatName: (c: Chat) => string; openBot: (id: number) => void; openChat: (chat: number, view: Tab) => void
+function InboxView({ data, troubled, reload, chats, chatName, openBot, openChat, openSettings }: {
+  data: Inbox | null; troubled: { id: number; text: string }[]; reload: () => unknown; chats: Chat[]; chatName: (c: Chat) => string; openBot: (id: number) => void; openChat: (chat: number, view: Tab) => void; openSettings: () => void
 }) {
   const botOf = useContext(Bots)
   const { err, leaving, decide } = useDecide(reload)
@@ -1304,6 +1304,19 @@ function InboxView({ data, troubled, reload, chats, chatName, openBot, openChat 
   )
   return (
     <div className="inbox">
+      {data.damage && <>
+        <div className="section-title" style={{ marginTop: 0 }}><h2>Your data</h2></div>
+        <div className="group">
+          <div className="inbox-row">
+            <span className="row-icon"><Icon name="alert" size={15} /></span>
+            <div className="inbox-main">
+              <div className="inbox-title">The database reports damage</div>
+              <div className="inbox-desc selectable">Today's check found: {data.damage}. No backup was taken over the good ones; restore the latest from Settings.</div>
+            </div>
+            <div className="row-ctl"><button className="btn btn-sm" onClick={openSettings}>Restore a backup…</button></div>
+          </div>
+        </div>
+      </>}
       {data.server_update && <>
         <div className="section-title" style={{ marginTop: 0 }}><h2>Update your server</h2></div>
         <div className="group">
@@ -3236,8 +3249,41 @@ function DataSettings() {
       <Row icon={<Icon name="archive" size={15} />} title="Export everything" desc={msg ?? 'One JSON file with everything Mimir keeps about you (not your tokens or keys).'}>
         <button type="button" className="btn btn-sm" onClick={exportAll}>Export</button>
       </Row>
+      <BackupRows />
     </Group>
   )
+}
+
+type Backups = { dir: string; list: { name: string; size: number; taken_at: number }[] }
+
+/** The daily copies of the database, and putting one back. */
+function BackupRows() {
+  const b = useLoad(() => invoke<Backups>('backups'), [], 60000)
+  const [pick, setPick] = useState('')
+  const [msg, setMsg] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  if (!b.data) return null
+  const list = b.data.list
+  const chosen = pick || list[0]?.name || ''
+  const label = (s: Backups['list'][number]) => `${fullTime(s.taken_at)}${s.name.includes('before-restore') ? ' (before a restore)' : ''} · ${(s.size / 1e6).toFixed(1)} MB`
+  const now = () => { setBusy(true); invoke('backup_now').then(() => { setMsg('Backed up just now.'); b.reload() }, e => setMsg(String(e))).finally(() => setBusy(false)) }
+  const restore = async () => {
+    const s = list.find(x => x.name === chosen)
+    if (!s || !await ask(`Put back the copy from ${label(s)}? Everything since then (memories, chats, routines) goes back to how it was. A copy of now is kept first, so you can undo this.`, 'Restore', true)) return
+    setBusy(true)
+    invoke('backup_restore', { name: chosen }).then(() => { setMsg(`Restored the copy from ${fullTime(s.taken_at)}.`); b.reload() }, e => setMsg(String(e))).finally(() => setBusy(false))
+  }
+  return <>
+    <Row icon={<Icon name="clock" size={15} />} title="Daily backup" desc={msg ?? (list.length ? `Last one ${ago(list[0].taken_at)}. Mimir checks the database and keeps a copy every day: the last 7 days and 4 weeks, in ${b.data.dir}.` : `Mimir checks the database and keeps a copy every day: the last 7 days and 4 weeks, in ${b.data.dir}.`)}>
+      <button type="button" className="btn btn-sm" disabled={busy} onClick={now}>Back up now</button>
+    </Row>
+    <Row icon={<Icon name="history" size={15} />} title="Restore a backup…" desc={list.length ? 'Puts a copy back in place of what Mimir has now. To restore one from elsewhere, put it in the backups folder first.' : 'No backups yet.'}>
+      {list.length > 0 && <select className="select select-inline" aria-label="Which backup" value={chosen} onChange={e => setPick(e.target.value)}>
+        {list.map(s => <option key={s.name} value={s.name}>{label(s)}</option>)}
+      </select>}
+      <button type="button" className="btn btn-sm" disabled={busy || !list.length} onClick={restore}>Restore</button>
+    </Row>
+  </>
 }
 
 /** The bots' own computer (self-hosted Linux server): a screen with a browser they can see and use. */

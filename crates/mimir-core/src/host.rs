@@ -171,6 +171,21 @@ impl Host {
         if let Err(e) = db.pair(LOCAL_CHAT, if mode == "server" { "Web chat" } else { "This computer" }) {
             eprintln!("built-in chat: {e:#}");
         }
+        // A copy of the database once a day, after checking it (looked at hourly: a laptop sleeps through the night).
+        {
+            let db = db.clone();
+            rt.spawn(async move {
+                loop {
+                    if crate::backup::due(&db) {
+                        let d = db.clone();
+                        if let Ok(Err(e)) = tokio::task::spawn_blocking(move || crate::backup::snapshot(&d, "")).await {
+                            eprintln!("backup: {e:#}");
+                        }
+                    }
+                    tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+                }
+            });
+        }
         // The bots' computer (self-hosted Linux server): bring it up if it's switched on, and back up if it dies.
         if crate::computer::available() {
             let (db, home) = (db.clone(), home.clone());
@@ -515,6 +530,17 @@ impl Host {
             // Everything Mimir keeps about you, as one JSON file (memories, conversations, meetings, skills, routines,
             // bots without their tokens).
             "export_all" => ok(self.db.export_all()?),
+            // Daily copies of the database (backups/ in the data folder), and putting one back.
+            "backups" => ok(json!({"dir": crate::backup::dir(&self.db), "list": crate::backup::list(&self.db)})),
+            "backup_now" => ok(crate::backup::snapshot(&self.db, "")?),
+            "backup_restore" => {
+                let name: String = arg(a, "name")?;
+                // Bots stopped around it, so nothing writes into the old database mid-restore; started again either way.
+                self.stop_all();
+                let done = crate::backup::restore(&self.db, &name);
+                self.restart_all();
+                ok(done?)
+            }
             // Someone else's chat (a guest: nothing of yours there), or yours.
             "chat_guest" => ok(self.db.chat_set_guest(arg(a, "chat_id")?, arg(a, "guest")?)?),
             // A guest's chat or a group reads (and adds to) the household's memories; a family group lets everyone in it talk.
@@ -1097,6 +1123,8 @@ impl Host {
                         json!({"key": key, "bot_id": bot, "routine_id": routine, "routine": prompt, "until": h.until, "why": h.why, "cap": h.waive.is_some()})
                     }).collect::<Vec<_>>(),
                     "suggestions": counts,
+                    // The daily check found the database damaged: restore a backup.
+                    "damage": self.db.setting(crate::backup::DAMAGE)?,
                     "unconfirmed": self.db.unconfirmed_counts()?.into_iter().map(|(chat, n)| json!({"chat_id": chat, "count": n})).collect::<Vec<_>>(),
                     // A newer release than this server runs (looked up by the bots' loops twice a day).
                     "server_update": is_server().then(|| self.db.setting("update_latest").ok().flatten()).flatten()
