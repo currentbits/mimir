@@ -945,6 +945,11 @@ impl Core {
                     Some(who) => format!("{who}: {}", text.trim()),
                     None => text.trim().to_string(),
                 };
+                // A reply is being written here: this reaches it and changes it ("actually, only this week"), instead of
+                // waiting its turn. Not a photo or file (only text can go in mid-run), nor while a routine holds the chat.
+                if images.is_empty() && crate::live::steer(self.bot, chat, &text) {
+                    return Ok(());
+                }
                 let (core, chan, ext) = (self.clone(), chan.clone(), ext.to_string());
                 tokio::spawn(async move {
                     // Typing at once, even when this chat is still busy; a wait past a few seconds says why, once.
@@ -988,9 +993,14 @@ impl Core {
                         // /stop: keep what was asked and written so far, like Stop in the app.
                         Err(_) => {
                             let partial = crate::live::get(core.bot, chat).unwrap_or_default();
+                            let steered = crate::live::steered(core.bot, chat);
                             crate::live::end(core.bot, chat);
                             let note = if partial.trim().is_empty() { tr("_Stopped before replying._").to_string() } else { format!("{}\n\n{}", partial.trim_end(), tr("_Stopped._")) };
-                            let logged = core.db.run_stop(core.bot, chat, &text).and_then(|_| core.db.log(core.bot, conv, "user", &text, None)).and_then(|_| core.db.log(core.bot, conv, "assistant", &note, None));
+                            let logged = core
+                                .db
+                                .run_stop(core.bot, chat, &text)
+                                .and_then(|_| std::iter::once(&text).chain(&steered).try_for_each(|t| core.db.log(core.bot, conv, "user", t, None)))
+                                .and_then(|_| core.db.log(core.bot, conv, "assistant", &note, None));
                             if let Err(e) = logged {
                                 eprintln!("stop: {e:#}");
                             }

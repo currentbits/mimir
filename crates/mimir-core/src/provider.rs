@@ -136,7 +136,36 @@ impl Provider {
         matches!(self, Provider::OpenAi { .. } | Provider::ChatGpt { .. })
     }
 
+    /// One reply. A message the person sends while it's being written steers it: `claude -p` takes it in mid-run
+    /// (see claude); the others can't, so the run stops and starts over from the same session with it added.
     pub async fn run(&self, ctx: &ToolCtx, system: &str, history: &[(String, String)], user: &str, session: Option<String>) -> Result<Reply> {
+        let (b, c) = (ctx.bot_id, ctx.chat_id);
+        let bell = if ctx.stream && !matches!(self, Provider::Claude { .. }) { crate::live::bell(b, c) } else { None };
+        let Some(bell) = bell else { return self.run_once(ctx, system, history, user, session).await };
+        let mut user = user.to_string();
+        loop {
+            let more = {
+                let run = self.run_once(ctx, system, history, &user, session.clone());
+                tokio::pin!(run);
+                loop {
+                    tokio::select! {
+                        r = &mut run => match crate::live::last_call(b, c) {
+                            more if more.is_empty() => return r,
+                            more => break more,
+                        },
+                        _ = bell.notified() => match crate::live::steers(b, c) {
+                            more if more.is_empty() => {}
+                            more => break more,
+                        },
+                    }
+                }
+            };
+            crate::live::turned(b, c);
+            user = steered(&user, &more);
+        }
+    }
+
+    async fn run_once(&self, ctx: &ToolCtx, system: &str, history: &[(String, String)], user: &str, session: Option<String>) -> Result<Reply> {
         match self {
             Provider::Claude { model, home } | Provider::Codex { model, home } | Provider::Grok { model, home } => {
                 let go = |sid: Option<&str>| {
@@ -161,6 +190,22 @@ impl Provider {
     }
 }
 
+/// The message a run starts over with after the person sent more while it was being written.
+fn steered(user: &str, more: &[String]) -> String {
+    format!(
+        "{user}\n\n<sent_while_you_were_answering>\nThe person sent this while you were still working on the message above, so you're \
+         starting over. It may change or replace what they asked: answer with it in mind.\n{}\n</sent_while_you_were_answering>",
+        more.join("\n\n")
+    )
+}
+
+/// What `claude -p` is sent for a message that arrives mid-run, after interrupting the answer in progress (the
+/// session keeps what was written so far).
+fn steer_line(text: &str) -> String {
+    let text = format!("[Sent while you were still answering. It may change or replace what I asked: answer with it in mind.]\n{text}");
+    json!({"type": "user", "message": {"role": "user", "content": text}}).to_string() + "\n"
+}
+
 async fn claude(ctx: &ToolCtx, home: &PathBuf, model: Option<&str>, system: &str, user: &str, session: Option<&str>) -> Result<Reply> {
     let exe = std::env::current_exe()?;
     // Tools off: no tools server at all (with --strict-mcp-config nothing else loads), so the run doesn't pay its startup.
@@ -181,6 +226,8 @@ async fn claude(ctx: &ToolCtx, home: &PathBuf, model: Option<&str>, system: &str
     cmd.current_dir(&workdir)
         // stream-json + partial messages: text arrives as it's written; the final `result` line has the same shape as --output-format json.
         .args(["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages"])
+        // Messages in as stream-json too, so one sent mid-run can steer it (stdin stays open until the answer is in).
+        .args(["--input-format", "stream-json"])
         .args(["--restricted", "--strict-mcp-config", "--permission-mode", "dontAsk"])
         .arg("--mcp-config")
         .arg(mcp.to_string())
@@ -217,20 +264,68 @@ async fn claude(ctx: &ToolCtx, home: &PathBuf, model: Option<&str>, system: &str
 
     let mut child = cmd.spawn().context("failed to start `claude` — is Claude Code installed and logged in?")?;
     // Prompt via stdin so it can't be mistaken for a flag value.
-    let mut stdin = child.stdin.take().unwrap();
+    let mut stdin = child.stdin.take();
     let user = with_image_note(user, &ctx.images);
-    stdin.write_all(user.as_bytes()).await?;
-    drop(stdin);
+    stdin.as_mut().context("no stdin")?.write_all(json!({"type": "user", "message": {"role": "user", "content": user}}).to_string().as_bytes()).await?;
+    stdin.as_mut().context("no stdin")?.write_all(b"\n").await?;
 
     let mut lines = tokio::io::BufReader::new(child.stdout.take().context("no stdout")?).lines();
     let mut stderr = child.stderr.take().context("no stderr")?;
     let (bot, chat, stream) = (ctx.bot_id, ctx.chat_id, ctx.stream);
+    // Only a reply to a person can be steered; anything else ends at its first answer.
+    let bell = if stream { crate::live::bell(bot, chat) } else { None };
+    if bell.is_none() {
+        stdin = None;
+    }
+    // ponytail: one that never rings stands in when there's none (that branch is off then anyway).
+    let bell = bell.unwrap_or_default();
     let read = async {
         let mut result = None;
-        while let Some(line) = lines.next_line().await? {
+        // Each message sent gets a `result` (an interrupted one too, as an error): tokens add up, cost is the process's so far.
+        let mut used = Usage::default();
+        // Messages sent that have no `result` yet: the answer is in when that's none.
+        let mut asked = 1;
+        loop {
+            let line = tokio::select! {
+                line = lines.next_line() => line,
+                // Interrupt the answer in progress, then the new message: it answers that, with the old one in its session.
+                _ = bell.notified(), if stdin.is_some() => {
+                    let more = crate::live::steers(bot, chat);
+                    if let (Some(w), false) = (stdin.as_mut(), more.is_empty()) {
+                        w.write_all((json!({"type": "control_request", "request_id": crate::random_hex(4)?, "request": {"subtype": "interrupt"}}).to_string() + "\n").as_bytes()).await?;
+                        for m in &more {
+                            w.write_all(steer_line(m).as_bytes()).await?;
+                        }
+                        asked += more.len();
+                        crate::live::turned(bot, chat);
+                    }
+                    continue;
+                }
+            };
+            let Some(line) = line? else { break };
             let Ok(v) = serde_json::from_str::<Value>(&line) else { continue };
             match v["type"].as_str() {
-                Some("result") => result = Some(v),
+                Some("result") => {
+                    let u = claude_usage(&v);
+                    (used.tokens_in, used.tokens_out, used.cache_read) = (used.tokens_in + u.tokens_in, used.tokens_out + u.tokens_out, used.cache_read + u.cache_read);
+                    (used.model, used.cost_usd) = (u.model.or(used.model), u.cost_usd);
+                    result = Some((v, used.clone()));
+                    asked = asked.saturating_sub(1);
+                    // The answer is in. One that arrived just now goes in as a message of its own (it's idle: nothing
+                    // to interrupt); with none, stdin closes and the CLI exits.
+                    if stdin.is_some() && asked == 0 {
+                        match crate::live::last_call(bot, chat) {
+                            more if more.is_empty() => stdin = None,
+                            more => {
+                                for m in &more {
+                                    stdin.as_mut().context("no stdin")?.write_all(steer_line(m).as_bytes()).await?;
+                                }
+                                asked += more.len();
+                                crate::live::turned(bot, chat);
+                            }
+                        }
+                    }
+                }
                 // The plan's usage windows (5-hour, weekly): shown with routines, and when a limit resets.
                 Some("rate_limit_event") => {
                     let _ = ctx.db.set_setting(WINDOWS, &json!({"at": crate::db::now(), "info": v["rate_limit_info"]}).to_string());
@@ -244,8 +339,9 @@ async fn claude(ctx: &ToolCtx, home: &PathBuf, model: Option<&str>, system: &str
         anyhow::Ok(result)
     };
     let result = tokio::time::timeout(TURN_TIMEOUT, read).await.context("claude timed out")??;
+    drop(stdin);
     let status = child.wait().await?;
-    let Some(v) = result else {
+    let Some((v, usage)) = result else {
         let mut err = String::new();
         let _ = tokio::io::AsyncReadExt::read_to_string(&mut stderr, &mut err).await;
         bail!("claude exited {status} without a result: {}", tools::truncate(&err, 500));
@@ -253,7 +349,7 @@ async fn claude(ctx: &ToolCtx, home: &PathBuf, model: Option<&str>, system: &str
     if v["is_error"].as_bool().unwrap_or(false) || !status.success() {
         bail!("claude error: {}", v["result"].as_str().unwrap_or("unknown error"));
     }
-    Ok(Reply { text: v["result"].as_str().unwrap_or("").to_string(), session: v["session_id"].as_str().map(String::from), usage: claude_usage(&v) })
+    Ok(Reply { text: v["result"].as_str().unwrap_or("").to_string(), session: v["session_id"].as_str().map(String::from), usage })
 }
 
 /// The HOME `grok` runs under: Mimir's own, so the person's grok/Claude/Cursor plugins, skills, hooks and MCP

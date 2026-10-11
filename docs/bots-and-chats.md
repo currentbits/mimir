@@ -33,7 +33,9 @@ What's shared and what isn't:
 
 - **This computer** (the built-in chat in the app). Replies stream in, with a line showing what the bot is doing
   ("Searching memory…", "Reading a web page…", "Waiting for your OK…") and, after a few seconds, how long it's been
-  working. **Stop** cuts a reply off; what was written so far stays, marked *Stopped*. A reply still being written in
+  working. You can keep typing while it works: what you send then ("actually, only this week") reaches the reply in
+  progress, which says *Changing course…* and answers with it in mind, instead of finishing the old answer first.
+  **Stop** cuts a reply off; what was written so far stays, marked *Stopped*. A reply still being written in
   Telegram, Slack or Discord can be stopped from the app too: open it under **Activity**. "Start fresh" (or `/new`)
   begins a new conversation. When a reply saved a memory, its "Saved to memory" chip has **Undo**.
   A chat opens on its newest 200 messages; **Show earlier messages** at the top pages back. **Search this chat**
@@ -114,9 +116,12 @@ asleep) starts with "Sorry for the slow reply". Messages sent while Mimir was of
 up to a day back: Telegram keeps them for it; on Slack your DMs and @-mentions in paired channels (with the
 `channels:history` and `groups:history` scopes; not replies inside threads), on Discord your paired DMs and channels. A failed reply says why in plain words and what to do.
 
-A bot does one thing at a time per chat; its other chats don't wait. A message that arrives while that chat is busy
-(a routine running there, or an earlier reply waiting for your OK) shows typing at once, and after a few seconds one
-note: "Finishing a routine first…" or "Finishing my last reply first…". Its reply follows.
+A bot does one thing at a time per chat; its other chats don't wait. A message sent while it's writing you a reply
+**steers** that reply: the draft says *Changing course…* and one reply answers both. With Claude the message goes into
+the run in progress (the answer so far stays in its session); the other AI accounts can't take a message mid-run, so
+that run stops and starts over with your new message added (anything it already did, like a saved memory, stays done).
+A message that arrives while a routine runs there, or with a photo or file, waits instead: typing at once, and after a
+few seconds one note: "Finishing a routine first…" or "Finishing my last reply first…". Its reply follows.
 
 Chat commands: `/memory`, `/why` (what the last reply used: memories, skills, pages), `/routines`, `/new`, `/stop` (a bare "stop" works too while it's writing), `/undo <n>`
 (take back something it learned; see [Memory](memory.md#learned-this-week)), and `/<skill>` for each of the bot's

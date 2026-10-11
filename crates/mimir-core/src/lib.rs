@@ -235,6 +235,8 @@ pub async fn turn(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) -> R
     }
     if ctx.stream {
         live::reset(ctx.bot_id, ctx.chat_id);
+        // Messages sent from now until it's answered steer this reply instead of waiting their turn.
+        live::listen(ctx.bot_id, ctx.chat_id);
     }
     let out = turn_inner(provider, &ctx, trigger).await;
     if ctx.stream {
@@ -1134,6 +1136,12 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
             // What the person typed ("/book-padel Thursday"), not the instruction it became.
             let said = if let Trigger::Message(t) = &trigger { t.to_string() } else { text.clone() };
             ctx.db.log(ctx.bot_id, ctx.conv, "user", &said, None)?;
+            // And what they sent while it was being written, which the reply took in.
+            if matches!(trigger, Trigger::Message(_)) {
+                for s in live::steered(ctx.bot_id, ctx.chat_id) {
+                    ctx.db.log(ctx.bot_id, ctx.conv, "user", &s, None)?;
+                }
+            }
             ctx.db.log(ctx.bot_id, ctx.conv, "assistant", &reply.text, ctx.run_id)?;
             if is_routine && ctx.is_tainted() {
                 ctx.db.conv_taint(ctx.bot_id, ctx.conv)?;

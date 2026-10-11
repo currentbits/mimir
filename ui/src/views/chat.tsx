@@ -328,6 +328,9 @@ export function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, 
   const replying = chat.chat_id === LOCAL && !incognito && !sentHere ? running.find(w => w.chat_id === LOCAL && w.trigger === 'message' && (!only || w.bot_id === botId))?.bot_id ?? null : null
   useEffect(() => { if (!pending && !running.some(w => w.chat_id === LOCAL && w.trigger === 'message')) setSentHere(false) }, [running, pending])
   const working = !!pending || replying !== null
+  // What you sent while the reply was being written: it changes course to take them in (steering).
+  const [steered, setSteered] = useState<string[]>([])
+  useEffect(() => { if (!working) setSteered([]) }, [working])
   const replier = to ?? replying ?? botId
   // "/" lists the bot's skills: "/book-padel Thursday" asks it to use that one.
   const skillList = useLoad(() => incognito ? Promise.resolve([] as Skill[]) : invoke<Skill[]>('skills', { chatId: chat.chat_id }), [chat.chat_id, incognito], 30000)
@@ -465,6 +468,8 @@ export function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, 
   const [photos, setPhotos] = useState<{ url: string; data: string; ext: string }[]>([])
   // A PDF, Word, Excel or text file to send with the message (one at a time); the bot gets its text.
   const [doc, setDoc] = useState<{ name: string; data: string } | null>(null)
+  // Text only, and not incognito (nothing there to take it in): a photo or file waits until the reply is done.
+  const steerable = working && !incognito && !photos.length && !doc
   const [dragging, setDragging] = useState(false)
   const addPhotos = (files: Iterable<File>) => {
     for (const f of files) {
@@ -504,9 +509,17 @@ export function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, 
     return b ? [b, t.slice(1 + b.name.length).replace(/^[\s,:]+/, '')] : null
   }
   const send = async (value = text) => {
+    if (working) {
+      const t = value.trim()
+      if (!t || !steerable) return
+      setText('')
+      // Not taken (it was just finishing): back in the box, to send once it's done.
+      invoke<boolean>('steer', { botId: replier, chatId: cid, text: t }).then(took => took ? setSteered(s => [...s, t]) : setText(x => x || t), e => { setText(x => x || t); setErr(String(e)) })
+      return
+    }
     const at = incognito ? null : mentioned(value.trim())
     const t = at ? at[1].trim() : value.trim()
-    if ((!t && !photos.length && !doc) || working) return
+    if (!t && !photos.length && !doc) return
     if (incognito) return sendIncognito(t)
     // "@Researcher …" goes to that bot (and the picker follows). In one bot's own chat, its thread opens when the reply is in
     // (switching now would drop this view, and the reply with it).
@@ -607,6 +620,7 @@ export function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, 
           {working && (
             <>
               {pending && <div className="msg-user msg-in"><Said text={pending} /></div>}
+              {steered.map((t, i) => <div key={i} className="msg-user msg-in"><Said text={t} /></div>)}
               <div className="msg-bot msg-in" style={{ '--pig': pigment(them.id), animationDelay: '120ms' } as React.CSSProperties}>
                 <Avatar id={them.id} name={them.name} size={26} alive mood={moodOf(step, draft)} />
                 <div><div className="msg-head"><b>{them.name}</b>{draft && <time>writing…</time>}
@@ -703,7 +717,7 @@ export function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, 
                     <Icon name="settings" size={14} />
                   </button>
                 )}
-                <textarea ref={box} rows={1} placeholder={incognito ? `Message ${me.name} incognito` : `Message ${me.name}`} value={text} onChange={e => setText(e.target.value)} disabled={working} autoFocus
+                <textarea ref={box} rows={1} placeholder={incognito ? `Message ${me.name} incognito` : working ? 'Add to what you asked, or change it' : `Message ${me.name}`} value={text} onChange={e => setText(e.target.value)} disabled={working && !steerable} autoFocus
                   onPaste={e => { if (incognito) return; const imgs = [...e.clipboardData.files].filter(f => f.type.startsWith('image/')); if (imgs.length) { e.preventDefault(); addPhotos(imgs) } }}
                   onKeyDown={e => {
                     if (e.key === 'Tab' && skillHits[0]) { e.preventDefault(); setText(`/${skillSlug(skillHits[0].name)} `); return }
@@ -713,6 +727,7 @@ export function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, 
                   <button type="button" className={'incog-toggle' + (incognito ? ' on' : '')} aria-pressed={incognito} onClick={() => setIncognito(!incognito)}
                     title={incognito ? 'Back to the normal chat' : 'Incognito chat: no memory, nothing saved'}><Icon name="incognito" size={16} /></button>
                 )}
+                {working && steerable && text.trim() && <button className="send" aria-label="Send now: the reply changes course" title="Send now: the reply changes course"><Icon name="send" size={15} /></button>}
                 {working
                   ? <button type="button" className="send stop" aria-label="Stop" title="Stop" onClick={() => invoke('stop', { botId: replier, chatId: cid }).catch(e => setErr(`Couldn't stop it: ${e}`))}><span className="stop-square" /></button>
                   : <button className="send" aria-label="Send" disabled={!text.trim() && !photos.length}><Icon name="send" size={15} /></button>}

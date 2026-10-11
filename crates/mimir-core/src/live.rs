@@ -10,14 +10,26 @@ fn with<R>(f: impl FnOnce(&mut HashMap<(i64, i64), String>) -> R) -> R {
     f(DRAFTS.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(HashMap::new))
 }
 
+/// Said at the end of a draft whose reply changed course, until the new answer's first words.
+const TURNING: &str = "_Changing course…_";
+
 /// Append streamed text for (bot, chat).
 pub fn push(bot: i64, chat: i64, delta: &str) {
-    with(|m| m.entry((bot, chat)).or_default().push_str(delta));
+    with(|m| {
+        let d = m.entry((bot, chat)).or_default();
+        if d.ends_with(TURNING) {
+            d.clear();
+        }
+        d.push_str(delta)
+    });
 }
 
-/// A new assistant message started (e.g. after a tool call): show only the current one.
+/// A new assistant message started (e.g. after a tool call): show only the current one (or that it's changing course).
 pub fn reset(bot: i64, chat: i64) {
-    with(|m| m.insert((bot, chat), String::new()));
+    with(|m| {
+        let d = m.entry((bot, chat)).or_default();
+        *d = if d.ends_with(TURNING) { TURNING.to_string() } else { String::new() };
+    });
 }
 
 pub fn get(bot: i64, chat: i64) -> Option<String> {
@@ -27,6 +39,80 @@ pub fn get(bot: i64, chat: i64) -> Option<String> {
 pub fn end(bot: i64, chat: i64) {
     with(|m| m.remove(&(bot, chat)));
     set_step(bot, chat, None);
+    inbox(|m| m.remove(&(bot, chat)));
+}
+
+/// The reply changed course (a message sent while it was being written): what it had so far, saying so, until the
+/// new answer starts.
+pub fn turned(bot: i64, chat: i64) {
+    with(|m| {
+        let d = m.entry((bot, chat)).or_default();
+        *d = format!("{}\n\n{TURNING}", d.trim_end()).trim_start().to_string();
+    });
+}
+
+/// Messages sent while a reply is being written, for the run writing it (steering).
+#[derive(Default)]
+struct Inbox {
+    open: bool,
+    waiting: Vec<String>,
+    /// Taken in by the run: logged with the message it answers.
+    taken: Vec<String>,
+    bell: std::sync::Arc<tokio::sync::Notify>,
+}
+
+static INBOX: Mutex<Option<HashMap<(i64, i64), Inbox>>> = Mutex::new(None);
+
+fn inbox<R>(f: impl FnOnce(&mut HashMap<(i64, i64), Inbox>) -> R) -> R {
+    f(INBOX.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(HashMap::new))
+}
+
+/// A reply to a person started: messages sent before it ends can steer it.
+pub fn listen(bot: i64, chat: i64) {
+    inbox(|m| m.insert((bot, chat), Inbox { open: true, ..Default::default() }));
+}
+
+/// Rung when a message arrives for the reply being written; None when nothing there takes one.
+pub fn bell(bot: i64, chat: i64) -> Option<std::sync::Arc<tokio::sync::Notify>> {
+    inbox(|m| m.get(&(bot, chat)).filter(|i| i.open).map(|i| i.bell.clone()))
+}
+
+/// A message sent while a reply is being written here: true if that reply takes it in, false if it should wait its
+/// turn as a message of its own (nothing being written, or it's just finishing).
+pub fn steer(bot: i64, chat: i64, text: &str) -> bool {
+    inbox(|m| match m.get_mut(&(bot, chat)).filter(|i| i.open) {
+        Some(i) => {
+            i.waiting.push(text.to_string());
+            i.bell.notify_one();
+            true
+        }
+        None => false,
+    })
+}
+
+/// The messages waiting for the run to take in (and so taken).
+pub fn steers(bot: i64, chat: i64) -> Vec<String> {
+    inbox(|m| {
+        let Some(i) = m.get_mut(&(bot, chat)) else { return vec![] };
+        let w = std::mem::take(&mut i.waiting);
+        i.taken.extend(w.iter().cloned());
+        w
+    })
+}
+
+/// The run has its answer: any message that just arrived, to take in first; with none, the inbox closes (one sent
+/// from now on is a message of its own).
+pub fn last_call(bot: i64, chat: i64) -> Vec<String> {
+    let w = steers(bot, chat);
+    if w.is_empty() {
+        inbox(|m| m.get_mut(&(bot, chat)).map(|i| i.open = false));
+    }
+    w
+}
+
+/// Every message that steered this reply, in order.
+pub fn steered(bot: i64, chat: i64) -> Vec<String> {
+    inbox(|m| m.get(&(bot, chat)).map(|i| i.taken.iter().chain(&i.waiting).cloned().collect()).unwrap_or_default())
 }
 
 /// What the bot is doing right now ("Searching memory"), while a reply is in progress.
@@ -97,5 +183,29 @@ mod tests {
         assert_eq!(super::get(7, 1).as_deref(), Some(""));
         super::end(7, 1);
         assert_eq!(super::get(7, 1), None);
+    }
+
+    #[test]
+    fn steering() {
+        use super::*;
+        assert!(!steer(8, 1, "nobody's writing"), "no reply in progress: a message of its own");
+        listen(8, 1);
+        push(8, 1, "Here's the month");
+        assert!(steer(8, 1, "only this week"));
+        turned(8, 1);
+        assert_eq!(get(8, 1).as_deref(), Some("Here's the month\n\n_Changing course…_"));
+        reset(8, 1);
+        assert_eq!(get(8, 1).as_deref(), Some("_Changing course…_"), "said until the new answer starts");
+        push(8, 1, "This week");
+        assert_eq!(get(8, 1).as_deref(), Some("This week"));
+        assert_eq!(steers(8, 1), ["only this week"]);
+        assert!(steers(8, 1).is_empty(), "taken once");
+        assert!(steer(8, 1, "and in French"));
+        assert_eq!(last_call(8, 1), ["and in French"], "one that arrived as it finished is still taken in");
+        assert!(last_call(8, 1).is_empty());
+        assert!(!steer(8, 1, "too late"), "closed: waits its turn");
+        assert_eq!(steered(8, 1), ["only this week", "and in French"]);
+        end(8, 1);
+        assert!(steered(8, 1).is_empty() && bell(8, 1).is_none());
     }
 }
