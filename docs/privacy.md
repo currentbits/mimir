@@ -11,8 +11,8 @@ to the services you connected.
 | Bot tokens, API keys (including Brave Search's), saved logins, tool-server tokens, the calendar link, the email and calendar app passwords | The OS keychain (macOS Keychain, Windows Credential Manager, the Linux keyring); on a server, its database; the data folder is owner-only (mode 0700) |
 | Your email account's server names and address (not its password) | `~/.mimir/mimir.db` (settings) |
 | The chats' file workspaces (notes, lists, drafts bots keep) | `~/.mimir/files/chat-<id>/`, with earlier versions under `.history/` |
-| Photos you send | `~/.mimir/media/`, deleted after 60 days |
-| A file's text you send (PDF, text file) | In the chat's history, with your message |
+| Photos you send (and a scanned PDF's pages) | `~/.mimir/media/`, deleted after 60 days |
+| A file's text you send (PDF, Word, Excel, text file) | In the chat's history, with your message |
 | Each bot's browser profile (its logins and cookies on sites) | `~/.mimir/browser/`; deleted with the bot |
 | The AI CLIs' own copies of conversations | Claude Code: `~/.claude/projects/` (the folder for Mimir's workspace); Codex: `~/.codex/sessions/`; Grok: `~/.mimir/grok/.grok/sessions/`. Deleted when you start fresh, delete a chat's history or delete the bot |
 | Speech, voice-activity and speaker models (and on Linux the speaker library) | `~/.mimir/whisper/` |

@@ -1,5 +1,6 @@
 //! `mimir server`: the self-hosted mode. Runs every bot 24/7 and serves the web UI plus
-//! `POST /api/<cmd>` (the same commands the desktop app uses), behind an admin token.
+//! `POST /api/<cmd>` (the same commands the desktop app uses), behind an admin token, and an OpenAI-compatible
+//! `/v1/chat/completions` whose tokens each reach one bot.
 //! Put it behind a TLS proxy (Caddy/Traefik) for anything beyond localhost.
 
 use anyhow::{Context, Result};
@@ -8,7 +9,7 @@ use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
-use axum::{Json, Router};
+use axum::{Extension, Json, Router};
 use mimir_core::db::Db;
 use mimir_core::host::{DbSecrets, Host};
 use serde_json::{Value, json};
@@ -48,8 +49,12 @@ fn same(a: &str, b: &str) -> bool {
     a.len() == b.len() && a.bytes().zip(b.bytes()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
+fn bearer(headers: &HeaderMap) -> Option<&str> {
+    headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()).and_then(|v| v.strip_prefix("Bearer "))
+}
+
 fn authorized(headers: &HeaderMap, token: &str) -> bool {
-    headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()).and_then(|v| v.strip_prefix("Bearer ")).is_some_and(|t| same(t, token))
+    bearer(headers).is_some_and(|t| same(t, token))
 }
 
 /// Runs before the request body is read, so without the token nothing big is accepted.
@@ -58,6 +63,77 @@ async fn require_token(State(app): State<App>, req: axum::extract::Request, next
         return (StatusCode::UNAUTHORIZED, Json(json!({"error": "wrong or missing admin token"}))).into_response();
     }
     next.run(req).await
+}
+
+/// The bot a chat API token reaches (set by `require_chat_token`).
+#[derive(Clone, Copy)]
+struct ChatBot(i64);
+
+/// Errors the way OpenAI's API words them, so clients show the message.
+fn oai_error(status: StatusCode, message: &str) -> Response {
+    (status, Json(json!({"error": {"message": message, "type": "invalid_request_error"}}))).into_response()
+}
+
+/// The chat API takes its own tokens, each for one bot; the admin token isn't one of them. Checked before the body
+/// is read, like the admin API.
+async fn require_chat_token(State(app): State<App>, mut req: Request, next: Next) -> Response {
+    match bearer(req.headers()).and_then(|t| mimir_core::host::chat_token_bot(&app.host.db, t)) {
+        Some(bot) => {
+            req.extensions_mut().insert(ChatBot(bot));
+            next.run(req).await
+        }
+        None => oai_error(StatusCode::UNAUTHORIZED, "wrong or missing token: make one under Settings, Chat API"),
+    }
+}
+
+/// The text of the last user message: a string, or the text parts of a list of parts.
+fn last_user_text(req: &Value) -> String {
+    let Some(m) = req["messages"].as_array().and_then(|m| m.iter().rev().find(|m| m["role"] == "user")) else { return String::new() };
+    match &m["content"] {
+        Value::String(s) => s.clone(),
+        Value::Array(parts) => parts.iter().filter_map(|p| p["text"].as_str()).collect::<Vec<_>>().join("\n"),
+        _ => String::new(),
+    }
+}
+
+/// OpenAI-compatible chat for Shortcuts, Home Assistant and the like: one bot, its built-in chat. Mimir keeps the
+/// conversation itself, so only the last user message is the turn; the rest of `messages` is ignored.
+async fn chat_completions(State(app): State<App>, Extension(ChatBot(bot)): Extension<ChatBot>, body: axum::body::Bytes) -> Response {
+    let req: Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(e) => return oai_error(StatusCode::BAD_REQUEST, &format!("bad request body: {e}")),
+    };
+    let text = last_user_text(&req);
+    if text.trim().is_empty() {
+        return oai_error(StatusCode::BAD_REQUEST, "no user message to answer");
+    }
+    let reply = match app.host.call("send_local", &json!({"bot_id": bot, "text": text})).await {
+        Ok(Value::String(s)) => s,
+        Ok(v) => v.to_string(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": {"message": format!("{e:#}"), "type": "server_error"}}))).into_response(),
+    };
+    let model = app.host.db.bot(bot).map(|b| b.name).unwrap_or_default();
+    let (id, created) = (format!("chatcmpl-{}", mimir_core::random_hex(12).unwrap_or_default()), mimir_core::db::now());
+    // ponytail: the whole reply as one chunk once it's done; real token streaming if a client needs it
+    if req["stream"] == true {
+        let chunk = |delta: Value, finish: Value| {
+            format!("data: {}\n\n", json!({"id": id, "object": "chat.completion.chunk", "created": created, "model": model, "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]}))
+        };
+        let body = chunk(json!({"role": "assistant", "content": reply}), Value::Null) + &chunk(json!({}), json!("stop")) + "data: [DONE]\n\n";
+        return ([(header::CONTENT_TYPE, "text/event-stream")], body).into_response();
+    }
+    Json(json!({
+        "id": id, "object": "chat.completion", "created": created, "model": model,
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": reply}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+    }))
+    .into_response()
+}
+
+/// The one "model" a token reaches: its bot. Clients ask for this to check the connection.
+async fn models(State(app): State<App>, Extension(ChatBot(bot)): Extension<ChatBot>) -> Response {
+    let name = app.host.db.bot(bot).map(|b| b.name).unwrap_or_default();
+    Json(json!({"object": "list", "data": [{"id": name, "object": "model", "created": 0, "owned_by": "mimir"}]})).into_response()
 }
 
 async fn api(State(app): State<App>, Path(cmd): Path<String>, body: axum::body::Bytes) -> Response {
@@ -120,9 +196,11 @@ pub async fn run(db: Db, home: PathBuf, listen: &str) -> Result<()> {
             "/api/{cmd}",
             post(api).layer(DefaultBodyLimit::max(32 * 1024 * 1024)).route_layer(axum::middleware::from_fn_with_state(state.clone(), require_token)),
         )
+        .route("/v1/chat/completions", post(chat_completions).route_layer(axum::middleware::from_fn_with_state(state.clone(), require_chat_token)))
+        .route("/v1/models", get(models).route_layer(axum::middleware::from_fn_with_state(state.clone(), require_chat_token)))
         .route("/healthz", get(|| async { "ok" }))
         // Token auth (no cookies), so any origin may call it: the desktop app in remote mode needs this.
-        .layer(CorsLayer::new().allow_origin(Any).allow_methods([Method::POST]).allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]))
+        .layer(CorsLayer::new().allow_origin(Any).allow_methods([Method::GET, Method::POST]).allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]))
         .with_state(state);
     match ui_dir() {
         Some(dir) => {
@@ -156,5 +234,15 @@ mod tests {
         assert!(!authorized(&h, "abcd"));
         h.insert(header::AUTHORIZATION, "abc".parse().unwrap());
         assert!(!authorized(&h, "abc"), "Bearer prefix required");
+    }
+
+    #[test]
+    fn last_user_message() {
+        let req = json!({"messages": [{"role": "system", "content": "s"}, {"role": "user", "content": "first"}, {"role": "assistant", "content": "a"},
+            {"role": "user", "content": [{"type": "text", "text": "lights"}, {"type": "image_url"}, {"type": "text", "text": "off"}]}]});
+        assert_eq!(last_user_text(&req), "lights\noff");
+        assert_eq!(last_user_text(&json!({"messages": [{"role": "user", "content": "hi"}]})), "hi");
+        assert_eq!(last_user_text(&json!({"messages": [{"role": "system", "content": "s"}]})), "");
+        assert_eq!(last_user_text(&json!({})), "");
     }
 }

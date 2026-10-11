@@ -15,7 +15,7 @@ For contributors: how the pieces fit together.
 
 | Module | Does |
 |---|---|
-| `db` | SQLite (one file): memories with FTS5 search and versions, bots, chats, messages (FTS5 too, for `chat_search`), routines, runs, tool calls, approvals, rules, suggestions, skills (versions, uses, proposals by kind), meetings |
+| `db/` | SQLite (one file): memories with FTS5 search and versions, bots, chats, messages (FTS5 too, for `chat_search`), routines, runs, tool calls, approvals, rules, suggestions, skills (versions, uses, proposals by kind), meetings. `mod.rs` holds `Db`, opening and migrations; each area (`memory.rs`, `chats.rs`, `routines.rs`…) has its own `impl Db` block |
 | `host` | `Host::call(cmd, args)`: every command the UI sends; starts and stops each bot's runtime; the secret store |
 | `runtime` | Per-bot channel listeners (Telegram, Slack, Discord), the 30 s routine scheduler, approval cards, the daily digest |
 | `telegram`, `slack`, `discord` | The messaging apps (outbound connections, streaming replies) |
@@ -110,7 +110,7 @@ The [Security model](security.md) in terms of where it lives. Keep these when ch
   - The AI CLIs get instructions through private files (`Private`), never the command line: Claude
     `--append-system-prompt-file`, Codex `model_instructions_file`, Grok a rules file in a trusted per-bot-and-chat
     folder (`grok_trust`, `grok_rules`; Windows keeps `--rules`).
-  - PDFs are read by `<binary> read-pdf` (`pdf_helper_main`).
+  - PDFs are read by `<binary> read-pdf` (`pdf_helper_main`); `read-pdf pages` gives a scanned PDF's page pictures.
   - The AI CLIs' transcripts are removed by `Provider::forget_session`.
   - `Host::new` does startup cleanup (`incognito_leftovers`, `prune_old`, `close_interrupted`, `tmp/`, old media). Never put that in
     `Db::open`: the tools server opens the database on every turn.
@@ -120,7 +120,7 @@ The [Security model](security.md) in terms of where it lives. Keep these when ch
 ## Data
 
 One SQLite file in the data folder (`~/.mimir`, or `MIMIR_HOME`). Its schema version is `PRAGMA user_version`
-(`VERSION` in `db.rs`). A schema change bumps `VERSION` and adds a `migrate_v<n>` step to `migrate`. Each step runs
+(`VERSION` in `db/mod.rs`). A schema change bumps `VERSION` and adds a `migrate_v<n>` step to `migrate`. Each step runs
 once, in one transaction, after `VACUUM INTO mimir.db.before-<n>` (the last 2 are kept). An up-to-date database only
 reads its version. A database with a higher version than the build is refused, and the desktop app shows the error
 and the data folder in a dialog. Installs from before the rename to Mimir (`~/.botpoc`,

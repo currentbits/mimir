@@ -5,7 +5,7 @@ import { openLink } from '../markdown'
 import { ask, tell, Empty, Group, Icon, Row, Segmented, Switch } from '../ui'
 import { SignInChatGPT, SignInGrok, ConnectOpenRouter } from './accounts'
 import { useLoad, SECRETS_AT, LOCAL } from '../shared'
-import type { ComputerStatus, Chat, Account, ToolServer } from '../types'
+import type { Bot, ComputerStatus, Chat, Account, ToolServer } from '../types'
 
 type VaultEntry = { name: string; domains: string[] }
 
@@ -23,6 +23,7 @@ const SETTING_WORDS: Record<string, string> = {
   'Browser': 'playwright chromium saved logins passwords vault',
   'Tool servers': 'mcp plugins integrations connectors',
   'Your data': 'export backup download delete privacy',
+  'Chat API': 'openai token shortcuts siri home assistant integration v1 completions',
 }
 
 /** Shows only the settings that match, live as you type: whole groups whose title or note matches, else the rows that do. */
@@ -104,6 +105,7 @@ export function SettingsView({ onComputer, find = '' }: { onComputer: () => void
       <ToolServerSettings onChange={toolsChanged} />
       <Permissions key={tools} />
       <DataSettings />
+      {(!inDesktop || remoteServer()) && <ChatApiSettings />}
       <ServerSettings />
       </div>
     </>
@@ -156,6 +158,43 @@ function BackupRows() {
       <button type="button" className="btn btn-sm" disabled={busy || !list.length} onClick={restore}>Restore</button>
     </Row>
   </>
+}
+
+/** Server only: tokens for an OpenAI-compatible chat API, each reaching one bot (Shortcuts, Home Assistant). */
+function ChatApiSettings() {
+  const tokens = useLoad(() => invoke<{ id: string; name: string; bot_id: number }[]>('chat_tokens'), [])
+  const bots = useLoad(() => invoke<Bot[]>('bots'), []).data ?? []
+  const [bot, setBot] = useState<number | null>(null)
+  const [name, setName] = useState('')
+  const [made, setMade] = useState<string | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+  const base = `${remoteServer()?.url ?? location.origin}/v1`
+  const botId = bot ?? bots[0]?.id
+  const add = () => invoke<string>('chat_token_add', { botId, name }).then(t => { setMade(t); setName(''); setErr(null); tokens.reload() }, e => setErr(String(e)))
+  const remove = async (id: string, n: string) => {
+    if (await ask(`Delete the token for “${n}”? Whatever uses it stops working.`, 'Delete', true)) invoke('chat_token_delete', { id }).then(tokens.reload, e => setErr(String(e)))
+  }
+  return (
+    <Group title="Chat API" note={err ? <span className="error">{err}</span> : <>For apps that speak OpenAI’s chat API. Base URL <code className="selectable">{base}</code>; each token reaches one bot, which answers in its built-in chat, and nothing else. Approvals still come here.</>}>
+      {(tokens.data ?? []).map(t => (
+        <Row key={t.id} icon={<Icon name="key" size={15} />} title={t.name} desc={bots.find(b => b.id === t.bot_id)?.name}>
+          <button type="button" className="btn btn-ghost btn-danger btn-sm" aria-label={`Delete ${t.name}`} onClick={() => remove(t.id, t.name)}><Icon name="trash" size={13} /></button>
+        </Row>
+      ))}
+      {made && <Row icon={<Icon name="check" size={15} />} title="Copy this token now: it isn’t shown again" desc={<code className="selectable">{made}</code>}>
+        <button type="button" className="btn btn-sm" onClick={() => navigator.clipboard.writeText(made).then(() => setMade(null), () => {})}><Icon name="copy" size={13} />Copy</button>
+      </Row>}
+      <form className="row-block" onSubmit={e => { e.preventDefault(); add() }}>
+        <div className="editor" style={{ margin: 0 }}><div className="er">
+          <input className="input" placeholder="Used by (Shortcuts, Home Assistant…)" aria-label="Token name" value={name} onChange={e => setName(e.target.value)} />
+          <select className="select" style={{ width: 'auto' }} aria-label="Bot" value={botId ?? ''} onChange={e => setBot(Number(e.target.value))}>
+            {bots.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+          </select>
+          <button className="btn" disabled={!name.trim() || botId == null}>New token</button>
+        </div></div>
+      </form>
+    </Group>
+  )
 }
 
 /** The bots' own computer (self-hosted Linux server): a screen with a browser they can see and use. */

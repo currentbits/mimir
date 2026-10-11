@@ -610,7 +610,7 @@ impl Core {
     /// A file it can't use yet (video, sticker, a spreadsheet…) in a paired direct chat: say so instead of dropping it.
     pub(crate) async fn incoming_media(&self, chan: &Chan, ext: &str) -> Result<()> {
         if self.is_paired(chan, ext)? {
-            chan.send(ext, tr("I can read text, photos, voice notes, PDFs and text files, but not this kind of file yet. Could you describe it or send a photo?")).await;
+            chan.send(ext, tr("I can read text, photos, voice notes, PDFs, Word and Excel files and text files, but not this kind of file yet. Could you describe it or send a photo?")).await;
         }
         Ok(())
     }
@@ -629,9 +629,16 @@ impl Core {
                 chan.send(ext, &format!("I {e}. Could you send it another way, or paste the part you need?")).await;
                 Ok(())
             }
+            // A scan: its pages go to the bot as photos.
             Some(Ok(t)) if t.split_whitespace().count() < 5 => {
-                chan.send(ext, tr("That file has no text I can read (a scanned PDF?). Send photos of the pages instead.")).await;
-                Ok(())
+                let pages = if crate::is_pdf(name, mime) { crate::read_pdf_pages(bytes.to_vec()).await } else { vec![] };
+                if pages.is_empty() {
+                    chan.send(ext, tr("That file has no text I can read (a scanned PDF?). Send photos of the pages instead.")).await;
+                    return Ok(());
+                }
+                let saved = pages.iter().map(|p| self.save_media(p, "jpg")).collect::<Result<Vec<_>>>()?;
+                self.db.conv_taint(self.bot, chat)?;
+                self.incoming_with(chan, ext, from, "", &crate::with_scan(said, name, saved.len()), saved, sent).await
             }
             Some(Ok(t)) => {
                 self.db.conv_taint(self.bot, self.conv(chan, ext, chat)?)?;

@@ -132,8 +132,8 @@ static NL: &[(&str, &str)] = &[
     ("{n} days ago", "{n} dagen geleden"),
     // Files and voice notes.
     (
-        "I can read text, photos, voice notes, PDFs and text files, but not this kind of file yet. Could you describe it or send a photo?",
-        "Ik kan tekst, foto's, spraakberichten, pdf's en tekstbestanden lezen, maar dit soort bestand nog niet. Kun je het beschrijven of er een foto van sturen?",
+        "I can read text, photos, voice notes, PDFs, Word and Excel files and text files, but not this kind of file yet. Could you describe it or send a photo?",
+        "Ik kan tekst, foto's, spraakberichten, pdf's, Word- en Excel-bestanden en tekstbestanden lezen, maar dit soort bestand nog niet. Kun je het beschrijven of er een foto van sturen?",
     ),
     ("That file has no text I can read (a scanned PDF?). Send photos of the pages instead.", "In dat bestand staat geen tekst die ik kan lezen (een gescande pdf?). Stuur liever foto's van de pagina's."),
     ("That file is over 20 MB, more than I take. Could you send a smaller one?", "Dat bestand is groter dan 20 MB, meer dan ik aanneem. Kun je een kleiner bestand sturen?"),
@@ -266,10 +266,16 @@ mod tests {
 
     /// The English strings handed to `tr`/`trf` in the source, as written there.
     fn used() -> Vec<String> {
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        // Every .rs file under src/, subfolders (db/) included.
+        let (mut dirs, mut files) = (vec![std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src")], vec![]);
+        while let Some(dir) = dirs.pop() {
+            for p in std::fs::read_dir(dir).unwrap().flatten().map(|f| f.path()) {
+                if p.is_dir() { dirs.push(p) } else { files.push(p) }
+            }
+        }
         let mut out = vec![];
-        for f in std::fs::read_dir(dir).unwrap().flatten().filter(|f| f.file_name() != "say.rs") {
-            let src = std::fs::read_to_string(f.path()).unwrap();
+        for f in files.iter().filter(|p| !p.ends_with("say.rs")) {
+            let src = std::fs::read_to_string(f).unwrap();
             let calls = src.match_indices("tr(\"").chain(src.match_indices("trf(\"")).filter(|(i, _)| !src[..*i].ends_with(|c: char| c.is_alphanumeric() || c == '_'));
             for (i, m) in calls {
                 let part = &src[i + m.len()..];

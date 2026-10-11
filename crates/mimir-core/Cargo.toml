@@ -34,6 +34,10 @@ ogg = "0.9"
 opus-decoder = "0.1"
 # Text of PDFs people send their bots.
 pdf-extract = "0.12.1"
+# The pictures in a scanned PDF's pages (pdf-extract's own PDF reader).
+lopdf = { version = "0.42", default-features = false }
+# Word and Excel files are zipped XML.
+zip = { version = "4.6", default-features = false, features = ["deflate-flate2"] }
 url = "2"
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls", "http2", "multipart"] }
 rusqlite = { version = "0.40.2", features = ["bundled", "backup"] }
