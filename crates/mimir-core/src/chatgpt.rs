@@ -26,6 +26,8 @@ const SECRET: &str = "chatgpt_signin";
 const ACCESS: &str = "chatgpt_access";
 const RESOURCE: &str = "https://api.openai.com/v1";
 const SCOPES: &str = "openid profile email offline_access resource.invoke chatgpt.tokens.use.direct";
+/// Where you set how much of your plan Mimir may use.
+pub const MANAGE_USAGE: &str = "https://chatgpt.com/#settings";
 
 fn auth_base() -> String {
     std::env::var("MIMIR_CHATGPT_AUTH").ok().filter(|s| !s.is_empty()).unwrap_or_else(|| "https://auth.openai.com".into())
