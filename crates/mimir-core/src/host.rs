@@ -583,6 +583,15 @@ impl Host {
                 &crate::db::Prov::by("you"),
             )?),
             "suggestions" => ok(self.db.suggestions(&scope(a)?)?),
+            // The one-time "get to know me" pass: whether it can run (email or calendar connected) and has; `run` starts it.
+            "know_me" => {
+                if arg::<Option<bool>>(a, "run")?.unwrap_or(false) {
+                    let bot = crate::tidy::memory_bot(&self.db).context("no bots")?;
+                    return ok(crate::tidy::get_to_know(&self.db, &self.provider(bot)?, bot, arg(a, "chat_id")?).await?);
+                }
+                let ready = crate::email::account(&self.db).is_some() || secret_get(crate::calendar::SECRET).is_some();
+                ok(json!({"ready": ready, "done": self.db.setting(crate::tidy::KNOW_ME)?.is_some()}))
+            }
             // Replay past corrections against a suggested preference (on request: it costs model calls).
             "check_suggestion" => {
                 let bot = crate::tidy::memory_bot(&self.db).context("no bots")?;

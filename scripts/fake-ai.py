@@ -7,6 +7,7 @@ The bot's name comes from its instructions ("Your name is …"). A bot named Sea
 task. Any other bot looks at your latest message for a word in capitals and calls the tool it stands for, then
 replies "DONE <tool>: <the tool's result>":
 
+    EMAIL (email not connected) → points to Settings → Email, from its <not_connected> instructions
     ASK SEARCH → ask_bot    MAKE BOT → bot_create    ROUTINE → routine_create    REMEMBER → memory_store
     FORGET <n> → memory_forget(n)    FILE → file_write    LIST FILES → file_list    DELETE ROUTINE <n> → routine_delete(n)
 
@@ -73,6 +74,13 @@ class H(BaseHTTPRequestHandler):
             time.sleep(3)
         if bot == "Search":
             return self.reply({"role": "assistant", "content": f"SEARCH-ANSWER: the title tag is fine (asked: {last_user[-60:]})"})
+        # The one-time "get to know me" pass: one suggestion per email sender line it was shown.
+        if "get to know them" in system:
+            senders = re.findall(r"^- [^|]+\| ([^|]+) \|", last_user, re.M)
+            return self.reply({"role": "assistant", "content": json.dumps([{"action": "add", "type": "knowledge", "title": f"Writes to you: {s.strip()}", "body": f"{s.strip()} emails you.", "reason": "Found in your email: a recent message"} for s in senders[:3]])})
+        # Asked for email while it isn't connected: the bot points at the setting, as its instructions say.
+        if "EMAIL" in last_user and "<not_connected>" in system and "Settings → Email" in system:
+            return self.reply({"role": "assistant", "content": "Your email isn't connected yet. Connect it in Settings → Email and I'll try again."})
         if last.get("role") == "tool":
             # What the tool said, back to the person.
             name = next((c["function"]["name"] for m in reversed(msgs) if m.get("role") == "assistant" for c in m.get("tool_calls") or []), "?")
