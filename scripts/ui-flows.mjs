@@ -87,7 +87,7 @@ await tab('Chat').click(); await p.waitForTimeout(500)
 await say('REMEMBER my dentist')
 await until(async () => (await main()).includes('DONE memory_store'))
 await tab('Memory').click(); await p.waitForTimeout(1000)
-check('memory listed', (await main()).includes('Dr. Lee in Stellenbosch'))
+check('memory listed', await until(async () => (await main()).includes('Dr. Lee in Stellenbosch')))
 const forgetBtn = p.getByRole('button', { name: /^Forget Dentist$/ }).first()
 check('Forget button there', (await forgetBtn.count()) > 0)
 if (await forgetBtn.count()) { await forgetBtn.click(); await p.waitForTimeout(400); if (await p.locator('.ask-box').count()) await p.locator('.ask-box button.btn-primary, .ask-box button.btn-danger-solid').click(); await p.waitForTimeout(800) }
@@ -103,7 +103,7 @@ check('skill added', await until(async () => (await main()).match(/Morning brief
 
 // Activity has the runs
 await tab('Activity').click(); await p.waitForTimeout(1200)
-check('activity lists runs', (await p.locator('.run').count()) > 3)
+check('activity lists runs', await until(async () => (await p.locator('.run').count()) > 3))
 
 // Delete the new bot from its page
 await p.locator('.rail-item', { hasText: 'Scout' }).first().click({ button: 'right' }); await p.waitForTimeout(300)
