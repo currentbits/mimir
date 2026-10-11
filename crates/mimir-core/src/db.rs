@@ -1712,8 +1712,8 @@ impl Db {
             )?,
             Err(e) => c.execute("UPDATE runs SET status='error', ended_at=?2, error=?3 WHERE id=?1", params![id, now(), e])?,
         };
-        // An approved plan only lasts for its run, and so does its hold on the computer.
-        c.execute("DELETE FROM settings WHERE key = ?1", [format!("plan:{id}")])?;
+        // An approved plan only lasts for its run, and so does its hold on the computer and its files to send.
+        c.execute("DELETE FROM settings WHERE key IN (?1, ?2)", [format!("plan:{id}"), format!("outbox:{id}")])?;
         c.execute("DELETE FROM settings WHERE key = 'computer_lease' AND json_extract(value, '$.who') = ?1", [format!("run:{id}")])?;
         Ok(())
     }

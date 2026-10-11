@@ -1,6 +1,6 @@
 //! Discord via the Gateway (outbound WebSocket) + REST.
 //! Bot setup: enable the Message Content intent in the Developer Portal, invite the bot with
-//! Send Messages + Read Message History (+ Send Messages in Threads). It answers DMs, and in servers only when
+//! Send Messages + Read Message History + Attach Files (+ Send Messages in Threads). It answers DMs, and in servers only when
 //! @-mentioned; a thread under a paired channel counts as that channel, and is answered in the thread.
 // ponytail: no RESUME — on any gateway hiccup we reconnect and re-IDENTIFY
 
@@ -125,6 +125,19 @@ impl Discord {
             bail!("discord {path}: {status} {}", crate::tools::truncate(&text, 200));
         }
         Ok(serde_json::from_str(&text).unwrap_or(Value::Null))
+    }
+
+    /// A file the bot sends (needs Attach Files), as an attachment in the same place as a reply.
+    pub(crate) async fn upload(&self, channel: &str, name: &str, bytes: Vec<u8>) -> Result<()> {
+        let to = self.dest(channel);
+        let payload = json!({"attachments": [{"id": 0, "filename": name}], "allowed_mentions": {"parse": []}});
+        let form = reqwest::multipart::Form::new().text("payload_json", payload.to_string()).part("files[0]", reqwest::multipart::Part::bytes(bytes).file_name(name.to_string()));
+        let resp = self.http.post(format!("{API}/channels/{to}/messages")).header("Authorization", format!("Bot {}", self.token)).multipart(form).send().await?;
+        let status = resp.status();
+        if !status.is_success() {
+            bail!("discord upload: {status} {}", crate::tools::truncate(&resp.text().await.unwrap_or_default(), 200));
+        }
+        Ok(())
     }
 
     /// Final reply (Discord speaks Markdown), with buttons under its last part; with a streamed draft, the draft

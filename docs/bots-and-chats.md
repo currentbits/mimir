@@ -148,6 +148,12 @@ instructions written in it, and anything that changes data asks you first for th
 pages instead. Slack needs the `files:read` scope for this (see the hint when you add Slack). In a channel or server,
 only the files of the person who paired it are fetched.
 
+Bots send files back too, with `send_file`: a file from the chat's workspace, or a screenshot of the bots' computer
+(the proof that a booking or a form went through). It arrives after the reply: a photo or document on Telegram, an
+upload in Slack (needs the `files:write` scope), an attachment on Discord (invite the bot with Attach Files), and in
+the app's chat, shown in place. In your own direct chat it just goes; in a group, channel or guest's chat it asks you
+first. At most 5 files with one reply.
+
 ## Incognito
 
 The mask button in the app's chat starts an incognito chat: the bot can't see or save memories, routines or meetings,

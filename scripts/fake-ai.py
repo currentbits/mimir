@@ -11,6 +11,7 @@ replies "DONE <tool>: <the tool's result>":
     EMAIL (email not connected) → points to Settings → Email, from its <not_connected> instructions
     ASK SEARCH → ask_bot    MAKE BOT → bot_create    ROUTINE → routine_create    REMEMBER → memory_store
     FORGET <n> → memory_forget(n)    CHOOSE → ask_choice    FILE → file_write    LIST FILES → file_list    DELETE ROUTINE <n> → routine_delete(n)
+    SEND FILE → send_file(notes/trip.md)
 
 A routine asked to say URGENT when the person's rule holds, about something DELAYED, says so.
 Anything else gets "OK: <your message>". A message with SLOW in it is answered after 3 seconds (any bot), for
@@ -37,6 +38,7 @@ SCRIPT = [
     ("FORGET", "memory_forget", lambda m: {"id": int(re.search(r"FORGET (\d+)", m).group(1))}),
     ("CHOOSE", "ask_choice", lambda m: {"question": "Which day?", "options": ["Thursday", "Friday"]}),
     ("LIST FILES", "file_list", lambda m: {}),
+    ("SEND FILE", "send_file", lambda m: {"path": "notes/trip.md"}),
     ("FILE", "file_write", lambda m: {"path": "notes/trip.md", "content": "- passport\n", "mode": "create"}),
 ]
 
