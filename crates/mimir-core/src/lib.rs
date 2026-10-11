@@ -85,6 +85,7 @@ pub mod watch;
 pub mod caldav;
 pub mod calendar;
 pub mod email;
+pub mod events;
 pub mod files;
 pub mod library;
 pub mod transcribe;

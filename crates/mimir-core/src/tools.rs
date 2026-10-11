@@ -338,6 +338,10 @@ pub fn specs() -> Vec<(&'static str, &'static str, Value)> {
              For something tied to the user's calendar, cron can be calendar:<minutes before>, optionally :meetings (only \
              events with someone else invited) or :outside (only ones with someone from another company): \
              'calendar:60:outside' runs an hour before each meeting with someone outside, and each run is told the event. \
+             For \"tell me when X arrives\" by email, cron can be mail:<rule> instead: from:<address or domain>, \
+             subject:<word or \"phrase\">, and any other words the email must contain, e.g. 'mail:from:acme.com subject:invoice'. \
+             Mimir checks new mail every 2 minutes itself and runs you only for a match, with that email. It ends after the \
+             first match unless keep=true (\"every time…\"). \
              prompt is what you will be asked to do each time it fires; the result is sent to this chat. \
              Set quiet=true for watches/check-ins (\"keep an eye on…\", \"only tell me if…\"): it runs read-only and \
              messages the user only when something needs their attention. A quiet check about one web page or feed, or \
@@ -345,7 +349,7 @@ pub fn specs() -> Vec<(&'static str, &'static str, Value)> {
              run and only runs you when it changed, with what changed, which costs far less. \
              For someone else in the household (\"remind Sam at 6 to…\"), set for to their name: it runs in their own chat \
              (write prompt as what to tell them), and the first time for each person the user is asked.",
-            json!({"type":"object","properties":{"cron":{"type":"string"},"at":{"type":"string","description":"YYYY-MM-DD HH:MM, for a one-off instead of cron"},"prompt":{"type":"string"},"quiet":{"type":"boolean"},"watch":{"type":"string","description":"quiet checks only: a page or feed URL, or \"mail\""},"for":{"type":"string","description":"a household member's name, to send it to their chat instead of this one"}},"required":["prompt"]}),
+            json!({"type":"object","properties":{"cron":{"type":"string"},"at":{"type":"string","description":"YYYY-MM-DD HH:MM, for a one-off instead of cron"},"prompt":{"type":"string"},"quiet":{"type":"boolean"},"watch":{"type":"string","description":"quiet checks only: a page or feed URL, or \"mail\""},"keep":{"type":"boolean","description":"mail:<rule> only: run for every match, not just the first"},"for":{"type":"string","description":"a household member's name, to send it to their chat instead of this one"}},"required":["prompt"]}),
         ),
         ("routine_list", "List this chat's routines.", json!({"type":"object","properties":{}})),
         (
@@ -1081,12 +1085,16 @@ fn calendar_links(title: &str, start: &str, minutes: i64, location: &str, notes:
     Ok(format!("Google Calendar: {google}\nOutlook: {outlook}\n(Nothing is added until the user opens one and saves it.)"))
 }
 
-/// A routine timed off the calendar needs one linked.
-fn calendar_linked(cron: &str) -> Result<()> {
+/// A routine timed off the calendar needs one linked; one started by mail, a mailbox. A webhook's secret is the
+/// person's to hand out, so they make those in the app.
+fn calendar_linked(ctx: &ToolCtx, cron: &str) -> Result<()> {
     if crate::calendar::trigger(cron)?.is_some() && crate::host::secret_get(crate::calendar::SECRET).is_none() {
         bail!("no calendar is linked yet: the person adds its link in Mimir's Meetings → Calendar first");
     }
-    Ok(())
+    if crate::events::on(cron)? == Some(crate::events::On::Webhook) {
+        bail!("only the person can set up a webhook, in Mimir's Routines tab (When called)");
+    }
+    crate::events::ready(&ctx.db, ctx.chat_id, cron)
 }
 
 /// When a routine runs next, for the bots: a calendar one may have no matching event coming up.
@@ -1094,7 +1102,10 @@ fn next_run(r: &crate::db::Routine) -> String {
     match crate::calendar::trigger(&r.cron) {
         Ok(Some(t)) if r.next_fire >= crate::db::IDLE => format!("({}; no such event in the next week)", t.words()),
         Ok(Some(t)) => format!("{} ({})", fmt_ts(r.next_fire), t.words()),
-        _ => fmt_ts(r.next_fire),
+        _ => match crate::events::on(&r.cron) {
+            Ok(Some(on)) => format!("on {}{}", on.words(), if r.once { ", then it's gone" } else { "" }),
+            _ => fmt_ts(r.next_fire),
+        },
     }
 }
 
@@ -1171,7 +1182,7 @@ fn precheck(ctx: &ToolCtx, name: &str, args: &Value) -> Result<()> {
                 bail!("routines a bot sets run at most every 15 minutes; pick a slower schedule");
             }
             if let Some(cron) = args["cron"].as_str() {
-                calendar_linked(cron)?;
+                calendar_linked(ctx, cron)?;
             }
             if let Some(w) = args["watch"].as_str() {
                 crate::watch::valid(w)?;
@@ -1200,7 +1211,7 @@ fn precheck(ctx: &ToolCtx, name: &str, args: &Value) -> Result<()> {
                 None if crate::db::min_gap_minutes(s(args, "cron").map_err(|_| anyhow::anyhow!("give cron for a recurring routine, or at for a one-off"))?)? < 15 => {
                     bail!("routines a bot creates run at most every 15 minutes; pick a slower schedule")
                 }
-                None => calendar_linked(s(args, "cron")?)?,
+                None => calendar_linked(ctx, s(args, "cron")?)?,
             }
             if let Some(w) = args["watch"].as_str().filter(|w| !w.trim().is_empty()) {
                 crate::watch::valid(w)?;
@@ -1884,6 +1895,9 @@ async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
             if ctx.is_tainted() {
                 ctx.db.routine_taint(r.id)?;
             }
+            if crate::events::on(&r.cron)?.is_some() && !args["keep"].as_bool().unwrap_or(false) {
+                ctx.db.routine_set_once(r.id)?;
+            }
             if let Some(w) = args["watch"].as_str().filter(|w| quiet && !w.trim().is_empty()) {
                 ctx.db.routine_set_watch(ctx.chat_id, r.id, w)?;
             }
@@ -1923,7 +1937,7 @@ async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
                 ctx.db.routine_taint(id)?;
             }
             let r = ctx.db.routines(ctx.chat_id)?.into_iter().find(|r| r.id == id).context("no such routine")?;
-            format!("routine #{id} updated; {} {}: {}", if r.once { "runs once," } else { "next run" }, fmt_ts(r.next_fire), r.prompt)
+            format!("routine #{id} updated; {} {}: {}", if r.once { "runs once," } else { "next run" }, next_run(&r), r.prompt)
         }
         "web_fetch" => {
             let url = s(args, "url")?;
@@ -2678,6 +2692,24 @@ mod tests {
         assert!(precheck(&ctx, "calendar_create", &json!({"title": "x", "start": "next tuesday"})).is_err());
         assert!(precheck(&ctx, "calendar_create", &json!({"title": "x", "start": "2020-01-01 10:00"})).is_err(), "the past");
         assert!(precheck(&ctx, "calendar_create", &json!({"title": "x", "start": "2099-01-01", "notes": "n".repeat(801)})).is_err(), "fits the card");
+    }
+
+    #[tokio::test]
+    async fn tell_me_when_an_email_arrives() {
+        let p = std::env::temp_dir().join(format!("mimir-mailrule-tool-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let ctx = ToolCtx::new(Db::open(&p).unwrap(), 1, 0);
+        let e = precheck(&ctx, "routine_create", &json!({"cron": "webhook", "prompt": "x"})).unwrap_err().to_string();
+        assert!(e.contains("only the person"), "{e}");
+        let e = precheck(&ctx, "routine_create", &json!({"cron": "mail:from:acme.com", "prompt": "x"})).unwrap_err().to_string();
+        assert!(e.contains("no mailbox"), "{e}");
+        // Ends after the first match unless asked to keep it.
+        let out = exec(&ctx, "routine_create", &json!({"cron": "mail:from:acme.com subject:invoice", "prompt": "tell me the amount"})).await.unwrap();
+        assert!(out.contains("on each email from “acme.com”, with “invoice” in the subject"), "{out}");
+        exec(&ctx, "routine_create", &json!({"cron": "mail:from:acme.com", "prompt": "file it", "keep": true})).await.unwrap();
+        assert_eq!(ctx.db.routines(0).unwrap().iter().map(|r| r.once).collect::<Vec<_>>(), [true, false]);
+        let list = exec(&ctx, "routine_list", &json!({})).await.unwrap();
+        assert!(list.contains("on each email from “acme.com”, with “invoice” in the subject, then it's gone"), "{list}");
     }
 
     #[tokio::test]

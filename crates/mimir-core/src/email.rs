@@ -121,7 +121,7 @@ pub struct Summary {
     pub unread: bool,
 }
 
-fn who(a: Option<&mail_parser::Address>) -> String {
+pub(crate) fn who(a: Option<&mail_parser::Address>) -> String {
     a.and_then(|a| a.first()).map(|a| match (a.name(), a.address()) {
         (Some(n), Some(m)) => format!("{n} <{m}>"),
         (Some(n), None) => n.to_string(),
@@ -131,7 +131,7 @@ fn who(a: Option<&mail_parser::Address>) -> String {
     .unwrap_or_default()
 }
 
-fn date(m: &mail_parser::Message) -> String {
+pub(crate) fn date(m: &mail_parser::Message) -> String {
     m.date()
         .and_then(|d| chrono::DateTime::from_timestamp(d.to_timestamp(), 0))
         .map(|d| d.with_timezone(&chrono::Local).format("%a %-d %b %H:%M").to_string())
