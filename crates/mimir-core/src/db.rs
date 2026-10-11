@@ -504,8 +504,15 @@ fn importance(kind: &str) -> i64 {
     if kind == "convention" { 5 } else { 3 }
 }
 
-/// Accepts standard 5-field cron ("0 8 * * Mon-Fri") or the cron crate's 6/7-field form.
+/// A calendar routine's next_fire while no matching event is coming up (2100-01-01): the scheduler sets the real one.
+pub const IDLE: i64 = 4_102_444_800;
+
+/// Accepts standard 5-field cron ("0 8 * * Mon-Fri") or the cron crate's 6/7-field form. A calendar trigger
+/// ("calendar:60:outside") waits (IDLE) until the scheduler reads the calendar.
 pub fn next_fire(expr: &str, after: i64) -> Result<i64> {
+    if crate::calendar::trigger(expr)?.is_some() {
+        return Ok(IDLE);
+    }
     let expr = expr.trim();
     let full = if expr.split_whitespace().count() == 5 { format!("0 {expr}") } else { expr.to_string() };
     let schedule = cron::Schedule::from_str(&full).map_err(|e| anyhow::anyhow!("bad cron '{expr}': {e}"))?;
@@ -518,6 +525,10 @@ pub fn next_fire(expr: &str, after: i64) -> Result<i64> {
 
 /// The shortest gap between two runs of a schedule over the next couple of days, in minutes.
 pub fn min_gap_minutes(expr: &str) -> Result<i64> {
+    // ponytail: a calendar trigger runs as often as the calendar has events; not counted
+    if crate::calendar::trigger(expr)?.is_some() {
+        return Ok(i64::MAX);
+    }
     let expr = expr.trim();
     let full = if expr.split_whitespace().count() == 5 { format!("0 {expr}") } else { expr.to_string() };
     let schedule = cron::Schedule::from_str(&full).map_err(|e| anyhow::anyhow!("bad cron '{expr}': {e}"))?;
@@ -2729,6 +2740,7 @@ impl Db {
             bail!("a routine needs a prompt");
         }
         let next = next_fire(cron, now())?;
+        self.calendar_private(chat, cron)?;
         let c = self.c();
         c.execute(
             "INSERT INTO routines(bot_id, chat_id, cron, prompt, next_fire, quiet) VALUES (?1,?2,?3,?4,?5,?6)",
@@ -2804,10 +2816,29 @@ impl Db {
             return Ok(self.c().execute("UPDATE routines SET prompt=?3, quiet=?4, paused=?5 WHERE id=?1 AND chat_id=?2", params![id, chat, prompt.trim(), quiet, paused])? > 0);
         }
         let next = next_fire(cron, now())?;
+        self.calendar_private(chat, cron)?;
         Ok(self.c().execute(
             "UPDATE routines SET cron=?3, prompt=?4, quiet=?5, paused=?6, next_fire=?7 WHERE id=?1 AND chat_id=?2",
             params![id, chat, cron.trim(), prompt.trim(), quiet, paused, next],
         )? > 0)
+    }
+
+    /// Your calendar is private: a routine timed off it (each run is told the event) only in a chat with you alone.
+    fn calendar_private(&self, chat: i64, cron: &str) -> Result<()> {
+        if crate::calendar::trigger(cron)?.is_some() && !self.chat_private(chat) {
+            bail!("a routine timed off your calendar can only be in a private chat");
+        }
+        Ok(())
+    }
+
+    /// A bot's calendar routines whose next run the scheduler may move: not due, paused, or being tried again.
+    pub fn calendar_routines(&self, bot: i64, t: i64) -> Result<Vec<Routine>> {
+        self.routines_where("bot_id = ?1 AND cron LIKE 'calendar:%' AND next_fire > ?2 AND paused = 0 AND retries = 0", [bot, t])
+    }
+
+    pub fn routine_set_next(&self, id: i64, t: i64) -> Result<()> {
+        self.c().execute("UPDATE routines SET next_fire=?2 WHERE id=?1", [id, t])?;
+        Ok(())
     }
 
     pub fn routine_set_delivery(&self, chat: i64, id: i64, delivery: &str) -> Result<bool> {
@@ -3899,6 +3930,16 @@ mod tests {
         assert!(d.routine_update(7, r.id, "nonsense", "x", false, false).is_err());
         assert!(!d.routine_delete(8, r.id).unwrap(), "other chat can't delete");
         assert!(d.routine_delete(7, r.id).unwrap());
+        // Timed off the calendar: it waits until the scheduler has read the calendar, and only where it's private.
+        assert!(d.routine_create(2, 7, "calendar:60:outside", "brief me", false).unwrap_err().to_string().contains("private"));
+        let c = d.routine_create(2, crate::host::LOCAL_CHAT, "calendar:60:outside", "brief me", false).unwrap();
+        assert_eq!(c.next_fire, IDLE);
+        assert!(d.routine_create(2, crate::host::LOCAL_CHAT, "calendar:60:all", "x", false).is_err());
+        assert_eq!(d.calendar_routines(2, now()).unwrap().len(), 1);
+        d.routine_set_next(c.id, now() + 60).unwrap();
+        assert!(d.due(2, now() + 60).unwrap().iter().any(|r| r.id == c.id));
+        d.routine_advance(&d.routines(crate::host::LOCAL_CHAT).unwrap()[0]).unwrap();
+        assert_eq!(d.routines(crate::host::LOCAL_CHAT).unwrap()[0].next_fire, IDLE, "the next event is the scheduler's to find");
     }
 
     #[test]

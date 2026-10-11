@@ -67,8 +67,16 @@ export const dayName = (d: string) => DAY[d] ?? d.slice(0, 1).toUpperCase() + d.
 const FULL: Record<string, string> = { Mon: 'Monday', Tue: 'Tuesday', Wed: 'Wednesday', Thu: 'Thursday', Fri: 'Friday', Sat: 'Saturday', Sun: 'Sunday' }
 export const fullDay = (d: string) => FULL[dayName(d)] ?? d
 
+/** A calendar routine's next_fire while no matching event is coming up (db::IDLE). */
+export const IDLE = 4_102_444_800
+
 /** Cron → plain words for the common shapes; anything else is shown as-is. */
 export function schedule(cron: string): string {
+  const cal = cron.trim().match(/^calendar:(\d+)(?::(meetings|outside))?$/)
+  if (cal) {
+    const m = +cal[1], lead = m % 60 === 0 && m > 0 ? `${m / 60} hour${m === 60 ? '' : 's'}` : `${m} min`
+    return `${lead} before each ${cal[2] === 'meetings' ? 'meeting with someone else' : cal[2] === 'outside' ? 'meeting with someone outside' : 'calendar event'}`
+  }
   const f = cron.trim().split(/\s+/)
   if (f.length !== 5) return cron
   const [m, h, dom, mon, dow] = f

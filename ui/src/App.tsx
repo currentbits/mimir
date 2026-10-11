@@ -1,7 +1,7 @@
 import { copyText, inDesktop, insecureServer, invoke, saveDownload, keystore, localInvoke, platform, probe, remoteServer, setWebToken, connectServer, shortcut, trayName, webToken } from './api'
 import { createContext, Fragment, useCallback, useMemo, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ask, askText, AskHost, tell, Avatar, Empty, Group, Icon, Row, Segmented, Switch, type Presence } from './ui'
-import { ago, ahead, dayLabel, fullDay, fullTime, pigment, PIGMENTS, schedule, setLooks, tok, usd, type Look } from './format'
+import { ago, ahead, dayLabel, fullDay, fullTime, IDLE, pigment, PIGMENTS, schedule, setLooks, tok, usd, type Look } from './format'
 import { Markdown, openLink } from './markdown'
 import { moodOf, type Mood } from './face'
 import { EXTRAS, EYES, SHAPES, traits } from './face-core'
@@ -223,7 +223,7 @@ function RoutineCard({ id, chatId, onChange }: { id: number; chatId: number; onC
         <div className="rc-main">
           <div className="rt">{when(r)}{r.quiet && <span className="badge pending">Quiet</span>}{r.paused && <span className="badge">Paused</span>}{r.delivery === 'digest' && <span className="badge">In digest</span>}{r.delivery === 'log' && <span className="badge">Log only</span>}</div>
           <div className="rp selectable">{r.prompt}</div>
-          <div className="rm">{r.paused ? 'Paused' : `Next run ${ahead(r.next_fire)}`} · change it any time in Routines</div>
+          <div className="rm">{r.paused ? 'Paused' : r.next_fire >= IDLE ? 'Runs when a matching event is on the calendar' : `Next run ${ahead(r.next_fire)}`} · change it any time in Routines</div>
         </div>
       </div>
       <div className="rc-actions">
@@ -2286,7 +2286,7 @@ function RoutineForm({ draft, setDraft, bots, onCancel, onSave, inline, skills =
           )}
           {w.mode === 'custom' && <input className="input mono" aria-label="Cron schedule" value={w.cron} placeholder="30 8 * * Mon-Fri" onChange={e => when({ cron: e.target.value })} />}
         </div>
-        {w.mode === 'custom' && <span className="hint">{readable !== cron ? `Runs: ${readable}` : 'Cron format: minute hour day-of-month month weekday, e.g. 30 8 * * Mon-Fri'}</span>}
+        {w.mode === 'custom' && <span className="hint">{readable !== cron ? `Runs: ${readable}` : 'Cron format: minute hour day-of-month month weekday, e.g. 30 8 * * Mon-Fri; or calendar:60:outside for an hour before each meeting with someone outside'}</span>}
       </div>
       <div className="quiet-row">
         <Switch label="Quiet" checked={draft.quiet} onChange={quiet => setDraft({ ...draft, quiet })} />
@@ -2364,7 +2364,7 @@ function RoutinesView({ chatId, bots }: { chatId: number; bots: Bot[] }) {
                   <div>
                     <div className="rt">{when(r)}{r.quiet && <span className="badge pending" title="Read-only; speaks up only when something needs your attention">Quiet</span>}{r.paused && <span className="badge">Paused</span>}{r.delivery === 'digest' && <span className="badge" title="Collected into your daily digest">In digest</span>}{r.delivery === 'log' && <span className="badge" title="Not sent; see Activity">Log only</span>}{r.quiet && r.watch && <span className="badge" title="Mimir looks first and only runs the AI when this changed">Watching {r.watch === 'mail' ? 'mail' : (() => { try { return new URL(r.watch).host } catch { return r.watch } })()}</span>}</div>
                     <div className="rp selectable">{r.prompt}</div>
-                    <div className="rm"><Avatar id={b.id} name={b.name} size={16} still /><span>{b.name}</span><span>·</span><span>{r.paused ? 'Won’t run until you turn it back on' : `${r.once ? 'Runs' : 'Next run'} ${ahead(r.next_fire)}${r.once ? ', then it’s gone' : ''}`}</span></div>
+                    <div className="rm"><Avatar id={b.id} name={b.name} size={16} still /><span>{b.name}</span><span>·</span><span>{r.paused ? 'Won’t run until you turn it back on' : r.next_fire >= IDLE ? 'No matching event on the calendar this week' : `${r.once ? 'Runs' : 'Next run'} ${ahead(r.next_fire)}${r.once ? ', then it’s gone' : ''}`}</span></div>
                     <RoutineHealth s={stats.data?.find(x => x.id === r.id)} onReset={() => invoke('reset_watch_noise', { chatId, id: r.id }).then(stats.reload, e => setErr(String(e)))} />
                     {rehearsal?.id === r.id && (rehearsal.r ? <RehearsalResult r={rehearsal.r} onClose={() => setRehearsal(null)} /> : <p className="hint">Rehearsing… it runs for real, but anything it would send or change is only described.</p>)}
                   </div>
