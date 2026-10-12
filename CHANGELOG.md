@@ -2,6 +2,12 @@
 
 What changed for people using Mimir. The newest release is at the top; "Unreleased" is what the next one brings.
 
+## Unreleased
+
+- **Replies survive a crash, an update or a restart:** a reply, a routine's result or a note for your decisions chat
+  is kept until Telegram, Slack or Discord has it. If Mimir stops before then, it sends it when it starts again. One
+  that didn't go through is tried again for a while. A routine's run shows *waiting to send* until it's sent.
+
 ## 0.2.0
 
 ### Talking to your bots
