@@ -1596,6 +1596,66 @@ impl Core {
         Ok(())
     }
 
+    /// Tasks this bot handed over to report back (ask_bot's `later`): new ones start on their own, and finished ones
+    /// come back as a turn of this bot in the chat they came from, sent there like a routine's result.
+    // ponytail: started on the next scheduler pass (up to 30s); a wake-up from the tool if that's too slow
+    async fn delegations(self: &Arc<Self>, chans: &[Chan]) -> Result<()> {
+        let now = crate::db::now();
+        for d in self.db.delegations(self.bot, "pending")? {
+            // A helper paused by the person waits, like its routines.
+            if self.db.paused(d.to_bot, now)?.is_some() {
+                continue;
+            }
+            self.db.delegation_status(d.id, "running")?;
+            let db = self.db.clone();
+            tokio::spawn(async move {
+                let mut asker = ToolCtx::new(db.clone(), d.bot_id, d.chat_id).with_run(d.run_id);
+                asker.conv = d.conv;
+                asker.unattended = d.unattended;
+                if d.tainted {
+                    asker.pre_taint();
+                }
+                let (ctx, task) = (asker.clone(), d.task.clone());
+                // In its own task: a crash in it fails this hand-off only, and says so.
+                let work = tokio::spawn(async move { crate::tools::delegate(&ctx, &ctx.db.bot(d.to_bot)?, &task).await });
+                let out = work.await.unwrap_or_else(|e| Err(anyhow::anyhow!("Mimir crashed during this task ({e})")));
+                let (reply, failed) = match out {
+                    Ok(r) => (r, false),
+                    Err(e) => (crate::friendly_error(&format!("{e:#}")), true),
+                };
+                if let Err(e) = db.delegation_done(d.id, &reply, failed, asker.is_tainted()) {
+                    eprintln!("handed-over task #{}: {e:#}", d.id);
+                }
+            });
+        }
+        for d in self.db.delegations(self.bot, "done")? {
+            // Marked first: told at most once (a crash mid-report leaves the helper's answer in the run log).
+            self.db.delegation_status(d.id, "told")?;
+            let from = self.db.bot(d.to_bot).map(|b| b.name).unwrap_or_else(|_| "Another bot".into());
+            let reply = d.reply.unwrap_or_default();
+            let reply = if d.failed { format!("It didn't finish: {reply}") } else { reply };
+            let _g = self.chat_lock(d.chat_id).lock_owned().await;
+            let target = Self::chan_for(chans, d.chat_id, &self.db);
+            let mut ctx = ToolCtx::new(self.db.clone(), self.bot, d.chat_id).with_run(d.run_id);
+            ctx.conv = d.conv;
+            let (provider, task, tainted) = (self.provider.clone(), d.task, d.tainted);
+            let out = self.own_task(d.chat_id, async move { turn(&provider, &ctx, Trigger::Reported { from: &from, task: &task, reply: &reply, tainted }).await }).await;
+            let text = match out {
+                Ok(t) => t,
+                Err(e) => {
+                    let text = format!("{}\n\n{}", crate::friendly_error(&format!("{e:#}")), tr("A task I handed to another bot is done: its answer is in the run log."));
+                    self.db.log(self.bot, d.conv, "assistant", &text, None)?;
+                    text
+                }
+            };
+            if let Some((c, ext)) = target {
+                let (said, files) = crate::files::split_sent(&text);
+                self.say(&c, &ext, d.chat_id, None, &said, &[], &files, None).await;
+            }
+        }
+        Ok(())
+    }
+
     /// A routine or tidy-up turn in its own task, the way a message's runs: a crash in it fails that run (its open
     /// run log entry says so), instead of stopping the scheduler and with it the whole bot.
     async fn own_task<T: Send + 'static>(&self, chat: i64, work: impl Future<Output = Result<T>> + Send + 'static) -> Result<T> {
@@ -1700,6 +1760,9 @@ impl Core {
                 }
                 Ok(_) => {}
                 Err(e) => eprintln!("scheduler: {e:#}"),
+            }
+            if let Err(e) = self.delegations(&chans).await {
+                eprintln!("handed-over tasks: {e:#}");
             }
             if let Err(e) = self.send_digest(&chans).await {
                 eprintln!("digest: {e:#}");
@@ -2077,6 +2140,50 @@ mod tests {
         db.routine_event_add(r.id, "{\"build\":\"green\"}").unwrap();
         core.run_routine(&[], fresh(&db).unwrap(), None).await.unwrap();
         assert!(fresh(&db).is_none());
+    }
+
+    #[tokio::test]
+    async fn handed_over_tasks_report_back_later() {
+        let p = std::env::temp_dir().join(format!("mimir-later-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = Db::open(&p).unwrap();
+        let (base, asked) = recording_ai().await;
+        let scout = crate::db::Bot { id: 0, name: "Scout".into(), persona: String::new(), provider: "openai".into(), model: "m".into(), base_url: base.clone(), tools: String::new(), look: String::new() };
+        let scout = db.bot_save(&scout).unwrap();
+        let run = db.run_start(1, 0, "message", None, "test").unwrap();
+        let ctx = ToolCtx::new(db.clone(), 1, 0).with_run(Some(run));
+        let out = crate::tools::call(&ctx, "ask_bot", &serde_json::json!({"bot": "Scout", "task": "Find three padel courts", "later": true})).await.unwrap();
+        assert!(out.starts_with("Handed to Scout") && asked.lock().unwrap().is_empty(), "nothing waits for it: {out}");
+        // The helper runs on its own; a pass after it's done brings its result back to the chat, from the bot asked.
+        let core = Arc::new(core_on(&db, &base));
+        core.delegations(&[]).await.unwrap();
+        for _ in 0..100 {
+            if !db.delegations(1, "done").unwrap().is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        core.delegations(&[]).await.unwrap();
+        let reqs = asked.lock().unwrap().clone();
+        assert_eq!(reqs.len(), 2);
+        assert!(reqs[0].contains("[Task from ") && reqs[0].contains("padel courts"), "{}", reqs[0]);
+        assert!(reqs[1].contains("[Report from Scout") && reqs[1].contains("padel courts") && reqs[1].contains("Seen."), "{}", reqs[1]);
+        let linked: Vec<_> = db.child_runs(run).unwrap().into_iter().map(|r| (r.bot_id, r.trigger)).collect();
+        assert_eq!(linked, [(scout, "delegated".to_string()), (1, "reported".to_string())]);
+        let said = db.messages(0, 1).unwrap().pop().unwrap();
+        assert!(said.bot_id == 1 && said.content.starts_with("Seen."), "{}", said.content);
+        assert!(db.delegations(1, "done").unwrap().is_empty() && db.delegations(1, "pending").unwrap().is_empty(), "told once");
+        // Stopped mid-task by a restart: not run again; the bot that asked says it didn't finish. Outside content the
+        // asker had read stays marked on the report.
+        let d = crate::db::Delegation { bot_id: 1, to_bot: scout, chat_id: 0, conv: 0, run_id: Some(run), task: "x".into(), tainted: true, ..Default::default() };
+        let id = db.delegation_add(&d).unwrap();
+        db.delegation_status(id, "running").unwrap();
+        db.close_interrupted().unwrap();
+        core.delegations(&[]).await.unwrap();
+        let reqs = asked.lock().unwrap().clone();
+        assert_eq!(reqs.len(), 3);
+        assert!(reqs[2].contains("It didn't finish: Mimir stopped"), "{}", reqs[2]);
+        assert!(db.run_tainted(db.runs(Some(0), 1).unwrap()[0].id).unwrap());
     }
 
     /// Against scripts/fake-mail.py: `python3 scripts/fake-mail.py`, then

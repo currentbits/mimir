@@ -427,8 +427,14 @@ pub fn specs() -> Vec<(&'static str, &'static str, Value)> {
         (
             "ask_bot",
             "Hand a task to another of the user's bots (see <team>) and get its answer back. It works with its own \
-             tools and the same memory of this user. Use it when the task fits that bot's role better than yours.",
-            json!({"type":"object","properties":{"bot":{"type":"string","description":"the bot's name"},"task":{"type":"string","description":"self-contained task with all needed context"}},"required":["bot","task"]}),
+             tools and the same memory of this user. Use it when the task fits that bot's role better than yours. \
+             For a long task, set later: you get an answer straight away and can reply to the person; when the other \
+             bot is done, its result comes back to you in this chat and you tell them.",
+            json!({"type":"object","properties":{
+                "bot":{"type":"string","description":"the bot's name"},
+                "task":{"type":"string","description":"self-contained task with all needed context"},
+                "later":{"type":"boolean","description":"don't wait: it reports back in this chat when done"}
+            },"required":["bot","task"]}),
         ),
         (
             "bot_create",
@@ -2133,27 +2139,50 @@ async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
             if ctx.db.paused(target.id, crate::db::now())?.is_some() {
                 bail!("{} is paused by the user; do the task yourself or say it has to wait", target.name);
             }
-            let from = ctx.db.bot(ctx.bot_id)?.name;
-            let provider = crate::provider::Provider::for_bot(target, ctx.db.dir())?;
-            // Carries the asking run's id into turn(), which links the delegate's run to it (then replaces it).
-            let mut sub = ToolCtx::new(ctx.db.clone(), target.id, ctx.chat_id).with_run(ctx.run_id);
-            // Taint flows both ways: a tainted caller hands it on, and a delegate that read the web taints the caller.
-            sub.tainted = ctx.tainted.clone();
-            sub.depth = ctx.depth + 1;
-            // Inside a routine, the helper's asks wait in the inbox too, rather than sending a live card.
-            sub.unattended = ctx.unattended;
-            // A rehearsal stays one in the helper.
-            sub.rehearsal = ctx.rehearsing();
-            sub.via_bot = Some(ctx.via_bot.unwrap_or(ctx.bot_id));
-            // Boxed: the handed-over turn may itself call tools::call (async recursion).
-            let reply = Box::pin(crate::turn(&provider, &sub, crate::Trigger::Delegated { from: &from, task })).await?;
-            if ctx.db.delegated_tainted(target.id, ctx.chat_id).unwrap_or(false) {
-                ctx.taint(); // the delegate ran in its own process (CLI providers): its taint is in the run log
+            // Later: it runs on its own (the asking bot's scheduler starts it) and reports back. A rehearsal waits for it,
+            // so nothing outlives the rehearsal.
+            if args["later"].as_bool() == Some(true) && !ctx.rehearsing() {
+                let d = crate::db::Delegation {
+                    bot_id: ctx.bot_id,
+                    to_bot: target.id,
+                    chat_id: ctx.chat_id,
+                    conv: ctx.conv,
+                    run_id: ctx.run_id,
+                    task: task.to_string(),
+                    unattended: ctx.unattended,
+                    tainted: ctx.is_tainted(),
+                    ..Default::default()
+                };
+                ctx.db.delegation_add(&d)?;
+                return Ok(format!("Handed to {}. Its result comes back to you in this chat when it's done; tell the person then.", target.name));
             }
+            let reply = delegate(ctx, target, task).await?;
             format!("{} replied:\n{}", target.name, truncate(&reply, 6000))
         }
         _ => bail!("unknown tool {name}"),
     })
+}
+
+/// `target`'s turn on a task from the bot of `ctx`, one level down (no chains), under the asking run.
+pub(crate) async fn delegate(ctx: &ToolCtx, target: &crate::db::Bot, task: &str) -> Result<String> {
+    let from = ctx.db.bot(ctx.bot_id)?.name;
+    let provider = crate::provider::Provider::for_bot(target, ctx.db.dir())?;
+    // Carries the asking run's id into turn(), which links the delegate's run to it (then replaces it).
+    let mut sub = ToolCtx::new(ctx.db.clone(), target.id, ctx.chat_id).with_run(ctx.run_id);
+    // Taint flows both ways: a tainted caller hands it on, and a delegate that read the web taints the caller.
+    sub.tainted = ctx.tainted.clone();
+    sub.depth = ctx.depth + 1;
+    // Inside a routine, the helper's asks wait in the inbox too, rather than sending a live card.
+    sub.unattended = ctx.unattended;
+    // A rehearsal stays one in the helper.
+    sub.rehearsal = ctx.rehearsing();
+    sub.via_bot = Some(ctx.via_bot.unwrap_or(ctx.bot_id));
+    // Boxed: the handed-over turn may itself call tools::call (async recursion).
+    let reply = Box::pin(crate::turn(&provider, &sub, crate::Trigger::Delegated { from: &from, task })).await?;
+    if ctx.db.delegated_tainted(target.id, ctx.chat_id).unwrap_or(false) {
+        ctx.taint(); // the delegate ran in its own process (CLI providers): its taint is in the run log
+    }
+    Ok(reply)
 }
 
 /// One computer action, then a screenshot of what it led to.

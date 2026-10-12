@@ -20,6 +20,8 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
   go to the first bot that uses the computer after the update.
 - **Loop breaker:** a bot that keeps making the same call (the 3rd time in a row, the 5th for just looking) stops and
   asks you whether to go on, instead of burning time and money. Routines ask in Needs you.
+- **Hand over a long task and keep talking:** a bot can pass a task to another of your bots to report back later. You
+  get an answer straight away, and when the other bot is done its result comes back in the same chat.
 
 ### Routines
 - **Follow-ups the bot books itself:** "I'll check back Friday whether they replied" becomes a one-off follow-up, said

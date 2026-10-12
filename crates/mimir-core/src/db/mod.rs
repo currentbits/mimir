@@ -51,7 +51,7 @@ PRAGMA secure_delete=ON;
 
 /// The schema version this build writes (`PRAGMA user_version`). A schema change bumps it and adds a step to
 /// `migrate`; each step runs once per database.
-const VERSION: i64 = 9;
+const VERSION: i64 = 10;
 
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS entries(
@@ -213,6 +213,9 @@ fn migrate(c: &Connection) -> Result<()> {
     }
     if v < 9 {
         migrate_v9(c)?;
+    }
+    if v < 10 {
+        migrate_v10(c)?;
     }
     c.execute(
         "INSERT INTO settings(key, value) VALUES ('schema_written_by', ?1) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -460,6 +463,16 @@ fn migrate_v9(c: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Version 10: tasks handed to another bot that report back later (ask_bot's `later`), until the result is told.
+fn migrate_v10(c: &Connection) -> Result<()> {
+    c.execute_batch(
+        "CREATE TABLE IF NOT EXISTS delegations(id INTEGER PRIMARY KEY, bot_id INTEGER NOT NULL, to_bot INTEGER NOT NULL, chat_id INTEGER NOT NULL,
+           conv INTEGER NOT NULL, run_id INTEGER, task TEXT NOT NULL, unattended INTEGER NOT NULL DEFAULT 0, tainted INTEGER NOT NULL DEFAULT 0,
+           status TEXT NOT NULL DEFAULT 'pending', reply TEXT, failed INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL)",
+    )?;
+    Ok(())
+}
+
 impl Db {
     /// Opens the database, migrating it first if an older Mimir wrote it. An up-to-date database only reads its
     /// version: the tools process opens it on every turn, and mustn't compete with the app for the write lock.
@@ -488,6 +501,12 @@ impl Db {
         self.c().execute(
             "UPDATE runs SET status='error', error='interrupted', ended_at=started_at WHERE status='running' AND started_at < ?1",
             [now() - 900],
+        )?;
+        // ponytail: a handed-over task Mimir stopped in the middle isn't run again (it may have sent half of something):
+        // the bot that asked says it didn't finish. Assumes one Mimir per data folder, like the rest.
+        self.c().execute(
+            "UPDATE delegations SET status='done', failed=1, reply='Mimir stopped while it was on this task, so it didn''t finish.' WHERE status='running'",
+            [],
         )?;
         Ok(())
     }
