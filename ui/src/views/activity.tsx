@@ -103,7 +103,7 @@ function RunDetail({ run }: { run: Run }) {
         <ol className="timeline">
           {items.map(c => (
             <li key={c.id} className={c.ok ? 'ok' : 'failed'}>
-              <div className="tl-sum">{c.summary}{c.decision !== 'allow' && <span className={'badge ' + (c.decision === 'ask' ? 'pending' : 'danger')}>{c.decision === 'ask' ? 'Asked you' : 'Blocked'}</span>}</div>
+              <div className="tl-sum">{c.summary}{c.decision !== 'allow' && <span className={'badge ' + (c.decision === 'ask' || c.decision === 'loop' ? 'pending' : 'danger')}>{c.decision === 'ask' || c.decision === 'loop' ? 'Asked you' : 'Blocked'}</span>}</div>
               <div className="tl-res">{c.result}</div>
             </li>
           ))}

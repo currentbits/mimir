@@ -80,6 +80,15 @@ standing instructions until you confirm it); replacing an existing memory still 
 messages. Files in a chat's workspace keep the same mark: one written after outside content (or changed outside
 Mimir) counts as outside content when a bot reads it.
 
+**Going round in circles.** When a reply or routine makes the same tool call again and again (same tool, same
+details on the card) instead of getting anywhere, the next repeat stops and asks first: *"The bot keeps repeating this
+step. Let it go on?"*. That's the 3rd time in a row for something that acts, or the 5th for something that only looks
+(reading, searching, a screenshot, scrolling, which often repeat for a reason while a page loads). A short cycle counts
+too: the same two or three calls, round and round, that many times. Allow lets it carry on (and asks again if it's
+still at it a few more rounds later); Deny stops the step and the bot is told to wrap up and tell you where it got
+stuck. A routine's ask waits in [Needs you](routines.md#needs-you). It works the same with every AI account, including
+Claude Code and Codex.
+
 ## Approve once for a whole job
 
 Before a task that needs several actions that ask (send, delete, book, open a site), a bot can propose a **plan**

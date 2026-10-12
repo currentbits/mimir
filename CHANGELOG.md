@@ -15,6 +15,8 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 - **Each bot has its own sign-ins on the computer:** a site you sign in to for one bot (when it asks you to take over)
   is signed in for that bot only. **Sign out everywhere** on a bot's page clears its sign-ins. Sign-ins from before
   go to the first bot that uses the computer after the update.
+- **Loop breaker:** a bot that keeps making the same call (the 3rd time in a row, the 5th for just looking) stops and
+  asks you whether to go on, instead of burning time and money. Routines ask in Needs you.
 
 ## 0.2.0
 
