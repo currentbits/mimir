@@ -150,7 +150,7 @@ fn user_version(c: &Connection) -> Result<i64> {
 }
 
 /// A database a newer Mimir wrote: refused whole, never half-migrated by an older build.
-fn check_not_newer(c: &Connection) -> Result<()> {
+pub(crate) fn check_not_newer(c: &Connection) -> Result<()> {
     if user_version(c)? > VERSION {
         let by: Option<String> =
             c.query_row("SELECT value FROM settings WHERE key='schema_written_by'", [], |r| r.get(0)).optional().ok().flatten();

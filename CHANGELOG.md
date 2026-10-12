@@ -6,6 +6,9 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 
 - **Malware check for tool servers:** a tool server that downloads its package (`npx`, `uvx`…) is looked up on
   OSV.dev's list of malicious packages first, and Mimir refuses to start it if it's there, saying which advisory.
+- **Check everything:** `mimir doctor` (and Settings → Your data → *Check everything*) checks each bot's AI sign-in,
+  its Telegram, Slack and Discord connection, your mailboxes, the bots' computer, free disk space, the database and its
+  backups, one line each with what to do. Nothing is spent or sent.
 
 ## 0.2.0
 

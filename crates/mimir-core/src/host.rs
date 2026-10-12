@@ -91,6 +91,12 @@ fn key(bot: i64, name: &str) -> String {
     if bot == 1 && name == TG { name.into() } else { format!("{name}:{bot}") }
 }
 
+/// A bot's channel tokens from the process's secret store, for code outside a Host (`mimir doctor`).
+pub(crate) fn channels_of(bot: i64) -> runtime::Channels {
+    let s = |n| secret_get(&key(bot, n));
+    runtime::Channels { telegram: s(TG), slack: s(SLACK_BOT).zip(s(SLACK_APP)), discord: s(DISCORD) }
+}
+
 struct Live {
     status: SharedStatus,
     task: Option<tokio::task::JoinHandle<()>>,
@@ -620,6 +626,7 @@ impl Host {
             // bots without their tokens).
             "export_all" => ok(self.db.export_all()?),
             // Daily copies of the database (backups/ in the data folder), and putting one back.
+            "doctor" => ok(crate::doctor::run(&self.home).await),
             "backups" => ok(json!({"dir": crate::backup::dir(&self.db), "list": crate::backup::list(&self.db)})),
             "backup_now" => ok(crate::backup::snapshot(&self.db, "")?),
             "backup_restore" => {
