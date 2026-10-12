@@ -14,7 +14,7 @@ export const RUN_TITLE: Record<Run['trigger'], string> = { message: 'Reply', rou
 
 /** "Quiet check · Weekdays at 8:30 AM"; a deleted routine keeps its number. */
 const runTitle = (r: Run, routine?: Routine) =>
-  r.trigger !== 'routine' ? RUN_TITLE[r.trigger] : routine ? `${routine.quiet ? 'Quiet check' : routine.once ? 'One-off' : 'Routine'} · ${when(routine)}` : `Routine #${r.routine_id}`
+  r.trigger !== 'routine' ? RUN_TITLE[r.trigger] : routine ? `${routine.quiet ? 'Quiet check' : routine.followup ? 'Follow-up' : routine.once ? 'One-off' : 'Routine'} · ${when(routine)}` : `Routine #${r.routine_id}`
 
 export function ActivityView({ chatId }: { chatId: number }) {
   const runs = useLoad(() => invoke<Run[]>('runs', { chatId }), [chatId], 3000)

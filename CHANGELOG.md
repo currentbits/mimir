@@ -2,6 +2,14 @@
 
 What changed for people using Mimir. The newest release is at the top; "Unreleased" is what the next one brings.
 
+## Unreleased
+
+### Routines
+- **Follow-ups the bot books itself:** "I'll check back Friday whether they replied" becomes a one-off follow-up, said
+  in the reply and shown in the Routines tab, where you delete it to cancel. It counts like any routine.
+- **Routines that end:** "every morning until the 30th" or "for two weeks": an optional end, shown on the routine, after
+  which it's gone.
+
 ## 0.2.0
 
 ### Talking to your bots

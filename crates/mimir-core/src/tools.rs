@@ -353,8 +353,13 @@ pub fn specs() -> Vec<(&'static str, &'static str, Value)> {
              about new email, should set watch (the page's address, or \"mail\"): Mimir then looks itself before each \
              run and only runs you when it changed, with what changed, which costs far less. \
              For someone else in the household (\"remind Sam at 6 to…\"), set for to their name: it runs in their own chat \
-             (write prompt as what to tell them), and the first time for each person the user is asked.",
-            json!({"type":"object","properties":{"cron":{"type":"string"},"at":{"type":"string","description":"YYYY-MM-DD HH:MM, for a one-off instead of cron"},"prompt":{"type":"string"},"quiet":{"type":"boolean"},"watch":{"type":"string","description":"quiet checks only: a page or feed URL, or \"mail\""},"keep":{"type":"boolean","description":"mail:<rule> only: run for every match, not just the first"},"for":{"type":"string","description":"a household member's name, to send it to their chat instead of this one"}},"required":["prompt"]}),
+             (write prompt as what to tell them), and the first time for each person the user is asked. \
+             A repeating one with an end (\"every morning until the 30th\", \"for two weeks\") sets until: after its last run \
+             before then, it's gone. \
+             When you tell the person you'll check back on something yourself (\"I'll check Friday whether they replied\"), \
+             book it: at, with followup=true, and prompt as what to check and tell them. Say in your reply when, and that \
+             they can cancel it. It counts like any routine.",
+            json!({"type":"object","properties":{"until":{"type":"string","description":"YYYY-MM-DD (through that day) or YYYY-MM-DD HH:MM: when a repeating routine ends"},"followup":{"type":"boolean","description":"with at: a check-back you booked on your own, not one the person asked for"},"cron":{"type":"string"},"at":{"type":"string","description":"YYYY-MM-DD HH:MM, for a one-off instead of cron"},"prompt":{"type":"string"},"quiet":{"type":"boolean"},"watch":{"type":"string","description":"quiet checks only: a page or feed URL, or \"mail\""},"keep":{"type":"boolean","description":"mail:<rule> only: run for every match, not just the first"},"for":{"type":"string","description":"a household member's name, to send it to their chat instead of this one"}},"required":["prompt"]}),
         ),
         ("routine_list", "List this chat's routines.", json!({"type":"object","properties":{}})),
         ("card_read", "Read this chat's pinned cards (a shopping list, bills due, a project's state): each one's title and what it says now, including items the person ticked.", json!({"type":"object","properties":{}})),
@@ -371,8 +376,8 @@ pub fn specs() -> Vec<(&'static str, &'static str, Value)> {
             "Change one of this chat's routines: what it does (prompt), when (cron), quiet, or watch. Use it when the person \
              replies to a routine's result with what to leave out, add or change (\"skip the crypto stuff\", \"make it shorter\", \
              \"move it to 9\"): rewrite the prompt to include that, keeping everything they didn't ask to change. Give only \
-             the fields that change.",
-            json!({"type":"object","properties":{"id":{"type":"integer"},"prompt":{"type":"string"},"cron":{"type":"string"},"quiet":{"type":"boolean"},"watch":{"type":"string"}},"required":["id"]}),
+             the fields that change. until sets or moves its end (\"stop it after Friday\"); \"\" clears it.",
+            json!({"type":"object","properties":{"id":{"type":"integer"},"until":{"type":"string"},"prompt":{"type":"string"},"cron":{"type":"string"},"quiet":{"type":"boolean"},"watch":{"type":"string"}},"required":["id"]}),
         ),
         (
             "plan_propose",
@@ -848,8 +853,14 @@ fn describe(ctx: &ToolCtx, name: &str, args: &Value) -> String {
         "routine_create" => {
             let to = args["for"].as_str().filter(|f| !f.trim().is_empty()).map(|f| format!(" in {f}'s own chat")).unwrap_or_default();
             match args["at"].as_str().filter(|a| !a.trim().is_empty()) {
+                Some(at) if args["followup"].as_bool() == Some(true) => format!("Follow-up at {at}{to}: {}", args["prompt"].as_str().unwrap_or("")),
                 Some(at) => format!("Once at {at}{to}: {}", args["prompt"].as_str().unwrap_or("")),
-                None => format!("Create routine [{}]{to} {}", args["cron"].as_str().unwrap_or(""), args["prompt"].as_str().unwrap_or("")),
+                None => format!(
+                    "Create routine [{}]{to}{} {}",
+                    args["cron"].as_str().unwrap_or(""),
+                    args["until"].as_str().filter(|u| !u.trim().is_empty()).map(|u| format!(" until {u}")).unwrap_or_default(),
+                    args["prompt"].as_str().unwrap_or("")
+                ),
             }
         }
         "memory_search" => format!("Search memory: {}", args["query"].as_str().unwrap_or("")),
@@ -1205,6 +1216,9 @@ fn precheck(ctx: &ToolCtx, name: &str, args: &Value) -> Result<()> {
             if let Some(w) = args["watch"].as_str() {
                 crate::watch::valid(w)?;
             }
+            if let Some(u) = args["until"].as_str().filter(|u| !u.trim().is_empty()) {
+                until_time(u)?;
+            }
         }
         "routine_create" => {
             if args["for"].as_str().is_some_and(|f| !f.trim().is_empty()) {
@@ -1235,6 +1249,18 @@ fn precheck(ctx: &ToolCtx, name: &str, args: &Value) -> Result<()> {
                 crate::watch::valid(w)?;
                 if !args["quiet"].as_bool().unwrap_or(false) {
                     bail!("watch is for quiet checks: set quiet=true too");
+                }
+            }
+            let at = args["at"].as_str().is_some_and(|a| !a.trim().is_empty());
+            if args["followup"].as_bool() == Some(true) && !at {
+                bail!("a follow-up is a one-off: give at, when you'll check back");
+            }
+            if let Some(u) = args["until"].as_str().filter(|u| !u.trim().is_empty()) {
+                if at {
+                    bail!("until is for a repeating routine; a one-off runs once at its time");
+                }
+                if until_time(u)? <= crate::db::now() {
+                    bail!("until must be in the future");
                 }
             }
             if ctx.db.routines(ctx.chat_id)?.len() >= 25 {
@@ -1515,6 +1541,14 @@ pub fn end_of_day(day: &str) -> Result<i64> {
 }
 
 /// A moment given as "YYYY-MM-DD HH:MM" (or with a T), local time, as unix seconds.
+/// A routine's end: a day means through that day.
+fn until_time(u: &str) -> Result<i64> {
+    match chrono::NaiveDate::parse_from_str(u.trim(), "%Y-%m-%d") {
+        Ok(d) => local_time(&format!("{d} 23:59:59")),
+        Err(_) => local_time(u),
+    }
+}
+
 pub fn local_time(at: &str) -> Result<i64> {
     let at = at.trim().replace('T', " ");
     let t = chrono::NaiveDateTime::parse_from_str(&at, "%Y-%m-%d %H:%M")
@@ -1931,10 +1965,25 @@ async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
             if let Some(w) = args["watch"].as_str().filter(|w| quiet && !w.trim().is_empty()) {
                 ctx.db.routine_set_watch(ctx.chat_id, r.id, w)?;
             }
+            // An end it can't have (its first run would be after it): no routine, rather than one that runs on forever.
+            if let Some(u) = args["until"].as_str().filter(|u| !r.once && !u.trim().is_empty())
+                && let Err(e) = until_time(u).and_then(|t| ctx.db.routine_set_ends(chat, r.id, t))
+            {
+                ctx.db.routine_delete(chat, r.id)?;
+                return Err(e);
+            }
+            let followup = r.once && args["followup"].as_bool() == Some(true);
+            if followup {
+                ctx.db.routine_set_followup(r.id)?;
+            }
             if let Some((_, name)) = &to {
                 return Ok(format!("#{} set for {name}: it runs in their own chat, {}", r.id, if r.once { format!("once, {}", next_run(&r)) } else { format!("next {}", next_run(&r)) }));
             }
-            format!("{} #{} created; {} {}", if quiet { "quiet check" } else if r.once { "one-off" } else { "routine" }, r.id, if r.once { "runs once," } else { "next run" }, next_run(&r))
+            if followup {
+                return Ok(format!("follow-up #{} booked; runs once, {}. Tell the person when you'll check back, and that they can cancel it.", r.id, next_run(&r)));
+            }
+            let until = args["until"].as_str().filter(|u| !r.once && !u.trim().is_empty()).map(|u| format!(", until {u}")).unwrap_or_default();
+            format!("{} #{} created; {} {}{until}", if quiet { "quiet check" } else if r.once { "one-off" } else { "routine" }, r.id, if r.once { "runs once," } else { "next run" }, next_run(&r))
         }
         "routine_list" => {
             let v = ctx.db.routines(ctx.chat_id)?;
@@ -1942,7 +1991,7 @@ async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
                 "no routines".into()
             } else {
                 v.iter()
-                    .map(|r| format!("#{} [{}]{}{}{} — {}", r.id, if r.once { "once" } else { &r.cron }, if r.quiet { " quiet" } else { "" }, if r.watch.is_empty() { String::new() } else { format!(" watching {}", r.watch) }, if r.paused || ctx.db.paused(r.bot_id, crate::db::now()).ok().flatten().is_some() { " paused".into() } else { format!(" next {}", next_run(r)) }, r.prompt))
+                    .map(|r| format!("#{} [{}]{}{}{}{} — {}", r.id, if r.followup { "follow-up" } else if r.once { "once" } else { &r.cron }, if r.ends > 0 { format!(" until {}", fmt_ts(r.ends)) } else { String::new() }, if r.quiet { " quiet" } else { "" }, if r.watch.is_empty() { String::new() } else { format!(" watching {}", r.watch) }, if r.paused || ctx.db.paused(r.bot_id, crate::db::now()).ok().flatten().is_some() { " paused".into() } else { format!(" next {}", next_run(r)) }, r.prompt))
                     .collect::<Vec<_>>()
                     .join("\n")
             }
@@ -1973,6 +2022,13 @@ async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
             let prompt = args["prompt"].as_str().unwrap_or(&r.prompt);
             if r.once && args["cron"].is_string() {
                 bail!("a one-off has a time, not a schedule: delete it and create a new one");
+            }
+            if let Some(u) = args["until"].as_str() {
+                if r.once && !u.trim().is_empty() {
+                    bail!("a one-off has no end: it runs once");
+                }
+                // The end first, so a new schedule is checked against the new end.
+                ctx.db.routine_set_ends(ctx.chat_id, id, if u.trim().is_empty() { 0 } else { until_time(u)? })?;
             }
             ctx.db.routine_update(ctx.chat_id, id, args["cron"].as_str().unwrap_or(&r.cron), prompt, quiet, r.paused)?;
             // Watching only makes sense for a quiet check: one that stops being quiet stops watching.
@@ -2887,6 +2943,48 @@ mod tests {
         ctx.db.routine_advance(&r).unwrap();
         ctx.db.routine_done(&r, true).unwrap();
         assert!(ctx.db.routines(9).unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn follow_ups_and_routines_that_end() {
+        let p = std::env::temp_dir().join(format!("mimir-ends-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let ctx = ToolCtx::new(Db::open(&p).unwrap(), 1, 9);
+        let day = |n: i64| (chrono::Local::now() + chrono::Duration::days(n)).format("%Y-%m-%d").to_string();
+        let soon = (chrono::Local::now() + chrono::Duration::hours(2)).format("%Y-%m-%d %H:%M").to_string();
+
+        // A follow-up the bot books itself: a one-off, marked, and the bot is told to say so.
+        assert!(call(&ctx, "routine_create", &json!({"cron": "0 8 * * *", "prompt": "x", "followup": true})).await.unwrap_err().to_string().contains("one-off"));
+        let out = call(&ctx, "routine_create", &json!({"at": soon, "prompt": "Check whether Sam replied", "followup": true})).await.unwrap();
+        assert!(out.starts_with("follow-up #") && out.contains("cancel"), "{out}");
+        let f = ctx.db.routines(9).unwrap().pop().unwrap();
+        assert!(f.once && f.followup);
+        assert!(describe(&ctx, "routine_create", &json!({"at": soon, "prompt": "x", "followup": true})).starts_with("Follow-up at "));
+        assert!(ctx.db.routine_set_ends(9, f.id, crate::db::now() + 86400).is_err(), "a one-off has no end");
+
+        // Every morning until a day: its last run is the last slot before the end, then it's gone.
+        assert!(call(&ctx, "routine_create", &json!({"at": soon, "prompt": "x", "until": day(3)})).await.is_err());
+        assert!(call(&ctx, "routine_create", &json!({"cron": "0 8 * * *", "prompt": "x", "until": day(-2)})).await.is_err());
+        let out = call(&ctx, "routine_create", &json!({"cron": "0 8 * * *", "prompt": "Brief me", "until": day(3)})).await.unwrap();
+        assert!(out.contains("until"), "{out}");
+        let r = ctx.db.routines(9).unwrap().into_iter().find(|r| r.prompt == "Brief me").unwrap();
+        assert!(r.ends > r.next_fire);
+        call(&ctx, "routine_update", &json!({"id": r.id, "until": ""})).await.unwrap();
+        assert_eq!(ctx.db.routine(r.id).unwrap().unwrap().ends, 0, "cleared");
+        assert!(ctx.db.routine_set_ends(9, r.id, r.next_fire + 60).unwrap());
+        assert!(ctx.db.routine_update(9, r.id, "0 8 1 1 *", "Brief me", false, false).is_err(), "would first run after the end");
+        let r = ctx.db.routine(r.id).unwrap().unwrap();
+        ctx.db.routine_advance(&r).unwrap();
+        assert!(ctx.db.routine(r.id).unwrap().is_some(), "still there for its last run");
+        ctx.db.routine_done(&r, true).unwrap();
+        assert!(ctx.db.routine(r.id).unwrap().is_none(), "gone after it");
+
+        // One whose end passed while it couldn't run (Mimir was off, it was paused) is removed, not run late.
+        let late = ctx.db.routine_create(1, 9, "0 8 * * *", "late", false).unwrap();
+        ctx.db.c().execute("UPDATE routines SET ends=?2, next_fire=?3 WHERE id=?1", [late.id, crate::db::now() - 3600, crate::db::now() - 7200]).unwrap();
+        assert!(ctx.db.due(1, crate::db::now()).unwrap().iter().all(|x| x.id != late.id));
+        assert!(ctx.db.routine(late.id).unwrap().is_none());
+        assert!(ctx.db.routine(f.id).unwrap().is_some(), "the follow-up isn't touched");
     }
 
     #[tokio::test]

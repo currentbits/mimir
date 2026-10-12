@@ -1013,6 +1013,8 @@ impl Host {
                             watch: String::new(),
                             retries: 0,
                             urgent: String::new(),
+                            ends: 0,
+                            followup: false,
                         }
                     }
                 };
@@ -1088,6 +1090,7 @@ impl Host {
             "reset_watch_noise" => ok(self.db.routine_reset_noise(arg(a, "chat_id")?, arg(a, "id")?)?),
             "set_watch" => ok(self.db.routine_set_watch(arg(a, "chat_id")?, arg(a, "id")?, &arg::<String>(a, "watch")?)?),
             // Only the person sets this (no bot tool does): what the bot read can't widen what comes through.
+            "set_ends" => ok(self.db.routine_set_ends(arg(a, "chat_id")?, arg(a, "id")?, arg(a, "ends")?)?),
             "set_urgent" => ok(self.db.routine_set_urgent(arg(a, "chat_id")?, arg(a, "id")?, &arg::<String>(a, "rule")?)?),
             // Pinned cards: the chat's, and your own edits to them (a tick writes back as yours; bots see it next read).
             "cards" => ok(self.db.cards(arg(a, "chat_id")?)?),

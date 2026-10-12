@@ -28,7 +28,7 @@ function actionLine(a: Action): [string, string] | null {
   const line: [string, string] | null =
     a.tool === 'memory_store' ? ['memory', `${a.result?.startsWith('Not saved') ? 'Suggested for memory' : 'Saved to memory'} · ${q(/^Remember "(.*?)":/)}`]
     : a.tool === 'memory_forget' ? ['trash', `Forgot · ${q(/"(.*)"$/)}`]
-    : a.tool === 'routine_create' ? ['clock', s.startsWith('Once at') ? `Reminder · ${q(/^Once at (.*?):/)}` : `Scheduled · ${schedule(q(/^Create routine \[(.*?)\]/))}`]
+    : a.tool === 'routine_create' ? ['clock', s.startsWith('Once at') ? `Reminder · ${q(/^Once at (.*?): /)}` : s.startsWith('Follow-up at') ? `Follow-up · ${q(/^Follow-up at (.*?): /)}` : `Scheduled · ${schedule(q(/^Create routine \[(.*?)\]/))}`]
     : a.tool === 'routine_delete' ? ['clock', 'Deleted a routine']
     : a.tool === 'ask_bot' ? ['user', `Asked ${q(/^Ask (.*?):/)}`]
     : a.tool === 'web_fetch' ? ['globe', `Read ${q(/^Read https?:\/\/([^/\s]+)/) || 'a page'}`]
