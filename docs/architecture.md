@@ -23,7 +23,7 @@ For contributors: how the pieces fit together.
 | `chatgpt` | Sign in with ChatGPT: OAuth (PKCE, dynamic registration), the plan's tokens, and replies on the Responses API |
 | `oauth` | OAuth sign-in with PKCE for tool servers and Outlook: the browser's return trip (or a pasted address), tokens in the secret store, refreshing |
 | `lib.rs` (`turn`) | One run: builds the instructions (role, standing memory, skills), calls the provider, records the run; `/skill` commands (`skill_command`) |
-| `tools` | Tool definitions, the allow / ask / deny gate, taint, plans, and the built-in tools' code |
+| `tools` | `mod.rs`: `ToolCtx`, `call` (every tool call), taint, shared helpers; `specs.rs`: tool definitions; `gate.rs`: the allow / ask / deny gate, plans, loops, parked calls; `builtin.rs`: the built-in tools' code |
 | `mcp` | The MCP server the CLIs start for each run (`<app> mcp --bot B --chat C --run R`, plus `--read-only` for quiet checks, `--no-tools`, `--depth` for hand-offs), exposing Mimir's tools |
 | `ext` | Tool servers (MCP clients over stdio and Streamable HTTP, MCP's OAuth sign-in for remote ones), the browser, saved logins |
 | `tidy` | The daily memory tidy-up (on `tidy_model` if set): corrections, skills from good runs, fixes for skills that went wrong, weekly upkeep (retire / merge / move to background), the weekly review; teaching a skill from a source or a SKILL.md |
