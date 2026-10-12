@@ -141,7 +141,7 @@ and the data folder in a dialog. Installs from before the rename to Mimir (`~/.b
 | `MIMIR_COMPUTER`, `MIMIR_COMPUTER_TOKEN` | Server: the bots' computer as a separate service (`computer:7300`, `mimir computer`) and the control channel's secret (24+ characters, on both sides) |
 | `MIMIR_OSV_API` | OSV.dev base URL for the tool servers' malware check (a test fake) |
 | `MIMIR_TELEGRAM_API` | Telegram Bot API base URL (a self-hosted Bot API server, or the test mock) |
-| `MIMIR_SIGNAL_API` | signal-cli-rest-api's address when a bot's page doesn't set one (default `http://127.0.0.1:8080`) |
+| `MIMIR_SIGNAL_API` | signal-cli-rest-api's address when a bot's page doesn't set one (default `http://127.0.0.1:8081`, as 8080 is `mimir server`'s own) |
 | `MIMIR_CHATGPT_AUTH`, `MIMIR_CHATGPT_API` | Sign in with ChatGPT: the sign-in and API base URLs (for the test fake, `scripts/fake-ai.py`) |
 | `MIMIR_CLAUDE_BIN`, `MIMIR_CODEX_BIN`, `MIMIR_GROK_BIN`, `MIMIR_NPX` | Paths to the CLIs, if not on PATH |
 

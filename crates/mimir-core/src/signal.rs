@@ -118,10 +118,10 @@ fn pick(text: &str) -> Option<usize> {
 }
 
 impl Signal {
-    /// `api` empty: MIMIR_SIGNAL_API, else signal-cli-rest-api's own default port on this computer.
+    /// `api` empty: MIMIR_SIGNAL_API, else port 8081 on this computer (8080 is `mimir server`'s own).
     pub(crate) fn new(api: &str, number: &str) -> Result<Self> {
         let api = match api.trim() {
-            "" => std::env::var("MIMIR_SIGNAL_API").unwrap_or_else(|_| "http://127.0.0.1:8080".into()),
+            "" => std::env::var("MIMIR_SIGNAL_API").unwrap_or_else(|_| "http://127.0.0.1:8081".into()),
             a => a.into(),
         };
         let number: String = number.chars().filter(|c| !c.is_whitespace()).collect();

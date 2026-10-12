@@ -223,7 +223,7 @@ export function BotPage({ bot, status, canDelete, onSaved, onDeleted, onChat }: 
         <ChannelRow icon="signal" title="Signal" st={chan('signal')} has={has('has_signal')} onRemove={() => save({ ...NO_SECRETS, signal_number: '', signal_api: '' })}
           hint="Run signal-cli-rest-api with MODE=json-rpc, link the bot's own Signal number to it (open /v1/qrcodelink?device_name=mimir on it and scan the code in Signal → Linked devices), then enter that number. Direct chats only.">
           <input className="input" aria-label="Signal number" placeholder="The bot's number (+31…)" value={typed('signal_number')} onChange={e => type('signal_number', e.target.value)} autoComplete="off" />
-          <input className="input" aria-label="signal-cli-rest-api address" placeholder="signal-cli-rest-api address (default http://127.0.0.1:8080)" value={typed('signal_api')} onChange={e => type('signal_api', e.target.value)} autoComplete="off" />
+          <input className="input" aria-label="signal-cli-rest-api address" placeholder="signal-cli-rest-api address (default http://127.0.0.1:8081)" value={typed('signal_api')} onChange={e => type('signal_api', e.target.value)} autoComplete="off" />
         </ChannelRow>
       </Group>
 

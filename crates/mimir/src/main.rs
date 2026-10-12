@@ -25,7 +25,7 @@ ENV:
   SLACK_BOT_TOKEN, SLACK_APP_TOKEN   xoxb-… and xapp-… (Socket Mode) (serve)
   DISCORD_BOT_TOKEN          from the Discord Developer Portal (serve)
   SIGNAL_NUMBER              the bot's Signal number, linked in signal-cli-rest-api (serve)
-  MIMIR_SIGNAL_API           signal-cli-rest-api's address (default http://127.0.0.1:8080)
+  MIMIR_SIGNAL_API           signal-cli-rest-api's address (default http://127.0.0.1:8081)
   MIMIR_PROVIDER            claude (default, your `claude` login) | codex (your ChatGPT login)
                              | grok (your SuperGrok login via Grok Build) | openrouter | xai (Grok API key)
                              | local (Ollama / LM Studio) | openai
