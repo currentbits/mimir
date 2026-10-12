@@ -95,6 +95,11 @@ say what changed.
 ## Day to day
 
 - **Logs**: `docker compose logs -f mimir`. **Stop**: `docker compose down` (your data stays).
+- **Is everything working?** `docker compose exec mimir mimir doctor` checks each bot's AI sign-in, that each
+  Telegram, Slack and Discord token and each mailbox still signs in, that the bots' computer answers, free disk space
+  (it warns under 1 GB), and that the database is sound, not from a newer Mimir, and backed up in the last two days.
+  One line each (✓ fine, ! worth a look, ✗ broken, with what to do), and it exits non-zero when something is broken,
+  so a monitoring script can run it. Nothing is spent or sent. Settings → Your data → *Check everything* shows the same.
 - **A new admin token**: `docker compose exec mimir mimir admin-token --new`, then `docker compose restart`. Signed-in
   browsers and connected apps need the new one.
 - **Backups**: Mimir keeps a checked copy of its database every day in `/data/backups` (7 daily, 4 weekly), and

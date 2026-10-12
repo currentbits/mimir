@@ -121,6 +121,13 @@ to it once to list its tools, so a broken setup isn't saved. Tokens in its envir
 allowed, the rest ask. Each bot can switch servers on or off. Remote servers use MCP's Streamable HTTP transport;
 servers that only offer the older SSE transport aren't supported.
 
+**Malware check.** Before starting a server whose command downloads a package (`npx`, `bunx`, `npm exec`, `pnpm dlx`,
+`uvx`, `pipx run`…), Mimir looks the package up in [OSV.dev](https://osv.dev)'s list of malicious packages and refuses
+to start it if it's there, naming the advisory. With a pinned version (`pkg@1.2.3`, `pkg==1.2.3`) only that version
+counts; without one, any version ever flagged blocks it, so pin a clean version to get past that. The answer is kept for
+a day (a flagged one for good), and if OSV.dev can't be reached the server starts anyway. The built-in browser is a
+fixed version and isn't checked.
+
 **Signing in.** A hosted server that wants a sign-in (Notion `https://mcp.notion.com/mcp`, Linear
 `https://mcp.linear.app/mcp` and the like) answers Mimir's first try with "wants you to sign in", and Settings shows
 **Sign in to …**. Mimir follows MCP's authorization spec: it finds the server's sign-in service from its metadata,

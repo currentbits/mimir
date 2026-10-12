@@ -213,6 +213,12 @@ impl Discord {
         Ok(m["id"].as_str().map(|id| format!("{to}/{id}")))
     }
 
+    /// For `mimir doctor`: the token works. The bot's name.
+    pub(crate) async fn check(&self) -> Result<String> {
+        let me = self.api(reqwest::Method::GET, "/users/@me", None).await.context("Discord rejected the bot token")?;
+        Ok(me["username"].as_str().unwrap_or("?").to_string())
+    }
+
     pub(crate) async fn listen(&self, me: &Chan, core: Arc<Core>, slot: Slot) -> Result<()> {
         self.api(reqwest::Method::GET, "/users/@me", None).await.context("Discord rejected the bot token")?;
         let (mut ws, _) = tokio_tungstenite::connect_async(GATEWAY).await?;

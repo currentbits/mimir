@@ -4,6 +4,8 @@
 //! It runs on its own: with docker compose it's a separate service (`mimir computer`, its own user, none of Mimir's
 //! data) that Mimir drives over a small control channel and Chromium's DevTools port; a plain `docker run` keeps it in
 //! Mimir's container. Never on your own machine.
+//! Each bot has its own Chromium profile, so a site you sign in to for one bot isn't signed in for the others: when
+//! another bot uses the computer, Chromium restarts with that bot's profile.
 // ponytail: one computer per server, shared by its bots (like Grok Bot's one VM per person); per-bot screens later
 
 use anyhow::{Context, Result, bail};
@@ -97,6 +99,12 @@ fn xdotool(args: &[&str]) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
+/// For `mimir doctor`: None without a computer service, else whether it answers (with the right token).
+pub fn reach() -> Option<Result<()>> {
+    let a = remote()?;
+    Some(ask(&a, serde_json::json!({"op": "status"})).map(drop))
+}
+
 /// Is the screen up?
 pub fn running() -> bool {
     if let Some(a) = remote() {
@@ -119,16 +127,96 @@ fn browser(home: &Path) -> Result<Command> {
     Ok(c)
 }
 
+fn launch(cmd: &mut Command) -> Result<Child> {
+    Ok(cmd.env("DISPLAY", DISPLAY).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn()?)
+}
+
 fn spawn(cmd: &mut Command) -> Result<()> {
-    let child = cmd.env("DISPLAY", DISPLAY).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn()?;
+    let child = launch(cmd)?;
     PROCS.lock().unwrap_or_else(|e| e.into_inner()).push(child);
     Ok(())
 }
 
-/// Start the screen, window manager and browser if they aren't running (again after a crash). Idempotent.
-pub fn start(home: &Path) -> Result<()> {
+/// A bot's own Chromium profile (its cookies and sign-ins).
+fn profile(home: &Path, bot: i64) -> Result<PathBuf> {
+    let dir = home.join("computer");
+    let p = dir.join(format!("chromium-{bot}"));
+    // Before profiles were per bot, all bots shared one: the first bot to use the computer since keeps its sign-ins.
+    let shared = dir.join("chromium");
+    if bot > 0 && !p.exists() && shared.is_dir() {
+        std::fs::rename(&shared, &p)?;
+    }
+    std::fs::create_dir_all(&p)?;
+    Ok(p)
+}
+
+/// Which bot's Chromium is on screen: (bot, pid), recorded in `computer/browser` by whichever process started it (the
+/// server, or a CLI bot's own `mimir mcp`, so not something one process can keep in memory), and only while that pid
+/// is still Chromium on that bot's profile.
+fn on_screen(home: &Path) -> Option<(i64, u32)> {
+    let s = std::fs::read_to_string(home.join("computer").join("browser")).ok()?;
+    let (bot, pid) = s.trim().split_once(' ')?;
+    let (bot, pid): (i64, u32) = (bot.parse().ok()?, pid.parse().ok()?);
+    let dir = format!("--user-data-dir={}", home.join("computer").join(format!("chromium-{bot}")).display());
+    let cmd = std::fs::read(format!("/proc/{pid}/cmdline")).ok()?;
+    cmd.split(|b| *b == 0).any(|a| a == dir.as_bytes()).then_some((bot, pid))
+}
+
+/// What start does about the browser: keep it, close the one open (if any) and start the bot's, or leave alone a
+/// Chromium on the DevTools port that no bot's record accounts for (driving it could mean anybody's sign-ins).
+#[derive(Debug, PartialEq)]
+enum Next {
+    Keep,
+    Switch(Option<u32>),
+    Unknown,
+}
+
+fn next(on: Option<(i64, u32)>, want: i64, up: bool) -> Next {
+    match on {
+        Some((b, _)) if b == want && up => Next::Keep,
+        Some((_, pid)) => Next::Switch(Some(pid)),
+        None if up => Next::Unknown,
+        None => Next::Switch(None),
+    }
+}
+
+/// One process at a time decides which Chromium is on screen.
+fn browser_lock(home: &Path) -> Result<std::fs::File> {
+    let dir = home.join("computer");
+    std::fs::create_dir_all(&dir)?;
+    let f = std::fs::File::create(dir.join("browser.lock"))?;
+    f.lock()?;
+    Ok(f)
+}
+
+/// Close Chromium the way a person would, so it writes its cookies out (killed if it hangs), and wait for its port.
+fn quit(pid: u32) {
+    // A zombie (exited, not yet collected by its parent) has an empty command line.
+    let alive = || std::fs::read(format!("/proc/{pid}/cmdline")).is_ok_and(|c| !c.is_empty());
+    let _ = Command::new("kill").args(["-TERM", &pid.to_string()]).status();
+    for _ in 0..50 {
+        PROCS.lock().unwrap_or_else(|e| e.into_inner()).retain_mut(|c| matches!(c.try_wait(), Ok(None)));
+        if !alive() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    if alive() {
+        let _ = Command::new("kill").args(["-KILL", &pid.to_string()]).status();
+    }
+    for _ in 0..30 {
+        if !browser_up() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// Start the screen, window manager and browser if they aren't running (again after a crash). Idempotent. With a
+/// bot, the browser runs that bot's profile (restarting it if another bot's is open); without, it keeps the one open.
+pub fn start(home: &Path, bot: Option<i64>) -> Result<()> {
     if let Some(a) = remote() {
-        return ask(&a, serde_json::json!({"op": "start"})).map(drop);
+        return ask(&a, serde_json::json!({"op": "start", "bot": bot})).map(drop);
     }
     if !available() {
         bail!("the computer needs a Linux server with Xvfb, xdotool, scrot and Chromium (the Mimir Docker image has them)");
@@ -148,42 +236,60 @@ pub fn start(home: &Path) -> Result<()> {
             spawn(&mut Command::new("openbox"))?;
         }
     }
-    if !browser_up() {
-        let profile = home.join("computer").join("chromium");
-        std::fs::create_dir_all(&profile)?;
-        // --no-sandbox: Chromium's own sandbox needs user namespaces, which containers usually don't allow; the
-        // container is the sandbox here.
-        spawn(browser(home)?.args([
-            "--no-sandbox",
-            // Hides the "unsupported command-line flag" bar --no-sandbox brings, which shifts every page down.
-            "--test-type",
-            "--no-first-run",
-            "--no-default-browser-check",
-            "--disable-dev-shm-usage",
-            &format!("--remote-debugging-port={CDP_PORT}"),
-            "--remote-debugging-address=127.0.0.1",
-            &format!("--user-data-dir={}", profile.display()),
-            "--window-position=0,0",
-            &format!("--window-size={WIDTH},{HEIGHT}"),
-            "--start-maximized",
-            "about:blank",
-        ]))
-        .context("couldn't start Chromium")?;
-        for _ in 0..80 {
-            if browser_up() {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(100));
+    let _lock = browser_lock(home)?;
+    let on = on_screen(home);
+    let bot = bot.or(on.map(|(b, _)| b)).unwrap_or(0);
+    let close = match next(on, bot, browser_up()) {
+        Next::Keep => return Ok(()),
+        Next::Unknown => bail!("another Chromium has the computer's DevTools port; turn the computer off and on in Settings"),
+        Next::Switch(pid) => pid,
+    };
+    if let Some(pid) = close {
+        quit(pid);
+    }
+    if browser_up() {
+        bail!("the open Chromium didn't close; turn the computer off and on in Settings");
+    }
+    let profile = profile(home, bot)?;
+    // --no-sandbox: Chromium's own sandbox needs user namespaces, which containers usually don't allow; the
+    // container is the sandbox here.
+    let child = launch(browser(home)?.args([
+        "--no-sandbox",
+        // Hides the "unsupported command-line flag" bar --no-sandbox brings, which shifts every page down.
+        "--test-type",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--disable-dev-shm-usage",
+        &format!("--remote-debugging-port={CDP_PORT}"),
+        "--remote-debugging-address=127.0.0.1",
+        &format!("--user-data-dir={}", profile.display()),
+        "--window-position=0,0",
+        &format!("--window-size={WIDTH},{HEIGHT}"),
+        "--start-maximized",
+        "about:blank",
+    ]))
+    .context("couldn't start Chromium")?;
+    std::fs::write(home.join("computer").join("browser"), format!("{bot} {}", child.id()))?;
+    PROCS.lock().unwrap_or_else(|e| e.into_inner()).push(child);
+    for _ in 0..80 {
+        if browser_up() {
+            break;
         }
+        std::thread::sleep(Duration::from_millis(100));
     }
     Ok(())
 }
 
-/// Stop everything this server started.
-pub fn stop() {
+/// Stop everything this server started, and the browser on screen.
+pub fn stop(home: &Path) {
     if let Some(a) = remote() {
         let _ = ask(&a, serde_json::json!({"op": "stop"}));
         return;
+    }
+    if let Ok(_lock) = browser_lock(home)
+        && let Some((_, pid)) = on_screen(home)
+    {
+        quit(pid);
     }
     for mut c in PROCS.lock().unwrap_or_else(|e| e.into_inner()).drain(..) {
         let _ = c.kill();
@@ -309,16 +415,16 @@ pub fn scroll(x: i64, y: i64, down: bool, amount: i64) -> Result<()> {
     xdotool(&["mousemove", "--sync", &sx, &sy, "click", "--repeat", &n, if down { "5" } else { "4" }]).map(drop)
 }
 
-/// Open a web address in the computer's Chromium (a new tab of the one on screen).
-pub fn open_url(home: &Path, url: &str) -> Result<()> {
+/// Open a web address in the computer's Chromium (a new tab of the one on screen), in the bot's profile.
+pub fn open_url(home: &Path, bot: i64, url: &str) -> Result<()> {
     if !(url.starts_with("https://") || url.starts_with("http://")) {
         bail!("open takes a web address starting with https://");
     }
     if let Some(a) = remote() {
-        return ask(&a, serde_json::json!({"op": "open", "url": url})).map(drop);
+        return ask(&a, serde_json::json!({"op": "open", "bot": bot, "url": url})).map(drop);
     }
-    start(home)?;
-    let profile = home.join("computer").join("chromium");
+    start(home, Some(bot))?;
+    let profile = profile(home, bot)?;
     browser(home)?
         .args(["--no-sandbox", &format!("--user-data-dir={}", profile.display()), url])
         .env("DISPLAY", DISPLAY)
@@ -327,6 +433,24 @@ pub fn open_url(home: &Path, url: &str) -> Result<()> {
         .stderr(Stdio::null())
         .spawn()
         .context("couldn't open Chromium")?;
+    Ok(())
+}
+
+/// Sign a bot out of every site on the computer: its profile is emptied (closing the browser if it's that bot's).
+pub fn forget(home: &Path, bot: i64) -> Result<()> {
+    if let Some(a) = remote() {
+        return ask(&a, serde_json::json!({"op": "forget", "bot": bot})).map(drop);
+    }
+    let _lock = browser_lock(home)?;
+    if let Some((b, pid)) = on_screen(home)
+        && b == bot
+    {
+        quit(pid);
+    }
+    let p = profile(home, bot)?;
+    std::fs::remove_dir_all(&p)?;
+    // Left empty, so the shared profile from before can't move in.
+    std::fs::create_dir_all(&p)?;
     Ok(())
 }
 
@@ -382,13 +506,14 @@ fn act(home: &Path, v: &serde_json::Value) -> Result<serde_json::Value> {
     match s("op") {
         "status" => return Ok(serde_json::json!({"running": running()})),
         "screenshot" => return Ok(serde_json::json!({"image": base64::engine::general_purpose::STANDARD.encode(screenshot_jpeg()?)})),
-        "start" => start(home)?,
-        "stop" => stop(),
+        "start" => start(home, v["bot"].as_i64())?,
+        "stop" => stop(home),
         "click" => click(n("x"), n("y"), s("button"), v["double"] == true)?,
         "type" => type_text(s("text"))?,
         "key" => key(s("keys"))?,
         "scroll" => scroll(n("x"), n("y"), v["down"] == true, n("amount"))?,
-        "open" => open_url(home, s("url"))?,
+        "open" => open_url(home, n("bot"), s("url"))?,
+        "forget" => forget(home, n("bot"))?,
         op => bail!("unknown request {op}"),
     }
     Ok(serde_json::json!({}))
@@ -738,6 +863,48 @@ mod tests {
         assert!(super::teaching().is_none());
     }
 
+
+    #[test]
+    fn each_bot_has_its_own_profile() {
+        let home = std::env::temp_dir().join(format!("mimir-profiles-{}", std::process::id()));
+        let shared = home.join("computer").join("chromium");
+        std::fs::create_dir_all(&shared).unwrap();
+        std::fs::write(shared.join("Cookies"), "signed in").unwrap();
+        // No bot's browser doesn't take the shared profile; the first bot to use the computer does.
+        assert_eq!(super::profile(&home, 0).unwrap(), home.join("computer").join("chromium-0"));
+        assert!(shared.is_dir());
+        let first = super::profile(&home, 3).unwrap();
+        assert_eq!(first, home.join("computer").join("chromium-3"));
+        assert!(first.join("Cookies").is_file() && !shared.exists());
+        let second = super::profile(&home, 4).unwrap();
+        assert!(second.is_dir() && !second.join("Cookies").exists(), "another bot starts signed out");
+        // Signing a bot out empties its profile, and only its.
+        std::fs::create_dir_all(&shared).unwrap();
+        std::fs::write(shared.join("Cookies"), "old").unwrap();
+        if super::remote().is_none() {
+            super::forget(&home, 3).unwrap();
+            assert!(!first.join("Cookies").exists() && first.is_dir());
+            assert!(super::profile(&home, 3).unwrap().read_dir().unwrap().next().is_none(), "the old shared one doesn't move back in");
+        }
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn the_browser_switches_to_the_bot_using_it() {
+        use super::{Next, next};
+        assert_eq!(next(Some((3, 40)), 3, true), Next::Keep);
+        assert_eq!(next(Some((3, 40)), 4, true), Next::Switch(Some(40)), "another bot's: closed first");
+        assert_eq!(next(Some((3, 40)), 3, false), Next::Switch(Some(40)), "not answering: started again");
+        assert_eq!(next(None, 3, false), Next::Switch(None));
+        // A Chromium nobody recorded (another process's, or one that outlived its record) isn't driven.
+        assert_eq!(next(None, 3, true), Next::Unknown);
+        // Only a record whose pid is still Chromium on that bot's profile counts.
+        let home = std::env::temp_dir().join(format!("mimir-onscreen-{}", std::process::id()));
+        std::fs::create_dir_all(home.join("computer")).unwrap();
+        std::fs::write(home.join("computer").join("browser"), format!("3 {}", std::process::id())).unwrap();
+        assert_eq!(super::on_screen(&home), None, "this test isn't Chromium on bot 3's profile");
+        let _ = std::fs::remove_dir_all(&home);
+    }
 
     #[test]
     fn image_results_only_point_into_the_media_folder() {

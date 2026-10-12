@@ -451,6 +451,11 @@ struct Http {
 impl Client {
     async fn start(conf: &ServerConf, db: &Db, bot: i64) -> Result<Self> {
         let (io, secrets_file) = if conf.url.is_empty() {
+            // The browser preset is pinned (PLAYWRIGHT); a command that fetches a package is checked first.
+            if conf.preset.is_none() {
+                let osv = std::env::var("MIMIR_OSV_API").unwrap_or_else(|_| "https://api.osv.dev".into());
+                malware_check(db, &osv, &conf.name, &conf.command, &conf.args).await?;
+            }
             // Off the async threads: bringing up the bots' computer can take seconds.
             let (conf, db) = (conf.clone(), db.clone());
             tokio::task::spawn_blocking(move || spawn(&conf, &db, bot)).await??
@@ -647,7 +652,7 @@ fn spawn(conf: &ServerConf, db: &Db, bot: i64) -> Result<(Io, Option<std::path::
             let mut args: Vec<String> = vec!["-y".into(), PLAYWRIGHT.into()];
             if crate::computer::usable(db) {
                 // The bots' computer is on: drive the Chromium on its screen, so you can watch (and take over).
-                crate::computer::start(&db.dir())?;
+                crate::computer::start(&db.dir(), (bot > 0).then_some(bot))?;
                 args.extend(["--cdp-endpoint".into(), crate::computer::cdp_endpoint()?]);
             } else {
                 // Bundled Chromium (see install_browser), so Google Chrome needn't be installed.
@@ -692,6 +697,106 @@ fn write_secrets_file(dir: &std::path::Path, values: &[(String, String)]) -> Res
     Ok(path)
 }
 
+/// The registry package a server's command fetches and runs (`npx -y pkg@1.2.3`, `uvx pkg`, `pipx run pkg`…):
+/// (OSV ecosystem, name, exact version if pinned). None for anything else (a local program, a path, a git URL).
+fn package_of(command: &str, args: &[String]) -> Option<(&'static str, String, Option<String>)> {
+    let tool = std::path::Path::new(command).file_stem()?.to_str()?.to_ascii_lowercase();
+    let a: Vec<&str> = args.iter().map(String::as_str).collect();
+    // The runner, the args after it, and its flags that name the package or take a value.
+    let (eco, rest, pkg_flags, value_flags): (_, &[&str], &[&str], &[&str]) = match (tool.as_str(), a.as_slice()) {
+        ("npx" | "bunx", r) => ("npm", r, &["-p", "--package"], &[]),
+        ("npm", ["exec" | "x", r @ ..]) => ("npm", r, &["-p", "--package"], &["-w", "--workspace", "-c", "--call"]),
+        ("pnpm" | "yarn", ["dlx", r @ ..]) | ("bun", ["x", r @ ..]) => ("npm", r, &["-p", "--package"], &[]),
+        ("uvx", r) | ("uv", ["tool", "run", r @ ..]) => ("PyPI", r, &["--from"], &["--with", "-w", "--python", "-p", "--index", "--index-url", "--extra-index-url", "--with-requirements"]),
+        ("pipx", ["run", r @ ..]) => ("PyPI", r, &["--spec"], &["--python", "--index-url", "--pip-args"]),
+        _ => return None,
+    };
+    let mut spec = None;
+    let mut i = 0;
+    while i < rest.len() {
+        let (flag, inline) = rest[i].split_once('=').map_or((rest[i], None), |(f, v)| (f, Some(v)));
+        if pkg_flags.contains(&flag) || value_flags.contains(&flag) {
+            let v = inline.or_else(|| rest.get(i + 1).copied());
+            i += if inline.is_some() { 1 } else { 2 };
+            if pkg_flags.contains(&flag) {
+                spec = v;
+                break;
+            }
+        } else if flag.starts_with('-') {
+            i += 1;
+        } else {
+            spec = Some(rest[i]);
+            break;
+        }
+    }
+    let spec = spec?;
+    if spec.is_empty() || spec.starts_with(['.', '/', '~', '\\']) || spec.contains(':') || (eco == "PyPI" && spec.contains('/')) {
+        return None;
+    }
+    let pinned = |v: &str| (v.starts_with(|c: char| c.is_ascii_digit()) && v.chars().all(|c| c.is_ascii_alphanumeric() || ".-+".contains(c))).then(|| v.to_string());
+    if eco == "npm" {
+        // A scoped name starts with @: the version's @ is the one after it.
+        let at = spec[1..].find('@').map(|i| i + 1);
+        let (name, version) = at.map_or((spec, None), |i| (&spec[..i], pinned(&spec[i + 1..])));
+        return Some((eco, name.to_lowercase(), version));
+    }
+    let (name, version) = spec.split_once("==").or_else(|| spec.split_once('@')).map_or((spec, None), |(n, v)| (n, pinned(v.trim())));
+    // Drop extras and any other specifier (`pkg[cli]>=1`); PyPI names compare normalized (PEP 503).
+    let name = name.split(['[', '<', '>', '=', '!', '~', ';', ' ']).next().unwrap_or(name);
+    Some((eco, name.to_lowercase().replace(['_', '.'], "-"), version))
+}
+
+/// The malicious-package advisory (OSV `MAL-…`) in an OSV query answer, if any.
+fn malicious(answer: &Value) -> Option<String> {
+    answer["vulns"].as_array()?.iter().find_map(|v| {
+        let id = v["id"].as_str().unwrap_or("");
+        let alias = v["aliases"].as_array().into_iter().flatten().filter_map(Value::as_str).find(|a| a.starts_with("MAL-"));
+        if id.starts_with("MAL-") { Some(id.to_string()) } else { alias.map(|a| format!("{a} ({id})")) }
+    })
+}
+
+/// How long a clean verdict holds before asking OSV again; a flagged one holds for good.
+const OSV_FRESH: i64 = 24 * 3600;
+
+/// Refuse to start a server whose package OSV.dev lists as malware. Verdicts are cached per package@version in
+/// settings; when OSV can't be reached the server starts anyway (logged).
+/// ponytail: an unpinned package is refused if any of its versions was ever flagged; pinning a clean one gets past that.
+async fn malware_check(db: &Db, osv: &str, server: &str, command: &str, args: &[String]) -> Result<()> {
+    let Some((eco, name, version)) = package_of(command, args) else { return Ok(()) };
+    let shown = format!("{name}{}", version.as_deref().map(|v| format!("@{v}")).unwrap_or_default());
+    let key = format!("osv:{eco}:{shown}");
+    let cached = db.setting(&key)?.unwrap_or_default();
+    let verdict = match cached.strip_prefix("ok:").and_then(|t| t.parse::<i64>().ok()) {
+        Some(t) if crate::db::now() - t < OSV_FRESH => None,
+        _ if cached.starts_with("MAL-") => Some(cached),
+        _ => {
+            let mut package = json!({"package": {"name": name, "ecosystem": eco}});
+            if let Some(v) = &version {
+                package["version"] = json!(v);
+            }
+            let asked = async {
+                let res = reqwest::Client::builder().timeout(Duration::from_secs(10)).build()?.post(format!("{osv}/v1/query")).json(&package).send().await?.error_for_status()?;
+                anyhow::Ok(res.json::<Value>().await?)
+            };
+            match asked.await {
+                Ok(answer) => {
+                    let found = malicious(&answer);
+                    db.set_setting(&key, &found.clone().unwrap_or_else(|| format!("ok:{}", crate::db::now())))?;
+                    found
+                }
+                Err(e) => {
+                    eprintln!("tool server {server}: couldn't check {shown} for malware on OSV.dev, starting it anyway: {e:#}");
+                    None
+                }
+            }
+        }
+    };
+    match verdict {
+        Some(id) => bail!("didn't start tool server {server}: its package {shown} is listed as malware ({id}, https://osv.dev/vulnerability/{})", id.split(' ').next().unwrap_or(&id)),
+        None => Ok(()),
+    }
+}
+
 /// Start a server once to (re)fill its tool cache. Called when servers are configured.
 pub async fn refresh(db: &Db, conf: &ServerConf) -> Result<usize> {
     let mut c = Client::start(conf, db, 0).await?;
@@ -734,6 +839,12 @@ pub async fn call(ctx: &ToolCtx, full: &str, args: &Value) -> Result<String> {
         crate::tools::wait_for_approval_with(ctx, full, &format!("Use saved login {} on {url}", names.join(", ")), "login", None).await?;
     }
 
+    if server == BROWSER && crate::computer::usable(&ctx.db) {
+        // On the bots' computer: hold it like its own tools do, in this bot's browser profile.
+        crate::tools::hold_computer(ctx).await?;
+        let (home, bot) = (ctx.db.dir(), ctx.bot_id);
+        tokio::task::spawn_blocking(move || crate::computer::start(&home, Some(bot))).await??;
+    }
     let mut sessions = ctx.ext.lock().await;
     if !sessions.contains_key(server) {
         sessions.insert(server.to_string(), Client::start(&conf, &ctx.db, ctx.bot_id).await?);
@@ -852,6 +963,68 @@ mod tests {
         assert_eq!(refresh(&db, &servers(&db)[0]).await.unwrap(), 1, "refused token: refreshed and retried");
         delete_server(&db, "fake").unwrap();
         assert!(!signed_in("fake"));
+    }
+
+    #[test]
+    fn package_of_commands() {
+        let p = |line: &str| {
+            let mut w = line.split(' ').map(String::from);
+            package_of(&w.next().unwrap(), &w.collect::<Vec<_>>()).map(|(e, n, v)| format!("{e} {n} {}", v.unwrap_or_default()))
+        };
+        assert_eq!(p("npx -y @modelcontextprotocol/server-filesystem ~/Notes").as_deref(), Some("npm @modelcontextprotocol/server-filesystem "));
+        assert_eq!(p("/usr/local/bin/npx --yes @scope/pkg@1.2.3 --flag").as_deref(), Some("npm @scope/pkg 1.2.3"));
+        assert_eq!(p("npx.cmd mcp-thing@latest").as_deref(), Some("npm mcp-thing "), "a tag isn't a pinned version");
+        assert_eq!(p("npx -p left-pad@1.3.0 run").as_deref(), Some("npm left-pad 1.3.0"));
+        assert_eq!(p("npm exec --yes -- pkg@^2").as_deref(), Some("npm pkg "));
+        assert_eq!(p("pnpm dlx pkg@2.0.0").as_deref(), Some("npm pkg 2.0.0"));
+        assert_eq!(p("bunx pkg").as_deref(), Some("npm pkg "));
+        assert_eq!(p("uvx mcp-server-fetch").as_deref(), Some("PyPI mcp-server-fetch "));
+        assert_eq!(p("uvx --python 3.12 Mcp_Server.Git==0.6.2").as_deref(), Some("PyPI mcp-server-git 0.6.2"));
+        assert_eq!(p("uvx --from awslabs.core-mcp-server@1.0.1 run").as_deref(), Some("PyPI awslabs-core-mcp-server 1.0.1"));
+        assert_eq!(p("uv tool run pkg[cli]>=1").as_deref(), Some("PyPI pkg "));
+        assert_eq!(p("pipx run --spec pkg==1.0 tool").as_deref(), Some("PyPI pkg 1.0"));
+        for none in ["node server.js", "npx ./local", "npx github:user/repo", "uvx git+https://x/y", "python -m pkg", "npm install x", "npx -y"] {
+            assert_eq!(p(none), None, "{none}");
+        }
+    }
+
+    #[test]
+    fn malicious_verdict() {
+        assert_eq!(malicious(&json!({"vulns": [{"id": "GHSA-x"}, {"id": "MAL-2025-1234"}]})).as_deref(), Some("MAL-2025-1234"));
+        assert_eq!(malicious(&json!({"vulns": [{"id": "GHSA-y", "aliases": ["CVE-1", "MAL-2024-9"]}]})).as_deref(), Some("MAL-2024-9 (GHSA-y)"));
+        assert_eq!(malicious(&json!({"vulns": [{"id": "GHSA-z"}]})), None, "an ordinary vulnerability doesn't block");
+        assert_eq!(malicious(&json!({})), None);
+    }
+
+    /// Against a one-file fake OSV: a flagged package is refused, the verdict is cached, and OSV being down doesn't block.
+    #[tokio::test]
+    async fn malware_check_refuses_and_caches() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tokio::io::AsyncReadExt;
+        static ASKED: AtomicUsize = AtomicUsize::new(0);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let osv = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            while let Ok((mut s, _)) = listener.accept().await {
+                let mut req = vec![0; 4096];
+                let n = s.read(&mut req).await.unwrap();
+                ASKED.fetch_add(1, Ordering::SeqCst);
+                let body = if String::from_utf8_lossy(&req[..n]).contains("evil-mcp") { r#"{"vulns":[{"id":"MAL-2025-42"}]}"# } else { "{}" };
+                let _ = s.write_all(format!("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}", body.len()).as_bytes()).await;
+            }
+        });
+        let p = std::env::temp_dir().join(format!("mimir-osv-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = Db::open(&p).unwrap();
+        let args = |a: &str| a.split(' ').map(String::from).collect::<Vec<_>>();
+        let err = malware_check(&db, &osv, "x", "npx", &args("-y evil-mcp@1.0.0")).await.unwrap_err().to_string();
+        assert!(err.contains("evil-mcp@1.0.0") && err.contains("MAL-2025-42"), "{err}");
+        malware_check(&db, &osv, "x", "npx", &args("-y good-mcp")).await.unwrap();
+        assert!(malware_check(&db, &osv, "x", "npx", &args("-y evil-mcp@1.0.0")).await.is_err());
+        malware_check(&db, &osv, "x", "npx", &args("-y good-mcp")).await.unwrap();
+        malware_check(&db, &osv, "x", "node", &args("server.js")).await.unwrap();
+        assert_eq!(ASKED.load(Ordering::SeqCst), 2, "verdicts come from the cache the second time");
+        malware_check(&db, "http://127.0.0.1:9", "x", "uvx", &args("other-pkg")).await.unwrap();
     }
 
     #[test]

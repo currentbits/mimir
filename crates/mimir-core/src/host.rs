@@ -91,6 +91,12 @@ fn key(bot: i64, name: &str) -> String {
     if bot == 1 && name == TG { name.into() } else { format!("{name}:{bot}") }
 }
 
+/// A bot's channel tokens from the process's secret store, for code outside a Host (`mimir doctor`).
+pub(crate) fn channels_of(bot: i64) -> runtime::Channels {
+    let s = |n| secret_get(&key(bot, n));
+    runtime::Channels { telegram: s(TG), slack: s(SLACK_BOT).zip(s(SLACK_APP)), discord: s(DISCORD) }
+}
+
 struct Live {
     status: SharedStatus,
     task: Option<tokio::task::JoinHandle<()>>,
@@ -227,7 +233,7 @@ impl Host {
                     if crate::computer::enabled(&db) {
                         // Both block (a TCP connect or xdotool, then up to ~13 s of starting).
                         let h = home.clone();
-                        let up = move || if crate::computer::running() { Ok(()) } else { crate::computer::start(&h) };
+                        let up = move || if crate::computer::running() { Ok(()) } else { crate::computer::start(&h, None) };
                         if let Ok(Err(e)) = tokio::task::spawn_blocking(up).await {
                             eprintln!("computer: {e:#}");
                         }
@@ -622,6 +628,7 @@ impl Host {
             // bots without their tokens).
             "export_all" => ok(self.db.export_all()?),
             // Daily copies of the database (backups/ in the data folder), and putting one back.
+            "doctor" => ok(crate::doctor::run(&self.home).await),
             "backups" => ok(json!({"dir": crate::backup::dir(&self.db), "list": crate::backup::list(&self.db)})),
             "backup_now" => ok(crate::backup::snapshot(&self.db, "")?),
             "backup_restore" => {
@@ -830,11 +837,16 @@ impl Host {
                 self.db.set_setting("computer", if on { "on" } else { "off" })?;
                 let home = self.home.clone();
                 if on {
-                    tokio::task::spawn_blocking(move || crate::computer::start(&home)).await??;
+                    tokio::task::spawn_blocking(move || crate::computer::start(&home, None)).await??;
                 } else {
-                    crate::computer::stop();
+                    crate::computer::stop(&self.home);
                 }
                 ok(json!({"enabled": on, "running": tokio::task::spawn_blocking(crate::computer::running).await?}))
+            }
+            // Sign a bot out of every site on the computer.
+            "computer_forget" => {
+                let (home, bot) = (self.home.clone(), arg::<i64>(a, "botId")?);
+                ok(tokio::task::spawn_blocking(move || crate::computer::forget(&home, bot)).await??)
             }
             // The live view: the screen as a JPEG (base64), for watching in the app.
             "computer_screen" => {

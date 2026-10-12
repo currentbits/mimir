@@ -78,41 +78,20 @@ impl Chan {
         }
     }
 
+    /// A passing message (a command's answer, a note): not kept if it doesn't go. What matters goes through `Core::say`.
     pub(crate) async fn send(&self, ext: &str, text: &str) {
-        if let Err(e) = self.try_send(ext, text, &[]).await {
+        if let Err(e) = self.post(ext, None, text, &[]).await {
             eprintln!("{} send to {ext} failed: {e:#}", self.kind());
         }
     }
 
-    async fn try_send(&self, ext: &str, text: &str, rows: &[Row]) -> Result<()> {
+    /// A message, with buttons under it if any; replaces the streamed draft if there is one.
+    async fn post(&self, ext: &str, draft: Option<&str>, text: &str, rows: &[Row]) -> Result<()> {
         let text = if text.trim().is_empty() { "(no reply)" } else { text };
         match self {
-            Chan::Telegram(c) => c.finish(ext, None, text, rows).await,
-            Chan::Slack(c) => c.finish(ext, None, text, rows).await,
-            Chan::Discord(c) => c.finish(ext, None, text, rows).await,
-        }
-    }
-
-    /// A routine's result, with its buttons: tried once more after a moment if the app didn't take it, and the error if
-    /// it still didn't.
-    async fn deliver(&self, ext: &str, text: &str, rows: &[Row]) -> Result<()> {
-        if self.try_send(ext, text, rows).await.is_ok() {
-            return Ok(());
-        }
-        tokio::time::sleep(Duration::from_secs(5)).await;
-        self.try_send(ext, text, rows).await
-    }
-
-    /// Final reply, with buttons under it if any; replaces the streamed draft if there is one.
-    async fn finish(&self, ext: &str, draft: Option<String>, text: &str, rows: &[Row]) {
-        let text = if text.trim().is_empty() { "(no reply)" } else { text };
-        let r = match self {
-            Chan::Telegram(c) => c.finish(ext, draft.as_deref(), text, rows).await,
-            Chan::Slack(c) => c.finish(ext, draft.as_deref(), text, rows).await,
-            Chan::Discord(c) => c.finish(ext, draft.as_deref(), text, rows).await,
-        };
-        if let Err(e) = r {
-            eprintln!("{} reply to {ext} failed: {e:#}", self.kind());
+            Chan::Telegram(c) => c.finish(ext, draft, text, rows).await,
+            Chan::Slack(c) => c.finish(ext, draft, text, rows).await,
+            Chan::Discord(c) => c.finish(ext, draft, text, rows).await,
         }
     }
 
@@ -1014,8 +993,7 @@ impl Core {
                     };
                     let draft = follower.finish().await;
                     let (reply, files) = crate::files::split_sent(&reply);
-                    chan.finish(&ext, draft, if reply.trim().is_empty() && !files.is_empty() { "📎" } else { &reply }, &rows).await;
-                    chan.attach(&ext, &core.db, chat, &files).await;
+                    core.say(&chan, &ext, chat, draft, if reply.trim().is_empty() && !files.is_empty() { "📎" } else { &reply }, &rows, &files, None).await;
                 });
             }
         }
@@ -1216,8 +1194,7 @@ impl Core {
                 self.db.conv_taint(self.bot, chat)?;
             }
             if let Some((c, ext)) = Self::chan_for(chans, chat, &self.db) {
-                c.send(&ext, &msg).await;
-                c.attach(&ext, &self.db, chat, &files).await;
+                self.say(&c, &ext, chat, None, &msg, &[], &files, None).await;
             }
             self.db.digest_mark_sent(&mine.iter().map(|i| i.0).collect::<Vec<_>>())?;
         }
@@ -1244,7 +1221,7 @@ impl Core {
                 self.db.set_setting(&format!("weekly_items:{}", c.chat_id), &serde_json::to_string(&ids)?)?;
                 self.db.set_setting(&format!("weekly_listed:{}", c.chat_id), &now.to_string())?;
                 self.db.log(self.bot, c.chat_id, "assistant", &msg, None)?;
-                chan.send(&ext, &msg).await;
+                self.say(&chan, &ext, c.chat_id, None, &msg, &[], &[], None).await;
             }
         }
         Ok(())
@@ -1255,10 +1232,10 @@ impl Core {
     async fn tell_update(&self, chans: &[Chan]) -> Result<()> {
         let Some(latest) = crate::server_update::latest(&self.db).await else { return Ok(()) };
         let Some(msg) = crate::server_update::to_tell(&self.db, &latest) else { return Ok(()) };
-        if let Some((_, chan, ext)) = self.latest_private(chans)?
+        if let Some((chat, chan, ext)) = self.latest_private(chans)?
             && crate::server_update::told(&self.db, &latest)
         {
-            chan.send(&ext, &msg).await;
+            self.say(&chan, &ext, chat, None, &msg, &[], &[], None).await;
         }
         Ok(())
     }
@@ -1308,7 +1285,7 @@ impl Core {
                         let (chat, target) = self.latest_private(chans)?.map_or((crate::host::LOCAL_CHAT, None), |(c, ch, ext)| (c, Some((ch, ext))));
                         self.db.log(self.bot, chat, "assistant", &why, None)?;
                         if let Some((c, ext)) = target {
-                            c.send(&ext, &why).await;
+                            self.say(&c, &ext, chat, None, &why, &[], &[], None).await;
                         }
                     }
                     crate::email::Task::Skip => {}
@@ -1333,7 +1310,7 @@ impl Core {
         }
         let reply = out.unwrap_or_else(|e| crate::friendly_error(&format!("{e:#}")));
         if let Some((c, ext)) = target {
-            c.send(&ext, &reply).await;
+            self.say(&c, &ext, chat, None, &reply, &[], &[], None).await;
         }
         Ok(())
     }
@@ -1343,8 +1320,60 @@ impl Core {
     async fn tell_decisions(&self, chans: &[Chan], from: Option<i64>, text: &str) {
         let Some(to) = decisions_chat(&self.db).filter(|to| Some(*to) != from && !quiet(&self.db)) else { return };
         if let Some((c, ext)) = Self::chan_for(chans, to, &self.db) {
-            c.send(&ext, text).await;
+            self.say(&c, &ext, to, None, text, &[], &[], None).await;
         }
+    }
+
+    /// Said in a chat app, kept in the outbox until it's sent: a crash, an update or a restart before it goes doesn't
+    /// lose it (`resend` sends what's left), and a send that fails is tried again. A routine's `run` shows where it is.
+    #[allow(clippy::too_many_arguments)]
+    async fn say(&self, chan: &Chan, ext: &str, chat: i64, draft: Option<String>, text: &str, rows: &[Row], files: &[String], run: Option<i64>) {
+        let (rows, files) = (serde_json::to_string(rows).unwrap_or_default(), serde_json::to_string(files).unwrap_or_default());
+        let id = self.db.outbox_add(self.bot, chat, chan.kind(), ext, draft.as_deref(), text, &rows, &files, run).unwrap_or_else(|e| {
+            // Not kept, but still sent now.
+            eprintln!("outbox: {e:#}");
+            0
+        });
+        let o = crate::db::Outgoing { id, chat_id: chat, kind: chan.kind().into(), ext: ext.into(), draft, text: text.into(), rows, files, run_id: run };
+        self.send_out(chan, &o).await;
+    }
+
+    /// One message from the outbox: gone from it once its text is sent (a crash while its files upload loses those
+    /// rather than sending the text twice), or marked to try again.
+    async fn send_out(&self, chan: &Chan, o: &crate::db::Outgoing) {
+        let rows: Vec<Row> = serde_json::from_str(&o.rows).unwrap_or_default();
+        let how = match chan.post(&o.ext, o.draft.as_deref(), &o.text, &rows).await {
+            Ok(()) => {
+                if let Err(e) = self.db.outbox_sent(o.id) {
+                    eprintln!("outbox: {e:#}");
+                }
+                let files: Vec<String> = serde_json::from_str(&o.files).unwrap_or_default();
+                chan.attach(&o.ext, &self.db, o.chat_id, &files).await;
+                format!("sent to {}", chan.kind())
+            }
+            Err(e) => {
+                eprintln!("{} send to {} failed: {e:#}", chan.kind(), o.ext);
+                let last = self.db.outbox_failed(o.id, &format!("{e:#}")).unwrap_or(true);
+                let e = crate::tools::truncate(&format!("{e:#}"), 200);
+                if last { format!("{} to {}: {e}", crate::db::NOT_SENT, chan.kind()) } else { format!("{} to {} yet, trying again: {e}", crate::db::NOT_SENT, chan.kind()) }
+            }
+        };
+        if let Some(run) = o.run_id
+            && let Err(e) = self.db.run_redelivered(run, &how)
+        {
+            eprintln!("run #{run}: {e:#}");
+        }
+    }
+
+    /// What's still in the outbox (left by a crash, an update or a restart, or a send that failed): sent now.
+    async fn resend(&self, chans: &[Chan]) -> Result<()> {
+        for o in self.db.outbox_take(self.bot, crate::db::now())? {
+            // Its channel isn't set up any more: it waits (and is cleared out after a few days).
+            if let Some(c) = chans.iter().find(|c| c.kind() == o.kind) {
+                self.send_out(c, &o).await;
+            }
+        }
+        Ok(())
     }
 
     fn chan_for(chans: &[Chan], chat: i64, db: &Db) -> Option<(Chan, String)> {
@@ -1378,7 +1407,7 @@ impl Core {
             let said = format!("⏸ Paused until tomorrow: {}. You can let it go on today in Mimir's Needs you.", h.why);
             self.db.hold_set(&key, &h)?;
             if let Some((c, ext)) = Self::chan_for(chans, r.chat_id, &self.db).filter(|_| r.delivery == "now") {
-                c.send(&ext, &said).await;
+                self.say(&c, &ext, r.chat_id, None, &said, &[], &[], None).await;
             }
             return Ok(());
         }
@@ -1487,7 +1516,8 @@ impl Core {
                         // Said once, where this routine speaks; Needs you has it too (in English, like the rest of the app).
                         if let Some((c, ext)) = target.as_ref().filter(|_| r.delivery == "now") {
                             let who = if held.len() > 1 { tr("Routines on this AI account wait") } else { tr("This bot's routines wait") };
-                            c.send(ext, &trf("⏸ I've hit my AI plan's usage limit. {who} until {at}, when the limit resets; this one runs again then.", &[("who", who), ("at", &clock(until))])).await;
+                            let said = trf("⏸ I've hit my AI plan's usage limit. {who} until {at}, when the limit resets; this one runs again then.", &[("who", who), ("at", &clock(until))]);
+                            self.say(c, ext, r.chat_id, None, &said, &[], &[], None).await;
                         }
                         Some(note)
                     }
@@ -1531,26 +1561,26 @@ impl Core {
         }
         // Matched the person's "come through right away if …" (within the day's cap): sent now, whatever its lane.
         let urgent = run.map(|run| self.db.run_urgent(run)).transpose()?.unwrap_or(false);
+        let mut send = None;
         let how = match (if urgent { "now" } else { r.delivery.as_str() }, &target) {
             ("digest", _) => "in the digest".to_string(),
             ("log", _) => "only in the log".to_string(),
             ("card", _) => if worked { "on its card" } else { "only in the log" }.to_string(),
             (_, None) => "in the app".to_string(),
             (_, Some((c, ext))) => {
-                // A result gets one-tap feedback (a reminder, Done or Snooze); a failure doesn't.
-                let (said, files) = crate::files::split_sent(&text);
-                let rows = if worked { self.result_rows(&r, &said) } else { vec![] };
-                match c.deliver(ext, &said, &rows).await {
-                    Ok(()) => {
-                        c.attach(ext, &self.db, r.chat_id, &files).await;
-                        format!("sent to {}", c.kind())
-                    }
-                    Err(e) => format!("{} to {}: {}", crate::db::NOT_SENT, c.kind(), crate::tools::truncate(&format!("{e:#}"), 200)),
-                }
+                send = Some((c, ext));
+                // Until it's sent (say updates it): a crash or restart before then leaves this showing, and the outbox sends it.
+                format!("waiting to send to {}", c.kind())
             }
         };
         if let Some(run) = run {
             self.db.run_delivered(run, &fell_back.map_or(how.clone(), |f| format!("{how} · {f}")))?;
+        }
+        if let Some((c, ext)) = send {
+            // A result gets one-tap feedback (a reminder, Done or Snooze); a failure doesn't.
+            let (said, files) = crate::files::split_sent(&text);
+            let rows = if worked { self.result_rows(&r, &said) } else { vec![] };
+            self.say(c, ext, r.chat_id, None, &said, &rows, &files, run).await;
         }
         Ok(())
     }
@@ -1593,6 +1623,10 @@ impl Core {
         let (mut mail_looked, mut rules_looked) = (0, 0);
         loop {
             let now = crate::db::now();
+            // Messages a crash, an update or a failed send left unsent: first, and while paused too (they were said).
+            if let Err(e) = self.resend(&chans).await {
+                eprintln!("outbox: {e:#}");
+            }
             // Mail tasks, looked for every two minutes by one bot (the memory bot) for everyone. You sent them, like a
             // message, so they run while the bot is paused too.
             if now - mail_looked >= 120 && crate::tidy::memory_bot(&self.db) == Some(self.bot) && self.db.setting("email_tasks").ok().flatten().as_deref() == Some("on") {
@@ -2160,6 +2194,62 @@ mod tests {
         assert!(db.over_cap(&r, 0).unwrap().is_none());
         db.set_setting("cap_routine", "3000").unwrap();
         assert!(db.over_cap(&r, 0).unwrap().is_some());
+    }
+
+    /// A Telegram double that counts what it's sent and answers ok.
+    async fn fake_telegram() -> (String, Arc<std::sync::atomic::AtomicUsize>) {
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let (addr, sent) = (l.local_addr().unwrap(), Arc::new(std::sync::atomic::AtomicUsize::new(0)));
+        let count = sent.clone();
+        tokio::spawn(async move {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            while let Ok((mut s, _)) = l.accept().await {
+                let mut buf = vec![0u8; 65536];
+                let n = s.read(&mut buf).await.unwrap_or(0);
+                if String::from_utf8_lossy(&buf[..n]).contains("/sendMessage") {
+                    count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
+                let body = r#"{"ok":true,"result":{"message_id":1}}"#;
+                let _ = s.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await;
+            }
+        });
+        (format!("http://{addr}"), sent)
+    }
+
+    #[tokio::test]
+    async fn the_outbox_sends_what_a_crash_left_once() {
+        let p = std::env::temp_dir().join(format!("mimir-outbox-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = Db::open(&p).unwrap();
+        let core = core_on(&db, "http://127.0.0.1:9");
+        let chat = db.pair_external("telegram", "42", "me").unwrap();
+        let (api, sent) = fake_telegram().await;
+        let tg = Chan::Telegram(Tg::at(&api, "t").unwrap());
+        let n = || sent.load(std::sync::atomic::Ordering::SeqCst);
+        // A routine's result another process kept and died sending (a crash, an update): sent at the next pass, once.
+        let run = db.run_start(1, chat, "routine", None, "m").unwrap();
+        db.run_delivered(run, "waiting to send to telegram · on the fallback account until 10:00").unwrap();
+        let id = db.outbox_add(1, chat, "telegram", "42", None, "the result", "[]", "[]", Some(run)).unwrap();
+        db.c().execute("UPDATE outbox SET claimed_by='gone' WHERE id=?1", [id]).unwrap();
+        core.resend(std::slice::from_ref(&tg)).await.unwrap();
+        assert_eq!(n(), 1);
+        assert_eq!(db.runs(Some(chat), 1).unwrap()[0].delivered.as_deref(), Some("sent to telegram · on the fallback account until 10:00"));
+        core.resend(std::slice::from_ref(&tg)).await.unwrap();
+        assert_eq!(n(), 1, "not sent twice");
+        // Said now: sent, and nothing left over.
+        core.say(&tg, "42", chat, None, "a reply", &[], &[], None).await;
+        assert_eq!(n(), 2);
+        assert!(db.outbox_take(1, crate::db::now() + 3600).unwrap().is_empty());
+        // Telegram unreachable: kept, and not taken again by this process until it's stale (its own send may still be going).
+        let down = Chan::Telegram(Tg::at("http://127.0.0.1:9", "t").unwrap());
+        core.say(&down, "42", chat, None, "lost?", &[], &[], None).await;
+        assert!(db.outbox_take(1, crate::db::now()).unwrap().is_empty());
+        core.resend(std::slice::from_ref(&tg)).await.unwrap();
+        assert_eq!(n(), 2);
+        let left = db.outbox_take(1, crate::db::now() + crate::db::OUTBOX_STALE + 1).unwrap();
+        assert_eq!(left.iter().map(|o| o.text.as_str()).collect::<Vec<_>>(), vec!["lost?"]);
+        // Claimed by that take: a second one finds nothing.
+        assert!(db.outbox_take(1, crate::db::now() + crate::db::OUTBOX_STALE + 1).unwrap().is_empty());
     }
 
     #[tokio::test]

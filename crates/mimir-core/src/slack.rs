@@ -181,6 +181,13 @@ impl Slack {
         Ok(m["ts"].as_str().map(String::from))
     }
 
+    /// For `mimir doctor`: both tokens work. The bot's name and workspace.
+    pub(crate) async fn check(&self) -> Result<String> {
+        let auth = self.api("auth.test", &self.bot_token, json!({})).await.context("Slack rejected the bot token")?;
+        self.api("apps.connections.open", &self.app_token, json!({})).await.context("Slack rejected the app-level token")?;
+        Ok(format!("{} in {}", auth["user"].as_str().unwrap_or("bot"), auth["team"].as_str().unwrap_or("Slack")))
+    }
+
     pub(crate) async fn listen(&self, me: &Chan, core: Arc<Core>, slot: Slot) -> Result<()> {
         let auth = self.api("auth.test", &self.bot_token, json!({})).await.context("Slack rejected the bot token")?;
         let my_user = auth["user_id"].as_str().unwrap_or("").to_string();

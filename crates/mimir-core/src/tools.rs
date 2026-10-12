@@ -1837,6 +1837,11 @@ async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
         }
         "computer_handoff" => {
             let reason = s(args, "reason")?.trim().to_string();
+            // Their sign-in goes where this bot will look: its own browser profile.
+            if crate::computer::usable(&ctx.db) {
+                let (home, bot) = (ctx.db.dir(), ctx.bot_id);
+                tokio::task::spawn_blocking(move || crate::computer::start(&home, Some(bot))).await??;
+            }
             // Let go of the computer first, so the person's clicks make it theirs.
             if let Some(r) = ctx.run_id {
                 ctx.db.computer_release(&format!("run:{r}"))?;
@@ -1881,27 +1886,13 @@ async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
             "The person did it and gave the computer back. Take a screenshot to see where things are now, then carry on.".into()
         }
         n if n.starts_with("computer_") => {
-            // One user of the computer at a time: this run holds it while it works; another bot waits a little;
-            // the person taking over in the app always wins (bots wait until they give it back).
-            let who = ctx.run_id.map(|r| format!("run:{r}")).unwrap_or_else(|| format!("bot:{}", ctx.bot_id));
-            let name = ctx.db.bot(ctx.bot_id).map(|b| b.name).unwrap_or_else(|_| "A bot".into());
-            let mut waited = 0;
-            while let Some((holder, holder_name)) = ctx.db.computer_lease(&who, &name, 120)? {
-                if holder == "you" {
-                    bail!("the person has taken over the computer right now; wait, or ask them to give it back (Computer → Give back)");
-                }
-                if waited >= 30 {
-                    bail!("the computer is busy: {holder_name} is using it; try again in a minute");
-                }
-                tokio::time::sleep(Duration::from_secs(2)).await;
-                waited += 2;
-            }
+            hold_computer(ctx).await?;
             // What's on the screen is outside content, like a web page.
             ctx.taint();
-            let home = ctx.db.dir();
+            let (home, bot) = (ctx.db.dir(), ctx.bot_id);
             let (n, args) = (n.to_string(), args.clone());
             // xdotool, scrot and the screenshot encoding block: off the async runtime.
-            tokio::task::spawn_blocking(move || computer_action(&home, &n, &args)).await??
+            tokio::task::spawn_blocking(move || computer_action(&home, bot, &n, &args)).await??
         }
         "skill_save" => {
             let (title, description, body) = (s(args, "title")?, s(args, "description")?, s(args, "body")?);
@@ -2069,9 +2060,28 @@ async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
 }
 
 /// One computer action, then a screenshot of what it led to.
-fn computer_action(home: &std::path::Path, name: &str, args: &Value) -> Result<String> {
+/// One user of the computer at a time: this run holds it while it works; another bot waits a little; the person
+/// taking over in the app always wins (bots wait until they give it back).
+pub(crate) async fn hold_computer(ctx: &ToolCtx) -> Result<()> {
+    let who = ctx.run_id.map(|r| format!("run:{r}")).unwrap_or_else(|| format!("bot:{}", ctx.bot_id));
+    let name = ctx.db.bot(ctx.bot_id).map(|b| b.name).unwrap_or_else(|_| "A bot".into());
+    let mut waited = 0;
+    while let Some((holder, holder_name)) = ctx.db.computer_lease(&who, &name, 120)? {
+        if holder == "you" {
+            bail!("the person has taken over the computer right now; wait, or ask them to give it back (Computer → Give back)");
+        }
+        if waited >= 30 {
+            bail!("the computer is busy: {holder_name} is using it; try again in a minute");
+        }
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        waited += 2;
+    }
+    Ok(())
+}
+
+fn computer_action(home: &std::path::Path, bot: i64, name: &str, args: &Value) -> Result<String> {
     use crate::computer as c;
-    c::start(home)?;
+    c::start(home, Some(bot))?;
     let int = |k: &str| args.get(k).and_then(Value::as_i64).with_context(|| format!("missing number '{k}'"));
     let done = match name {
         "computer_screenshot" => "The screen right now.".to_string(),
@@ -2092,7 +2102,7 @@ fn computer_action(home: &std::path::Path, name: &str, args: &Value) -> Result<S
             "Scrolled. The screen now:".into()
         }
         "computer_open" => {
-            c::open_url(home, s(args, "url")?)?;
+            c::open_url(home, bot, s(args, "url")?)?;
             std::thread::sleep(Duration::from_millis(1500));
             "Opened. The screen now:".into()
         }

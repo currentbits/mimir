@@ -22,7 +22,7 @@ const SETTING_WORDS: Record<string, string> = {
   'Permissions': 'allow ask deny approve rules tools safety always',
   'Browser': 'playwright chromium saved logins passwords vault',
   'Tool servers': 'mcp plugins integrations connectors',
-  'Your data': 'export backup download delete privacy',
+  'Your data': 'export backup download delete privacy doctor check health troubleshoot problem',
   'Chat API': 'openai token shortcuts siri home assistant integration v1 completions',
 }
 
@@ -124,6 +124,7 @@ function DataSettings() {
         <button type="button" className="btn btn-sm" onClick={exportAll}>Export</button>
       </Row>
       <BackupRows />
+      <DoctorRow />
     </Group>
   )
 }
@@ -158,6 +159,22 @@ function BackupRows() {
       <button type="button" className="btn btn-sm" disabled={busy || !list.length} onClick={restore}>Restore</button>
     </Row>
   </>
+}
+
+type Check = { state: 'ok' | 'warn' | 'fail'; what: string; fix: string }
+
+/** `mimir doctor`: everything Mimir needs, checked once. Nothing is spent or sent. */
+function DoctorRow() {
+  const [checks, setChecks] = useState<Check[] | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+  const run = () => { setBusy(true); invoke<Check[]>('doctor').then(c => { setChecks(c); setErr(null) }, e => setErr(String(e))).finally(() => setBusy(false)) }
+  const mark = { ok: '✓', warn: '!', fail: '✗' }
+  return <Row icon={<Icon name="check" size={15} />} title="Check everything" desc={err ?? (checks
+    ? checks.map((c, i) => <div key={i} className={c.state === 'fail' ? 'error' : undefined}>{mark[c.state]} {c.what}{c.fix && `. ${c.fix}`}</div>)
+    : 'AI sign-ins, each bot’s Telegram, Slack and Discord connection, email, the bots’ computer, disk space, the database and its backups. Nothing is spent or sent.')}>
+    <button type="button" className="btn btn-sm" disabled={busy} onClick={run}>{busy ? 'Checking…' : 'Check'}</button>
+  </Row>
 }
 
 /** Server only: tokens for an OpenAI-compatible chat API, each reaching one bot (Shortcuts, Home Assistant). */
