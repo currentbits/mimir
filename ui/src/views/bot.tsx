@@ -6,7 +6,7 @@ import { ask, Avatar, Group, Icon, Row, Switch } from '../ui'
 import { ModelInput } from './accounts'
 import { TOOL_LABEL } from './settings'
 import { LOCAL, randomLook, useLoad, online, presenceOf, CHANNEL, LookPicker, SECRETS_AT } from '../shared'
-import type { Bot, Delivery, Routine, Status, ToolServer, ChannelStatus } from '../types'
+import type { Bot, Delivery, Routine, Status, ToolServer, ChannelStatus, ComputerStatus } from '../types'
 
 const parseLook = (s?: string): Look => { try { return s ? JSON.parse(s) : {} } catch { return {} } }
 
@@ -106,6 +106,7 @@ export function BotPage({ bot, status, canDelete, onSaved, onDeleted, onChat }: 
   const chan = (kind: string) => status?.channels.find(c => c.kind === kind)
   const toolServers = useLoad(() => invoke<{ servers: ToolServer[] }>('tool_servers'), [], 60000)
   const topics = useLoad(() => bot ? invoke<boolean>('telegram_topics', { botId: bot.id }) : Promise.resolve(false), [bot?.id], 60000)
+  const computer = useLoad(() => invoke<ComputerStatus>('computer'), [], 60000)
   const serverTools: [string, string][] = (toolServers.data?.servers ?? []).filter(s => !s.preset).map(s => [`${s.name}__*`, `Use ${s.name}`])
   const ALL = [...Object.keys(TOOL_LABEL), 'browser__*', ...serverTools.map(([t]) => t)]
   const enabled = b.tools.trim() ? b.tools.split(',').map(t => t.trim()) : ALL
@@ -228,6 +229,16 @@ export function BotPage({ bot, status, canDelete, onSaved, onDeleted, onChat }: 
           ))}
         </div>
       </Group>
+
+      {bot && computer.data?.enabled && (
+        <Group title="Computer" note="Sites you sign in to on the computer for this bot stay signed in for this bot only.">
+          <Row title="Its sign-ins on the computer" desc="Cookies and logins in its own browser on the computer">
+            <button type="button" className="btn btn-sm btn-ghost btn-danger" onClick={() => ask(`Sign ${bot.name} out of every site on the computer?`, 'Sign out', true).then(ok => {
+              if (ok) invoke('computer_forget', { botId: bot.id }).then(() => { setErr(null); setMsg('Signed out on the computer') }, e => { setErr(String(e)); setMsg(null) })
+            })}>Sign out everywhere</button>
+          </Row>
+        </Group>
+      )}
 
       <div className="savebar">
         {!isNew && canDelete && <button type="button" className="btn btn-ghost btn-danger" onClick={() => {

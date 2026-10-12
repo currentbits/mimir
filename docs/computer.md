@@ -21,11 +21,23 @@ everything (build with `--build-arg COMPUTER=` to leave it out).
 Each action returns a fresh screenshot. With the browser switched on (Settings → Browser), the browser tools drive the
 same Chromium, so a bot can mix precise page tools with looking and clicking.
 
+## Each bot's own sign-ins
+
+Each bot has its own browser profile on the computer: its cookies, sign-ins and history. A site you sign in to for one
+bot isn't signed in for the others. When another bot starts using the computer, Chromium closes and opens again with
+that bot's profile (its tabs from before are gone; its sign-ins stay). **Sign out everywhere** on a bot's page
+(under Computer) clears its profile.
+
+Before profiles were per bot, all bots shared one. After the update, that one becomes the profile of the first bot to
+use the computer; the others start signed out.
+
 ## Watching and taking over
 
 **Computer** in the sidebar shows the screen live. Click it to take over: your clicks, typing and scrolling go to the
 computer, and while you're in control bots wait. **Give back** hands it over. One user at a time: a bot that needs the
-computer while another bot has it waits up to 30 seconds, then says it's busy.
+computer while another bot has it waits up to 30 seconds, then says it's busy. The browser tools count as using it
+too. When you take over, the browser shows the profile of the bot that used it last (the one asking you, at a
+handoff).
 
 ## When a bot needs you there
 
@@ -72,8 +84,9 @@ afterwards.
 `mimir computer --listen 0.0.0.0:7300` (the compose service) starts a virtual screen (Xvfb, 1280×800) with a small
 window manager (openbox) and a visible Chromium with its DevTools port on `127.0.0.1:9222`; the server asks it to
 (re)start them when they're off. Mimir sends it requests on port 7300, one line of JSON each with the token
-(`status`, `start`, `stop`, `screenshot`, `click`, `type`, `key`, `scroll`, `open`); both sides check coordinates, keys
-and addresses. Chromium's DevTools are passed on at port 9223 for Playwright (`--cdp-endpoint`) and teach by showing's
+(`status`, `start`, `stop`, `screenshot`, `click`, `type`, `key`, `scroll`, `open`, `forget`); both sides check
+coordinates, keys and addresses. `start`, `open` and `forget` carry the bot's id: the profiles
+(`computer/chromium-<bot>`) live on the computer's side. Chromium's DevTools are passed on at port 9223 for Playwright (`--cdp-endpoint`) and teach by showing's
 page lookups; Mimir connects by IP, since Chromium only answers a Host that's an IP or localhost. Mimir uses the service
 when `MIMIR_COMPUTER` (e.g. `computer:7300`) is set, and runs it in its own process otherwise.
 On the computer's side, tools act through `xdotool` and take screenshots with `scrot`, as JPEG at screen size so

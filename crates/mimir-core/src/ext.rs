@@ -652,7 +652,7 @@ fn spawn(conf: &ServerConf, db: &Db, bot: i64) -> Result<(Io, Option<std::path::
             let mut args: Vec<String> = vec!["-y".into(), PLAYWRIGHT.into()];
             if crate::computer::usable(db) {
                 // The bots' computer is on: drive the Chromium on its screen, so you can watch (and take over).
-                crate::computer::start(&db.dir())?;
+                crate::computer::start(&db.dir(), (bot > 0).then_some(bot))?;
                 args.extend(["--cdp-endpoint".into(), crate::computer::cdp_endpoint()?]);
             } else {
                 // Bundled Chromium (see install_browser), so Google Chrome needn't be installed.
@@ -839,6 +839,12 @@ pub async fn call(ctx: &ToolCtx, full: &str, args: &Value) -> Result<String> {
         crate::tools::wait_for_approval_with(ctx, full, &format!("Use saved login {} on {url}", names.join(", ")), "login", None).await?;
     }
 
+    if server == BROWSER && crate::computer::usable(&ctx.db) {
+        // On the bots' computer: hold it like its own tools do, in this bot's browser profile.
+        crate::tools::hold_computer(ctx).await?;
+        let (home, bot) = (ctx.db.dir(), ctx.bot_id);
+        tokio::task::spawn_blocking(move || crate::computer::start(&home, Some(bot))).await??;
+    }
     let mut sessions = ctx.ext.lock().await;
     if !sessions.contains_key(server) {
         sessions.insert(server.to_string(), Client::start(&conf, &ctx.db, ctx.bot_id).await?);
