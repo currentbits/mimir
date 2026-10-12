@@ -253,16 +253,22 @@ pub async fn teach(db: &Db, provider: &Provider, bot: i64, chat: i64, source: &s
     };
     // A SKILL.md (the agentskills.io format Hermes, Claude Code and others use): taken as written, no model needed.
     if let Some((name, description, body)) = parse_skill_md(&text) {
-        if crate::tools::looks_secret(db, &format!("{name}\n{description}\n{body}")).is_some() {
-            bail!("that skill contains something that looks like a password or key, so it wasn't kept");
-        }
-        let mut reason = format!("Imported from a SKILL.md ({origin}). It came from outside: read it before accepting.");
-        if let Some(p) = crate::tools::instruction_like(&format!("{description}\n{body}")) {
-            reason.push_str(&format!(" Warning: it contains instruction-like text (\"{p}\")."));
-        }
-        return db.skill_taught_propose(&scope, bot, &name, &description, &body, &reason)?.map(Some).ok_or_else(|| anyhow::anyhow!("a version of \"{name}\" is already waiting for you in Memory"));
+        return skill_md_propose(db, &scope, bot, &origin, &name, &description, &body)?.map(Some).ok_or_else(|| anyhow::anyhow!("a version of \"{name}\" is already waiting for you in Memory"));
     }
     teach_from(db, provider, bot, chat, &origin, &text, vec![]).await
+}
+
+/// A parsed SKILL.md as a proposal, taken as written (it came from outside, so the person reads it first). None when
+/// that version is already proposed or was dismissed.
+pub(crate) fn skill_md_propose(db: &Db, scope: &str, bot: i64, origin: &str, name: &str, description: &str, body: &str) -> Result<Option<i64>> {
+    if crate::tools::looks_secret(db, &format!("{name}\n{description}\n{body}")).is_some() {
+        bail!("that skill contains something that looks like a password or key, so it wasn't kept");
+    }
+    let mut reason = format!("Imported from a SKILL.md ({origin}). It came from outside: read it before accepting.");
+    if let Some(p) = crate::tools::instruction_like(&format!("{description}\n{body}")) {
+        reason.push_str(&format!(" Warning: it contains instruction-like text (\"{p}\")."));
+    }
+    db.skill_taught_propose(scope, bot, name, description, body, &reason)
 }
 
 /// Teach by showing: draft a skill from what you did on the bots' computer (the steps, and a few click screenshots,

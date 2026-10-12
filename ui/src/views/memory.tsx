@@ -289,6 +289,8 @@ function Files({ chatId }: { chatId: number }) {
   )
 }
 
+type AgentSource = { id: string; label: string; memories: number; skills: number; routines: number }
+
 /** Paste another assistant's memories; the memory bot turns them into suggestions to accept or dismiss. */
 function ImportMemory({ chatId, onDone }: { chatId: number; onDone: () => void }) {
   const [text, setText] = useState('')
@@ -299,8 +301,26 @@ function ImportMemory({ chatId, onDone }: { chatId: number; onDone: () => void }
       n => n ? onDone() : setState({ note: 'Nothing new to add: your memory already has all of it.' }),
       e => setState({ err: String(e) }))
   }
+  // Other agents on this computer, brought in with one click: memories as suggestions, skills as proposals, jobs as paused routines.
+  const agents = useLoad(() => invoke<AgentSource[]>('import_sources'), []).data
+  const many = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`
+  const bring = (a: AgentSource) => {
+    setState({ busy: true })
+    invoke<{ memories: number; skills: number; routines: number }>('import_agent', { chatId, source: a.id }).then(
+      r => {
+        const got = [r.memories && `${many(r.memories, 'suggested memory')} below`, r.skills && `${many(r.skills, 'skill')} to review in Skills`, r.routines && `${many(r.routines, 'routine')} paused in Routines (resume one to start it)`].filter(Boolean)
+        setState({ note: got.length ? `From ${a.label}: ${got.join(', ')}.` : `Nothing new from ${a.label}: you already have all of it.` })
+        if (r.memories) onDone()
+      },
+      e => setState({ err: String(e) }))
+  }
   return (
     <div className="editor-card import">
+      {!!agents?.length && <div className="er">
+        <span className="grow hint">Other agents found where Mimir runs:</span>
+        {agents.map(a => <button key={a.id} className="btn btn-ghost" disabled={state.busy} onClick={() => bring(a)}
+          title={[many(a.memories, 'memory file'), many(a.skills, 'skill'), many(a.routines, 'scheduled job')].join(', ')}>From {a.label}</button>)}
+      </div>}
       <p className="hint" style={{ margin: 0 }}>Paste what another assistant remembers about you. In ChatGPT: Settings → Personalization → Manage memories; or ask any assistant “List everything you remember about me.”</p>
       <textarea className="textarea" rows={7} aria-label="Memories to import" placeholder={'- Lives in Cape Town\n- Prefers short answers\n- Training for a half marathon in March'} value={text} onChange={e => setText(e.target.value)} autoFocus />
       <div className="er">

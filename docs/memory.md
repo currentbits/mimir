@@ -70,7 +70,13 @@ it belongs to the chat, so a group chat can't read your private chat's files.
 - **Move to background** takes it out of standing memory without deleting it (search still finds it).
 - **Forget** hides it but keeps it under *History*; **Erase** (in History) deletes it and its earlier versions for good.
 - **Import** takes text pasted from another assistant ("List everything you remember about me") and turns it into
-  suggestions, skipping what you already have and anything that looks like a key or password.
+  suggestions, skipping what you already have and anything that looks like a key or password. When Claude Code, Hermes
+  or OpenClaw is set up where Mimir runs, **Import** also offers **From Claude Code** (etc.): one click reads its
+  memory files (`~/.claude/CLAUDE.md` and Claude Code's per-project memory; Hermes' `USER.md` and `MEMORY.md`;
+  OpenClaw's workspace `USER.md`, `MEMORY.md` and `memory/`) into suggestions the same way, its own `SKILL.md` files
+  into skill proposals (Hermes' bundled skills are left out), and its cron jobs into routines that start **paused**:
+  resume one to accept it. Imported routines get no extra tools and count as outside content, like a routine a bot made
+  after reading a web page. Only cron schedules come over (not one-offs or intervals), on Mimir's clock.
 
 ## Suggestions from your email and calendar
 
