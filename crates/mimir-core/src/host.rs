@@ -725,6 +725,13 @@ impl Host {
                 let bot = crate::tidy::memory_bot(&self.db).context("no bots")?;
                 ok(crate::tidy::import(&self.db, &self.provider(bot)?, bot, arg(a, "chat_id")?, &arg::<String>(a, "text")?).await?)
             }
+            // Other agents on this computer (Claude Code, Hermes, OpenClaw) and what they have; `import_agent` brings
+            // one in as suggestions, skill proposals and paused routines.
+            "import_sources" => ok(crate::imports::sources()),
+            "import_agent" => {
+                let bot = crate::tidy::memory_bot(&self.db).context("no bots")?;
+                ok(crate::imports::run(&self.db, &self.provider(bot)?, bot, arg(a, "chat_id")?, &arg::<String>(a, "source")?).await?)
+            }
             // Add a memory, or correct one (`supersedes`); history is kept either way.
             "remember" => ok(self.db.store_by(
                 &scope(a)?,
