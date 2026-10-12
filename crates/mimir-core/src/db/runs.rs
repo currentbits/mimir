@@ -155,6 +155,12 @@ impl Db {
         Ok(self.c().query_row("SELECT asked FROM runs WHERE id=?1", [run], |r| r.get(0)).optional()?.flatten())
     }
 
+    /// What a run was asked to do: the person's message, or the routine's prompt.
+    pub fn brief(&self, run: i64) -> Result<Option<String>> {
+        let sql = "SELECT COALESCE(r.asked, (SELECT prompt FROM routines WHERE id=r.routine_id)) FROM runs r WHERE r.id=?1";
+        Ok(self.c().query_row(sql, [run], |r| r.get(0)).optional()?.flatten())
+    }
+
     pub fn run_recalled(&self, run: i64, ids: &[i64]) -> Result<()> {
         let list = ids.iter().map(i64::to_string).collect::<Vec<_>>().join(",");
         self.c().execute("UPDATE runs SET recalled=?2 WHERE id=?1", params![run, list])?;

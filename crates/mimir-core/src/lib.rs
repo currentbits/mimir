@@ -369,6 +369,23 @@ pub(crate) fn shares_words(a: &str, b: &str) -> bool {
     !words(a).is_disjoint(&words(b))
 }
 
+/// Does an action fit what was asked: does what it acts on (a recipient, a title, an id) share a word of 3+ letters
+/// or a number with the request? The request-match check asks first when it doesn't.
+// ponytail: word overlap; catches an action on something else entirely, not the wrong verb on the right thing
+pub(crate) fn fits_ask(asked: &str, target: &str) -> bool {
+    const FILLER: [&str; 30] = [
+        "the", "and", "for", "you", "your", "that", "this", "with", "from", "please", "can", "about", "what", "have", "are", "not", "but", "all", "just",
+        "het", "een", "van", "die", "dat", "met", "voor", "niet", "maar", "ook", "naar",
+    ];
+    let words = |s: &str| -> std::collections::HashSet<String> {
+        s.split(|c: char| !c.is_alphanumeric())
+            .map(str::to_lowercase)
+            .filter(|w| !w.is_empty() && (w.chars().count() >= 3 || w.chars().all(|c| c.is_ascii_digit())) && !FILLER.contains(&w.as_str()))
+            .collect()
+    };
+    !words(asked).is_disjoint(&words(target))
+}
+
 /// A failed reply in plain words for a chat app, with what to do about it (the app's inbox says the same).
 /// The raw error follows in small print, shortened, for whoever has to debug it.
 /// The text of a file someone sent: a PDF's text, or a plain-text file. None for kinds it can't read.
