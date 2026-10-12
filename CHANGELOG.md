@@ -2,6 +2,11 @@
 
 What changed for people using Mimir. The newest release is at the top; "Unreleased" is what the next one brings.
 
+## Unreleased
+
+- **Malware check for tool servers:** a tool server that downloads its package (`npx`, `uvx`…) is looked up on
+  OSV.dev's list of malicious packages first, and Mimir refuses to start it if it's there, saying which advisory.
+
 ## 0.2.0
 
 ### Talking to your bots
