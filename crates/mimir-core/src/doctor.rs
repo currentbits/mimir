@@ -159,6 +159,10 @@ async fn channels(bot: &str, ch: crate::runtime::Channels) -> Vec<Check> {
         let r = match crate::slack::Slack::new(&b, &a) { Ok(c) => within(c.check()).await, Err(e) => Err(e) };
         out.push(("Slack", r, "Check both tokens (xoxb-… and xapp-…) in the bot's settings."));
     }
+    if let Some((api, n)) = ch.signal {
+        let r = match crate::signal::Signal::new(&api, &n) { Ok(c) => within(c.check()).await, Err(e) => Err(e) };
+        out.push(("Signal", r, "Check that signal-cli-rest-api is running (MODE=json-rpc) and the bot's number is linked to it."));
+    }
     out.into_iter()
         .map(|(name, r, fix)| match r {
             Ok(me) => ok(format!("{bot}: {name} reaches {me}")),

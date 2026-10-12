@@ -96,7 +96,7 @@ fn key(bot: i64, name: &str) -> String {
 /// A bot's channel tokens from the process's secret store, for code outside a Host (`mimir doctor`).
 pub(crate) fn channels_of(bot: i64) -> runtime::Channels {
     let s = |n| secret_get(&key(bot, n));
-    runtime::Channels { telegram: s(TG), slack: s(SLACK_BOT).zip(s(SLACK_APP)), discord: s(DISCORD) }
+    runtime::Channels { telegram: s(TG), slack: s(SLACK_BOT).zip(s(SLACK_APP)), discord: s(DISCORD), signal: s(SIGNAL).map(|n| (s(SIGNAL_API).unwrap_or_default(), n)) }
 }
 
 struct Live {

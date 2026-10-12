@@ -230,11 +230,17 @@ impl Signal {
         Ok(Some(msg))
     }
 
-    pub(crate) async fn listen(&self, me: &Chan, core: Arc<Core>, slot: Slot) -> Result<()> {
+    /// signal-cli-rest-api answers, and has the bot's number linked: the number.
+    pub(crate) async fn check(&self) -> Result<String> {
         let accounts: Value = self.http.get(format!("{}/v1/accounts", self.api)).send().await.with_context(|| format!("can't reach signal-cli-rest-api at {}", self.api))?.json().await?;
         if !accounts.as_array().is_some_and(|a| a.iter().any(|n| n == self.number.as_str())) {
             bail!("{} isn't linked to signal-cli yet: open {}/v1/qrcodelink?device_name=mimir and scan it in Signal (Settings → Linked devices)", self.number, self.api);
         }
+        Ok(self.number.clone())
+    }
+
+    pub(crate) async fn listen(&self, me: &Chan, core: Arc<Core>, slot: Slot) -> Result<()> {
+        self.check().await?;
         let url = format!("{}/v1/receive/{}", self.api.replacen("http", "ws", 1), self.number);
         let (mut ws, _) = tokio_tungstenite::connect_async(url.as_str()).await.context("signal-cli-rest-api has to run with MODE=json-rpc")?;
         slot.connected(self.number.clone());
