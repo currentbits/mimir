@@ -18,6 +18,7 @@ USAGE:
   mimir runs                recent runs with tokens, cost and tool calls
   mimir approvals           list actions waiting for your approval
   mimir approve <id>        approve one (deny <id> to refuse)
+  mimir doctor              check AI logins, channels, the computer, disk, database and backups
 
 ENV:
   TELEGRAM_BOT_TOKEN         from @BotFather (serve)
@@ -61,6 +62,12 @@ async fn main() -> Result<()> {
         .await?;
     }
     let home = mimir_core::data_dir()?;
+    // Before opening the database: a damaged or too-new one is one of the lines.
+    if args.first().map(String::as_str) == Some("doctor") {
+        let checks = mimir_core::doctor::run(&home).await;
+        checks.iter().for_each(|c| println!("{c}"));
+        std::process::exit(if mimir_core::doctor::passed(&checks) { 0 } else { 1 });
+    }
     let db = Db::open(&home.join("mimir.db"))?;
     match args.first().map(String::as_str) {
         Some("serve") => serve(db, home).await,

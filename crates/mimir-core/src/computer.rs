@@ -97,6 +97,12 @@ fn xdotool(args: &[&str]) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
+/// For `mimir doctor`: None without a computer service, else whether it answers (with the right token).
+pub fn reach() -> Option<Result<()>> {
+    let a = remote()?;
+    Some(ask(&a, serde_json::json!({"op": "status"})).map(drop))
+}
+
 /// Is the screen up?
 pub fn running() -> bool {
     if let Some(a) = remote() {

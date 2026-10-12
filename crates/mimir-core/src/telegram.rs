@@ -160,6 +160,12 @@ impl Tg {
         Ok(m["message_id"].as_i64().map(|id| id.to_string()))
     }
 
+    /// For `mimir doctor`: the token works. The bot's @name.
+    pub(crate) async fn check(&self) -> Result<String> {
+        let bot = self.call("getMe", json!({})).await.context("Telegram rejected the bot token")?;
+        Ok(format!("@{}", bot["username"].as_str().unwrap_or("?")))
+    }
+
     pub(crate) async fn listen(&self, me: &Chan, core: Arc<Core>, slot: Slot) -> Result<()> {
         let bot = self.call("getMe", json!({})).await.context("Telegram rejected the bot token")?;
         let me_id = bot["id"].as_i64();

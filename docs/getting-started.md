@@ -151,4 +151,4 @@ mimir chat "remember my dentist is Dr. Lee"     # one turn, no messaging app nee
 ```
 
 Other commands: `mimir server` (self-hosting), `mimir runs`, `mimir approvals`, `mimir approve <id>`,
-`mimir transcribe <file>`. Environment variables are listed in [Architecture](architecture.md#environment-variables).
+`mimir transcribe <file>`, `mimir doctor` (is everything working?). Environment variables are listed in [Architecture](architecture.md#environment-variables).
