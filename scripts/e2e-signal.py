@@ -27,10 +27,12 @@ def check(name, cond, detail=""):
     print(("PASS " if cond else "FAIL ") + name + ("" if cond else f"  [{detail}]"), flush=True)
 
 
-def msg(text, attachments=None):
+def msg(text, attachments=None, quote=None):
     d = {"message": text, "timestamp": int(time.time() * 1000)}
     if attachments:
         d["attachments"] = attachments
+    if quote:
+        d["quote"] = {"id": quote, "author": "+15550000", "authorNumber": "+15550000", "text": "…"}
     e = {"source": "+3161", "sourceNumber": "+3161", "sourceUuid": "u-ana", "sourceName": "Ana", "timestamp": d["timestamp"], "dataMessage": d}
     urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{SIG}/control/push", json.dumps(e).encode()))
 
@@ -92,8 +94,13 @@ try:
     check("…and its text reaches the AI", "Dentist is on Tuesday at nine" in open(f"{DIR}/ai.log").read(), "")
     t = time.time(); msg("FILE")
     # After reading a file the chat has read outside content, so writing one asks first.
-    until(lambda: any("Approve this action?" in x for x in texts(t)), 15)
-    t = time.time(); msg("1")
+    card = until(lambda: [c for c in calls(t) if "Approve this action?" in c["message"]], 15)
+    # Once the bot has written something else, a bare number no longer reaches the card (a unit test checks that; here
+    # it would just steer the reply in progress); replying to the card does.
+    t = time.time(); msg("/memory")
+    until(lambda: any("remembered" in x for x in texts(t)), 10)
+    t = time.time(); msg("1", quote=card[0]["timestamp"])
+    check("replying to the card answers it", until(lambda: any(x.startswith("✅ Approved") for x in texts(t)), 10), texts(t))
     check("written", until(lambda: any("DONE file_write" in x for x in texts(t)), 15), texts(t))
     t = time.time(); msg("SEND FILE")
     sent = until(lambda: [a for c in calls(t) for a in c["base64_attachments"]], 15)

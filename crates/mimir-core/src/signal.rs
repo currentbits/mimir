@@ -22,14 +22,22 @@ pub(crate) struct Signal {
     api: String,
     /// The bot's own number, as signal-cli knows it ("+31…").
     number: String,
-    /// Chat → the numbered choices under the bot's latest message that had some.
-    choices: Arc<Mutex<HashMap<String, Choices>>>,
+    /// Chat → the bot's latest message there and the numbered choices still open.
+    choices: Arc<Mutex<HashMap<String, Numbers>>>,
+}
+
+#[derive(Default)]
+struct Numbers {
+    /// The bot's latest message in the chat (its Signal timestamp): a bare number answers only that one.
+    last: String,
+    open: Vec<Choices>,
 }
 
 struct Choices {
-    /// The message they're under (its Signal timestamp).
+    /// The message they're under.
     msg: String,
-    /// An approval card's stay until it's decided; a question's go with the bot's next message.
+    /// An approval card's stay open until it's decided (answered later by replying to the card); a question's go with
+    /// the bot's next message.
     card: bool,
     /// Each choice's button data, in order.
     data: Vec<String>,
@@ -42,6 +50,10 @@ pub(crate) struct Incoming {
     from: String,
     name: String,
     text: String,
+    /// Their own words, without the message they replied to.
+    said: String,
+    /// The bot's message they replied to (its Signal timestamp).
+    quoted: Option<String>,
     /// Attachments; `url` is signal-cli's attachment id.
     files: Vec<(String, String, u64, String)>,
     sent: Option<i64>,
@@ -75,16 +87,19 @@ pub(crate) fn message_of(env: &Value, me: &str) -> Option<Incoming> {
         return None;
     }
     let q = &d["quote"];
-    let text = match q["text"].as_str().filter(|t| !t.trim().is_empty() && (q["authorNumber"] == me || q["author"] == me)) {
+    let mine = q["authorNumber"] == me || q["author"] == me;
+    let quoted = q["id"].as_i64().filter(|_| mine).map(|id| id.to_string());
+    let said = text.clone();
+    let text = match q["text"].as_str().filter(|t| mine && !t.trim().is_empty()) {
         Some(quoted) => crate::with_reply(&text, quoted),
         None => text,
     };
     let name = env["sourceName"].as_str().unwrap_or("").to_string();
-    Some(Incoming { from: from.into(), name, text, files, sent: env["timestamp"].as_i64().map(|t| t / 1000) })
+    Some(Incoming { from: from.into(), name, text, said, quoted, files, sent: env["timestamp"].as_i64().map(|t| t / 1000) })
 }
 
-/// Buttons as a numbered list under the text; returns each number's button data.
-fn numbered(text: &mut String, rows: &[Row]) -> Vec<String> {
+/// Buttons as a numbered list under the text (a card's say how to answer it later); returns each number's button data.
+fn numbered(text: &mut String, rows: &[Row], card: bool) -> Vec<String> {
     let all: Vec<&(String, String)> = rows.iter().flatten().collect();
     if all.is_empty() {
         return vec![];
@@ -93,7 +108,7 @@ fn numbered(text: &mut String, rows: &[Row]) -> Vec<String> {
     for (n, (label, _)) in all.iter().enumerate() {
         text.push_str(&format!("{}. {label}\n", n + 1));
     }
-    text.push_str(tr("(Reply with a number.)"));
+    text.push_str(if card { tr("(Reply with a number. If I've written since, reply to this message with it.)") } else { tr("(Reply with a number.)") });
     all.into_iter().map(|(_, d)| d.clone()).collect()
 }
 
@@ -126,25 +141,36 @@ impl Signal {
             bail!("signal send: {status} {}", crate::tools::truncate(&text, 200));
         }
         let v: Value = serde_json::from_str(&text).unwrap_or_default();
-        Ok(v["timestamp"].as_str().map(String::from).or(v["timestamp"].as_i64().map(|t| t.to_string())).unwrap_or_default())
+        let msg = v["timestamp"].as_str().map(String::from).or(v["timestamp"].as_i64().map(|t| t.to_string())).unwrap_or_default();
+        self.sent(to, &msg);
+        Ok(msg)
     }
 
-    /// Remember the numbered choices under a message just sent; a message without any ends a question's (not a card's).
-    fn offer(&self, chat: &str, msg: String, card: bool, data: Vec<String>) {
+    /// The bot wrote in a chat: a bare number there now answers only this message, and a question's numbers are gone.
+    fn sent(&self, chat: &str, msg: &str) {
         let mut choices = self.choices.lock().unwrap();
+        let n = choices.entry(chat.into()).or_default();
+        n.last = msg.into();
+        n.open.retain(|c| c.card);
+    }
+
+    /// The numbered choices under a message just sent.
+    fn offer(&self, chat: &str, msg: String, card: bool, data: Vec<String>) {
         if !data.is_empty() {
-            choices.insert(chat.into(), Choices { msg, card, data });
-        } else if choices.get(chat).is_some_and(|c| !c.card) {
-            choices.remove(chat);
+            self.choices.lock().unwrap().entry(chat.into()).or_default().open.push(Choices { msg, card, data });
         }
     }
 
-    /// The button a reply of just a number picks, if the bot's latest numbered message has that many.
-    fn picked(&self, chat: &str, text: &str) -> Option<String> {
+    /// The button a reply of just a number picks: on the message it replies to, else on the bot's latest message. So a
+    /// number meant for something the bot wrote later can't answer an older card.
+    fn picked(&self, chat: &str, text: &str, quoted: Option<&str>) -> Option<String> {
         let n = pick(text)?;
         let mut choices = self.choices.lock().unwrap();
-        let data = choices.get(chat)?.data.get(n - 1)?.clone();
-        choices.remove(chat);
+        let c = choices.get_mut(chat)?;
+        let under = quoted.unwrap_or(&c.last).to_string();
+        let i = c.open.iter().position(|o| o.msg == under)?;
+        let data = c.open[i].data.get(n - 1)?.clone();
+        c.open.remove(i);
         Some(data)
     }
 
@@ -166,7 +192,7 @@ impl Signal {
     /// Final reply as plain text (Signal shows no Markdown), with any buttons as a numbered list.
     pub(crate) async fn finish(&self, chat: &str, _draft: Option<&str>, text: &str, rows: &[Row]) -> Result<()> {
         let mut text = crate::fmt::plain(text);
-        let data = numbered(&mut text, rows);
+        let data = numbered(&mut text, rows, false);
         let msg = self.send(chat, &text, vec![]).await?;
         self.offer(chat, msg, false, data);
         Ok(())
@@ -178,11 +204,8 @@ impl Signal {
 
     /// Only a card is ever "edited" (there are no drafts): its outcome comes as a new message, and its numbers stop working.
     pub(crate) async fn draft_edit(&self, chat: &str, msg: &str, text: &str) {
-        {
-            let mut choices = self.choices.lock().unwrap();
-            if choices.get(chat).is_some_and(|c| c.msg == msg) {
-                choices.remove(chat);
-            }
+        if let Some(c) = self.choices.lock().unwrap().get_mut(chat) {
+            c.open.retain(|o| o.msg != msg);
         }
         if let Err(e) = self.send(chat, text, vec![]).await {
             eprintln!("signal: {e:#}");
@@ -201,7 +224,7 @@ impl Signal {
 
     pub(crate) async fn card(&self, chat: &str, a: &Approval) -> Result<Option<String>> {
         let mut text = card_text(a);
-        let data = numbered(&mut text, &crate::runtime::card_buttons(a));
+        let data = numbered(&mut text, &crate::runtime::card_buttons(a), true);
         let msg = self.send(chat, &text, vec![]).await?;
         self.offer(chat, msg.clone(), true, data);
         Ok(Some(msg))
@@ -239,7 +262,7 @@ impl Signal {
         let Some(m) = message_of(env, &self.number) else { return Ok(()) };
         let (chat, from) = (m.from.as_str(), Sender { id: &m.from, dm: true });
         if m.files.is_empty()
-            && let Some(data) = self.picked(chat, &m.text)
+            && let Some(data) = self.picked(chat, &m.said, m.quoted.as_deref())
         {
             return self.choose(me, core, chat, from, &data).await;
         }
@@ -308,33 +331,49 @@ mod tests {
         assert_eq!(m.text, "");
         assert_eq!(m.files[0], ("Ab12.aac".into(), "audio/aac".into(), 900, "Ab12".into()), "a voice note named for its kind of audio");
         assert_eq!(m.files[1].0, "trip.pdf");
-        let reply = json!({"sourceUuid": "u-1", "dataMessage": {"message": "move it", "quote": {"author": ME, "authorNumber": ME, "text": "2. Call Sam"}}});
-        assert_eq!(message_of(&reply, ME).unwrap().text, crate::with_reply("move it", "2. Call Sam"));
+        let reply = json!({"sourceUuid": "u-1", "dataMessage": {"message": "move it", "quote": {"id": 1_700_000_000_999i64, "author": ME, "authorNumber": ME, "text": "2. Call Sam"}}});
+        let m = message_of(&reply, ME).unwrap();
+        assert_eq!((m.text, m.said.as_str(), m.quoted.as_deref()), (crate::with_reply("move it", "2. Call Sam"), "move it", Some("1700000000999")));
         let theirs = json!({"sourceUuid": "u-1", "dataMessage": {"message": "this", "quote": {"author": "+3162", "text": "x"}}});
-        assert_eq!(message_of(&theirs, ME).unwrap().text, "this", "only the bot's own messages are quoted");
+        let m = message_of(&theirs, ME).unwrap();
+        assert_eq!((m.text.as_str(), m.quoted), ("this", None), "only the bot's own messages are quoted");
     }
 
     #[test]
     fn choices_are_numbered_and_a_number_picks_one() {
         let rows: Vec<Row> = vec![vec![("Approve".into(), "ap:7:y".into()), ("Deny".into(), "ap:7:n".into())], vec![("Always".into(), "ap:7:w".into())]];
         let mut text = "🔐 Approve this action?".to_string();
-        let data = numbered(&mut text, &rows);
-        assert_eq!(text, "🔐 Approve this action?\n\n1. Approve\n2. Deny\n3. Always\n(Reply with a number.)");
+        let data = numbered(&mut text, &rows, true);
+        assert_eq!(text, "🔐 Approve this action?\n\n1. Approve\n2. Deny\n3. Always\n(Reply with a number. If I've written since, reply to this message with it.)");
         assert_eq!(data, ["ap:7:y", "ap:7:n", "ap:7:w"]);
+        assert!(numbered(&mut String::new(), &rows, false).len() == 3);
         assert_eq!((pick(" 2 "), pick("3."), pick("0"), pick("2 please")), (Some(2), Some(3), None, None));
 
         let s = Signal::new("http://x", "+1 555 0000").unwrap();
         assert_eq!(s.number, "+15550000");
         assert!(Signal::new("", "0612").is_err(), "needs the country code");
-        s.offer("u-1", "100".into(), true, data);
-        assert_eq!(s.picked("u-1", "4"), None, "out of range");
-        assert_eq!(s.picked("u-2", "1"), None, "another chat's");
-        s.offer("u-1", "101".into(), false, vec![]);
-        assert_eq!(s.picked("u-1", "2").as_deref(), Some("ap:7:n"), "a plain message after a card keeps its numbers");
-        assert_eq!(s.picked("u-1", "2"), None, "used up");
-        // A question's numbers go with the bot's next message.
-        s.offer("u-1", "102".into(), false, vec!["tp:a:0".into()]);
-        s.offer("u-1", "103".into(), false, vec![]);
-        assert_eq!(s.picked("u-1", "1"), None);
+        // What `send` then `finish` / `card` do for a message.
+        let post = |msg: &str, card: bool, data: Vec<String>| {
+            s.sent("u-1", msg);
+            s.offer("u-1", msg.into(), card, data);
+        };
+        post("100", true, data.clone());
+        assert_eq!(s.picked("u-1", "4", None), None, "out of range");
+        assert_eq!(s.picked("u-2", "1", None), None, "another chat's");
+        assert_eq!(s.picked("u-1", "2", None).as_deref(), Some("ap:7:n"), "the card is the latest message");
+        assert_eq!(s.picked("u-1", "2", None), None, "used up");
+
+        // Hours later the bot writes something else, its own list in plain text: "1" is an answer to that, not to the
+        // card. Replying to the card still answers it.
+        post("200", true, data);
+        post("201", false, vec![]);
+        assert_eq!(s.picked("u-1", "1", None), None, "a bare number can't reach an older card");
+        assert_eq!(s.picked("u-1", "1", Some("201")), None);
+        assert_eq!(s.picked("u-1", "1", Some("200")).as_deref(), Some("ap:7:y"), "replying to the card");
+
+        // A question's numbers go with the bot's next message, even when that message is replied to.
+        post("300", false, vec!["tp:a:0".into()]);
+        post("301", false, vec![]);
+        assert_eq!(s.picked("u-1", "1", Some("300")), None);
     }
 }

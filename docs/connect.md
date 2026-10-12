@@ -178,8 +178,12 @@ SIM or a second number; not yours, or its replies would come from you), and Mimi
    `MIMIR_SIGNAL_API` in `docker-compose.yml`. On your own computer, with Docker:
    ```sh
    docker run -d --name signal --restart unless-stopped -p 127.0.0.1:8080:8080 -e MODE=json-rpc \
-     -v "$HOME/.local/share/signal-api:/home/.local/share/signal-cli" bbernhard/signal-cli-rest-api
+     -v "$HOME/.local/share/signal-api:/home/.local/share/signal-cli" bbernhard/signal-cli-rest-api:0.101
    ```
+   signal-cli-rest-api has no password: anything that can reach it can send messages as the bot and link another
+   device to its number. `127.0.0.1` keeps it off your network, but every program and user account on this computer
+   can still reach it, so run it only on a computer that's yours alone. (In the server's `docker-compose.yml` it's on
+   a network of its own with Mimir, out of reach of the bots' browser.)
 2. **Link the bot's number** as a linked device. Set up Signal on a phone with that number, open
    `http://127.0.0.1:8080/v1/qrcodelink?device_name=mimir` in a browser and scan the code with that phone: Signal →
    Settings → Linked devices → **+**. (On a server, `ssh -L 8081:127.0.0.1:8081 you@server` first, then open
