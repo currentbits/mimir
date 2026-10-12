@@ -7,6 +7,8 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 - **Replies survive a crash, an update or a restart:** a reply, a routine's result or a note for your decisions chat
   is kept until Telegram, Slack or Discord has it. If Mimir stops before then, it sends it when it starts again. One
   that didn't go through is tried again for a while. A routine's run shows *waiting to send* until it's sent.
+- **Malware check for tool servers:** a tool server that downloads its package (`npx`, `uvx`…) is looked up on
+  OSV.dev's list of malicious packages first, and Mimir refuses to start it if it's there, saying which advisory.
 
 ## 0.2.0
 

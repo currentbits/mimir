@@ -95,6 +95,8 @@ half is built into the app); a tampered download is refused. It never restarts o
 
 - Speech, voice and speaker models, and the speaker library Linux loads, are fixed versions checked against SHA-256.
 - The browser tool, the AI CLIs in the Docker image and the base images are fixed versions.
+- A tool server that downloads its package (`npx`, `uvx`…) is checked against OSV.dev's malicious-package list first
+  and doesn't start if it's listed ([details](tools-and-safety.md#tool-servers-mcp)).
 - CI actions are pinned by commit, and CI runs with a read-only token.
 
 **Hostile input can't take the app down.**
