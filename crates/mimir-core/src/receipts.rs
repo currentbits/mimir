@@ -24,6 +24,7 @@ fn receipt(c: &ToolCall) -> Option<String> {
         }
         "routine_create" => Some(match s.strip_prefix("Once at ") {
             Some(r) => format!("Reminder set for {}", r.split(": ").next().unwrap_or(r)),
+            None if s.starts_with("Follow-up at ") => format!("Follow-up booked for {}", s["Follow-up at ".len()..].split(": ").next().unwrap_or_default()),
             // "Create routine [0 8 * * *] Brief me": what it does (its schedule is on its chip in the app).
             None => format!("Routine set: {}", s.split_once("] ").map_or(s.as_str(), |(_, p)| p)),
         }),
@@ -46,7 +47,7 @@ const CLAIMS: &[Claim] = &[
         "I said it's booked or in your calendar, but nothing was booked or added.",
     ),
     (
-        &["i'll remind you", "i will remind you", "i'll ping you", "i'll nudge you", "reminder set", "reminder is set", "i've set a reminder", "i set a reminder", "i've set up a reminder", "i'll send you a reminder"],
+        &["i'll remind you", "i will remind you", "i'll ping you", "i'll nudge you", "i'll check back", "i will check back", "i'll follow up", "i will follow up", "reminder set", "reminder is set", "i've set a reminder", "i set a reminder", "i've set up a reminder", "i'll send you a reminder"],
         |t| t == "routine_create" || t == "routine_update",
         NO_REMINDER,
     ),

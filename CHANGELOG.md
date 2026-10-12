@@ -16,6 +16,12 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
   is signed in for that bot only. **Sign out everywhere** on a bot's page clears its sign-ins. Sign-ins from before
   go to the first bot that uses the computer after the update.
 
+### Routines
+- **Follow-ups the bot books itself:** "I'll check back Friday whether they replied" becomes a one-off follow-up, said
+  in the reply and shown in the Routines tab, where you delete it to cancel. It counts like any routine.
+- **Routines that end:** "every morning until the 30th" or "for two weeks": an optional end, shown on the routine, after
+  which it's gone.
+
 ## 0.2.0
 
 ### Talking to your bots

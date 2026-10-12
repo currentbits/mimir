@@ -42,6 +42,12 @@ export function dayLabel(ts: number) {
 
 export const fullTime = (ts: number) => FULL_TIME.format(new Date(ts * 1000))
 
+/** A routine's end: "Thu 30 Oct" when it's through that day (23:59), else the date and time. */
+export function untilText(ts: number) {
+  const d = new Date(ts * 1000)
+  return d.getHours() === 23 && d.getMinutes() === 59 ? SHORT.format(d) : FULL_TIME.format(d)
+}
+
 export function ago(ts: number) {
   const s = Date.now() / 1000 - ts
   const d = new Date(ts * 1000)

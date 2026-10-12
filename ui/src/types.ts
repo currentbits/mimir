@@ -17,7 +17,7 @@ export type Kind = 'convention' | 'knowledge' | 'task'
 
 export type Delivery = 'now' | 'digest' | 'log' | 'card'
 
-export type Routine = { id: number; bot_id: number; quiet: boolean; paused: boolean; chat_id: number; cron: string; prompt: string; next_fire: number; delivery: Delivery; once?: boolean; watch?: string; urgent?: string }
+export type Routine = { id: number; bot_id: number; quiet: boolean; paused: boolean; chat_id: number; cron: string; prompt: string; next_fire: number; delivery: Delivery; once?: boolean; watch?: string; urgent?: string; ends?: number; followup?: boolean }
 
 export type Tab = 'chat' | 'memory' | 'skills' | 'routines' | 'activity'
 

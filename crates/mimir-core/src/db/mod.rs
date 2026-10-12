@@ -51,7 +51,7 @@ PRAGMA secure_delete=ON;
 
 /// The schema version this build writes (`PRAGMA user_version`). A schema change bumps it and adds a step to
 /// `migrate`; each step runs once per database.
-const VERSION: i64 = 8;
+const VERSION: i64 = 9;
 
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS entries(
@@ -210,6 +210,9 @@ fn migrate(c: &Connection) -> Result<()> {
     }
     if v < 8 {
         migrate_v8(c)?;
+    }
+    if v < 9 {
+        migrate_v9(c)?;
     }
     c.execute(
         "INSERT INTO settings(key, value) VALUES ('schema_written_by', ?1) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -444,6 +447,16 @@ fn migrate_v8(c: &Connection) -> Result<()> {
            created_at INTEGER NOT NULL, claimed_by TEXT, claimed_at INTEGER, tries INTEGER NOT NULL DEFAULT 0, error TEXT);
          CREATE INDEX IF NOT EXISTS outbox_bot ON outbox(bot_id, id);",
     )?;
+    Ok(())
+}
+
+/// Version 9: when a repeating routine ends (0 = never), and a one-off the bot booked on its own to check back.
+fn migrate_v9(c: &Connection) -> Result<()> {
+    for col in ["ends", "followup"] {
+        if !c.prepare(&format!("SELECT 1 FROM pragma_table_info('routines') WHERE name='{col}'"))?.exists([])? {
+            c.execute_batch(&format!("ALTER TABLE routines ADD COLUMN {col} INTEGER NOT NULL DEFAULT 0"))?;
+        }
+    }
     Ok(())
 }
 
