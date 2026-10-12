@@ -55,7 +55,8 @@ pub(crate) struct Incoming {
     /// The bot's message they replied to (its Signal timestamp).
     quoted: Option<String>,
     /// Attachments; `url` is signal-cli's attachment id.
-    files: Vec<(String, String, u64, String)>,
+    /// (name, mime, size, id, recorded in Signal as a voice note)
+    files: Vec<(String, String, u64, String, bool)>,
     sent: Option<i64>,
 }
 
@@ -74,12 +75,15 @@ pub(crate) fn message_of(env: &Value, me: &str) -> Option<Incoming> {
         .filter_map(|a| {
             let (id, mime) = (a["id"].as_str()?, a["contentType"].as_str().unwrap_or(""));
             // A voice note has no file name: its id, with the kind of audio it is, for the transcriber.
-            let name = match a["filename"].as_str().filter(|n| !n.is_empty()) {
+            let named = a["filename"].as_str().filter(|n| !n.is_empty());
+            let name = match named {
                 Some(n) => n.to_string(),
                 None if id.contains('.') => id.to_string(),
                 None => format!("{id}.{}", mime.rsplit('/').next().filter(|e| e.chars().all(char::is_alphanumeric) && !e.is_empty()).unwrap_or("bin")),
             };
-            Some((name, mime.to_string(), a["size"].as_u64().unwrap_or(0), id.to_string()))
+            // A voice note recorded in Signal is the person's own words; an audio file someone made isn't.
+            let voice = a["voiceNote"] == true || (named.is_none() && mime.starts_with("audio/"));
+            Some((name, mime.to_string(), a["size"].as_u64().unwrap_or(0), id.to_string(), voice))
         })
         .collect();
     let text = d["message"].as_str().unwrap_or("").trim().to_string();
@@ -273,7 +277,7 @@ impl Signal {
             return self.choose(me, core, chat, from, &data).await;
         }
         if !m.files.is_empty() {
-            let files: Vec<File> = m.files.iter().map(|(name, mime, size, id)| File { name: name.clone(), mime: mime.clone(), size: *size, url: id.clone() }).collect();
+            let files: Vec<File> = m.files.iter().map(|(name, mime, size, id, voice)| File { name: name.clone(), mime: mime.clone(), size: *size, url: id.clone(), voice: *voice }).collect();
             return core.incoming_files(me, chat, from, &m.text, &files, m.sent, |f| self.download(f.url.clone())).await;
         }
         core.incoming(me, chat, from, format!("Signal {}", m.name).trim_end(), &m.text, m.sent).await
@@ -335,8 +339,11 @@ mod tests {
             {"contentType": "application/pdf", "filename": "trip.pdf", "id": "Cd34.pdf", "size": 5}]}});
         let m = message_of(&env, ME).unwrap();
         assert_eq!(m.text, "");
-        assert_eq!(m.files[0], ("Ab12.aac".into(), "audio/aac".into(), 900, "Ab12".into()), "a voice note named for its kind of audio");
+        assert_eq!(m.files[0], ("Ab12.aac".into(), "audio/aac".into(), 900, "Ab12".into(), true), "a voice note named for its kind of audio");
         assert_eq!(m.files[1].0, "trip.pdf");
+        assert!(!m.files[1].4);
+        let song = json!({"sourceUuid": "u-1", "dataMessage": {"attachments": [{"contentType": "audio/mpeg", "filename": "song.mp3", "id": "Ef56.mp3", "size": 9}]}});
+        assert!(!message_of(&song, ME).unwrap().files[0].4, "an audio file is outside content");
         let reply = json!({"sourceUuid": "u-1", "dataMessage": {"message": "move it", "quote": {"id": 1_700_000_000_999i64, "author": ME, "authorNumber": ME, "text": "2. Call Sam"}}});
         let m = message_of(&reply, ME).unwrap();
         assert_eq!((m.text, m.said.as_str(), m.quoted.as_deref()), (crate::with_reply("move it", "2. Call Sam"), "move it", Some("1700000000999")));

@@ -177,7 +177,7 @@ impl Slack {
             {"type": "section", "text": {"type": "plain_text", "text": text}},
             {"type": "actions", "elements": buttons}
         ]);
-        let m = self.api("chat.postMessage", &self.bot_token, self.post(channel, json!({"text": text, "blocks": blocks}))).await?;
+        let m = self.api("chat.postMessage", &self.bot_token, self.post(channel, json!({"text": crate::fmt::esc(&text), "blocks": blocks}))).await?;
         Ok(m["ts"].as_str().map(String::from))
     }
 
@@ -365,7 +365,8 @@ impl Slack {
             return Ok(());
         };
         let text = match core.decide(me, channel, who, id, d) {
-            Ok(Some(a)) => verdict_for(&a, d),
+            // Escaped: the summary can hold a page's words, and Slack would turn <!channel> into a ping.
+            Ok(Some(a)) => crate::fmt::esc(&verdict_for(&a, d)),
             Ok(None) => crate::say::tr("This request is no longer pending.").into(),
             // Someone else in the channel pressed it: tell only them, leave the card as it is.
             Err(e) => {
@@ -410,6 +411,8 @@ fn files_of(ev: &Value) -> Vec<File> {
             mime: f["mimetype"].as_str().unwrap_or("").into(),
             size: f["size"].as_u64().unwrap_or(0),
             url: f["url_private_download"].as_str().unwrap_or("").into(),
+            // A clip recorded in Slack, not an uploaded audio file.
+            voice: f["subtype"] == "slack_audio",
         })
         .collect()
 }

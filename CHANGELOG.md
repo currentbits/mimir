@@ -10,6 +10,23 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 - **Signal:** a bot can be on Signal too, with a number of its own, through signal-cli-rest-api. Text, photos, voice
   notes and files work both ways; approval cards and a bot's questions come as a numbered list you answer with the
   number. Direct chats only. Setup is under [Connect](docs/connect.md#signal).
+- **Security fixes** from a review of the whole app:
+  - A bot can't open a page in a new browser tab past the "open a site" ask and its checks.
+  - After reading outside content, no approval card offers **Always**, not even for actions that already ask. A
+    guest's OK is always for that once, so it can't change your rules.
+  - After reading your email or a meeting, every web address asks for the rest of the conversation, and in tasks
+    handed to other bots (before: that turn only).
+  - An audio file sent to a bot (not a voice note you recorded) counts as outside content, like a document.
+  - A reply that quotes the bot's message no longer counts the quote as your words when the tidy-up learns from it.
+  - The bots' computer is offered only in chats with you alone, never a group.
+  - Slack approval cards can't ping `@channel`.
+  - The computer service's DevTools port needs its token, like its control channel.
+  - A signed webhook call can't be replayed.
+  - Tool-server sign-in checks addresses properly (`http://localhost.evil.com` isn't this computer) and follows
+    redirects only to public addresses.
+  - The server no longer prints the admin token in its log; `mimir admin-token` shows it.
+  - Voice notes are written to owner-only temp files.
+
 - **Malware check for tool servers:** a tool server that downloads its package (`npx`, `uvx`…) is looked up on
   OSV.dev's list of malicious packages first, and Mimir refuses to start it if it's there, saying which advisory.
 - **Check everything:** `mimir doctor` (and Settings → Your data → *Check everything*) checks each bot's AI sign-in,

@@ -73,8 +73,8 @@ afterwards.
 - Opening a site asks (per-site "always" is available); saved logins ask every time. After outside content, jumping
   to the address bar (keys or a click on the browser's bar) asks too, so a page can't steer the bot to another site.
 - With compose, the computer is a separate container: user `computer`, no `/data` mount, no published ports, all
-  capabilities dropped. Mimir reaches it over the compose network only; the control channel needs
-  `MIMIR_COMPUTER_TOKEN`, which both services get from `.env`.
+  capabilities dropped. Mimir reaches it over the compose network only; the control channel and the DevTools port
+  need `MIMIR_COMPUTER_TOKEN`, which both services get from `.env`.
 - Its Chromium runs without any environment (not even that token) and with its own home, and the Docker image blocks
   `file://` and internal `chrome://` pages and downloads by policy.
 - Never available in incognito chats (its browser keeps history and cookies).
@@ -90,7 +90,8 @@ coordinates, keys and addresses. `start`, `open` and `forget` carry the bot's id
 `computer/browser` (bot and process id, checked against the running Chromium's command line), since a bot on a CLI
 account runs its tools in a process of its own; a Chromium on the DevTools port that no record accounts for is left
 alone and not driven. Chromium's DevTools are passed on at port 9223 for Playwright (`--cdp-endpoint`) and teach by showing's
-page lookups; Mimir connects by IP, since Chromium only answers a Host that's an IP or localhost. Mimir uses the service
+page lookups, only to a connection whose first request carries `Authorization: Bearer <token>` (Playwright gets it as
+`PLAYWRIGHT_MCP_CDP_HEADERS`); Mimir connects by IP, since Chromium only answers a Host that's an IP or localhost. Mimir uses the service
 when `MIMIR_COMPUTER` (e.g. `computer:7300`) is set, and runs it in its own process otherwise.
 On the computer's side, tools act through `xdotool` and take screenshots with `scrot`, as JPEG at screen size so
 screenshot pixels are click coordinates. Images go to the model as
