@@ -130,7 +130,8 @@ fn bring_in(db: &Db, bot: i64, chat: i64, label: &str, home: &Path, found: &Foun
 
 /// `~/.hermes/memories/USER.md` rather than the full path.
 fn shown(home: &Path, p: &Path) -> String {
-    p.strip_prefix(home).map_or_else(|_| p.display().to_string(), |r| format!("~/{}", r.display()))
+    // `/` on Windows too: the same label everywhere.
+    p.strip_prefix(home).map_or_else(|_| p.display().to_string(), |r| format!("~/{}", r.components().map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/")))
 }
 
 fn scan(home: &Path, source: &str) -> Found {
