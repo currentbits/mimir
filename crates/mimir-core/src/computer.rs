@@ -26,8 +26,6 @@ pub const IMAGE_MARK: &str = "[[image:";
 
 /// The screen, window manager and browser processes this server started.
 static PROCS: Mutex<Vec<Child>> = Mutex::new(Vec::new());
-/// The Chromium on screen and whose profile it runs (0: no bot's).
-static BROWSER: Mutex<Option<(i64, Child)>> = Mutex::new(None);
 
 fn which(bin: &str) -> bool {
     std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(bin).is_file()))
@@ -152,17 +150,60 @@ fn profile(home: &Path, bot: i64) -> Result<PathBuf> {
     Ok(p)
 }
 
+/// Which bot's Chromium is on screen: (bot, pid), recorded in `computer/browser` by whichever process started it (the
+/// server, or a CLI bot's own `mimir mcp`, so not something one process can keep in memory), and only while that pid
+/// is still Chromium on that bot's profile.
+fn on_screen(home: &Path) -> Option<(i64, u32)> {
+    let s = std::fs::read_to_string(home.join("computer").join("browser")).ok()?;
+    let (bot, pid) = s.trim().split_once(' ')?;
+    let (bot, pid): (i64, u32) = (bot.parse().ok()?, pid.parse().ok()?);
+    let dir = format!("--user-data-dir={}", home.join("computer").join(format!("chromium-{bot}")).display());
+    let cmd = std::fs::read(format!("/proc/{pid}/cmdline")).ok()?;
+    cmd.split(|b| *b == 0).any(|a| a == dir.as_bytes()).then_some((bot, pid))
+}
+
+/// What start does about the browser: keep it, close the one open (if any) and start the bot's, or leave alone a
+/// Chromium on the DevTools port that no bot's record accounts for (driving it could mean anybody's sign-ins).
+#[derive(Debug, PartialEq)]
+enum Next {
+    Keep,
+    Switch(Option<u32>),
+    Unknown,
+}
+
+fn next(on: Option<(i64, u32)>, want: i64, up: bool) -> Next {
+    match on {
+        Some((b, _)) if b == want && up => Next::Keep,
+        Some((_, pid)) => Next::Switch(Some(pid)),
+        None if up => Next::Unknown,
+        None => Next::Switch(None),
+    }
+}
+
+/// One process at a time decides which Chromium is on screen.
+fn browser_lock(home: &Path) -> Result<std::fs::File> {
+    let dir = home.join("computer");
+    std::fs::create_dir_all(&dir)?;
+    let f = std::fs::File::create(dir.join("browser.lock"))?;
+    f.lock()?;
+    Ok(f)
+}
+
 /// Close Chromium the way a person would, so it writes its cookies out (killed if it hangs), and wait for its port.
-fn quit(mut c: Child) {
-    let _ = Command::new("kill").args(["-TERM", &c.id().to_string()]).status();
+fn quit(pid: u32) {
+    // A zombie (exited, not yet collected by its parent) has an empty command line.
+    let alive = || std::fs::read(format!("/proc/{pid}/cmdline")).is_ok_and(|c| !c.is_empty());
+    let _ = Command::new("kill").args(["-TERM", &pid.to_string()]).status();
     for _ in 0..50 {
-        if c.try_wait().is_ok_and(|s| s.is_some()) {
+        PROCS.lock().unwrap_or_else(|e| e.into_inner()).retain_mut(|c| matches!(c.try_wait(), Ok(None)));
+        if !alive() {
             break;
         }
         std::thread::sleep(Duration::from_millis(100));
     }
-    let _ = c.kill();
-    let _ = c.wait();
+    if alive() {
+        let _ = Command::new("kill").args(["-KILL", &pid.to_string()]).status();
+    }
     for _ in 0..30 {
         if !browser_up() {
             break;
@@ -195,50 +236,60 @@ pub fn start(home: &Path, bot: Option<i64>) -> Result<()> {
             spawn(&mut Command::new("openbox"))?;
         }
     }
-    let mut open = BROWSER.lock().unwrap_or_else(|e| e.into_inner());
-    let bot = bot.or(open.as_ref().map(|(b, _)| *b)).unwrap_or(0);
-    if !(open.as_ref().is_some_and(|(b, _)| *b == bot) && browser_up()) {
-        if let Some((_, c)) = open.take() {
-            quit(c);
+    let _lock = browser_lock(home)?;
+    let on = on_screen(home);
+    let bot = bot.or(on.map(|(b, _)| b)).unwrap_or(0);
+    let close = match next(on, bot, browser_up()) {
+        Next::Keep => return Ok(()),
+        Next::Unknown => bail!("another Chromium has the computer's DevTools port; turn the computer off and on in Settings"),
+        Next::Switch(pid) => pid,
+    };
+    if let Some(pid) = close {
+        quit(pid);
+    }
+    if browser_up() {
+        bail!("the open Chromium didn't close; turn the computer off and on in Settings");
+    }
+    let profile = profile(home, bot)?;
+    // --no-sandbox: Chromium's own sandbox needs user namespaces, which containers usually don't allow; the
+    // container is the sandbox here.
+    let child = launch(browser(home)?.args([
+        "--no-sandbox",
+        // Hides the "unsupported command-line flag" bar --no-sandbox brings, which shifts every page down.
+        "--test-type",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--disable-dev-shm-usage",
+        &format!("--remote-debugging-port={CDP_PORT}"),
+        "--remote-debugging-address=127.0.0.1",
+        &format!("--user-data-dir={}", profile.display()),
+        "--window-position=0,0",
+        &format!("--window-size={WIDTH},{HEIGHT}"),
+        "--start-maximized",
+        "about:blank",
+    ]))
+    .context("couldn't start Chromium")?;
+    std::fs::write(home.join("computer").join("browser"), format!("{bot} {}", child.id()))?;
+    PROCS.lock().unwrap_or_else(|e| e.into_inner()).push(child);
+    for _ in 0..80 {
+        if browser_up() {
+            break;
         }
-        let profile = profile(home, bot)?;
-        // --no-sandbox: Chromium's own sandbox needs user namespaces, which containers usually don't allow; the
-        // container is the sandbox here.
-        let child = launch(browser(home)?.args([
-            "--no-sandbox",
-            // Hides the "unsupported command-line flag" bar --no-sandbox brings, which shifts every page down.
-            "--test-type",
-            "--no-first-run",
-            "--no-default-browser-check",
-            "--disable-dev-shm-usage",
-            &format!("--remote-debugging-port={CDP_PORT}"),
-            "--remote-debugging-address=127.0.0.1",
-            &format!("--user-data-dir={}", profile.display()),
-            "--window-position=0,0",
-            &format!("--window-size={WIDTH},{HEIGHT}"),
-            "--start-maximized",
-            "about:blank",
-        ]))
-        .context("couldn't start Chromium")?;
-        *open = Some((bot, child));
-        for _ in 0..80 {
-            if browser_up() {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(100));
-        }
+        std::thread::sleep(Duration::from_millis(100));
     }
     Ok(())
 }
 
-/// Stop everything this server started.
-pub fn stop() {
+/// Stop everything this server started, and the browser on screen.
+pub fn stop(home: &Path) {
     if let Some(a) = remote() {
         let _ = ask(&a, serde_json::json!({"op": "stop"}));
         return;
     }
-    if let Some((_, c)) = BROWSER.lock().unwrap_or_else(|e| e.into_inner()).take() {
-        quit(c);
+    if let Ok(_lock) = browser_lock(home)
+        && let Some((_, pid)) = on_screen(home)
+    {
+        quit(pid);
     }
     for mut c in PROCS.lock().unwrap_or_else(|e| e.into_inner()).drain(..) {
         let _ = c.kill();
@@ -390,11 +441,11 @@ pub fn forget(home: &Path, bot: i64) -> Result<()> {
     if let Some(a) = remote() {
         return ask(&a, serde_json::json!({"op": "forget", "bot": bot})).map(drop);
     }
-    let mut open = BROWSER.lock().unwrap_or_else(|e| e.into_inner());
-    if open.as_ref().is_some_and(|(b, _)| *b == bot)
-        && let Some((_, c)) = open.take()
+    let _lock = browser_lock(home)?;
+    if let Some((b, pid)) = on_screen(home)
+        && b == bot
     {
-        quit(c);
+        quit(pid);
     }
     let p = profile(home, bot)?;
     std::fs::remove_dir_all(&p)?;
@@ -456,7 +507,7 @@ fn act(home: &Path, v: &serde_json::Value) -> Result<serde_json::Value> {
         "status" => return Ok(serde_json::json!({"running": running()})),
         "screenshot" => return Ok(serde_json::json!({"image": base64::engine::general_purpose::STANDARD.encode(screenshot_jpeg()?)})),
         "start" => start(home, v["bot"].as_i64())?,
-        "stop" => stop(),
+        "stop" => stop(home),
         "click" => click(n("x"), n("y"), s("button"), v["double"] == true)?,
         "type" => type_text(s("text"))?,
         "key" => key(s("keys"))?,
@@ -835,6 +886,23 @@ mod tests {
             assert!(!first.join("Cookies").exists() && first.is_dir());
             assert!(super::profile(&home, 3).unwrap().read_dir().unwrap().next().is_none(), "the old shared one doesn't move back in");
         }
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn the_browser_switches_to_the_bot_using_it() {
+        use super::{Next, next};
+        assert_eq!(next(Some((3, 40)), 3, true), Next::Keep);
+        assert_eq!(next(Some((3, 40)), 4, true), Next::Switch(Some(40)), "another bot's: closed first");
+        assert_eq!(next(Some((3, 40)), 3, false), Next::Switch(Some(40)), "not answering: started again");
+        assert_eq!(next(None, 3, false), Next::Switch(None));
+        // A Chromium nobody recorded (another process's, or one that outlived its record) isn't driven.
+        assert_eq!(next(None, 3, true), Next::Unknown);
+        // Only a record whose pid is still Chromium on that bot's profile counts.
+        let home = std::env::temp_dir().join(format!("mimir-onscreen-{}", std::process::id()));
+        std::fs::create_dir_all(home.join("computer")).unwrap();
+        std::fs::write(home.join("computer").join("browser"), format!("3 {}", std::process::id())).unwrap();
+        assert_eq!(super::on_screen(&home), None, "this test isn't Chromium on bot 3's profile");
         let _ = std::fs::remove_dir_all(&home);
     }
 

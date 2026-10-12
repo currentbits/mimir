@@ -86,7 +86,10 @@ window manager (openbox) and a visible Chromium with its DevTools port on `127.0
 (re)start them when they're off. Mimir sends it requests on port 7300, one line of JSON each with the token
 (`status`, `start`, `stop`, `screenshot`, `click`, `type`, `key`, `scroll`, `open`, `forget`); both sides check
 coordinates, keys and addresses. `start`, `open` and `forget` carry the bot's id: the profiles
-(`computer/chromium-<bot>`) live on the computer's side. Chromium's DevTools are passed on at port 9223 for Playwright (`--cdp-endpoint`) and teach by showing's
+(`computer/chromium-<bot>`) live on the computer's side. Which bot's Chromium is on screen is kept in
+`computer/browser` (bot and process id, checked against the running Chromium's command line), since a bot on a CLI
+account runs its tools in a process of its own; a Chromium on the DevTools port that no record accounts for is left
+alone and not driven. Chromium's DevTools are passed on at port 9223 for Playwright (`--cdp-endpoint`) and teach by showing's
 page lookups; Mimir connects by IP, since Chromium only answers a Host that's an IP or localhost. Mimir uses the service
 when `MIMIR_COMPUTER` (e.g. `computer:7300`) is set, and runs it in its own process otherwise.
 On the computer's side, tools act through `xdotool` and take screenshots with `scrot`, as JPEG at screen size so

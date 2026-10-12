@@ -837,7 +837,7 @@ impl Host {
                 if on {
                     tokio::task::spawn_blocking(move || crate::computer::start(&home, None)).await??;
                 } else {
-                    crate::computer::stop();
+                    crate::computer::stop(&self.home);
                 }
                 ok(json!({"enabled": on, "running": tokio::task::spawn_blocking(crate::computer::running).await?}))
             }
