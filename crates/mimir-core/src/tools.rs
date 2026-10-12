@@ -811,6 +811,34 @@ fn types_memory(ctx: &ToolCtx, text: &str) -> bool {
     })
 }
 
+/// The request-match check (setting ask_check=on): a send, delete or edit whose target isn't in what the person asked
+/// (their own words) or the routine's prompt. No brief (a task from another bot, words not theirs): no check, as before.
+/// The browser and the computer act step by step on pages, gated per site; they aren't checked.
+fn off_brief(ctx: &ToolCtx, name: &str, args: &Value) -> bool {
+    if ctx.db.setting("ask_check").ok().flatten().as_deref() != Some("on") {
+        return false;
+    }
+    let external = crate::ext::split(name).is_some_and(|(s, _)| s != crate::ext::BROWSER) && !is_read_only(&ctx.db, name);
+    if !external && !["email_send", "calendar_create", "memory_forget", "routine_delete", "file_delete"].contains(&name) {
+        return false;
+    }
+    let Some(brief) = ctx.run_id.and_then(|r| ctx.db.brief(r).ok().flatten()).filter(|b| crate::own_words(b)) else { return false };
+    let id = args["id"].as_i64().unwrap_or(0);
+    // What it acts on: who an email goes to (not its text, which the bot writes from the request), which memory or
+    // routine, which file; for a tool server's tool, everything it's given.
+    let target = match name {
+        "email_send" => format!("{} {}", args["to"].as_str().unwrap_or(""), args["cc"].as_str().unwrap_or("")),
+        "memory_forget" => ctx.db.entries(&ctx.scope()).ok().and_then(|v| v.into_iter().find(|e| e.id == id)).map(|e| format!("{id} {} {}", e.title, e.body)).unwrap_or(id.to_string()),
+        "routine_delete" => ctx.db.routine(id).ok().flatten().map(|r| format!("{id} {}", r.prompt)).unwrap_or(id.to_string()),
+        _ => {
+            let mut all = vec![];
+            crate::ext::strings(args, &mut all);
+            all.join(" ")
+        }
+    };
+    !crate::fits_ask(&brief, &target)
+}
+
 /// The website a call acts on, for per-site rules ("always allow opening github.com").
 fn site_of(name: &str, args: &Value) -> Option<String> {
     if name != "web_fetch" && name != "browser__browser_navigate" && name != "computer_open" {
@@ -1457,6 +1485,8 @@ pub async fn call(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
     } else {
         (decision, why)
     };
+    // A write that doesn't fit what the person asked (or the routine's brief) asks first. Only ever allow → ask.
+    let (decision, why) = if decision == "allow" && off_brief(ctx, name, args) { ("ask".to_string(), "unasked") } else { (decision, why) };
     let mut decision = decision;
     // A rehearsal: what would change or send something, or ask the person, says what it would do instead.
     let would_ask = decision == "ask";
@@ -3213,5 +3243,48 @@ mod tests {
         assert_eq!(deep.mcp_args()[5..], ["--depth", "1", "--via", "1"].map(String::from));
         assert!(call(&ctx, "ask_bot", &json!({"bot":"Nobody","task":"y"})).await.unwrap_err().to_string().contains("the team is"));
         assert!(call(&ctx, "ask_bot", &json!({"bot":"mimir","task":"y"})).await.unwrap_err().to_string().contains("is you"));
+    }
+
+    #[tokio::test]
+    async fn a_write_off_the_brief_asks() {
+        let p = std::env::temp_dir().join(format!("mimir-brief-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = Db::open(&p).unwrap();
+        db.set_rule("routine_delete", "allow").unwrap();
+        let gym = db.routine_create(1, 9, "0 7 * * 1", "Remind me about the gym", false).unwrap();
+        let run = |asked: Option<&str>, routine: Option<i64>| {
+            let r = db.run_start(1, 9, "message", routine, "x").unwrap();
+            if let Some(a) = asked {
+                db.run_asked(r, a).unwrap();
+            }
+            let mut ctx = ToolCtx::new(db.clone(), 1, 9).with_run(Some(r));
+            ctx.unattended = true;
+            ctx
+        };
+        let del = |id: i64| json!({"id": id});
+        // Off: the rule decides, as before.
+        let other = db.routine_create(1, 9, "0 9 * * *", "Water the plants", false).unwrap();
+        call(&run(Some("what's the weather"), None), "routine_delete", &del(other.id)).await.unwrap();
+        assert!(db.routine(other.id).unwrap().is_none() && db.approvals_pending().unwrap().is_empty());
+        db.set_setting("ask_check", "on").unwrap();
+        // Not what they asked: parked for an OK, never "always".
+        let out = call(&run(Some("what's the weather"), None), "routine_delete", &del(gym.id)).await.unwrap();
+        assert!(out.starts_with("Not done yet") && db.routine(gym.id).unwrap().is_some(), "{out}");
+        let a = db.approvals_pending().unwrap().pop().unwrap();
+        assert_eq!(a.kind, "unasked");
+        db.approval_decide(a.id, false, None).unwrap();
+        // A task from another bot has no brief: no check.
+        let none = run(None, None);
+        assert!(!off_brief(&none, "routine_delete", &del(gym.id)));
+        // A routine compares against its own prompt; read-only and unchecked tools never ask.
+        let r = run(None, Some(gym.id));
+        assert!(!off_brief(&r, "routine_delete", &del(gym.id)) && !off_brief(&run(Some("hi"), None), "file_write", &json!({"path":"x"})));
+        assert!(off_brief(&r, "email_send", &json!({"to":"eve@evil.example"})));
+        // What they asked: it runs.
+        call(&run(Some("Stop the gym reminder"), None), "routine_delete", &del(gym.id)).await.unwrap();
+        assert!(db.routine(gym.id).unwrap().is_none() && db.approvals_pending().unwrap().is_empty());
+        // An ask stays an ask: the check never loosens a rule.
+        assert!(off_brief(&run(Some("email bob"), None), "email_send", &json!({"to":"eve@evil.example"})));
+        assert!(!off_brief(&run(Some("email bob"), None), "email_send", &json!({"to":"bob@acme.example"})));
     }
 }
