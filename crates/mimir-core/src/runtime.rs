@@ -1,10 +1,10 @@
-//! The always-on runtime for one bot: channel listeners (Telegram, Slack, Discord) + routine
+//! The always-on runtime for one bot: channel listeners (Telegram, Slack, Discord, Signal) + routine
 //! scheduler + approval cards. Shared by the CLI (`mimir serve`) and the desktop app, which
 //! aborts/respawns it on settings change.
 
 use crate::db::{Approval, Db};
 use crate::say::{tr, trf};
-use crate::{Trigger, discord::Discord, provider::Provider, slack::Slack, telegram::Tg, tools::ToolCtx, turn};
+use crate::{Trigger, discord::Discord, provider::Provider, signal::Signal, slack::Slack, telegram::Tg, tools::ToolCtx, turn};
 use anyhow::Result;
 use serde::Serialize;
 use serde_json::json;
@@ -40,6 +40,8 @@ pub struct Channels {
     /// (bot token xoxb-…, app-level token xapp-… for Socket Mode)
     pub slack: Option<(String, String)>,
     pub discord: Option<String>,
+    /// (signal-cli-rest-api address, "" for the default; the bot's own number)
+    pub signal: Option<(String, String)>,
 }
 
 /// A connected messaging channel. Enum dispatch keeps the adapters plain structs.
@@ -48,6 +50,7 @@ pub(crate) enum Chan {
     Telegram(Tg),
     Slack(Slack),
     Discord(Discord),
+    Signal(Signal),
 }
 
 /// Telegram allows about one edit per second per chat, Discord five per five seconds: 1.5s suits all.
@@ -75,6 +78,7 @@ impl Chan {
             Chan::Telegram(_) => "telegram",
             Chan::Slack(_) => "slack",
             Chan::Discord(_) => "discord",
+            Chan::Signal(_) => "signal",
         }
     }
 
@@ -92,6 +96,7 @@ impl Chan {
             Chan::Telegram(c) => c.finish(ext, draft, text, rows).await,
             Chan::Slack(c) => c.finish(ext, draft, text, rows).await,
             Chan::Discord(c) => c.finish(ext, draft, text, rows).await,
+            Chan::Signal(c) => c.finish(ext, draft, text, rows).await,
         }
     }
 
@@ -104,6 +109,7 @@ impl Chan {
                     Chan::Telegram(c) => c.upload(ext, &name, bytes).await,
                     Chan::Slack(c) => c.upload(ext, &name, bytes).await,
                     Chan::Discord(c) => c.upload(ext, &name, bytes).await,
+                    Chan::Signal(c) => c.upload(ext, &name, bytes).await,
                 },
                 Err(e) => Err(e.into()),
             };
@@ -147,6 +153,7 @@ impl Chan {
             Chan::Telegram(c) => c.draft_post(ext, text).await,
             Chan::Slack(c) => c.draft_post(ext, text).await,
             Chan::Discord(c) => c.draft_post(ext, text).await,
+            Chan::Signal(c) => c.draft_post(ext, text).await,
         }
     }
 
@@ -155,6 +162,7 @@ impl Chan {
             Chan::Telegram(c) => c.draft_edit(ext, id, text).await,
             Chan::Slack(c) => c.draft_edit(ext, id, text).await,
             Chan::Discord(c) => c.draft_edit(ext, id, text).await,
+            Chan::Signal(c) => c.draft_edit(ext, id, text).await,
         }
     }
 
@@ -163,6 +171,7 @@ impl Chan {
         match self {
             Chan::Telegram(c) => Some(c.typing(ext)),
             Chan::Discord(c) => Some(c.typing(ext)),
+            Chan::Signal(c) => Some(c.typing(ext)),
             Chan::Slack(_) => None,
         }
     }
@@ -172,6 +181,7 @@ impl Chan {
             Chan::Telegram(c) => c.card(ext, a).await,
             Chan::Slack(c) => c.card(ext, a).await,
             Chan::Discord(c) => c.card(ext, a).await,
+            Chan::Signal(c) => c.card(ext, a).await,
         }
     }
 
@@ -180,6 +190,7 @@ impl Chan {
             Chan::Telegram(c) => c.listen(self, core, slot).await,
             Chan::Slack(c) => c.listen(self, core, slot).await,
             Chan::Discord(c) => c.listen(self, core, slot).await,
+            Chan::Signal(c) => c.listen(self, core, slot).await,
         }
     }
 }
@@ -479,7 +490,7 @@ pub fn quiet_now(db: &Db, now: chrono::DateTime<chrono::Local>) -> bool {
     if from <= to { (from..to).contains(&t) } else { t >= from || t < to }
 }
 
-/// A file attached to a Slack or Discord message, as the app describes it; `url` is "" when it can't be fetched.
+/// A file attached to a Slack, Discord or Signal message, as the app describes it; `url` is "" when it can't be fetched.
 pub(crate) struct File {
     pub name: String,
     pub mime: String,
@@ -626,7 +637,7 @@ impl Core {
         }
     }
 
-    /// Files with a message (Slack, Discord): photos go to the bot's AI with the text, a voice clip is transcribed, a
+    /// Files with a message (Slack, Discord, Signal): photos go to the bot's AI with the text, a voice clip is transcribed, a
     /// PDF or text file is read, anything else gets the honest "can't read this yet". Only the paired person's files
     /// are fetched; `get` downloads one from the app's own file host.
     #[allow(clippy::too_many_arguments)]
@@ -1800,6 +1811,9 @@ pub async fn serve(db: Db, bot: i64, provider: Arc<Provider>, channels: Channels
     }
     if let Some(t) = channels.discord {
         chans.push(Chan::Discord(Discord::new(&t)?));
+    }
+    if let Some((api, number)) = channels.signal {
+        chans.push(Chan::Signal(Signal::new(&api, &number)?));
     }
     // Started again after a crash: what happened stays on show.
     let crashed = status.lock().unwrap_or_else(|e| e.into_inner()).error.take();

@@ -52,6 +52,8 @@ What's shared and what isn't:
   with its next message, opening with a short "where we left off" quoted from Mimir's log. Each reply then re-sends
   less, and anything outside the bot read earlier stops counting (unless it's in the quoted part). Set the hours, or 0
   for never, under **Settings → Limits**.
+- **Signal**, through signal-cli-rest-api and a number of the bot's own: direct chats, with approval cards and
+  questions as numbered lists you answer with a number. Setup: [Connect](connect.md#signal).
 
 ### What a reply did, from the log
 

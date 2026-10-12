@@ -1,5 +1,5 @@
 //! Bot replies are Markdown; each messaging app wants its own dialect.
-//! Telegram → HTML (parse_mode=HTML), Slack → mrkdwn. Discord speaks Markdown already.
+//! Telegram → HTML (parse_mode=HTML), Slack → mrkdwn, Signal → plain text. Discord speaks Markdown already.
 //! Covers what chat models write: paragraphs, lists, headings, quotes, code, bold/italic, links.
 
 #[derive(Debug, PartialEq)]
@@ -245,9 +245,51 @@ pub fn slack(md: &str) -> String {
         .join("\n\n")
 }
 
+// ---------------- Plain text (Signal) ----------------
+
+fn plain_inline(v: &[Inline]) -> String {
+    v.iter()
+        .map(|x| match x {
+            Inline::Text(t) | Inline::Code(t) => t.clone(),
+            Inline::Bold(v) | Inline::Italic(v) => plain_inline(v),
+            Inline::Link(v, url) => match plain_inline(v) {
+                t if t == *url => t,
+                t => format!("{t} ({url})"),
+            },
+        })
+        .collect()
+}
+
+/// Readable text without markup, for apps that show none (Signal): links keep their address.
+pub fn plain(md: &str) -> String {
+    blocks(md)
+        .iter()
+        .map(|b| match b {
+            Block::Para(t) | Block::Heading(t) => plain_inline(&inline(t)),
+            Block::Quote(t) => format!("> {}", plain_inline(&inline(t))),
+            Block::Code(t) => t.clone(),
+            Block::List { ordered, items } => items
+                .iter()
+                .enumerate()
+                .map(|(n, it)| format!("{} {}", if *ordered { format!("{}.", n + 1) } else { "•".into() }, plain_inline(&inline(it))))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn plain_text() {
+        let s = plain(REPLY);
+        assert!(s.starts_with("Today\n\nTwo things:\n\n1. Send Acme the invoice — due <today> & soon."), "{s}");
+        assert!(s.contains("Dr. Lee (https://lee.example/book?a=1&b=2)"), "{s}");
+        assert!(s.contains("• snake_case_names stay as is") && s.ends_with("let x = a < b;"), "{s}");
+    }
 
     const REPLY: &str = "## Today\nTwo things:\n\n1. **Send Acme** the `invoice` — due <today> & soon.\n2. Book the dentist (see [Dr. Lee](https://lee.example/book?a=1&b=2)).\n\n- snake_case_names stay *as is*\n\n> remember the umbrella\n\n```\nlet x = a < b;\n```";
 
