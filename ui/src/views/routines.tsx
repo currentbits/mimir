@@ -1,6 +1,6 @@
 import { useContext, useState } from 'react'
 import { inDesktop, invoke, remoteServer } from '../api'
-import { ahead, fullDay, fullTime, IDLE, schedule, tok, usd } from '../format'
+import { ahead, fullDay, fullTime, IDLE, schedule, tok, untilText, usd } from '../format'
 import { ask, Avatar, Empty, Icon, Segmented, Switch } from '../ui'
 import { Paused, pausedText } from './chat'
 import { RUN_DOT, skillSlug, useLoad, Bots, when, RehearsalResult } from '../shared'
@@ -66,7 +66,11 @@ function toCron(w: When): string {
     : w.mode === 'hours' ? `0 */${w.hours} * * *` : w.mode === 'mail' ? (w.rule.trim() ? `mail:${w.rule.trim()}` : '') : w.mode === 'webhook' ? 'webhook' : w.cron
 }
 
-type RoutineDraft = { prompt: string; botId: number; quiet: boolean; when: When; delivery: Delivery; watch: string; urgent: string; firstOnly?: boolean }
+type RoutineDraft = { prompt: string; botId: number; quiet: boolean; when: When; delivery: Delivery; watch: string; urgent: string; firstOnly?: boolean; until: string }
+
+/** A date input's day as the routine's end (through that day), and back; '' and 0 are none. */
+const endOf = (day: string) => day ? Math.floor(new Date(`${day}T23:59:59`).getTime() / 1000) : 0
+const dayOf = (ts?: number) => { if (!ts) return ''; const d = new Date(ts * 1000); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` }
 
 function RoutineForm({ draft, setDraft, bots, onCancel, onSave, inline, skills = [] }: {
   draft: RoutineDraft; setDraft: (d: RoutineDraft) => void; bots: Bot[]; onCancel: () => void; onSave: () => void; inline?: boolean; skills?: Skill[]
@@ -116,6 +120,10 @@ function RoutineForm({ draft, setDraft, bots, onCancel, onSave, inline, skills =
         {w.mode === 'webhook' && <span className="hint">Runs each time its address on your Mimir server is called, with what was sent. After saving, the routine shows the address and its secret.</span>}
         {w.mode === 'custom' && <span className="hint">{readable !== cron ? `Runs: ${readable}` : 'Cron format: minute hour day-of-month month weekday, e.g. 30 8 * * Mon-Fri; or calendar:60:outside for an hour before each meeting with someone outside'}</span>}
       </div>
+      <label className="field-label"><span>Until (optional)</span>
+        <input className="input" type="date" style={{ width: 180 }} value={draft.until} min={dayOf(Date.now() / 1000)} onChange={e => setDraft({ ...draft, until: e.target.value })} />
+        <span className="hint">Its last run is the last one on or before that day; then it’s gone.</span>
+      </label>
       <div className="quiet-row">
         <Switch label="Quiet" checked={draft.quiet} onChange={quiet => setDraft({ ...draft, quiet })} />
         <div><b>Quiet</b><span>Read-only, and it only messages you when something needs your attention.</span></div>
@@ -179,16 +187,21 @@ export function RoutinesView({ chatId, bots }: { chatId: number; bots: Bot[] }) 
   const deliver = (id: number, delivery: Delivery) => invoke('set_delivery', { chatId, id, delivery })
   const watch = (id: number, w: string) => invoke('set_watch', { chatId, id, watch: w.trim() })
   const urgent = (id: number, rule: string) => invoke('set_urgent', { chatId, id, rule })
-  const update = (r: Routine, patch: { cron?: string; prompt?: string; quiet?: boolean; paused?: boolean; delivery?: Delivery; watch?: string; urgent?: string }) =>
-    invoke('update_routine', { chatId, id: r.id, cron: r.cron, prompt: r.prompt, quiet: r.quiet, paused: r.paused, ...patch })
+  const ends = (id: number, day: string) => invoke('set_ends', { chatId, id, ends: endOf(day) })
+  const update = (r: Routine, patch: { cron?: string; prompt?: string; quiet?: boolean; paused?: boolean; delivery?: Delivery; watch?: string; urgent?: string; until?: string }) =>
+    // The end first, so a new schedule is checked against the new end.
+    (patch.until !== undefined && patch.until !== dayOf(r.ends) ? ends(r.id, patch.until) : Promise.resolve(null))
+      .then(() => invoke('update_routine', { chatId, id: r.id, cron: r.cron, prompt: r.prompt, quiet: r.quiet, paused: r.paused, ...patch }))
       .then(() => patch.watch !== undefined && patch.watch.trim() !== (r.watch ?? '') ? watch(r.id, patch.watch) : null)
       .then(() => patch.delivery && patch.delivery !== r.delivery ? deliver(r.id, patch.delivery) : null)
       .then(() => patch.urgent !== undefined && patch.urgent.trim() !== (r.urgent ?? '') ? urgent(r.id, patch.urgent) : null)
       .then(() => { setErr(null); setEditing(null); rows.reload() }, e => setErr(String(e)))
-  const start = (cron: string, prompt: string, quiet: boolean, w = '') => { setErr(null); setDraft({ prompt, quiet, botId: bots[0]?.id ?? 1, when: toWhen(cron), delivery: 'now', watch: w, urgent: '', firstOnly: false }) }
+  const start = (cron: string, prompt: string, quiet: boolean, w = '') => { setErr(null); setDraft({ prompt, quiet, botId: bots[0]?.id ?? 1, when: toWhen(cron), delivery: 'now', watch: w, urgent: '', firstOnly: false, until: '' }) }
   const add = () => draft && invoke<Routine>('add_routine', { chatId, botId: draft.botId, cron: toCron(draft.when), prompt: draft.prompt, quiet: draft.quiet, firstOnly: draft.firstOnly })
     .then(async r => { if (draft.quiet && draft.watch.trim()) await watch(r.id, draft.watch); return r })
     .then(async r => { if (draft.urgent.trim()) await urgent(r.id, draft.urgent); return r })
+    // ponytail: a bad end leaves the routine made without one; the error says why, and Edit sets it
+    .then(async r => { if (draft.until) await ends(r.id, draft.until); return r })
     .then(r => draft.delivery !== 'now' ? deliver(r.id, draft.delivery) : null)
     .then(() => { setDraft(null); setErr(null); rows.reload() }, e => setErr(String(e)))
   return (
@@ -207,13 +220,13 @@ export function RoutinesView({ chatId, bots }: { chatId: number; bots: Bot[] }) 
               const held = pausedOf(r.bot_id)
               if (editing?.id === r.id) return (
                 <RoutineForm key={r.id} inline skills={skillRows.data ?? []} draft={editing.draft} setDraft={d => setEditing({ id: r.id, draft: d })} bots={bots} onCancel={() => setEditing(null)}
-                  onSave={() => update(r, { cron: toCron(editing.draft.when), prompt: editing.draft.prompt, quiet: editing.draft.quiet, delivery: editing.draft.delivery, watch: editing.draft.quiet ? editing.draft.watch : '', urgent: editing.draft.urgent })} />
+                  onSave={() => update(r, { cron: toCron(editing.draft.when), prompt: editing.draft.prompt, quiet: editing.draft.quiet, delivery: editing.draft.delivery, watch: editing.draft.quiet ? editing.draft.watch : '', urgent: editing.draft.urgent, until: editing.draft.until })} />
               )
               return (
                 <div className={'routine' + (r.paused || held !== undefined ? ' paused' : '')} key={r.id}>
                   <span className={'ri' + (r.quiet ? ' quiet' : '')}><Icon name={r.quiet ? 'moon' : 'clock'} /></span>
                   <div>
-                    <div className="rt">{when(r)}{r.quiet && <span className="badge pending" title="Read-only; speaks up only when something needs your attention">Quiet</span>}{(r.paused || held !== undefined) && <span className="badge">Paused</span>}{r.delivery === 'digest' && <span className="badge" title="Collected into your daily digest">In digest</span>}{r.delivery === 'log' && <span className="badge" title="Not sent; see Activity">Log only</span>}{r.delivery === 'card' && <span className="badge" title="Updates a card pinned at the top of the chat; nothing is sent">On a card</span>}{r.urgent && <span className="badge" title={`Comes through right away if: ${r.urgent}`}>Urgent if…</span>}{r.quiet && r.watch && <span className="badge" title="Mimir looks first and only runs the AI when this changed">Watching {r.watch === 'mail' ? 'mail' : (() => { try { return new URL(r.watch).host } catch { return r.watch } })()}</span>}</div>
+                    <div className="rt">{when(r)}{r.followup && <span className="badge" title="The bot booked this on its own, to check back. Delete it to cancel.">Follow-up</span>}{!!r.ends && <span className="badge" title="Its last run is the last one before this; then it’s gone">Until {untilText(r.ends)}</span>}{r.quiet && <span className="badge pending" title="Read-only; speaks up only when something needs your attention">Quiet</span>}{(r.paused || held !== undefined) && <span className="badge">Paused</span>}{r.delivery === 'digest' && <span className="badge" title="Collected into your daily digest">In digest</span>}{r.delivery === 'log' && <span className="badge" title="Not sent; see Activity">Log only</span>}{r.delivery === 'card' && <span className="badge" title="Updates a card pinned at the top of the chat; nothing is sent">On a card</span>}{r.urgent && <span className="badge" title={`Comes through right away if: ${r.urgent}`}>Urgent if…</span>}{r.quiet && r.watch && <span className="badge" title="Mimir looks first and only runs the AI when this changed">Watching {r.watch === 'mail' ? 'mail' : (() => { try { return new URL(r.watch).host } catch { return r.watch } })()}</span>}</div>
                     <div className="rp selectable">{r.prompt}</div>
                     <div className="rm"><Avatar id={b.id} name={b.name} size={16} still /><span>{b.name}</span><span>·</span><span>{r.paused ? 'Won’t run until you turn it back on' : held !== undefined ? `${pausedText(held)} with ${b.name}; ${r.once ? 'it runs once then' : 'runs in between are skipped, not caught up'}` : r.next_fire >= IDLE ? `${r.cron === 'webhook' ? 'Waits for a call' : r.cron.startsWith('mail:') ? 'Waits for a matching email' : 'No matching event on the calendar this week'}${r.once ? ', then it’s gone' : ''}` : `${r.once ? 'Runs' : 'Next run'} ${ahead(r.next_fire)}${r.once ? ', then it’s gone' : ''}`}</span></div>
                     {r.cron === 'webhook' && <WebhookAddress chatId={chatId} id={r.id} />}
@@ -229,7 +242,7 @@ export function RoutinesView({ chatId, bots }: { chatId: number; bots: Bot[] }) 
                     <button className="btn btn-ghost btn-sm" disabled={rehearsal?.id === r.id && !rehearsal.r} title="Run it once without sending or changing anything: see what it would do"
                       onClick={() => rehearse(r.id)}>Rehearse</button>
                     {/* A one-off has no schedule to edit: change its words by asking the bot, or delete it. */}
-                    {!r.once && <button className="btn btn-ghost btn-sm" onClick={() => setEditing({ id: r.id, draft: { prompt: r.prompt, quiet: r.quiet, botId: r.bot_id, when: toWhen(r.cron), delivery: r.delivery ?? 'now', watch: r.watch ?? '', urgent: r.urgent ?? '' } })}>Edit</button>}
+                    {!r.once && <button className="btn btn-ghost btn-sm" onClick={() => setEditing({ id: r.id, draft: { prompt: r.prompt, quiet: r.quiet, botId: r.bot_id, when: toWhen(r.cron), delivery: r.delivery ?? 'now', watch: r.watch ?? '', urgent: r.urgent ?? '', until: dayOf(r.ends) } })}>Edit</button>}
                     <button className="btn btn-ghost btn-danger btn-sm icon-btn" title="Delete" aria-label="Delete routine" onClick={() => ask('Delete this routine?', 'Delete', true).then(ok => { if (ok) void invoke('delete_routine', { chatId, id: r.id }).then(rows.reload, e => setErr(String(e))) })}><Icon name="trash" size={14} /></button>
                   </div>
                 </div>
