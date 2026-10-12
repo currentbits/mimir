@@ -7,6 +7,9 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 - **Replies survive a crash, an update or a restart:** a reply, a routine's result or a note for your decisions chat
   is kept until Telegram, Slack or Discord has it. If Mimir stops before then, it sends it when it starts again. One
   that didn't go through is tried again for a while. A routine's run shows *waiting to send* until it's sent.
+- **Signal:** a bot can be on Signal too, with a number of its own, through signal-cli-rest-api. Text, photos, voice
+  notes and files work both ways; approval cards and a bot's questions come as a numbered list you answer with the
+  number. Direct chats only. Setup is under [Connect](docs/connect.md#signal).
 - **Malware check for tool servers:** a tool server that downloads its package (`npx`, `uvx`…) is looked up on
   OSV.dev's list of malicious packages first, and Mimir refuses to start it if it's there, saying which advisory.
 - **Check everything:** `mimir doctor` (and Settings → Your data → *Check everything*) checks each bot's AI sign-in,
@@ -15,6 +18,14 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 - **Each bot has its own sign-ins on the computer:** a site you sign in to for one bot (when it asks you to take over)
   is signed in for that bot only. **Sign out everywhere** on a bot's page clears its sign-ins. Sign-ins from before
   go to the first bot that uses the computer after the update.
+- **Loop breaker:** a bot that keeps making the same call (the 3rd time in a row, the 5th for just looking) stops and
+  asks you whether to go on, instead of burning time and money. Routines ask in Needs you.
+
+### Routines
+- **Follow-ups the bot books itself:** "I'll check back Friday whether they replied" becomes a one-off follow-up, said
+  in the reply and shown in the Routines tab, where you delete it to cancel. It counts like any routine.
+- **Routines that end:** "every morning until the 30th" or "for two weeks": an optional end, shown on the routine, after
+  which it's gone.
 
 ## 0.2.0
 

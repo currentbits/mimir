@@ -63,7 +63,7 @@ export function RehearsalResult({ r, onClose }: { r: Rehearsed; onClose: () => v
 }
 
 /** When a routine runs, in words: its schedule, or the one time a one-off (a reminder) runs. */
-export const when = (r: Routine) => r.once && !r.cron ? `Once · ${fullTime(r.next_fire)}` : schedule(r.cron)
+export const when = (r: Routine) => r.once && !r.cron ? `${r.followup ? 'Follow-up' : 'Once'} · ${fullTime(r.next_fire)}` : schedule(r.cron)
 
 export const RUN_DOT: Record<Run['status'], string> = { ok: 'live', error: 'err', missed: 'missed', running: 'wait', unchanged: 'same' }
 
@@ -80,7 +80,7 @@ export const SECRETS_AT = inDesktop && !remoteServer() ? keystore : "your server
 
 export const CHANNEL: Record<string, { name: string; icon: string }> = {
   telegram: { name: 'Telegram', icon: 'telegram' }, slack: { name: 'Slack', icon: 'slack' },
-  discord: { name: 'Discord', icon: 'discord' }, household: { name: 'Shared with your household', icon: 'home' }, local: { name: 'Built-in chat', icon: inDesktop && !remoteServer() ? 'laptop' : 'globe' },
+  discord: { name: 'Discord', icon: 'discord' }, signal: { name: 'Signal', icon: 'signal' }, household: { name: 'Shared with your household', icon: 'home' }, local: { name: 'Built-in chat', icon: inDesktop && !remoteServer() ? 'laptop' : 'globe' },
 }
 
 export const online = (s?: Status) => s?.channels.filter(c => c.connected) ?? []

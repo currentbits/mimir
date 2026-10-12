@@ -10,6 +10,15 @@ losing it. Schedules are in your local time. A routine a bot creates runs at mos
 becomes a routine that runs once, at that time, and is then gone (the Routines tab shows it as *Once · Fri 16 Oct
 09:00*). It can be paused or deleted like any routine.
 
+**Follow-ups the bot books itself.** When a bot says it'll check back ("I'll look Friday whether they replied"), it
+books that as a one-off follow-up and says when in its reply. The chip under the reply opens it, and the Routines tab
+shows it as *Follow-up · Fri 16 Oct 09:00*; delete it to cancel. Follow-ups count like any routine: toward the 25 a
+chat holds, and toward the daily caps.
+
+**Routines that end.** "Every morning until the 30th" or "for two weeks" sets an end (*Until* in the Routines tab, or
+the bot sets it). Its last run is the last one on or before that day, and then it's gone. If it couldn't run near the
+end (Mimir wasn't running, or it was paused), it's removed 15 minutes after the end instead of running late.
+
 **Reminders for someone else.** "Remind Sam at 6 to take the bins out" goes to Sam's own chat, if Sam is in your
 [household](bots-and-chats.md#the-household-and-family-groups) (matched by the name of their chat, first name is
 enough). The first time for each person you're asked (its own kind of approval, never "always"); after that it's set up

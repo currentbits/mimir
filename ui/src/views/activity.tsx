@@ -14,7 +14,7 @@ export const RUN_TITLE: Record<Run['trigger'], string> = { message: 'Reply', rou
 
 /** "Quiet check · Weekdays at 8:30 AM"; a deleted routine keeps its number. */
 const runTitle = (r: Run, routine?: Routine) =>
-  r.trigger !== 'routine' ? RUN_TITLE[r.trigger] : routine ? `${routine.quiet ? 'Quiet check' : routine.once ? 'One-off' : 'Routine'} · ${when(routine)}` : `Routine #${r.routine_id}`
+  r.trigger !== 'routine' ? RUN_TITLE[r.trigger] : routine ? `${routine.quiet ? 'Quiet check' : routine.followup ? 'Follow-up' : routine.once ? 'One-off' : 'Routine'} · ${when(routine)}` : `Routine #${r.routine_id}`
 
 export function ActivityView({ chatId }: { chatId: number }) {
   const runs = useLoad(() => invoke<Run[]>('runs', { chatId }), [chatId], 3000)
@@ -103,7 +103,7 @@ function RunDetail({ run }: { run: Run }) {
         <ol className="timeline">
           {items.map(c => (
             <li key={c.id} className={c.ok ? 'ok' : 'failed'}>
-              <div className="tl-sum">{c.summary}{c.decision !== 'allow' && <span className={'badge ' + (c.decision === 'ask' ? 'pending' : 'danger')}>{c.decision === 'ask' ? 'Asked you' : 'Blocked'}</span>}</div>
+              <div className="tl-sum">{c.summary}{c.decision !== 'allow' && <span className={'badge ' + (c.decision === 'ask' || c.decision === 'loop' ? 'pending' : 'danger')}>{c.decision === 'ask' || c.decision === 'loop' ? 'Asked you' : 'Blocked'}</span>}</div>
               <div className="tl-res">{c.result}</div>
             </li>
           ))}

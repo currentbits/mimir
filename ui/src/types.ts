@@ -1,10 +1,10 @@
-export type ChannelStatus = { kind: 'telegram' | 'slack' | 'discord'; connected: boolean; handle: string | null; error: string | null }
+export type ChannelStatus = { kind: 'telegram' | 'slack' | 'discord' | 'signal'; connected: boolean; handle: string | null; error: string | null }
 
 export type Status = { bot_id: number; provider: string; pair_code: string | null; channels: ChannelStatus[]; error: string | null }
 
 export type Bot = {
   id: number; name: string; persona: string; provider: string; model: string; base_url: string; tools: string
-  has_telegram_token: boolean; has_slack: boolean; has_discord: boolean
+  has_telegram_token: boolean; has_slack: boolean; has_discord: boolean; has_signal: boolean
   /** Its creature, as you chose it (JSON of Look); empty = the one its id gives it. */
   look?: string
 }
@@ -17,7 +17,7 @@ export type Kind = 'convention' | 'knowledge' | 'task'
 
 export type Delivery = 'now' | 'digest' | 'log' | 'card'
 
-export type Routine = { id: number; bot_id: number; quiet: boolean; paused: boolean; chat_id: number; cron: string; prompt: string; next_fire: number; delivery: Delivery; once?: boolean; watch?: string; urgent?: string }
+export type Routine = { id: number; bot_id: number; quiet: boolean; paused: boolean; chat_id: number; cron: string; prompt: string; next_fire: number; delivery: Delivery; once?: boolean; watch?: string; urgent?: string; ends?: number; followup?: boolean }
 
 export type Tab = 'chat' | 'memory' | 'skills' | 'routines' | 'activity'
 
@@ -30,7 +30,7 @@ export type Run = {
   delivered?: string | null; repeats?: number; cache_read?: number; estimated?: boolean
 }
 
-export type Approval = { id: number; bot_id: number; chat_id: number; tool: string; summary: string; created_at: number; expires_at: number; kind?: 'rule' | 'guarded' | 'login' | 'plan' | 'bot' | 'send' | 'takeover' | 'remind' | 'unasked'; site?: string | null; parked?: boolean; allowed_before?: number }
+export type Approval = { id: number; bot_id: number; chat_id: number; tool: string; summary: string; created_at: number; expires_at: number; kind?: 'rule' | 'guarded' | 'login' | 'plan' | 'bot' | 'send' | 'takeover' | 'remind' | 'unasked' | 'loop'; site?: string | null; parked?: boolean; allowed_before?: number }
 
 export type Busy = { bot_id: number; chat_id: number; trigger: string; step: string | null }
 

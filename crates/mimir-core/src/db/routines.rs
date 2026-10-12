@@ -60,6 +60,12 @@ pub struct Routine {
     /// the app, never by a bot, so nothing the bot read can widen it.
     #[serde(default)]
     pub urgent: String,
+    /// A repeating routine's end (0 = none): its last run is the last slot before it, then it's gone.
+    #[serde(default)]
+    pub ends: i64,
+    /// A one-off the bot booked on its own ("I'll check back Friday"), not one the person asked for.
+    #[serde(default)]
+    pub followup: bool,
 }
 
 /// Routines waiting: until a usage limit resets, or a daily cap's day is over. `why` finishes "Missed 3 runs, …: ".
@@ -136,7 +142,7 @@ impl Db {
             "INSERT INTO routines(bot_id, chat_id, cron, prompt, next_fire, quiet) VALUES (?1,?2,?3,?4,?5,?6)",
             params![bot, chat, cron.trim(), prompt.trim(), next, quiet],
         )?;
-        Ok(Routine { id: c.last_insert_rowid(), bot_id: bot, chat_id: chat, cron: cron.trim().into(), prompt: prompt.trim().into(), next_fire: next, quiet, paused: false, delivery: "now".into(), tainted: false, once: false, watch: String::new(), retries: 0, urgent: String::new() })
+        Ok(Routine { id: c.last_insert_rowid(), bot_id: bot, chat_id: chat, cron: cron.trim().into(), prompt: prompt.trim().into(), next_fire: next, quiet, paused: false, delivery: "now".into(), tainted: false, once: false, watch: String::new(), retries: 0, urgent: String::new(), ends: 0, followup: false })
     }
 
     /// A one-off at `at` (unix seconds): a reminder, or a task for later. It's deleted once it has run.
@@ -152,7 +158,7 @@ impl Db {
             "INSERT INTO routines(bot_id, chat_id, cron, prompt, next_fire, quiet, once) VALUES (?1,?2,'',?3,?4,?5,1)",
             params![bot, chat, prompt.trim(), at, quiet],
         )?;
-        Ok(Routine { id: c.last_insert_rowid(), bot_id: bot, chat_id: chat, cron: String::new(), prompt: prompt.trim().into(), next_fire: at, quiet, paused: false, delivery: "now".into(), tainted: false, once: true, watch: String::new(), retries: 0, urgent: String::new() })
+        Ok(Routine { id: c.last_insert_rowid(), bot_id: bot, chat_id: chat, cron: String::new(), prompt: prompt.trim().into(), next_fire: at, quiet, paused: false, delivery: "now".into(), tainted: false, once: true, watch: String::new(), retries: 0, urgent: String::new(), ends: 0, followup: false })
     }
 
     /// A routine a bot made after reading outside content: its prompt may carry someone else's words.
@@ -163,7 +169,7 @@ impl Db {
 
     fn routines_where(&self, sql: &str, p: impl rusqlite::Params) -> Result<Vec<Routine>> {
         let c = self.c();
-        let mut st = c.prepare(&format!("SELECT id, chat_id, cron, prompt, next_fire, bot_id, quiet, paused, delivery, tainted, once, watch, retries, urgent FROM routines WHERE {sql} ORDER BY id"))?;
+        let mut st = c.prepare(&format!("SELECT id, chat_id, cron, prompt, next_fire, bot_id, quiet, paused, delivery, tainted, once, watch, retries, urgent, ends, followup FROM routines WHERE {sql} ORDER BY id"))?;
         let v = st
             .query_map(p, |r| {
                 Ok(Routine {
@@ -181,6 +187,8 @@ impl Db {
                     watch: r.get(11)?,
                     retries: r.get(12)?,
                     urgent: r.get(13)?,
+                    ends: r.get(14)?,
+                    followup: r.get(15)?,
                 })
             })?
             .collect::<Result<_, _>>()?;
@@ -191,8 +199,12 @@ impl Db {
         self.routines_where("chat_id = ?1", [chat])
     }
 
-    /// A bot's routines that are due.
+    /// A bot's routines that are due. Ones past their end (by more than a late run's grace) are removed first: they
+    /// don't run late after it.
     pub fn due(&self, bot: i64, t: i64) -> Result<Vec<Routine>> {
+        for r in self.routines_where("bot_id = ?1 AND ends > 0 AND ends + ?3 <= ?2", params![bot, t, MISSED_AFTER])? {
+            self.routine_delete(r.chat_id, r.id)?;
+        }
         self.routines_where("bot_id = ?1 AND next_fire <= ?2 AND paused = 0", [bot, t])
     }
 
@@ -208,6 +220,10 @@ impl Db {
         }
         let next = next_fire(cron, now())?;
         self.calendar_private(chat, cron)?;
+        let ends: i64 = self.c().query_row("SELECT ends FROM routines WHERE id=?1", [id], |r| r.get(0)).optional()?.unwrap_or(0);
+        if !paused && ends > 0 && next < IDLE && next > ends {
+            bail!("on that schedule it wouldn't run again before it ends; change or clear its end first");
+        }
         Ok(self.c().execute(
             "UPDATE routines SET cron=?3, prompt=?4, quiet=?5, paused=?6, next_fire=?7 WHERE id=?1 AND chat_id=?2",
             params![id, chat, cron.trim(), prompt.trim(), quiet, paused, next],
@@ -278,6 +294,26 @@ impl Db {
         Ok(self.c().execute("UPDATE routines SET delivery=?3 WHERE id=?1 AND chat_id=?2", params![id, chat, delivery])? > 0)
     }
 
+    /// When a repeating routine ends (unix seconds; 0 = never). It must still run at least once before then.
+    pub fn routine_set_ends(&self, chat: i64, id: i64, ends: i64) -> Result<bool> {
+        let Some(r) = self.routine(id)?.filter(|r| r.chat_id == chat) else { return Ok(false) };
+        if ends != 0 {
+            if r.once {
+                bail!("a one-off has no end: it runs once");
+            }
+            if ends <= now() || (r.next_fire < IDLE && r.next_fire > ends) {
+                bail!("it wouldn't run again before that end");
+            }
+        }
+        Ok(self.c().execute("UPDATE routines SET ends=?3 WHERE id=?1 AND chat_id=?2", params![id, chat, ends])? > 0)
+    }
+
+    /// A one-off the bot booked on its own, to check back.
+    pub fn routine_set_followup(&self, id: i64) -> Result<()> {
+        self.c().execute("UPDATE routines SET followup=1 WHERE id=?1", [id])?;
+        Ok(())
+    }
+
     /// The person's "come through right away if …" ("" = never): one line, no angle brackets (it goes into the prompt).
     pub fn routine_set_urgent(&self, chat: i64, id: i64, rule: &str) -> Result<bool> {
         let rule = rule.split_whitespace().collect::<Vec<_>>().join(" ").replace(['<', '>'], "");
@@ -339,11 +375,13 @@ impl Db {
         Ok(())
     }
 
-    /// A routine's run is over and won't be tried again: a one-off is gone. When it worked, its earlier failures leave
-    /// Needs you (it healed), and the count of tries starts over.
+    /// A routine's run is over and won't be tried again: a one-off is gone, and so is one whose next slot is past its
+    /// end. When it worked, its earlier failures leave Needs you (it healed), and the count of tries starts over.
     pub fn routine_done(&self, r: &Routine, worked: bool) -> Result<()> {
         let c = self.c();
-        if r.once {
+        // routine_advance already moved it on; a calendar or event routine waiting (IDLE) goes when its end is past.
+        let ended = c.query_row("SELECT ends > 0 AND next_fire > ends AND next_fire < ?2 FROM routines WHERE id=?1", [r.id, IDLE], |x| x.get(0)).optional()?.unwrap_or(false);
+        if r.once || ended {
             c.execute("DELETE FROM routines WHERE id=?1", [r.id])?;
             c.execute("DELETE FROM routine_events WHERE routine_id=?1", [r.id])?;
             c.execute("DELETE FROM settings WHERE key=?1", [format!("webhook:{}", r.id)])?;

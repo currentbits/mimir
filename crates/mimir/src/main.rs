@@ -11,7 +11,7 @@ USAGE:
   mimir server [--listen 127.0.0.1:8080]   self-hosted mode: all bots 24/7 + web UI + API
   mimir admin-token [--new] print the server's admin token (--new replaces it; restart the server)
   mimir computer [--listen 0.0.0.0:7300]   the bots' computer as its own service (docker compose)
-  mimir serve               run one bot from env vars (no UI) on Telegram/Slack/Discord
+  mimir serve               run one bot from env vars (no UI) on Telegram/Slack/Discord/Signal
   mimir chat <message>      one local turn as chat 0 (no Telegram needed)
   mimir mcp --chat <id>     MCP stdio server (spawned by `claude -p`)
   mimir transcribe <file>   speech to text for a recording (whisper.cpp here, or your OpenAI-compatible key)
@@ -24,6 +24,8 @@ ENV:
   TELEGRAM_BOT_TOKEN         from @BotFather (serve)
   SLACK_BOT_TOKEN, SLACK_APP_TOKEN   xoxb-… and xapp-… (Socket Mode) (serve)
   DISCORD_BOT_TOKEN          from the Discord Developer Portal (serve)
+  SIGNAL_NUMBER              the bot's Signal number, linked in signal-cli-rest-api (serve)
+  MIMIR_SIGNAL_API           signal-cli-rest-api's address (default http://127.0.0.1:8081)
   MIMIR_PROVIDER            claude (default, your `claude` login) | codex (your ChatGPT login)
                              | grok (your SuperGrok login via Grok Build) | openrouter | xai (Grok API key)
                              | local (Ollama / LM Studio) | openai
@@ -143,9 +145,10 @@ async fn serve(db: Db, home: PathBuf) -> Result<()> {
         telegram: var("TELEGRAM_BOT_TOKEN"),
         slack: var("SLACK_BOT_TOKEN").zip(var("SLACK_APP_TOKEN")),
         discord: var("DISCORD_BOT_TOKEN"),
+        signal: var("SIGNAL_NUMBER").map(|n| (String::new(), n)),
     };
-    if channels.telegram.is_none() && channels.slack.is_none() && channels.discord.is_none() {
-        eprintln!("no channel configured (TELEGRAM_BOT_TOKEN / SLACK_BOT_TOKEN+SLACK_APP_TOKEN / DISCORD_BOT_TOKEN); running routines only");
+    if channels.telegram.is_none() && channels.slack.is_none() && channels.discord.is_none() && channels.signal.is_none() {
+        eprintln!("no channel configured (TELEGRAM_BOT_TOKEN / SLACK_BOT_TOKEN+SLACK_APP_TOKEN / DISCORD_BOT_TOKEN / SIGNAL_NUMBER); running routines only");
     }
     db.close_interrupted()?;
     let provider = Arc::new(Provider::from_env(home)?);

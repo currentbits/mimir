@@ -74,7 +74,9 @@ const TG: &str = "telegram_bot_token";
 const SLACK_BOT: &str = "slack_bot_token";
 const SLACK_APP: &str = "slack_app_token";
 const DISCORD: &str = "discord_bot_token";
-const CHANNEL_SECRETS: [&str; 4] = [TG, SLACK_BOT, SLACK_APP, DISCORD];
+const SIGNAL: &str = "signal_number";
+const SIGNAL_API: &str = "signal_api";
+const CHANNEL_SECRETS: [&str; 6] = [TG, SLACK_BOT, SLACK_APP, DISCORD, SIGNAL, SIGNAL_API];
 /// Chat id of the built-in chat in the app (no messaging app needed).
 pub const LOCAL_CHAT: i64 = 0;
 
@@ -94,7 +96,7 @@ fn key(bot: i64, name: &str) -> String {
 /// A bot's channel tokens from the process's secret store, for code outside a Host (`mimir doctor`).
 pub(crate) fn channels_of(bot: i64) -> runtime::Channels {
     let s = |n| secret_get(&key(bot, n));
-    runtime::Channels { telegram: s(TG), slack: s(SLACK_BOT).zip(s(SLACK_APP)), discord: s(DISCORD) }
+    runtime::Channels { telegram: s(TG), slack: s(SLACK_BOT).zip(s(SLACK_APP)), discord: s(DISCORD), signal: s(SIGNAL).map(|n| (s(SIGNAL_API).unwrap_or_default(), n)) }
 }
 
 struct Live {
@@ -123,6 +125,7 @@ struct BotView {
     has_telegram_token: bool,
     has_slack: bool,
     has_discord: bool,
+    has_signal: bool,
 }
 
 /// Write-only channel secrets: None = keep, "" = remove, else replace.
@@ -133,6 +136,8 @@ struct Secrets {
     slack_bot_token: Option<String>,
     slack_app_token: Option<String>,
     discord_token: Option<String>,
+    signal_number: Option<String>,
+    signal_api: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -247,7 +252,7 @@ impl Host {
 
     fn channels(&self, bot: i64) -> runtime::Channels {
         let s = |n| self.secrets.get(&key(bot, n));
-        runtime::Channels { telegram: s(TG), slack: s(SLACK_BOT).zip(s(SLACK_APP)), discord: s(DISCORD) }
+        runtime::Channels { telegram: s(TG), slack: s(SLACK_BOT).zip(s(SLACK_APP)), discord: s(DISCORD), signal: s(SIGNAL).map(|n| (s(SIGNAL_API).unwrap_or_default(), n)) }
     }
 
     fn provider(&self, bot: i64) -> Result<Provider> {
@@ -384,14 +389,14 @@ impl Host {
                 .into_iter()
                 .map(|b| {
                     let ch = self.channels(b.id);
-                    BotView { has_telegram_token: ch.telegram.is_some(), has_slack: ch.slack.is_some(), has_discord: ch.discord.is_some(), bot: b }
+                    BotView { has_telegram_token: ch.telegram.is_some(), has_slack: ch.slack.is_some(), has_discord: ch.discord.is_some(), has_signal: ch.signal.is_some(), bot: b }
                 })
                 .collect::<Vec<_>>()),
             "save_bot" => {
                 // The UI sends back the bot as `bots` listed it: the channel flags are that list's, not the bot's.
                 let mut bot = a.get("bot").cloned().unwrap_or_default();
                 if let Some(o) = bot.as_object_mut() {
-                    for k in ["has_telegram_token", "has_slack", "has_discord"] {
+                    for k in ["has_telegram_token", "has_slack", "has_discord", "has_signal"] {
                         o.remove(k);
                     }
                 }
@@ -405,7 +410,7 @@ impl Host {
                 }
                 let id = self.db.bot_save(&bot)?;
                 for (name, value) in
-                    [(TG, secrets.telegram_token), (SLACK_BOT, secrets.slack_bot_token), (SLACK_APP, secrets.slack_app_token), (DISCORD, secrets.discord_token)]
+                    [(TG, secrets.telegram_token), (SLACK_BOT, secrets.slack_bot_token), (SLACK_APP, secrets.slack_app_token), (DISCORD, secrets.discord_token), (SIGNAL, secrets.signal_number), (SIGNAL_API, secrets.signal_api)]
                 {
                     if let Some(v) = value {
                         self.secrets.set(&key(id, name), v.trim())?;
@@ -727,6 +732,13 @@ impl Host {
                 let bot = crate::tidy::memory_bot(&self.db).context("no bots")?;
                 ok(crate::tidy::import(&self.db, &self.provider(bot)?, bot, arg(a, "chat_id")?, &arg::<String>(a, "text")?).await?)
             }
+            // Other agents on this computer (Claude Code, Hermes, OpenClaw) and what they have; `import_agent` brings
+            // one in as suggestions, skill proposals and paused routines.
+            "import_sources" => ok(crate::imports::sources()),
+            "import_agent" => {
+                let bot = crate::tidy::memory_bot(&self.db).context("no bots")?;
+                ok(crate::imports::run(&self.db, &self.provider(bot)?, bot, arg(a, "chat_id")?, &arg::<String>(a, "source")?).await?)
+            }
             // Add a memory, or correct one (`supersedes`); history is kept either way.
             "remember" => ok(self.db.store_by(
                 &scope(a)?,
@@ -1027,6 +1039,8 @@ impl Host {
                             watch: String::new(),
                             retries: 0,
                             urgent: String::new(),
+                            ends: 0,
+                            followup: false,
                         }
                     }
                 };
@@ -1102,6 +1116,7 @@ impl Host {
             "reset_watch_noise" => ok(self.db.routine_reset_noise(arg(a, "chat_id")?, arg(a, "id")?)?),
             "set_watch" => ok(self.db.routine_set_watch(arg(a, "chat_id")?, arg(a, "id")?, &arg::<String>(a, "watch")?)?),
             // Only the person sets this (no bot tool does): what the bot read can't widen what comes through.
+            "set_ends" => ok(self.db.routine_set_ends(arg(a, "chat_id")?, arg(a, "id")?, arg(a, "ends")?)?),
             "set_urgent" => ok(self.db.routine_set_urgent(arg(a, "chat_id")?, arg(a, "id")?, &arg::<String>(a, "rule")?)?),
             // Pinned cards: the chat's, and your own edits to them (a tick writes back as yours; bots see it next read).
             "cards" => ok(self.db.cards(arg(a, "chat_id")?)?),

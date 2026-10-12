@@ -216,6 +216,8 @@ static NL: &[(&str, &str)] = &[
     ("You chose: {choice}", "Je koos: {choice}"),
     ("✍️ Type your answer: {question}", "✍️ Typ je antwoord: {question}"),
     ("Type your answer.", "Typ je antwoord."),
+    ("(Reply with a number.)", "(Antwoord met een nummer.)"),
+    ("(Reply with a number. If I've written since, reply to this message with it.)", "(Antwoord met een nummer. Heb ik intussen iets anders gestuurd, beantwoord dan dit bericht met het nummer.)"),
     ("✅ Done", "✅ Klaar"),
     ("⏰ I'll remind you again today at {at}.", "⏰ Ik herinner je er vandaag om {at} weer aan."),
     ("⏰ I'll remind you again tomorrow at {at}.", "⏰ Ik herinner je er morgen om {at} weer aan."),
