@@ -4,8 +4,14 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 
 ## Unreleased
 
+- **Replies survive a crash, an update or a restart:** a reply, a routine's result or a note for your decisions chat
+  is kept until Telegram, Slack or Discord has it. If Mimir stops before then, it sends it when it starts again. One
+  that didn't go through is tried again for a while. A routine's run shows *waiting to send* until it's sent.
 - **Malware check for tool servers:** a tool server that downloads its package (`npx`, `uvx`…) is looked up on
   OSV.dev's list of malicious packages first, and Mimir refuses to start it if it's there, saying which advisory.
+- **Check everything:** `mimir doctor` (and Settings → Your data → *Check everything*) checks each bot's AI sign-in,
+  its Telegram, Slack and Discord connection, your mailboxes, the bots' computer, free disk space, the database and its
+  backups, one line each with what to do. Nothing is spent or sent.
 
 ### Routines
 - **Follow-ups the bot books itself:** "I'll check back Friday whether they replied" becomes a one-off follow-up, said

@@ -12,6 +12,7 @@ pub mod backup;
 pub mod chatgpt;
 pub mod computer;
 pub mod db;
+pub mod doctor;
 
 /// The user's home directory on every OS (Windows has USERPROFILE, not HOME).
 pub fn user_home() -> Option<std::path::PathBuf> {

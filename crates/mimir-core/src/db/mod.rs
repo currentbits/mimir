@@ -17,6 +17,7 @@ mod chats;
 mod meetings;
 mod memory;
 mod messages;
+mod outbox;
 mod routines;
 mod runs;
 mod settings;
@@ -29,6 +30,7 @@ pub use cards::*;
 pub use chats::*;
 pub use memory::*;
 pub use messages::*;
+pub use outbox::*;
 pub use routines::*;
 pub use runs::*;
 pub use skills::*;
@@ -49,7 +51,7 @@ PRAGMA secure_delete=ON;
 
 /// The schema version this build writes (`PRAGMA user_version`). A schema change bumps it and adds a step to
 /// `migrate`; each step runs once per database.
-const VERSION: i64 = 8;
+const VERSION: i64 = 9;
 
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS entries(
@@ -150,7 +152,7 @@ fn user_version(c: &Connection) -> Result<i64> {
 }
 
 /// A database a newer Mimir wrote: refused whole, never half-migrated by an older build.
-fn check_not_newer(c: &Connection) -> Result<()> {
+pub(crate) fn check_not_newer(c: &Connection) -> Result<()> {
     if user_version(c)? > VERSION {
         let by: Option<String> =
             c.query_row("SELECT value FROM settings WHERE key='schema_written_by'", [], |r| r.get(0)).optional().ok().flatten();
@@ -208,6 +210,9 @@ fn migrate(c: &Connection) -> Result<()> {
     }
     if v < 8 {
         migrate_v8(c)?;
+    }
+    if v < 9 {
+        migrate_v9(c)?;
     }
     c.execute(
         "INSERT INTO settings(key, value) VALUES ('schema_written_by', ?1) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -434,8 +439,19 @@ fn migrate_v7(c: &Connection) -> Result<()> {
     Ok(())
 }
 
-/// Version 8: when a repeating routine ends (0 = never), and a one-off the bot booked on its own to check back.
+/// Version 8: messages to chat apps kept until they're sent, so a crash or an update in between doesn't lose them.
 fn migrate_v8(c: &Connection) -> Result<()> {
+    c.execute_batch(
+        "CREATE TABLE IF NOT EXISTS outbox(id INTEGER PRIMARY KEY, bot_id INTEGER NOT NULL, chat_id INTEGER NOT NULL, kind TEXT NOT NULL,
+           ext TEXT NOT NULL, draft TEXT, text TEXT NOT NULL, rows TEXT NOT NULL DEFAULT '[]', files TEXT NOT NULL DEFAULT '[]', run_id INTEGER,
+           created_at INTEGER NOT NULL, claimed_by TEXT, claimed_at INTEGER, tries INTEGER NOT NULL DEFAULT 0, error TEXT);
+         CREATE INDEX IF NOT EXISTS outbox_bot ON outbox(bot_id, id);",
+    )?;
+    Ok(())
+}
+
+/// Version 9: when a repeating routine ends (0 = never), and a one-off the bot booked on its own to check back.
+fn migrate_v9(c: &Connection) -> Result<()> {
     for col in ["ends", "followup"] {
         if !c.prepare(&format!("SELECT 1 FROM pragma_table_info('routines') WHERE name='{col}'"))?.exists([])? {
             c.execute_batch(&format!("ALTER TABLE routines ADD COLUMN {col} INTEGER NOT NULL DEFAULT 0"))?;
