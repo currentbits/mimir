@@ -23,7 +23,10 @@ pub(crate) struct Tg {
 impl Tg {
     pub(crate) fn new(token: &str) -> Result<Self> {
         // MIMIR_TELEGRAM_API: a self-hosted Bot API server (or a test double).
-        let api = std::env::var("MIMIR_TELEGRAM_API").unwrap_or_else(|_| "https://api.telegram.org".into());
+        Self::at(&std::env::var("MIMIR_TELEGRAM_API").unwrap_or_else(|_| "https://api.telegram.org".into()), token)
+    }
+
+    pub(crate) fn at(api: &str, token: &str) -> Result<Self> {
         let api = api.trim_end_matches('/');
         Ok(Tg {
             http: reqwest::Client::builder().timeout(Duration::from_secs(70)).build()?,
