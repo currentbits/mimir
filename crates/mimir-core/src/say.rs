@@ -203,6 +203,7 @@ static NL: &[(&str, &str)] = &[
     ("Try again; if it keeps happening, the details are in Mimir's Needs you list.", "Probeer het opnieuw; blijft het gebeuren, dan staan de details in Mimirs lijst Needs you."),
     ("Routines on this AI account wait", "Routines op dit AI-account wachten"),
     ("This bot's routines wait", "De routines van deze bot wachten"),
+    ("A task I handed to another bot is done: its answer is in the run log.", "Een taak die ik aan een andere bot gaf is klaar: het antwoord staat in het runlogboek."),
     ("⏸ I've hit my AI plan's usage limit. {who} until {at}, when the limit resets; this one runs again then.", "⏸ Ik zit aan de gebruikslimiet van mijn AI-abonnement. {who} tot {at}, als de limiet weer vrij is; deze draait dan opnieuw."),
     // Buttons under a question, a reminder or a routine's result, and what a tap says.
     ("Something else", "Iets anders"),

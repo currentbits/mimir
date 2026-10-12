@@ -193,6 +193,13 @@ own AI account, role, tools and permissions, against your shared memory, and the
 talking to. A "chief of staff" is just a bot whose role says to coordinate. It goes one level deep (no chains), and
 approval cards come from the bot you're talking to. Turn it off per bot with the *Hand tasks to other bots* tool.
 
+A long task doesn't have to hold up the chat: the bot can hand it over to report back later. It tells you it's handed
+over and carries on; the other bot works on its own, and when it's done the bot you were talking to gets its result and
+tells you, in the same chat (Telegram, Slack, Discord or the app). The run log shows the hand-off, the other bot's run
+and the report back together. Handed-over tasks are kept in the database: one not started yet runs after a restart, but
+one Mimir stopped in the middle isn't run again (it may have done half of something), and the bot says it didn't
+finish. A paused bot's handed-over tasks wait until the pause ends. In a rehearsal the bot waits for the answer instead.
+
 ## A bot that makes a bot
 
 Ask a bot for a new one ("make me a bot for SEO on heymimir.app") and it drafts it with `bot_create`: a name and a role

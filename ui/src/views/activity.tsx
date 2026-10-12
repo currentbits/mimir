@@ -10,7 +10,7 @@ type ToolCall = { id: number; tool: string; summary: string; decision: string; o
 
 type Totals = { runs: number; errors: number; tokens_in: number; tokens_out: number; cost_usd: number }
 
-export const RUN_TITLE: Record<Run['trigger'], string> = { message: 'Reply', routine: 'Routine', rehearsal: 'Rehearsal', tidy: 'Memory tidy-up', delegated: 'Task from another bot', import: 'Memory import', know_me: 'Getting to know you', check: 'Checked a suggestion' }
+export const RUN_TITLE: Record<Run['trigger'], string> = { message: 'Reply', routine: 'Routine', rehearsal: 'Rehearsal', tidy: 'Memory tidy-up', delegated: 'Task from another bot', reported: 'Report on a handed-over task', import: 'Memory import', know_me: 'Getting to know you', check: 'Checked a suggestion' }
 
 /** "Quiet check · Weekdays at 8:30 AM"; a deleted routine keeps its number. */
 const runTitle = (r: Run, routine?: Routine) =>

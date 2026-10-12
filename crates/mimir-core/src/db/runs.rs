@@ -49,6 +49,26 @@ pub struct Run {
     pub estimated: bool,
 }
 
+/// A task handed to another bot that reports back later (ask_bot's `later`): pending → running → done → told.
+#[derive(Debug, Clone, Default)]
+pub struct Delegation {
+    pub id: i64,
+    /// The bot that asked, and the bot doing it.
+    pub bot_id: i64,
+    pub to_bot: i64,
+    pub chat_id: i64,
+    pub conv: i64,
+    /// The asking run: the helper's run and the report-back run are linked to it.
+    pub run_id: Option<i64>,
+    pub task: String,
+    pub unattended: bool,
+    /// The asker had read outside content, or the helper did: the report-back turn starts tainted.
+    pub tainted: bool,
+    /// The helper's reply, or why it didn't finish (`failed`).
+    pub reply: Option<String>,
+    pub failed: bool,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ToolCall {
     pub id: i64,
@@ -308,6 +328,53 @@ impl Db {
 
     pub fn run_set_parent(&self, run: i64, parent: i64) -> Result<()> {
         self.c().execute("UPDATE runs SET parent_run=?2 WHERE id=?1", [run, parent])?;
+        Ok(())
+    }
+
+    pub fn delegation_add(&self, d: &Delegation) -> Result<i64> {
+        let c = self.c();
+        c.execute(
+            "INSERT INTO delegations(bot_id, to_bot, chat_id, conv, run_id, task, unattended, tainted, created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+            params![d.bot_id, d.to_bot, d.chat_id, d.conv, d.run_id, d.task, d.unattended, d.tainted, now()],
+        )?;
+        Ok(c.last_insert_rowid())
+    }
+
+    /// The tasks this bot handed over that are at `status`, oldest first.
+    pub fn delegations(&self, bot: i64, status: &str) -> Result<Vec<Delegation>> {
+        let c = self.c();
+        let mut st = c.prepare("SELECT id, bot_id, to_bot, chat_id, conv, run_id, task, unattended, tainted, reply, failed FROM delegations WHERE bot_id=?1 AND status=?2 ORDER BY id")?;
+        let v = st
+            .query_map(params![bot, status], |r| {
+                Ok(Delegation {
+                    id: r.get(0)?,
+                    bot_id: r.get(1)?,
+                    to_bot: r.get(2)?,
+                    chat_id: r.get(3)?,
+                    conv: r.get(4)?,
+                    run_id: r.get(5)?,
+                    task: r.get(6)?,
+                    unattended: r.get(7)?,
+                    tainted: r.get(8)?,
+                    reply: r.get(9)?,
+                    failed: r.get(10)?,
+                })
+            })?
+            .collect::<Result<_, _>>()?;
+        Ok(v)
+    }
+
+    pub fn delegation_status(&self, id: i64, status: &str) -> Result<()> {
+        self.c().execute("UPDATE delegations SET status=?2 WHERE id=?1", params![id, status])?;
+        Ok(())
+    }
+
+    /// The helper finished (or failed): what it said waits for the bot that asked to tell the person.
+    pub fn delegation_done(&self, id: i64, reply: &str, failed: bool, tainted: bool) -> Result<()> {
+        self.c().execute(
+            "UPDATE delegations SET status='done', reply=?2, failed=?3, tainted = tainted OR ?4 WHERE id=?1",
+            params![id, crate::tools::truncate(reply, 8000), failed, tainted],
+        )?;
         Ok(())
     }
 

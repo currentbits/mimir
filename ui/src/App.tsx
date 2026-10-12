@@ -30,7 +30,7 @@ const troubleOf = (s?: Status): string | null =>
 /** A bot at work, as its face: the step a reply is on, else what kind of work it is. */
 const busyMood = (w: Busy): Mood => w.step ? moodOf(w.step, '') : w.trigger === 'tidy' || w.trigger === 'import' || w.trigger === 'know_me' ? 'remembering' : w.trigger === 'teach' ? 'writing' : 'thinking'
 
-const BUSY_KIND: Record<string, string> = { routine: 'Running a routine', delegated: 'On a task for another bot', tidy: 'Tidying memory', check: 'Checking a preference', import: 'Importing memories', know_me: 'Getting to know you', teach: 'Writing a skill' }
+const BUSY_KIND: Record<string, string> = { routine: 'Running a routine', delegated: 'On a task for another bot', reported: 'Reporting back on a task', tidy: 'Tidying memory', check: 'Checking a preference', import: 'Importing memories', know_me: 'Getting to know you', teach: 'Writing a skill' }
 
 const busyLabel = (w: Busy) => w.step ? `${w.step}…` : BUSY_KIND[w.trigger] ?? 'Replying…'
 

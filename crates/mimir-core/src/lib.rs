@@ -198,6 +198,8 @@ pub enum Trigger<'a> {
     Routine(&'a db::Routine),
     /// A task handed over by another bot via ask_bot.
     Delegated { from: &'a str, task: &'a str },
+    /// What another bot found on a task this bot handed it with ask_bot's `later`, to tell the person.
+    Reported { from: &'a str, task: &'a str, reply: &'a str, tainted: bool },
 }
 
 /// One agent turn: bootstrap + recall → provider (with tools) → log.
@@ -218,10 +220,11 @@ pub async fn turn(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) -> R
         Trigger::Message(_) => ("message", None),
         Trigger::Routine(r) => ("routine", Some(r.id)),
         Trigger::Delegated { .. } => ("delegated", None),
+        Trigger::Reported { .. } => ("reported", None),
     };
     let run = ctx.db.run_start(ctx.bot_id, ctx.chat_id, kind, routine_id, &provider.name())?;
-    // A handed-over task arrives carrying the asking run's id: link the two, so the hand-off can be followed.
-    if let (Trigger::Delegated { .. }, Some(parent)) = (&trigger, ctx.run_id) {
+    // A handed-over task (and its report back) arrives carrying the asking run's id: link them, so the hand-off can be followed.
+    if let (Trigger::Delegated { .. } | Trigger::Reported { .. }, Some(parent)) = (&trigger, ctx.run_id) {
         ctx.db.run_set_parent(run, parent)?;
     }
     let mut ctx = ctx.clone().with_run(Some(run));
@@ -234,9 +237,8 @@ pub async fn turn(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) -> R
         ctx.pre_taint();
     }
     // A routine a bot made after reading outside content: its prompt may be someone else's words, every time it runs.
-    if let Trigger::Routine(r) = &trigger
-        && r.tainted
-    {
+    // Likewise a report back from a helper that read some (or was handed a task after the asker did).
+    if matches!(&trigger, Trigger::Routine(r) if r.tainted) || matches!(trigger, Trigger::Reported { tainted: true, .. }) {
         ctx.pre_taint();
     }
     if ctx.stream {
@@ -337,7 +339,7 @@ pub(crate) fn own_part(text: &str) -> &str {
 }
 
 pub(crate) fn own_words(text: &str) -> bool {
-    !text.contains("<document name=") && !text.starts_with("[Scheduled ") && !text.starts_with("[Task from ")
+    !text.contains("<document name=") && !text.starts_with("[Scheduled ") && !text.starts_with("[Task from ") && !text.starts_with("[Report from ")
 }
 
 /// Asking nearly the same thing again (most of the same words) right after a reply: the reply likely missed, in any
@@ -862,6 +864,12 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
         Trigger::Delegated { from, task } => {
             (format!("[Task from {from}, another of the user's bots. Reply with the result; {from} relays it to the user.] {task}"), true, false)
         }
+        // Like a routine's result: a fresh session, landing in the conversation. The task says what it was about.
+        Trigger::Reported { from, task, reply, .. } => (
+            format!("[Report from {from} on the task you handed it earlier: \"{task}\". The person hasn't seen this; tell them what came of it.]\n{reply}"),
+            true,
+            false,
+        ),
         Trigger::Routine(r) => {
             // A routine can just run a skill: its prompt is "/skill-name …".
             let prompt = skill_command(&ctx.db, &scope, ctx.bot_id, &r.prompt).unwrap_or_else(|| r.prompt.clone());
@@ -934,8 +942,8 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
     }
     let mut ctx = ctx.clone();
     ctx.read_only |= quiet;
-    // A routine has nobody watching: anything that would ask waits in the inbox instead.
-    ctx.unattended |= matches!(trigger, Trigger::Routine(_));
+    // A routine (or a report back) has nobody watching: anything that would ask waits in the inbox instead.
+    ctx.unattended |= matches!(trigger, Trigger::Routine(_) | Trigger::Reported { .. });
     let ctx = &ctx;
 
     let bot = ctx.db.bot(ctx.bot_id)?;

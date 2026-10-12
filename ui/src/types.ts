@@ -24,7 +24,7 @@ export type Tab = 'chat' | 'memory' | 'skills' | 'routines' | 'activity'
 export type ComputerStatus = { available: boolean; enabled: boolean; running: boolean }
 
 export type Run = {
-  id: number; bot_id: number; chat_id: number; reply?: string | null; parent_run?: number | null; trigger: 'message' | 'routine' | 'rehearsal' | 'tidy' | 'delegated' | 'import' | 'know_me' | 'check'; routine_id: number | null; provider: string; model: string | null
+  id: number; bot_id: number; chat_id: number; reply?: string | null; parent_run?: number | null; trigger: 'message' | 'routine' | 'rehearsal' | 'tidy' | 'delegated' | 'reported' | 'import' | 'know_me' | 'check'; routine_id: number | null; provider: string; model: string | null
   status: 'running' | 'ok' | 'error' | 'missed' | 'unchanged'; error: string | null; started_at: number; ended_at: number | null
   tokens_in: number; tokens_out: number; cost_usd: number | null; tool_calls: number
   delivered?: string | null; repeats?: number; cache_read?: number; estimated?: boolean
