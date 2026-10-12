@@ -52,7 +52,9 @@ recipient. A new bot gets at most the tools of the bot that made it, and can't m
 in a group (where the reply goes to everyone) or incognito (where nothing may be kept).
 
 **What's learned stays yours to accept.** Bots never change your memory's rules, your permissions, tool grants, saved
-logins or schedules on their own. A memory saved after reading outside content is marked *unconfirmed* and is kept
+logins, or your routines' schedules on their own. A bot may book a follow-up in the chat ("I'll check back Friday"):
+a one-off you see in its reply and in Routines, which asks first after outside content, is marked when made then, and
+counts toward the routine caps. A memory saved after reading outside content is marked *unconfirmed* and is kept
 out of the bots' standing instructions until you confirm it. That quarantine is why saving a new memory after outside
 content is the one change that doesn't ask; replacing an existing memory does, since it would take a confirmed one out
 of the instructions. The mark survives every path back in: a new version of the memory, a tidy-up suggestion drawn
