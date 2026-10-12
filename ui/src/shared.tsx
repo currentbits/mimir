@@ -80,7 +80,7 @@ export const SECRETS_AT = inDesktop && !remoteServer() ? keystore : "your server
 
 export const CHANNEL: Record<string, { name: string; icon: string }> = {
   telegram: { name: 'Telegram', icon: 'telegram' }, slack: { name: 'Slack', icon: 'slack' },
-  discord: { name: 'Discord', icon: 'discord' }, household: { name: 'Shared with your household', icon: 'home' }, local: { name: 'Built-in chat', icon: inDesktop && !remoteServer() ? 'laptop' : 'globe' },
+  discord: { name: 'Discord', icon: 'discord' }, signal: { name: 'Signal', icon: 'signal' }, household: { name: 'Shared with your household', icon: 'home' }, local: { name: 'Built-in chat', icon: inDesktop && !remoteServer() ? 'laptop' : 'globe' },
 }
 
 export const online = (s?: Status) => s?.channels.filter(c => c.connected) ?? []

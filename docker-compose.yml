@@ -23,6 +23,7 @@ services:
       MIMIR_COMPUTER_TOKEN: ${MIMIR_COMPUTER_TOKEN:?put MIMIR_COMPUTER_TOKEN in .env (see the top of this file)}
     #   MIMIR_ADMIN_TOKEN: <24+ characters>     # else one is generated on first run (openssl rand -hex 24)
     #   CLAUDE_CODE_OAUTH_TOKEN: ...             # from `claude setup-token` on any machine
+    #   MIMIR_SIGNAL_API: http://signal:8080     # with the signal service below
     depends_on: [computer]
 
   # The bots' computer (screen + Chromium). Its own user and no /data: a browser exploit from a page a bot visits
@@ -44,6 +45,15 @@ services:
     healthcheck:
       disable: true
 
+  # Optional Signal for the bots (https://heymimir.app/docs/connect/#signal). Link the bot's number once through an SSH
+  # tunnel to port 8081: http://127.0.0.1:8081/v1/qrcodelink?device_name=mimir
+  # signal:
+  #   image: bbernhard/signal-cli-rest-api
+  #   restart: unless-stopped
+  #   environment: {MODE: json-rpc}
+  #   ports: ["127.0.0.1:8081:8080"]
+  #   volumes: [signal-data:/home/.local/share/signal-cli]
+
   # Optional HTTPS with automatic certificates. Point a DNS name at this host and set it below.
   # caddy:
   #   image: caddy:2
@@ -54,4 +64,5 @@ services:
 
 volumes:
   mimir-data:
+  # signal-data:
   # caddy-data:

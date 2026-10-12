@@ -17,8 +17,8 @@ For contributors: how the pieces fit together.
 |---|---|
 | `db/` | SQLite (one file): memories with FTS5 search and versions, bots, chats, messages (FTS5 too, for `chat_search`), routines, runs, tool calls, approvals, rules, suggestions, skills (versions, uses, proposals by kind), meetings. `mod.rs` holds `Db`, opening and migrations; each area (`memory.rs`, `chats.rs`, `routines.rs`…) has its own `impl Db` block |
 | `host` | `Host::call(cmd, args)`: every command the UI sends; starts and stops each bot's runtime; the secret store |
-| `runtime` | Per-bot channel listeners (Telegram, Slack, Discord), the 30 s routine scheduler, approval cards, the daily digest |
-| `telegram`, `slack`, `discord` | The messaging apps (outbound connections, streaming replies) |
+| `runtime` | Per-bot channel listeners (Telegram, Slack, Discord, Signal), the 30 s routine scheduler, approval cards, the daily digest |
+| `telegram`, `slack`, `discord`, `signal` | The messaging apps (outbound connections, streaming replies) |
 | `provider` | AI accounts: starts `claude -p` / `codex exec` / `grok -p`, or calls an OpenAI-compatible API; streams replies |
 | `chatgpt` | Sign in with ChatGPT: OAuth (PKCE, dynamic registration), the plan's tokens, and replies on the Responses API |
 | `oauth` | OAuth sign-in with PKCE for tool servers and Outlook: the browser's return trip (or a pasted address), tokens in the secret store, refreshing |
@@ -134,13 +134,14 @@ and the data folder in a dialog. Installs from before the rename to Mimir (`~/.b
 | `MIMIR_HOME` | Data folder (default `~/.mimir`) |
 | `MIMIR_PROVIDER`, `MIMIR_MODEL` | CLI bot: `claude` (default), `codex`, `grok`, `openrouter`, `xai`, `local`, `openai`; model override |
 | `OPENROUTER_API_KEY`, `XAI_API_KEY`, `OPENAI_API_KEY`, `OPENAI_BASE_URL` | Keys for the CLI bot; `OPENAI_BASE_URL` also points `local` elsewhere (LM Studio: `http://localhost:1234/v1`) |
-| `TELEGRAM_BOT_TOKEN`, `SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN`, `DISCORD_BOT_TOKEN` | Messaging apps for `mimir serve` |
+| `TELEGRAM_BOT_TOKEN`, `SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN`, `DISCORD_BOT_TOKEN`, `SIGNAL_NUMBER` (+ `MIMIR_SIGNAL_API`) | Messaging apps for `mimir serve` |
 | `MIMIR_BOT` | Which bot the CLI acts as (default 1) |
 | `MIMIR_ADMIN_TOKEN` | Server: a fixed admin token, at least 24 characters (else one is generated on first run) |
 | `MIMIR_UI_DIR` | Server: the web UI folder (default `ui/dist` or `/app/ui`) |
 | `MIMIR_COMPUTER`, `MIMIR_COMPUTER_TOKEN` | Server: the bots' computer as a separate service (`computer:7300`, `mimir computer`) and the control channel's secret (24+ characters, on both sides) |
 | `MIMIR_OSV_API` | OSV.dev base URL for the tool servers' malware check (a test fake) |
 | `MIMIR_TELEGRAM_API` | Telegram Bot API base URL (a self-hosted Bot API server, or the test mock) |
+| `MIMIR_SIGNAL_API` | signal-cli-rest-api's address when a bot's page doesn't set one (default `http://127.0.0.1:8080`) |
 | `MIMIR_CHATGPT_AUTH`, `MIMIR_CHATGPT_API` | Sign in with ChatGPT: the sign-in and API base URLs (for the test fake, `scripts/fake-ai.py`) |
 | `MIMIR_CLAUDE_BIN`, `MIMIR_CODEX_BIN`, `MIMIR_GROK_BIN`, `MIMIR_NPX` | Paths to the CLIs, if not on PATH |
 
@@ -197,6 +198,8 @@ Test hooks and opt-in tests:
   prints what was saved. With PulseAudio null sinks in a container, this tests the whole meeting pipeline on Linux.
 - `MIMIR_WHISPER_DEBUG=1`: prints voice-activity stretches and chunk timings.
 - `scripts/mock-telegram.py`: a fake Telegram Bot API; set `MIMIR_TELEGRAM_API` to it.
+- `scripts/mock-signal.py`: a fake signal-cli-rest-api; set `MIMIR_SIGNAL_API` to it. `scripts/e2e-signal.py <dir>`
+  runs a bot on it with `fake-ai.py` (pairing, numbered choices and cards, files both ways).
 - `scripts/fake-mail.py`: a fake IMAP (port 1143) and SMTP (port 1025) server, any login accepted, with a planted
   instruction in one message for outside-content tests. Point a bot's email at `127.0.0.1`.
 - `scripts/e2e-busy-chat.py <dir>`: a Telegram message to a busy bot gets an answer, not silence. Starts its own

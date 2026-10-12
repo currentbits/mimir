@@ -7,6 +7,9 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 - **Replies survive a crash, an update or a restart:** a reply, a routine's result or a note for your decisions chat
   is kept until Telegram, Slack or Discord has it. If Mimir stops before then, it sends it when it starts again. One
   that didn't go through is tried again for a while. A routine's run shows *waiting to send* until it's sent.
+- **Signal:** a bot can be on Signal too, with a number of its own, through signal-cli-rest-api. Text, photos, voice
+  notes and files work both ways; approval cards and a bot's questions come as a numbered list you answer with the
+  number. Direct chats only. Setup is under [Connect](docs/connect.md#signal).
 - **Malware check for tool servers:** a tool server that downloads its package (`npx`, `uvx`…) is looked up on
   OSV.dev's list of malicious packages first, and Mimir refuses to start it if it's there, saying which advisory.
 - **Check everything:** `mimir doctor` (and Settings → Your data → *Check everything*) checks each bot's AI sign-in,

@@ -1,7 +1,7 @@
-# Connect your email, calendar and web search
+# Connect your email, calendar, web search and Signal
 
-Bots work with what you connect: your email, your calendar and a web search service. Each is optional and takes a few
-minutes. This page is the setup, service by service; what bots then do (and what always asks you first) is at the end
+Bots work with what you connect: your email, your calendar and a web search service, and you can reach them on Signal.
+Each is optional and takes a few minutes. This page is the setup, service by service; what bots then do (and what always asks you first) is at the end
 of each part.
 
 Everything here is set in the app. The passwords and keys are stored in the OS keychain on your computer, or in the
@@ -167,6 +167,36 @@ Search (`web_search`) and then read the pages that matter (`web_fetch`). Results
 service sees your queries, so once a conversation has read outside content, a search that would carry one of your
 memories asks you first.
 
+## Signal
+
+A bot can be on Signal next to Telegram, Slack and Discord (those are set up on the bot's page, see
+[Bots and chats](bots-and-chats.md)). Signal has no bot accounts, so the bot needs a Signal number of its own (a spare
+SIM or a second number; not yours, or its replies would come from you), and Mimir reaches Signal through
+[signal-cli-rest-api](https://github.com/bbernhard/signal-cli-rest-api), a small service you run next to it.
+
+1. **Run signal-cli-rest-api** in json-rpc mode. On a [server](self-hosting.md), uncomment the `signal` service and
+   `MIMIR_SIGNAL_API` in `docker-compose.yml`. On your own computer, with Docker:
+   ```sh
+   docker run -d --name signal --restart unless-stopped -p 127.0.0.1:8080:8080 -e MODE=json-rpc \
+     -v "$HOME/.local/share/signal-api:/home/.local/share/signal-cli" bbernhard/signal-cli-rest-api
+   ```
+2. **Link the bot's number** as a linked device. Set up Signal on a phone with that number, open
+   `http://127.0.0.1:8080/v1/qrcodelink?device_name=mimir` in a browser and scan the code with that phone: Signal →
+   Settings → Linked devices → **+**. (On a server, `ssh -L 8081:127.0.0.1:8081 you@server` first, then open
+   `http://127.0.0.1:8081/v1/qrcodelink?device_name=mimir`.)
+3. **Add it in Mimir**: the bot's page → Messaging apps → **Signal** → **Set up**: the bot's number with its country
+   code (`+31…`), and signal-cli-rest-api's address if it isn't `http://127.0.0.1:8080`. Save; it shows
+   *Connected · +31…*.
+4. **Pair**: from your own Signal, message the bot's number `pair` and the code on the bot's page.
+
+Text, photos, voice notes (transcribed as on Telegram; Signal's are AAC, so whisper.cpp needs `ffmpeg` installed),
+PDFs and other files work both ways, with a typing indicator while the bot writes. Reply under one of its messages and
+the bot knows which one you mean. Signal has no buttons, so approval cards and a bot's questions come as a numbered list:
+answer with just the number (`1` approves). The numbers belong to the bot's latest numbered message, and a card's
+keep working until it's decided. Replies arrive whole, as plain text (no streaming). Direct chats only: in a Signal
+group the bot stays silent. Messages sent while Mimir isn't connected to signal-cli-rest-api aren't fetched later, as
+they are on Telegram. For `mimir serve`, set `SIGNAL_NUMBER` (and `MIMIR_SIGNAL_API`).
+
 ## Files
 
 Nothing to set up: each chat has a small workspace of text files bots keep there (notes, lists, drafts), under
@@ -178,4 +208,5 @@ Nothing to set up: each chat has a small workspace of text files bots keep there
 - **Calendar**: Meetings → Calendar → remove the link (or reset the secret address in your calendar's settings); for
   adding events, Settings → Calendar → **Remove**.
 - **Web search**: Settings → Web search → **Remove** the key, or clear the SearXNG address.
+- **Signal**: the bot's page → Signal → **Disconnect**, and remove *mimir* under Linked devices on the bot's phone.
 - **One tool for one bot**: the bot's page → its tools. **One tool for all bots**: Settings → Permissions → *deny*.
