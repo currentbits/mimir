@@ -66,7 +66,8 @@ pub async fn run(db: &Db, provider: &Provider, bot: i64, chat: i64, source: &str
     // The memory files first: it's the part that can fail (a model call), and a retry is harmless (all deduplicated).
     let text = memory_text(&home, &found.memory);
     if !text.is_empty() {
-        done.memories = crate::tidy::import(db, provider, bot, chat, &text).await?;
+        // Written by that agent, not typed by the person: outside content (adds only, unconfirmed).
+        done.memories = crate::tidy::import_outside(db, provider, bot, chat, &text).await?;
     }
     let (skills, routines) = bring_in(db, bot, chat, label, &home, &found)?;
     (done.skills, done.routines) = (skills, routines);

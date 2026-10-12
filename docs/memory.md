@@ -73,7 +73,9 @@ it belongs to the chat, so a group chat can't read your private chat's files.
   suggestions, skipping what you already have and anything that looks like a key or password. When Claude Code, Hermes
   or OpenClaw is set up where Mimir runs, **Import** also offers **From Claude Code** (etc.): one click reads its
   memory files (`~/.claude/CLAUDE.md` and Claude Code's per-project memory; Hermes' `USER.md` and `MEMORY.md`;
-  OpenClaw's workspace `USER.md`, `MEMORY.md` and `memory/`) into suggestions the same way, its own `SKILL.md` files
+  OpenClaw's workspace `USER.md`, `MEMORY.md` and `memory/`) into suggestions. That agent wrote them, often after
+  reading repos, pages or mail, so they count as outside content: new memories only (never a change to one you have),
+  *unconfirmed* even after you accept them, until you mark one **Looks right**. Its own `SKILL.md` files go
   into skill proposals (Hermes' bundled skills are left out), and its cron jobs into routines that start **paused**:
   resume one to accept it. Imported routines get no extra tools and count as outside content, like a routine a bot made
   after reading a web page. Only cron schedules come over (not one-offs or intervals), on Mimir's clock.
