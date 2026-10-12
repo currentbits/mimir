@@ -22,6 +22,11 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 - **Routines that end:** "every morning until the 30th" or "for two weeks": an optional end, shown on the routine, after
   which it's gone.
 
+### Memory
+- **Bring your other agents along:** Memory → Import has a button for each of Claude Code, Hermes and OpenClaw found on
+  this computer. Their memories come in as suggestions, their skills as proposals, and their scheduled jobs as paused
+  routines you resume to accept. Nothing is active until you say so.
+
 ### Safety and upkeep
 - **Security fixes** from a review of the whole app:
   - A bot can't open a page in a new browser tab past the "open a site" ask and its checks.
