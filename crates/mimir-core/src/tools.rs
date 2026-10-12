@@ -1366,12 +1366,42 @@ pub(crate) async fn wait_for_approval_with(ctx: &ToolCtx, name: &str, summary: &
     }
 }
 
+/// What a loop-breaker card says before the step itself.
+const LOOP_CARD: &str = "The bot keeps repeating this step. Let it go on? ";
+
+/// Whether this call would repeat the run's last one, two or three calls over and over (since the last loop ask).
+/// A call is its tool and its card text: the same arguments as far as the person can see.
+fn looping(ctx: &ToolCtx, name: &str, summary: &str) -> bool {
+    let Some(run) = ctx.run_id else { return false };
+    let calls = ctx.db.tool_calls(run).unwrap_or_default();
+    let from = calls.iter().rposition(|c| c.decision == "loop").map_or(0, |i| i + 1);
+    let past: Vec<(&str, &str)> = calls[from..].iter().map(|c| (c.tool.as_str(), c.summary.as_str())).collect();
+    // Looking again is often fine (a screenshot while a page loads, scrolling down a long one); doing the same thing
+    // again rarely is.
+    let times = if is_read_only(&ctx.db, name) || name == "computer_scroll" { LOOP_READS } else { LOOP_ACTIONS };
+    loops(&past, (name, &truncate(summary, 300)), times)
+}
+
+/// Rounds of the same steps before a run is stopped and asked: actions, and calls that only read.
+const LOOP_ACTIONS: usize = 3;
+const LOOP_READS: usize = 5;
+
+/// True when `next` completes `times` rounds in a row of the same cycle of one to three calls.
+fn loops(past: &[(&str, &str)], next: (&str, &str), times: usize) -> bool {
+    let mut seq = past.to_vec();
+    seq.push(next);
+    (1..=3).any(|n| seq.len() >= n * times && {
+        let tail = &seq[seq.len() - n * times..];
+        tail.iter().zip(&tail[n..]).all(|(a, b)| a == b)
+    })
+}
+
 /// How long a parked approval waits in the inbox.
 const PARKED_TTL_SECS: i64 = 24 * 3600;
 
 /// An unattended run can't wait for a person: park the exact call in the inbox and carry on.
-fn park(ctx: &ToolCtx, name: &str, args: &Value, why: &str, site: Option<&str>) -> Result<String> {
-    let summary = card_text(&describe(ctx, name, args));
+fn park(ctx: &ToolCtx, name: &str, args: &Value, summary: &str, why: &str, site: Option<&str>) -> Result<String> {
+    let summary = card_text(summary);
     let id = ctx.db.approval_create(ctx.via_bot.unwrap_or(ctx.bot_id), ctx.chat_id, name, &summary, PARKED_TTL_SECS, why, site)?;
     ctx.db.approval_park(id, &args.to_string(), ctx.is_tainted())?;
     Ok(format!("Not done yet: this needs the user's OK, so it is waiting in their Mimir inbox and will run as soon as they approve ({summary}). Mention briefly that it's waiting."))
@@ -1494,10 +1524,16 @@ pub async fn call(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
     if decision == "ask" && why == "rule" && !ctx.is_tainted() && planned(&plan_of(ctx), name, site.as_deref()) {
         decision = "plan".into();
     }
+    // Going round in circles: what would run without asking stops and asks first. From the run's log, so it works
+    // the same for tools run in the MCP subprocess.
+    let summary = describe(ctx, name, args);
+    if matches!(decision.as_str(), "allow" | "plan") && looping(ctx, name, &summary) {
+        decision = "loop".into();
+    }
     // Tools running in this process (API-key providers): say what's happening while it does.
     // (Claude runs tools in the MCP subprocess; its stream events report the step instead.)
     if ctx.stream {
-        let step = if decision == "ask" { "Waiting for your OK".to_string() } else { crate::live::step_label(name) };
+        let step = if matches!(decision.as_str(), "ask" | "loop") { "Waiting for your OK".to_string() } else { crate::live::step_label(name) };
         crate::live::set_step(ctx.bot_id, ctx.chat_id, Some(step));
     }
     let out = match decision.as_str() {
@@ -1509,10 +1545,15 @@ pub async fn call(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
             describe(ctx, name, args),
             if would_ask { "first ask the user for an OK" } else { "happen without asking" }
         )),
-        "ask" if ctx.unattended => park(ctx, name, args, why, site.as_deref()),
-        "ask" => match wait_for_approval_with(ctx, name, &describe(ctx, name, args), why, site.as_deref()).await {
+        "ask" if ctx.unattended => park(ctx, name, args, &summary, why, site.as_deref()),
+        "ask" => match wait_for_approval_with(ctx, name, &summary, why, site.as_deref()).await {
             Ok(()) => exec(ctx, name, args).await,
             Err(e) => Err(e),
+        },
+        "loop" if ctx.unattended => park(ctx, name, args, &format!("{LOOP_CARD}{summary}"), "loop", None),
+        "loop" => match wait_for_approval_with(ctx, name, &format!("{LOOP_CARD}{summary}"), "loop", None).await {
+            Ok(()) => exec(ctx, name, args).await,
+            Err(_) => Err(anyhow::anyhow!("stopped: you are repeating the same step ({summary}) and the user didn't let it go on. Don't call it again; stop and tell the user what you found and where you got stuck.")),
         },
         _ => exec(ctx, name, args).await,
     };
@@ -1526,7 +1567,7 @@ pub async fn call(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
         Ok(r) =>truncate(&crate::computer::split_image(r, &ctx.db.dir()).1, 400),
         Err(e) => truncate(&format!("{e:#}"), 400),
     };
-    let summary = truncate(&describe(ctx, name, args), 300);
+    let summary = truncate(&summary, 300);
     if !ctx.incognito()
         && let Err(e) = ctx.db.tool_call_log(ctx.run_id, ctx.chat_id, name, &summary, &decision, out.is_ok(), &result)
     {
@@ -2572,6 +2613,56 @@ mod tests {
         run_parked(db.clone(), a).await;
         assert_eq!(db.entries("chat:0").unwrap().iter().filter(|e| e.status == "active").count(), 0, "approved call ran");
         assert!(db.messages(0, 5).unwrap().last().unwrap().content.starts_with("Done, as you approved"));
+    }
+
+    #[test]
+    fn loops_are_the_same_steps_round_and_round() {
+        let (a, b, c) = (("file_write", "Create x: 1"), ("file_read", "Read x"), ("web_search", "Search the web: x"));
+        assert!(!loops(&[a], a, 3), "twice is fine");
+        assert!(loops(&[a, a], a, 3), "the third time in a row");
+        assert!(!loops(&[a, b, a], a, 3), "not in a row");
+        assert!(!loops(&[a, a], ("file_write", "Create x: 2"), 3), "other arguments");
+        assert!(loops(&[a, b, a, b, a], b, 3), "a cycle of two");
+        assert!(loops(&[a, b, c, a, b, c, a, b], c, 3), "a cycle of three");
+        assert!(!loops(&[c, a, b, c, a, b, c, a], b, 4), "not four rounds yet");
+        assert!(!loops(&[b; 3], b, LOOP_READS) && loops(&[b; 4], b, LOOP_READS), "reads get more rounds");
+    }
+
+    #[tokio::test]
+    async fn a_run_repeating_itself_stops_and_asks() {
+        let p = std::env::temp_dir().join(format!("mimir-loop-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = Db::open(&p).unwrap();
+        let run = db.run_start(1, 0, "message", None, "test").unwrap();
+        let ctx = ToolCtx::new(db.clone(), 1, 0).with_run(Some(run));
+        let search = json!({"query": "gym"});
+        for _ in 0..LOOP_READS - 1 {
+            call(&ctx, "memory_search", &search).await.unwrap();
+        }
+        assert!(db.approvals_pending().unwrap().is_empty(), "no ask before the limit");
+        let c2 = ctx.clone();
+        let again = tokio::spawn(async move { call(&c2, "memory_search", &json!({"query": "gym"})).await });
+        let ask = loop {
+            if let Some(a) = db.approvals_pending().unwrap().pop() {
+                break a;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        };
+        assert_eq!((ask.kind.as_str(), ask.tool.as_str()), ("loop", "memory_search"));
+        assert!(ask.summary.contains("keeps repeating") && ask.summary.contains("Search memory: gym"), "{}", ask.summary);
+        db.approval_decide(ask.id, false, None).unwrap();
+        assert!(again.await.unwrap().unwrap_err().to_string().contains("repeating the same step"));
+        // The count starts again after an ask; another search is something else.
+        call(&ctx, "memory_search", &search).await.unwrap();
+        call(&ctx, "memory_search", &json!({"query": "flat"})).await.unwrap();
+        // A routine can't wait: the ask goes to the inbox.
+        let mut routine = ToolCtx::new(db.clone(), 1, 0).with_run(Some(db.run_start(1, 0, "routine", None, "test").unwrap()));
+        routine.unattended = true;
+        for _ in 0..LOOP_READS - 1 {
+            call(&routine, "memory_search", &search).await.unwrap();
+        }
+        assert!(call(&routine, "memory_search", &search).await.unwrap().starts_with("Not done yet"));
+        assert!(db.approvals_pending().unwrap().iter().any(|a| a.parked && a.kind == "loop"));
     }
 
     #[test]
