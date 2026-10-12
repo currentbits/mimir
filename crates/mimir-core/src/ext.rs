@@ -118,8 +118,7 @@ fn validate(s: &ServerConf) -> Result<()> {
         bail!("server {} needs a command or a URL", s.name);
     }
     // Plain http only to this machine: header tokens would otherwise travel in the clear.
-    let local_http = ["http://localhost", "http://127.0.0.1", "http://[::1]"].iter().any(|p| s.url.starts_with(p));
-    if !(s.url.is_empty() || s.url.starts_with("https://") || local_http) {
+    if !(s.url.is_empty() || secure(&s.url)) {
         bail!("server {}'s URL must start with https:// (plain http only for localhost)", s.name);
     }
     Ok(())
@@ -204,9 +203,17 @@ pub fn signed_in(server: &str) -> bool {
 /// The server a sign-in in progress is for: saved once the sign-in is done.
 static SIGNING_IN: std::sync::Mutex<Option<ServerConf>> = std::sync::Mutex::new(None);
 
-/// https, or plain http to this computer only (a server of your own, a test).
+/// https, or plain http to this computer only (a server of your own, a test). Parsed, not prefix-matched, so
+/// `http://localhost.evil.com` and `http://localhost@evil.com` aren't this computer.
 fn secure(url: &str) -> bool {
-    url.starts_with("https://") || ["http://localhost", "http://127.0.0.1", "http://[::1]"].iter().any(|p| url.starts_with(p))
+    let Ok(u) = url::Url::parse(url) else { return false };
+    match (u.scheme(), u.host()) {
+        ("https", Some(_)) => true,
+        ("http", Some(url::Host::Domain(d))) => d == "localhost",
+        ("http", Some(url::Host::Ipv4(ip))) => ip.is_loopback(),
+        ("http", Some(url::Host::Ipv6(ip))) => ip.is_loopback(),
+        _ => false,
+    }
 }
 
 async fn get_json(http: &reqwest::Client, url: &str) -> Option<Value> {
@@ -234,7 +241,13 @@ pub async fn sign_in(conf: ServerConf, listen: bool) -> Result<String> {
     if conf.url.is_empty() {
         bail!("only a server with a URL signs in");
     }
-    let http = reqwest::Client::builder().timeout(Duration::from_secs(20)).build()?;
+    // Metadata comes from the server: its redirects can't bounce Mimir onto this computer or the local network,
+    // unless the server itself is there.
+    let mut http = reqwest::Client::builder().timeout(Duration::from_secs(20));
+    if !crate::tools::is_private_host(&conf.url) {
+        http = http.redirect(crate::tools::public_redirects());
+    }
+    let http = http.build()?;
     let server = url::Url::parse(&conf.url)?;
     // The server's 401 says where its metadata is; else the well-known places (path first, then the root).
     let probe = http
@@ -645,6 +658,7 @@ impl Http {
 /// Start a stdio server. Returns the browser's secrets file too, to delete once it has started.
 fn spawn(conf: &ServerConf, db: &Db, bot: i64) -> Result<(Io, Option<std::path::PathBuf>)> {
     let dir = db.dir().join("browser");
+    let mut env = values_of(&conf.name, "env", &conf.env);
     let (command, args, secrets_file) = match conf.preset.as_deref() {
         Some("playwright") => {
             std::fs::create_dir_all(&dir)?;
@@ -654,6 +668,10 @@ fn spawn(conf: &ServerConf, db: &Db, bot: i64) -> Result<(Io, Option<std::path::
                 // The bots' computer is on: drive the Chromium on its screen, so you can watch (and take over).
                 crate::computer::start(&db.dir(), (bot > 0).then_some(bot))?;
                 args.extend(["--cdp-endpoint".into(), crate::computer::cdp_endpoint()?]);
+                // A computer service wants its token on DevTools too: in the environment, not the command line `ps` shows.
+                if let Some(h) = crate::computer::cdp_auth()? {
+                    env.push(("PLAYWRIGHT_MCP_CDP_HEADERS".into(), format!("Authorization: {h}")));
+                }
             } else {
                 // Bundled Chromium (see install_browser), so Google Chrome needn't be installed.
                 args.extend(["--headless".into(), "--browser".into(), "chromium".into()]);
@@ -670,7 +688,7 @@ fn spawn(conf: &ServerConf, db: &Db, bot: i64) -> Result<(Io, Option<std::path::
     };
     let mut child = tokio::process::Command::new(&command)
         .args(&args)
-        .envs(values_of(&conf.name, "env", &conf.env))
+        .envs(env)
         .current_dir(db.dir())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -932,6 +950,10 @@ mod tests {
         let root = url::Url::parse("https://auth.example.com").unwrap();
         assert_eq!(well_known(&root, "oauth-authorization-server"), "https://auth.example.com/.well-known/oauth-authorization-server");
         assert!(secure("https://a.example") && secure("http://127.0.0.1:9/x") && !secure("http://evil.example"));
+        assert!(secure("http://localhost:8000/mcp") && secure("http://[::1]/") && secure("http://127.8.0.1/") && secure("http://LOCALHOST/"));
+        for bad in ["http://localhost.evil.com/", "http://127.0.0.1.evil.com/", "http://localhost@evil.com/", "http://[::1].evil/", "ftp://localhost/", "localhost", "https://"] {
+            assert!(!secure(bad), "{bad}");
+        }
     }
 
     /// Against scripts/fake-mcp-oauth.py: the whole sign-in (metadata, registration, PKCE, token) then a tool list

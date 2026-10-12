@@ -192,6 +192,7 @@ impl Db {
     pub fn incognito_leftovers(&self) -> Result<()> {
         self.c().execute("DELETE FROM approvals WHERE chat_id = -1", [])?;
         self.c().execute("DELETE FROM conv_taint WHERE chat_id = -1", [])?;
+        self.c().execute("DELETE FROM settings WHERE key LIKE 'private:%:-1'", [])?;
         Ok(())
     }
 
@@ -315,6 +316,7 @@ impl Db {
                     params![format!("fresh:{bot}:{chat}"), last.to_string()],
                 )?;
                 c.execute("DELETE FROM sessions WHERE bot_id=?1 AND chat_id=?2", [bot, chat])? + c.execute("DELETE FROM conv_taint WHERE bot_id=?1 AND chat_id=?2", [bot, chat])?
+                    + c.execute("DELETE FROM settings WHERE key = ?1", [crate::tools::private_key(bot, chat)])?
             }
         };
         Ok(())

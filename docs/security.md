@@ -40,7 +40,8 @@ Reading stays allowed after outside content, except when the read itself would c
 - jumping to the browser's address bar on the bots' computer;
 - typing one of your memories into a page;
 - read-only tool-server calls that reach the internet with a request that carries data;
-- after reading your email or a meeting, any web address at all (a short link can carry a code);
+- after reading your email or a meeting, any web address at all (a short link can carry a code), for the rest of the
+  conversation and in tasks it hands to other bots;
 - a web search whose query holds one of your memories.
 
 **Some actions always ask.** Sending an email and making a bot ask every time, whatever the rules say, as their own
@@ -70,7 +71,8 @@ left: no `..`, no links, size limits.
 - Long text is cut with a note saying so; the limits on memories, routines and hand-offs keep theirs whole.
 - Hidden direction marks are made visible.
 - Plans list what they pre-approve before their steps.
-- "Always" never comes from a request made after outside content, or from one that uses a saved login.
+- "Always" never comes from a request made after outside content (even for an action that already asks), from one
+  that uses a saved login, or from a guest's chat (your rules are yours).
 
 **Saved logins never reach the model.** They are typed by name into the browser, only on the sites you listed (the
 site is read the way the browser reads it), and each use asks.
@@ -86,8 +88,8 @@ The data folder is owner-only. Chat API tokens (for Shortcuts and the like) each
 nothing else, are checked before the body is read too, and only their SHA-256 is stored.
 
 **The bots' computer** runs its browser without Mimir's environment or secrets, with its own home. With docker compose
-it's a separate container (its own user, no data folder, no published ports, a token on its control channel), so a
-browser exploit doesn't land next to your database. In the Docker image, `file://` and internal pages and downloads
+it's a separate container (its own user, no data folder, no published ports, a token on its control channel and its
+DevTools port), so a browser exploit doesn't land next to your database. In the Docker image, `file://` and internal pages and downloads
 are blocked by policy, and the containers drop all capabilities.
 
 **Updates are signed.** The desktop app installs an update only if it's signed with Mimir's release key (the public
@@ -111,6 +113,9 @@ half is built into the app); a tampered download is refused. It never restarts o
 
 ## What's left
 
+- A photo you send counts as your own message, so words inside it (a screenshot of a page, a photo of a letter) aren't
+  marked as outside content. Forwarded photos, audio files and documents are.
+
 - A message with a photo goes to Grok on its command line (it has no file form for that), where other accounts on the
   same computer could read it.
 - After outside content, clicks in the browser on a site you set to "always" don't ask (typing your memories there
@@ -119,6 +124,9 @@ half is built into the app); a tampered download is refused. It never restarts o
   addresses one fetch at a time (each fetch is in the run log).
 - An email card shows exactly what's sent, but approving it is your call: after reading an email, check the recipient
   is who you meant.
+- When the bots' computer runs in Mimir's own process on a plain Linux host (not Docker), its Chromium's DevTools on
+  `127.0.0.1:9222` have no token, so other accounts on that machine can drive the browser. Use the Docker image or
+  compose.
 
 ## For contributors
 

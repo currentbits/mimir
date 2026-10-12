@@ -109,13 +109,14 @@ impl Db {
     }
 
     /// Earlier messages with this chat (all bots) that match `query`, best first: an excerpt around the match.
-    /// `tainted`: a bot message from a run that read outside content, or from no known run. The person's words never are.
+    /// `tainted`: a bot message from a run that read outside content, or from no known run; a file's text, or a message that
+    /// quotes another (the quote isn't the person's words).
     /// `range`: (from, to) in unix seconds, inclusive.
     pub fn chat_search(&self, chat: i64, query: &str, exclude_run: Option<i64>, range: (i64, i64), limit: usize) -> Result<Vec<ChatHit>> {
         let Some(q) = fts_query(query) else { return Ok(vec![]) };
         let c = self.c();
         let mut st = c.prepare(
-            "SELECT m.ts, m.bot_id, m.role, snippet(messages_fts, 0, '', '', '…', 40), (m.role = 'assistant' AND coalesce(r.tainted, 1)) OR (m.role = 'user' AND m.content LIKE '%<document name=%'),
+            "SELECT m.ts, m.bot_id, m.role, snippet(messages_fts, 0, '', '', '…', 40), (m.role = 'assistant' AND coalesce(r.tainted, 1)) OR (m.role = 'user' AND (m.content LIKE '%<document name=%' OR m.content LIKE '<replying_to_%')),
                m.role = 'user' AND m.content LIKE '[Scheduled%', m.id
              FROM messages_fts JOIN messages m ON m.id = messages_fts.rowid LEFT JOIN runs r ON r.id = m.run_id
              WHERE messages_fts MATCH ?1 AND m.chat_id = ?2 AND (?3 IS NULL OR m.run_id IS NOT ?3) AND m.ts BETWEEN ?5 AND ?6

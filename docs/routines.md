@@ -48,7 +48,7 @@ A routine can start when something comes in instead of at a time. In the Routine
   `https://<your server>/hook/<id>`, and a secret (**Show its address and secret**). A caller sends the secret as
   `Authorization: Bearer <secret>`, or signs the body with it as `X-Hub-Signature-256: sha256=<HMAC-SHA256 hex>`
   (how GitHub signs, so a GitHub webhook's secret field works as is). A wrong secret, or an unknown address, gets
-  401; a paused routine 409. The body (up to 256 KB; the run sees the first 4,000 characters) is passed to the run.
+  401; a paused routine 409, and so does a signed body sent a second time (a captured call can't be replayed). The body (up to 256 KB; the run sees the first 4,000 characters) is passed to the run.
 
 What came is someone else's words: the run counts as having read outside content. Several emails or calls that come
 before the run starts go to one run together (up to 20). In chat, "tell me when the invoice from Acme arrives" makes a

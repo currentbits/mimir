@@ -496,6 +496,8 @@ pub(crate) struct File {
     pub mime: String,
     pub size: u64,
     pub url: String,
+    /// Recorded in the app as a voice message: the person's own words, unlike an audio file someone made.
+    pub voice: bool,
 }
 
 /// The most a file may be for the bot to fetch it (Telegram's cap for bots, used for every app).
@@ -627,7 +629,7 @@ impl Core {
                     return Ok(());
                 }
                 let saved = pages.iter().map(|p| self.save_media(p, "jpg")).collect::<Result<Vec<_>>>()?;
-                self.db.conv_taint(self.bot, chat)?;
+                self.db.conv_taint(self.bot, self.conv(chan, ext, chat)?)?;
                 self.incoming_with(chan, ext, from, "", &crate::with_scan(said, name, saved.len()), saved, sent).await
             }
             Some(Ok(t)) => {
@@ -678,7 +680,7 @@ impl Core {
         }
         if let Some(f) = usable.iter().find(|f| f.mime.starts_with("audio/")) {
             let Some(bytes) = fetch(f).await else { return Ok(()) };
-            return self.incoming_voice(chan, ext, from, bytes, &f.name, false, sent).await;
+            return self.incoming_voice(chan, ext, from, bytes, &f.name, (!f.voice).then_some("an audio file"), sent).await;
         }
         if let Some(f) = usable.iter().find(|f| crate::readable_document(&f.name, &f.mime)) {
             let Some(bytes) = fetch(f).await else { return Ok(()) };
@@ -687,15 +689,15 @@ impl Core {
         self.incoming_media(chan, ext).await
     }
 
-    /// A voice note: transcribed and shown back (so a mishearing is visible), then answered like typing. A forwarded
-    /// one is someone else's words: outside content.
+    /// A voice note: transcribed and shown back (so a mishearing is visible), then answered like typing. `outside` says
+    /// what it is when it's someone else's words (a forwarded voice note, an audio file): outside content.
     #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn incoming_voice(self: &Arc<Self>, chan: &Chan, ext: &str, from: Sender<'_>, bytes: Vec<u8>, name: &str, forwarded: bool, sent: Option<i64>) -> Result<()> {
+    pub(crate) async fn incoming_voice(self: &Arc<Self>, chan: &Chan, ext: &str, from: Sender<'_>, bytes: Vec<u8>, name: &str, outside: Option<&str>, sent: Option<i64>) -> Result<()> {
         match crate::transcribe::voice_note(&self.db, bytes, name).await {
             Some(Ok(text)) if !text.is_empty() => {
                 chan.send(ext, &trf("🎙️ I heard: “{text}”", &[("text", &text)])).await;
-                if forwarded {
-                    let said = crate::with_document("(I forwarded you a voice note.)", "a forwarded voice note", &text);
+                if let Some(what) = outside {
+                    let said = crate::with_document(&format!("(I sent you {what}.)"), what, &text);
                     return self.incoming_outside_with(chan, ext, from, "", &said, vec![], sent).await;
                 }
                 return self.incoming_with(chan, ext, from, "", &text, vec![], sent).await;
@@ -1615,6 +1617,10 @@ impl Core {
                 if d.tainted {
                     asker.pre_taint();
                 }
+                let private = crate::tools::delegation_private_key(d.id);
+                if db.setting(&private).ok().flatten().is_some() {
+                    asker.pre_private();
+                }
                 let (ctx, task) = (asker.clone(), d.task.clone());
                 // In its own task: a crash in it fails this hand-off only, and says so.
                 let work = tokio::spawn(async move { crate::tools::delegate(&ctx, &ctx.db.bot(d.to_bot)?, &task).await });
@@ -1623,6 +1629,10 @@ impl Core {
                     Ok(r) => (r, false),
                     Err(e) => (crate::friendly_error(&format!("{e:#}")), true),
                 };
+                // The helper read email or a meeting: the report-back turn knows (shared with the asker, like taint).
+                if asker.saw_private() {
+                    let _ = db.set_setting(&private, "1");
+                }
                 if let Err(e) = db.delegation_done(d.id, &reply, failed, asker.is_tainted()) {
                     eprintln!("handed-over task #{}: {e:#}", d.id);
                 }
@@ -1638,6 +1648,9 @@ impl Core {
             let target = Self::chan_for(chans, d.chat_id, &self.db);
             let mut ctx = ToolCtx::new(self.db.clone(), self.bot, d.chat_id).with_run(d.run_id);
             ctx.conv = d.conv;
+            if self.db.setting_take(&crate::tools::delegation_private_key(d.id))?.is_some() {
+                ctx.pre_private();
+            }
             let (provider, task, tainted) = (self.provider.clone(), d.task, d.tainted);
             let out = self.own_task(d.chat_id, async move { turn(&provider, &ctx, Trigger::Reported { from: &from, task: &task, reply: &reply, tainted }).await }).await;
             let text = match out {
@@ -2186,6 +2199,27 @@ mod tests {
         assert!(db.run_tainted(db.runs(Some(0), 1).unwrap()[0].id).unwrap());
     }
 
+    #[tokio::test]
+    async fn a_later_hand_off_keeps_the_askers_limits() {
+        let p = std::env::temp_dir().join(format!("mimir-later-limits-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = Db::open(&p).unwrap();
+        let scout = crate::db::Bot { id: 0, name: "Scout".into(), persona: String::new(), provider: "openai".into(), model: "m".into(), base_url: String::new(), tools: String::new(), look: String::new() };
+        db.bot_save(&scout).unwrap();
+        db.pair(200, "Sam").unwrap();
+        db.chat_set_guest(200, true).unwrap();
+        // After reading your email, the helper running later still asks before any web address.
+        let ctx = ToolCtx::new(db.clone(), 1, 200);
+        ctx.mark_private();
+        crate::tools::call(&ctx, "ask_bot", &serde_json::json!({"bot": "Scout", "task": "Find three padel courts", "later": true})).await.unwrap();
+        let d = db.delegations(1, "pending").unwrap().pop().unwrap();
+        assert!(db.setting(&crate::tools::delegation_private_key(d.id)).unwrap().is_some());
+        // A guest's hand-off runs in the guest's chat, so the helper gets the guest's tools, not yours.
+        assert_eq!(d.chat_id, 200);
+        let helper = crate::tools::specs_for(&ToolCtx::new(db.clone(), d.to_bot, d.chat_id)).into_iter().map(|s| s.0).collect::<Vec<_>>();
+        assert!(!helper.iter().any(|t| t.starts_with("email_") || t.starts_with("computer_") || t.starts_with("browser__") || t == "bot_create"), "{helper:?}");
+    }
+
     /// Against scripts/fake-mail.py: `python3 scripts/fake-mail.py`, then
     /// `cargo test -p mimir-core fake_mail_triggers -- --ignored`.
     #[tokio::test]
@@ -2455,7 +2489,7 @@ mod tests {
         assert!(core.mark_seen(&chan, "C1", 11) && core.seen(&chan, "C1") == Some(11));
         assert_eq!(core.paired_on(&chan), vec![("C1".to_string(), false)]);
         // A stranger's file in the owner's channel is never even fetched.
-        let files = [File { name: "a.png".into(), mime: "image/png".into(), size: 10, url: "https://cdn.discordapp.com/a.png".into() }];
+        let files = [File { name: "a.png".into(), mime: "image/png".into(), size: 10, url: "https://cdn.discordapp.com/a.png".into(), voice: false }];
         let stranger = Sender { id: "U2", dm: false };
         core.incoming_files(&chan, "C1", stranger, "", &files, None, |_| async { panic!("fetched a stranger's file") }).await.unwrap();
         // Unpaired, the chat forgets where catch-up left off (another app's chat with the same id keeps its own).

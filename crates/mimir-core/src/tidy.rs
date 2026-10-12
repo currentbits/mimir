@@ -761,7 +761,8 @@ pub async fn run(db: &Db, provider: &Provider, bot: i64, chat: i64) -> Result<us
     // The person's own words in this window (never a file's or a forward's text): a suggestion that says what they said
     // is theirs, even if a bot also read a page in that conversation (else one web search would leave every lesson
     // from that chat unconfirmed, and so out of the bots' instructions).
-    let own: Vec<String> = msgs.iter().filter(|m| m.role == "user" && crate::own_words(&m.content)).map(|m| m.content.clone()).collect();
+    // A quoted message they replied to isn't theirs either (it's often the bot's, repeating a page).
+    let own: Vec<String> = msgs.iter().filter(|m| m.role == "user" && crate::own_words(&m.content)).map(|m| crate::own_part(&m.content).to_string()).collect();
     let recent: Vec<String> = msgs
         .iter()
         .map(|m| {

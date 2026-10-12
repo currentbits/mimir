@@ -281,10 +281,12 @@ impl Tg {
             }
             return core.incoming_with(me, chat, from, "", &text, vec![saved], m["date"].as_i64()).await;
         }
-        if let Some(id) = m["voice"]["file_id"].as_str().or(m["audio"]["file_id"].as_str()) {
+        // A voice note is recorded in the app; an audio file (a song, a recording someone made) is outside content.
+        let audio = m["voice"]["file_id"].as_str().map(|id| (id, forwarded.then_some("a forwarded voice note"))).or_else(|| m["audio"]["file_id"].as_str().map(|id| (id, Some("an audio file"))));
+        if let Some((id, outside)) = audio {
             let (bytes, path) = self.download(id).await?;
             let name = path.rsplit('/').next().unwrap_or("voice.ogg");
-            return core.incoming_voice(me, chat, from, bytes, name, forwarded, m["date"].as_i64()).await;
+            return core.incoming_voice(me, chat, from, bytes, name, outside, m["date"].as_i64()).await;
         }
         if let Some(id) = m["document"]["file_id"].as_str() {
             // Telegram's bots can download files up to 20 MB.

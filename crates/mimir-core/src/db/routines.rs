@@ -653,7 +653,7 @@ impl Db {
     pub fn routine_delete(&self, chat: i64, id: i64) -> Result<bool> {
         let gone = self.c().execute("DELETE FROM routines WHERE id=?1 AND chat_id=?2", params![id, chat])? > 0;
         if gone {
-            self.c().execute("DELETE FROM settings WHERE key IN (?1, ?2)", [format!("hold:routine:{id}"), format!("webhook:{id}")])?;
+            self.c().execute("DELETE FROM settings WHERE key IN (?1, ?2, ?3)", [format!("hold:routine:{id}"), format!("webhook:{id}"), format!("webhook-seen:{id}")])?;
             self.c().execute("DELETE FROM routine_events WHERE routine_id=?1", [id])?;
         }
         Ok(gone)
