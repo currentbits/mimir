@@ -214,13 +214,16 @@ impl Db {
     }
 
     /// A bot's routines that are due. Ones past their end (by more than a late run's grace) are removed first: they
-    /// don't run late after it.
+    /// don't run late after it. The grace is for a slot before the end; an event (mail, webhook) after it doesn't run.
     pub fn due(&self, bot: i64, t: i64) -> Result<Vec<Routine>> {
         for r in self.routines_where("bot_id = ?1 AND ends > 0 AND ends + ?3 <= ?2", params![bot, t, MISSED_AFTER])? {
             self.routine_delete(r.chat_id, r.id)?;
         }
         // A paused or finished goal's routines wait with it.
-        self.routines_where("bot_id = ?1 AND next_fire <= ?2 AND paused = 0 AND (goal_id IS NULL OR goal_id IN (SELECT id FROM goals WHERE status IN ('active','blocked')))", [bot, t])
+        self.routines_where(
+            "bot_id = ?1 AND next_fire <= ?2 AND paused = 0 AND (ends = 0 OR next_fire <= ends) AND (goal_id IS NULL OR goal_id IN (SELECT id FROM goals WHERE status IN ('active','blocked')))",
+            [bot, t],
+        )
     }
 
     /// Edit, pause or resume. The next run is worked out from now, so resuming doesn't fire missed slots.
