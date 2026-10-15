@@ -15,6 +15,9 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 - **Each bot has its own sign-ins on the computer:** a site you sign in to for one bot (when it asks you to take over)
   is signed in for that bot only. **Sign out everywhere** on a bot's page clears its sign-ins. Sign-ins from before
   go to the first bot that uses the computer after the update.
+- **Hidden characters are taken out:** text with invisible characters that only a model would read (Unicode tag
+  characters, stray variation selectors) has them removed before a bot sees it, from pages, mail, files, tool results
+  and messages alike. A Word file with text made hard to see (hidden, white or 1 pt) has it marked, and the bot says so.
 
 ### Routines
 - **Follow-ups the bot books itself:** "I'll check back Friday whether they replied" becomes a one-off follow-up, said

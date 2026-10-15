@@ -1519,6 +1519,8 @@ pub async fn call(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
     if ctx.stream {
         crate::live::set_step(ctx.bot_id, ctx.chat_id, None);
     }
+    // Pages, mail, files, tool servers: nothing the model reads keeps characters hidden from the person.
+    let out = out.map(|r| crate::unhide(&r));
     let result = match &out {
         // A search's addresses, all of them: what a reply's links are checked against (receipts::footer).
         Ok(r) if name == "web_search" => truncate(&r.lines().map(str::trim).filter(|l| l.starts_with("http")).collect::<Vec<_>>().join("\n"), 2000),

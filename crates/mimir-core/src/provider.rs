@@ -166,6 +166,10 @@ impl Provider {
     }
 
     async fn run_once(&self, ctx: &ToolCtx, system: &str, history: &[(String, String)], user: &str, session: Option<String>) -> Result<Reply> {
+        // Forwards, files, mail, webhooks and memories all reach the model through here: none of it keeps characters
+        // hidden from the person (tool results are cleaned in tools::call).
+        let (system, user, history) = (crate::unhide(system), crate::unhide(user), history.iter().map(|(who, said)| (who.clone(), crate::unhide(said))).collect::<Vec<_>>());
+        let (system, user, history) = (system.as_str(), user.as_str(), history.as_slice());
         match self {
             Provider::Claude { model, home } | Provider::Codex { model, home } | Provider::Grok { model, home } => {
                 let go = |sid: Option<&str>| {
