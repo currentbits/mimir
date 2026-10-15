@@ -317,6 +317,8 @@ pub async fn call(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
         },
         _ => exec(ctx, name, args).await,
     };
+    // A page, a mail, a tool server's answer: hidden characters don't reach the model (or the run log).
+    let out = out.map(|r| crate::visible(&r));
     if ctx.stream {
         crate::live::set_step(ctx.bot_id, ctx.chat_id, None);
     }
