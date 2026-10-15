@@ -51,7 +51,7 @@ PRAGMA secure_delete=ON;
 
 /// The schema version this build writes (`PRAGMA user_version`). A schema change bumps it and adds a step to
 /// `migrate`; each step runs once per database.
-const VERSION: i64 = 10;
+const VERSION: i64 = 11;
 
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS entries(
@@ -216,6 +216,9 @@ fn migrate(c: &Connection) -> Result<()> {
     }
     if v < 10 {
         migrate_v10(c)?;
+    }
+    if v < 11 {
+        migrate_v11(c)?;
     }
     c.execute(
         "INSERT INTO settings(key, value) VALUES ('schema_written_by', ?1) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -470,6 +473,16 @@ fn migrate_v10(c: &Connection) -> Result<()> {
            conv INTEGER NOT NULL, run_id INTEGER, task TEXT NOT NULL, unattended INTEGER NOT NULL DEFAULT 0, tainted INTEGER NOT NULL DEFAULT 0,
            status TEXT NOT NULL DEFAULT 'pending', reply TEXT, failed INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL)",
     )?;
+    Ok(())
+}
+
+/// Version 11: an approval card's text you can edit before it goes (an email's subject and body), and why you said no.
+fn migrate_v11(c: &Connection) -> Result<()> {
+    for col in ["draft", "reason"] {
+        if !c.prepare(&format!("SELECT 1 FROM pragma_table_info('approvals') WHERE name='{col}'"))?.exists([])? {
+            c.execute_batch(&format!("ALTER TABLE approvals ADD COLUMN {col} TEXT"))?;
+        }
+    }
     Ok(())
 }
 

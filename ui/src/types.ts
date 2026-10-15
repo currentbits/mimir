@@ -30,7 +30,9 @@ export type Run = {
   delivered?: string | null; repeats?: number; cache_read?: number; estimated?: boolean
 }
 
-export type Approval = { id: number; bot_id: number; chat_id: number; tool: string; summary: string; created_at: number; expires_at: number; kind?: 'rule' | 'guarded' | 'guest' | 'login' | 'plan' | 'bot' | 'send' | 'takeover' | 'remind' | 'unasked' | 'loop'; site?: string | null; parked?: boolean; allowed_before?: number }
+export type Approval = { id: number; bot_id: number; chat_id: number; tool: string; summary: string; created_at: number; expires_at: number; kind?: 'rule' | 'guarded' | 'guest' | 'login' | 'plan' | 'bot' | 'send' | 'takeover' | 'remind' | 'unasked' | 'loop'; site?: string | null; parked?: boolean; allowed_before?: number
+  /** A card whose text you can edit before it goes: its fields (subject and body editable; to, cc and account shown). */
+  draft?: Record<string, string> | null }
 
 export type Busy = { bot_id: number; chat_id: number; trigger: string; step: string | null }
 

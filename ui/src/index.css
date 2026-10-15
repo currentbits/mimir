@@ -310,6 +310,10 @@ a { color: inherit; }
 .approval.inline { background: var(--surface); box-shadow: var(--shadow-sm); backdrop-filter: none; -webkit-backdrop-filter: none; animation: rise 460ms var(--spring) both; }
 .approval .parked { margin-top: 3px; font-size: 11.5px; color: var(--text-3); }
 .approval .what.plan { white-space: pre-line; }
+.approval .draft-edit { display: grid; gap: 6px; margin-top: 4px; }
+.approval .draft-edit .textarea { resize: vertical; }
+.approval .deny-why { flex-wrap: nowrap; }
+.approval .deny-why .input { min-width: 180px; }
 .approval .learned { margin-top: 3px; font-size: 11.5px; color: var(--text-2); font-weight: 500; }
 .inbox-list { display: grid; gap: 10px; }
 .inbox-item .badge.count { margin-left: auto; animation: pop 360ms var(--spring-soft) both; }

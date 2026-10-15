@@ -43,7 +43,8 @@ For contributors: how the pieces fit together.
    Mimir's tools; for APIs, tools are function definitions handled in-process.
 4. Each tool call goes through `tools::call`: the allow / ask / deny rule, taint (outside content read in this
    conversation), the bot's allowlist, then the tool itself. "Ask" creates an approval and waits for your answer from
-   any app.
+   any app. An email's card keeps its fields in `approvals.draft`; approved, `tools::with_draft` takes back only the
+   subject and body from it (never who it's to), and a no's `approvals.reason` goes back to the bot as the tool's error.
 5. The reply streams back to where you asked; the run and every tool call are recorded.
 
 ## Desktop and server

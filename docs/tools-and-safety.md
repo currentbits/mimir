@@ -44,7 +44,16 @@ to Telegram, Slack or Discord and shows a card in the app with **Allow once**, *
 for opening pages: "Always on this site") and **Deny**. Every "always" becomes a visible rule in Settings → Permissions.
 Once you've allowed the same thing twice, the card makes "always" the main button. No answer within 5 minutes means
 deny (routines park their asks for 24 hours instead; see [Needs you](routines.md#needs-you)). From the command line:
-`mimir approvals`, `mimir approve <id>`, `mimir deny <id>`.
+`mimir approvals`, `mimir approve <id>`, `mimir deny <id> [why]`.
+
+**Say why.** **Deny…** in the app takes an optional reason, and in Telegram, Slack, Discord or Signal a text reply to
+the card does the same (a number on Signal still picks a button). The bot is told *"Denied: <your reason>"* in your own
+words and carries on with that, instead of only saying it wasn't done.
+
+**Edit before it goes.** An email's card (to send, or to draft after outside content) has **Edit** in the app: change
+the subject and text, then approve, and that's what goes. Who it's to, the cc and the account can't be changed on the
+card, and the edited email is checked again (one-line subject, whole on the card). In a messaging app the card has
+**Edit in Mimir**, a link to it in the web app, when Mimir runs as a server with an https address.
 
 ## Outside content (taint)
 

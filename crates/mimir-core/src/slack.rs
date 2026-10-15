@@ -162,6 +162,10 @@ impl Slack {
             .into_iter()
             .flatten()
             .map(|(label, data)| {
+                // A link opens in the browser (its press comes back with no value, and does nothing here).
+                if data.starts_with("https://") {
+                    return json!({"type": "button", "action_id": "ap_link", "url": data, "text": {"type": "plain_text", "text": label}});
+                }
                 // action_id is unique per card: the decision letter.
                 let d = data.rsplit(':').next().unwrap_or("y").to_string();
                 let mut b = json!({"type": "button", "action_id": format!("ap_{d}"), "value": data, "text": {"type": "plain_text", "text": label}});
@@ -247,6 +251,12 @@ impl Slack {
         if !files.is_empty() {
             // ponytail: a message with files isn't told the thread's first message; add it if "this one" with a file bites
             return core.incoming_files(me, ch, from, &t, &files, sent, |f| self.download(f.url.clone(), f.mime.clone())).await;
+        }
+        // In a card's thread: no, and why.
+        if let Some(card) = ev["thread_ts"].as_str().filter(|t| ev["ts"].as_str() != Some(t))
+            && core.deny_by_reply(me, ch, from, card, &t)?
+        {
+            return Ok(());
         }
         // In a thread: the message that started it, so "this one" or "do that" says which.
         let (t, outside) = match self.thread_parent(ev).await {
