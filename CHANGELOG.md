@@ -2,6 +2,15 @@
 
 What changed for people using Mimir. The newest release is at the top; "Unreleased" is what the next one brings.
 
+## Unreleased
+
+### Safety
+- **Sensitive sources:** mark a tool server (your bank's, your health records'), a single tool or a chat's memory as
+  sensitive in **Settings → Sensitive sources**. Once a reply or routine has read from one, everything that goes out
+  asks first, and the card says why ("This run read from bank"): an email, a web page or search, a task for another
+  bot, a message to someone else's chat, and any tool server's change. Servers whose names look like banking or
+  health are suggested, never marked for you.
+
 ## 0.3.0
 
 ### Talking to your bots

@@ -34,8 +34,16 @@ pub fn ctx_from_args(db: crate::db::Db, args: &[String]) -> Result<ToolCtx> {
     {
         ctx.pre_taint();
     }
-    if args.iter().any(|a| a == "--private") || (ctx.sticky && ctx.db.setting(&crate::tools::private_key(ctx.bot_id, ctx.conv)).ok().flatten().is_some()) {
+    if args.iter().any(|a| a == "--private") {
         ctx.pre_private();
+    }
+    if let Some(s) = args.iter().position(|a| a == "--sensitive").and_then(|i| args.get(i + 1)) {
+        ctx.restore_private(s);
+    }
+    if ctx.sticky
+        && let Some(kept) = ctx.db.setting(&crate::tools::private_key(ctx.bot_id, ctx.conv)).ok().flatten()
+    {
+        ctx.restore_private(&kept);
     }
     Ok(ctx)
 }

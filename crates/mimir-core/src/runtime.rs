@@ -1618,8 +1618,8 @@ impl Core {
                     asker.pre_taint();
                 }
                 let private = crate::tools::delegation_private_key(d.id);
-                if db.setting(&private).ok().flatten().is_some() {
-                    asker.pre_private();
+                if let Some(kept) = db.setting(&private).ok().flatten() {
+                    asker.restore_private(&kept);
                 }
                 let (ctx, task) = (asker.clone(), d.task.clone());
                 // In its own task: a crash in it fails this hand-off only, and says so.
@@ -1631,7 +1631,7 @@ impl Core {
                 };
                 // The helper read email or a meeting: the report-back turn knows (shared with the asker, like taint).
                 if asker.saw_private() {
-                    let _ = db.set_setting(&private, "1");
+                    let _ = db.set_setting(&private, &asker.private_value());
                 }
                 if let Err(e) = db.delegation_done(d.id, &reply, failed, asker.is_tainted()) {
                     eprintln!("handed-over task #{}: {e:#}", d.id);
@@ -1648,8 +1648,8 @@ impl Core {
             let target = Self::chan_for(chans, d.chat_id, &self.db);
             let mut ctx = ToolCtx::new(self.db.clone(), self.bot, d.chat_id).with_run(d.run_id);
             ctx.conv = d.conv;
-            if self.db.setting_take(&crate::tools::delegation_private_key(d.id))?.is_some() {
-                ctx.pre_private();
+            if let Some(kept) = self.db.setting_take(&crate::tools::delegation_private_key(d.id))? {
+                ctx.restore_private(&kept);
             }
             let (provider, task, tainted) = (self.provider.clone(), d.task, d.tainted);
             let out = self.own_task(d.chat_id, async move { turn(&provider, &ctx, Trigger::Reported { from: &from, task: &task, reply: &reply, tainted }).await }).await;
