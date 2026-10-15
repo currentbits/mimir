@@ -134,6 +134,11 @@ pub const UNCHANGED: &str = "unchanged";
 pub type HoldRow = (String, i64, Option<i64>, Hold);
 pub type DigestItem = (i64, i64, Option<i64>, String, bool);
 
+/// A new routine's id: past any the run log still names, so a deleted routine's results (in another chat, maybe)
+/// never read as a new one's. SQLite alone would hand the newest deleted id out again.
+/// ponytail: max(routine_id) scans the run log (no index); fine for how rarely routines are made.
+const NEW_ID: &str = "(SELECT max(coalesce((SELECT max(id) FROM routines), 0), coalesce((SELECT max(routine_id) FROM runs), 0)) + 1)";
+
 impl Db {
     // ---------- routines ----------
 
@@ -145,7 +150,7 @@ impl Db {
         self.calendar_private(chat, cron)?;
         let c = self.c();
         c.execute(
-            "INSERT INTO routines(bot_id, chat_id, cron, prompt, next_fire, quiet) VALUES (?1,?2,?3,?4,?5,?6)",
+            &format!("INSERT INTO routines(id, bot_id, chat_id, cron, prompt, next_fire, quiet) VALUES ({NEW_ID},?1,?2,?3,?4,?5,?6)"),
             params![bot, chat, cron.trim(), prompt.trim(), next, quiet],
         )?;
         Ok(Routine { id: c.last_insert_rowid(), bot_id: bot, chat_id: chat, cron: cron.trim().into(), prompt: prompt.trim().into(), next_fire: next, quiet, paused: false, delivery: "now".into(), tainted: false, once: false, watch: String::new(), retries: 0, urgent: String::new(), ends: 0, followup: false, goal_held: false, for_goal: false })
@@ -161,7 +166,7 @@ impl Db {
         }
         let c = self.c();
         c.execute(
-            "INSERT INTO routines(bot_id, chat_id, cron, prompt, next_fire, quiet, once) VALUES (?1,?2,'',?3,?4,?5,1)",
+            &format!("INSERT INTO routines(id, bot_id, chat_id, cron, prompt, next_fire, quiet, once) VALUES ({NEW_ID},?1,?2,'',?3,?4,?5,1)"),
             params![bot, chat, prompt.trim(), at, quiet],
         )?;
         Ok(Routine { id: c.last_insert_rowid(), bot_id: bot, chat_id: chat, cron: String::new(), prompt: prompt.trim().into(), next_fire: at, quiet, paused: false, delivery: "now".into(), tainted: false, once: true, watch: String::new(), retries: 0, urgent: String::new(), ends: 0, followup: false, goal_held: false, for_goal: false })
@@ -430,7 +435,9 @@ impl Db {
     pub fn routine_results(&self, routine: i64, n: usize) -> Result<Vec<(i64, String, bool)>> {
         let c = self.c();
         let mut st = c.prepare(
-            "SELECT started_at, reply, tainted FROM runs WHERE routine_id=?1 AND trigger='routine' AND status='ok' AND coalesce(reply, '') != '' ORDER BY id DESC LIMIT ?2",
+            // Same bot and chat too: a database from before NEW_ID may have given a deleted routine's id out again.
+            "SELECT u.started_at, u.reply, u.tainted FROM runs u JOIN routines r ON r.id = u.routine_id AND r.bot_id = u.bot_id AND r.chat_id = u.chat_id
+             WHERE u.routine_id=?1 AND u.trigger='routine' AND u.status='ok' AND coalesce(u.reply, '') != '' ORDER BY u.id DESC LIMIT ?2",
         )?;
         let v = st.query_map(params![routine, n as i64], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<Result<_, _>>()?;
         Ok(v)

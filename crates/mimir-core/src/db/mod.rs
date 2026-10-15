@@ -1296,6 +1296,14 @@ mod tests {
         let v: Vec<_> = d.routine_results(r.id, 3).unwrap().into_iter().map(|(_, s, t)| (s, t)).collect();
         assert_eq!(v, vec![("Tue news".to_string(), true), ("Mon news".to_string(), false)]);
         assert_eq!(d.routine_results(r.id, 1).unwrap().len(), 1);
+        // Deleted, the next routine (another chat's) doesn't get its id, or its results.
+        d.routine_delete(8, r.id).unwrap();
+        let n = d.routine_create(1, 9, "0 8 * * *", "brief me", false).unwrap();
+        assert!(n.id > r.id);
+        assert!(d.routine_results(n.id, 3).unwrap().is_empty());
+        // One a database from before handed the same id: another chat's runs still aren't its own.
+        d.c().execute("UPDATE runs SET routine_id=?1", [n.id]).unwrap();
+        assert!(d.routine_results(n.id, 3).unwrap().is_empty());
     }
 
     #[test]
