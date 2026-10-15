@@ -44,6 +44,21 @@ Reading stays allowed after outside content, except when the read itself would c
   conversation and in tasks it hands to other bots;
 - a web search whose query holds one of your memories.
 
+**What you mark sensitive keeps its data in.** In Settings → Sensitive sources you can mark a tool server (your
+bank's), one of its tools, or a chat's memory as sensitive; servers named like banking or health are suggested, never
+marked for you. Once a conversation or routine has read from one (a tool call, a memory search, or its memories in the
+bot's instructions), everything that goes out asks, even if its rule says allow, and the card starts with why
+("This run read from bank, which you marked sensitive"):
+
+- sending an email;
+- reading a web page or searching the web, and opening a page or typing on the bots' computer;
+- handing a task to another bot;
+- a message to someone else's chat (a reminder for them, a file in a group);
+- any tool server's change, and its reads that reach the internet (not the sensitive server's own).
+
+Like outside content, it never becomes "always", "all like this" or part of a plan, it sticks to the conversation until
+"Start fresh", and it carries over to tasks handed to other bots. It can only make things stricter.
+
 **Some actions always ask.** Sending an email and making a bot ask every time, whatever the rules say, as their own
 kind of approval: never "always", never "all like this". An email is sent only if all of it fits on the card you
 approve (recipient first), at most 20 a day from a chat, with addresses checked so nothing can add a hidden
@@ -146,6 +161,8 @@ half is built into the app); a tampered download is refused. It never restarts o
   failed (and the login isn't saved).
 - An email card shows exactly what's sent, but approving it is your call: after reading an email, check the recipient
   is who you meant.
+- Sensitive sources only work once you mark them: a bank's server you haven't marked is just a tool server (its data
+  is still outside content, and private-data rules don't apply to it).
 - When the bots' computer runs in Mimir's own process on a plain Linux host (not Docker), its Chromium's DevTools on
   `127.0.0.1:9222` have no token, so other accounts on that machine can drive the browser. Use the Docker image or
   compose.
@@ -153,6 +170,7 @@ half is built into the app); a tampered download is refused. It never restarts o
 ## For contributors
 
 Every new way for text to reach a model must either be the person's own words, or mark the conversation
-(`ToolCtx::taint`). Every new action that changes data must go through `tools::call`. Every new kind of learned
+(`ToolCtx::taint`). Every new way for data to leave must be listed in `sends_out`, so it asks after a sensitive
+source. Every new action that changes data must go through `tools::call`. Every new kind of learned
 artefact must be a proposal that keeps the outside-content mark. Details, with the code they live in, are in
 [Architecture](architecture.md).

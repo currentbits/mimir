@@ -30,7 +30,7 @@ export type Run = {
   delivered?: string | null; repeats?: number; cache_read?: number; estimated?: boolean
 }
 
-export type Approval = { id: number; bot_id: number; chat_id: number; tool: string; summary: string; created_at: number; expires_at: number; kind?: 'rule' | 'guarded' | 'guest' | 'login' | 'plan' | 'bot' | 'send' | 'takeover' | 'signin' | 'remind' | 'unasked' | 'loop'; site?: string | null; parked?: boolean; allowed_before?: number }
+export type Approval = { id: number; bot_id: number; chat_id: number; tool: string; summary: string; created_at: number; expires_at: number; kind?: 'rule' | 'guarded' | 'guest' | 'login' | 'plan' | 'bot' | 'send' | 'takeover' | 'signin' | 'remind' | 'unasked' | 'loop' | 'sensitive'; site?: string | null; parked?: boolean; allowed_before?: number }
 
 export type Busy = { bot_id: number; chat_id: number; trigger: string; step: string | null }
 
@@ -52,4 +52,4 @@ export type Skill = {
 
 export type LibrarySkill = { slug: string; category: string; name: string; description: string; body: string; needs: string[]; added: number[]; missing: Record<string, string[]>; schedule: { cron: string; label: string; prompt: string } | null }
 
-export type ToolServer = { name: string; preset: string | null; command: string; args: string[]; url: string; env: string[]; headers: string[]; tools: number; signed_in?: boolean }
+export type ToolServer = { name: string; preset: string | null; command: string; args: string[]; url: string; env: string[]; headers: string[]; tools: number; signed_in?: boolean; sensitive?: boolean; suggest_sensitive?: boolean }
