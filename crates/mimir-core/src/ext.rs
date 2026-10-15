@@ -149,7 +149,8 @@ fn values_of(server: &str, kind: &str, map: &HashMap<String, String>) -> Vec<(St
 }
 
 /// Add or replace a tool server (not the browser). An empty env/header value keeps the one saved before.
-/// The server is started once first to list its tools, so a broken setup is never saved.
+/// A package it runs is pinned to a version (update_server moves it on). The server is started once first to list
+/// its tools, so a broken setup is never saved.
 pub async fn save_server(db: &Db, mut conf: ServerConf) -> Result<usize> {
     conf.name = conf.name.trim().to_string();
     if conf.name == BROWSER || conf.preset.is_some() {
@@ -164,6 +165,13 @@ pub async fn save_server(db: &Db, mut conf: ServerConf) -> Result<usize> {
         }
     }
     validate(&conf)?;
+    // A package without a version would run whatever was published last, every start: pin the newest settled one.
+    if conf.url.is_empty()
+        && let Some(p) = package_of(&conf.command, &conf.args)
+        && p.version.is_none()
+    {
+        conf.args = p.pinned(&conf.args, &version_to_pin(&p).await?);
+    }
     let n = refresh(db, &conf).await?;
     let mut list = servers(db);
     let mut old = list.iter().find(|s| s.name == conf.name).cloned().unwrap_or_default();
@@ -807,9 +815,33 @@ fn write_secrets_file(dir: &std::path::Path, values: &[(String, String)]) -> Res
     Ok(path)
 }
 
-/// The registry package a server's command fetches and runs (`npx -y pkg@1.2.3`, `uvx pkg`, `pipx run pkg`…):
-/// (OSV ecosystem, name, exact version if pinned). None for anything else (a local program, a path, a git URL).
-fn package_of(command: &str, args: &[String]) -> Option<(&'static str, String, Option<String>)> {
+/// The registry package a server's command fetches and runs (`npx -y pkg@1.2.3`, `uvx pkg`, `pipx run pkg`…).
+struct Package {
+    /// OSV ecosystem: npm or PyPI.
+    eco: &'static str,
+    /// Normalized (lowercase; PyPI's PEP 503 form), for OSV and the registry.
+    name: String,
+    /// The exact version, if pinned (a tag or range isn't).
+    version: Option<String>,
+    /// The arg holding the spec (it ends the arg: `pkg@1`, or `--from=pkg@1`), and the name as written (with extras).
+    at: usize,
+    spec_len: usize,
+    written: String,
+}
+
+impl Package {
+    /// The args with this package pinned to `version`.
+    fn pinned(&self, args: &[String], version: &str) -> Vec<String> {
+        let mut args = args.to_vec();
+        let a = &mut args[self.at];
+        a.truncate(a.len() - self.spec_len);
+        a.push_str(&format!("{}{}{version}", self.written, if self.eco == "npm" { "@" } else { "==" }));
+        args
+    }
+}
+
+/// None for anything that isn't a registry package (a local program, a path, a git URL).
+fn package_of(command: &str, args: &[String]) -> Option<Package> {
     let tool = std::path::Path::new(command).file_stem()?.to_str()?.to_ascii_lowercase();
     let a: Vec<&str> = args.iter().map(String::as_str).collect();
     // The runner, the args after it, and its flags that name the package or take a value.
@@ -826,7 +858,7 @@ fn package_of(command: &str, args: &[String]) -> Option<(&'static str, String, O
     while i < rest.len() {
         let (flag, inline) = rest[i].split_once('=').map_or((rest[i], None), |(f, v)| (f, Some(v)));
         if pkg_flags.contains(&flag) || value_flags.contains(&flag) {
-            let v = inline.or_else(|| rest.get(i + 1).copied());
+            let v = inline.map(|v| (i, v)).or_else(|| rest.get(i + 1).map(|v| (i + 1, *v)));
             i += if inline.is_some() { 1 } else { 2 };
             if pkg_flags.contains(&flag) {
                 spec = v;
@@ -835,25 +867,105 @@ fn package_of(command: &str, args: &[String]) -> Option<(&'static str, String, O
         } else if flag.starts_with('-') {
             i += 1;
         } else {
-            spec = Some(rest[i]);
+            spec = Some((i, rest[i]));
             break;
         }
     }
-    let spec = spec?;
+    let (i, spec) = spec?;
     if spec.is_empty() || spec.starts_with(['.', '/', '~', '\\']) || spec.contains(':') || (eco == "PyPI" && spec.contains('/')) {
         return None;
     }
+    let at = i + a.len() - rest.len();
     let pinned = |v: &str| (v.starts_with(|c: char| c.is_ascii_digit()) && v.chars().all(|c| c.is_ascii_alphanumeric() || ".-+".contains(c))).then(|| v.to_string());
     if eco == "npm" {
         // A scoped name starts with @: the version's @ is the one after it.
-        let at = spec[1..].find('@').map(|i| i + 1);
-        let (name, version) = at.map_or((spec, None), |i| (&spec[..i], pinned(&spec[i + 1..])));
-        return Some((eco, name.to_lowercase(), version));
+        let v_at = spec[1..].find('@').map(|i| i + 1);
+        let (name, version) = v_at.map_or((spec, None), |i| (&spec[..i], pinned(&spec[i + 1..])));
+        return Some(Package { eco, name: name.to_lowercase(), version, at, spec_len: spec.len(), written: name.into() });
     }
     let (name, version) = spec.split_once("==").or_else(|| spec.split_once('@')).map_or((spec, None), |(n, v)| (n, pinned(v.trim())));
-    // Drop extras and any other specifier (`pkg[cli]>=1`); PyPI names compare normalized (PEP 503).
-    let name = name.split(['[', '<', '>', '=', '!', '~', ';', ' ']).next().unwrap_or(name);
-    Some((eco, name.to_lowercase().replace(['_', '.'], "-"), version))
+    // Drop any other specifier (`pkg[cli]>=1`), keeping extras to write back; PyPI names compare normalized (PEP 503).
+    let written = name.split(['<', '>', '=', '!', '~', ';', ' ']).next().unwrap_or(name);
+    let name = written.split('[').next().unwrap_or(written);
+    Some(Package { eco, name: name.to_lowercase().replace(['_', '.'], "-"), version, at, spec_len: spec.len(), written: written.into() })
+}
+
+/// How old a release must be before Mimir picks it: a hijacked package is usually caught and pulled within days
+/// (pnpm and Yarn hold back new releases the same way).
+const SETTLE_DAYS: i64 = 7;
+
+/// The release to run from npm or PyPI: the one the registry calls latest once it's SETTLE_DAYS old, else the last
+/// stable one published before that. By date, not number: packages renumber (2026.8.31, then 1.0.0). None if there's
+/// none, or none published after `current`.
+/// ponytail: "stable" is dotted numbers only, so prereleases and odd forms are never picked.
+async fn settled_version(eco: &str, name: &str, current: Option<&str>) -> Result<Option<String>> {
+    let http = reqwest::Client::builder().timeout(Duration::from_secs(15)).build()?;
+    let (url, latest_at, releases) = if eco == "npm" {
+        let base = std::env::var("MIMIR_NPM_REGISTRY").unwrap_or_else(|_| "https://registry.npmjs.org".into());
+        (format!("{base}/{}", name.replace('/', "%2f")), "/dist-tags/latest", "/time")
+    } else {
+        let base = std::env::var("MIMIR_PYPI").unwrap_or_else(|_| "https://pypi.org".into());
+        (format!("{base}/pypi/{name}/json"), "/info/version", "/releases")
+    };
+    let doc: Value = http.get(&url).send().await?.error_for_status()?.json().await?;
+    Ok(newest_settled(&doc, latest_at, releases, crate::db::now(), current))
+}
+
+fn newest_settled(doc: &Value, latest_at: &str, releases: &str, now: i64, current: Option<&str>) -> Option<String> {
+    // npm: {version: date}, unpublished ones still listed (gone from `versions`); PyPI: {version: [files]}, dated by
+    // the first upload, and none if every file is yanked.
+    let published = |v: &str, at: &Value| match at {
+        Value::String(t) => doc["versions"].get(v).map(|_| t.clone()),
+        Value::Array(files) => files.iter().filter(|f| f["yanked"] != true).filter_map(|f| f["upload_time_iso_8601"].as_str()).min().map(String::from),
+        _ => None,
+    };
+    let stable = |v: &str| !v.is_empty() && v.split('.').all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()));
+    let dated: HashMap<&str, i64> = doc
+        .pointer(releases)?
+        .as_object()?
+        .iter()
+        .filter(|(v, _)| stable(v))
+        .filter_map(|(v, at)| Some((v.as_str(), chrono::DateTime::parse_from_rfc3339(&published(v, at)?).ok()?.timestamp())))
+        .collect();
+    let settled = |v: &str| dated.get(v).is_some_and(|t| now - t >= SETTLE_DAYS * 86400);
+    let latest = doc.pointer(latest_at).and_then(Value::as_str).filter(|v| settled(v));
+    let pick = latest.or_else(|| dated.keys().copied().filter(|v| settled(v)).max_by_key(|v| dated[v]))?;
+    match current.and_then(|c| dated.get(c)) {
+        Some(t) if dated[pick] <= *t => None,
+        _ => Some(pick.to_string()),
+    }
+}
+
+/// A version to pin `p` to, or why there isn't one.
+async fn version_to_pin(p: &Package) -> Result<String> {
+    settled_version(p.eco, &p.name, None)
+        .await
+        .with_context(|| format!("couldn't look up {}'s versions on {}", p.name, p.eco))?
+        .with_context(|| format!("{} has no release older than {SETTLE_DAYS} days yet. To use a newer one anyway, name its version (pkg@1.2.3, pkg==1.2.3)", p.name))
+}
+
+/// Servers that have a newer settled release than the one they're pinned to (or aren't pinned): name → version.
+/// One that can't be looked up is left out.
+pub async fn updates(db: &Db) -> HashMap<String, String> {
+    let checks = servers(db).into_iter().filter(|s| s.preset.is_none() && s.url.is_empty()).filter_map(|s| {
+        let p = package_of(&s.command, &s.args)?;
+        Some(async move { settled_version(p.eco, &p.name, p.version.as_deref()).await.ok().flatten().map(|v| (s.name, v)) })
+    });
+    futures_util::future::join_all(checks).await.into_iter().flatten().collect()
+}
+
+/// Pin a server to its newest settled release: checked for malware and started once (like adding it), then saved.
+pub async fn update_server(db: &Db, name: &str) -> Result<String> {
+    let mut conf = servers(db).into_iter().find(|s| s.name == name && s.preset.is_none()).with_context(|| format!("tool server {name} is not configured"))?;
+    let p = package_of(&conf.command, &conf.args).with_context(|| format!("{name} doesn't run a package from npm or PyPI"))?;
+    let v = version_to_pin(&p).await?;
+    conf.args = p.pinned(&conf.args, &v);
+    refresh(db, &conf).await?;
+    // Read again: the list may have changed while it started.
+    let mut list = servers(db);
+    list.iter_mut().filter(|s| s.name == name).for_each(|s| s.args = conf.args.clone());
+    set_servers(db, &list)?;
+    Ok(v)
 }
 
 /// The malicious-package advisory (OSV `MAL-…`) in an OSV query answer, if any.
@@ -869,10 +981,11 @@ fn malicious(answer: &Value) -> Option<String> {
 const OSV_FRESH: i64 = 24 * 3600;
 
 /// Refuse to start a server whose package OSV.dev lists as malware. Verdicts are cached per package@version in
-/// settings; when OSV can't be reached the server starts anyway (logged).
+/// settings. When OSV can't be reached, a package it called clean before starts anyway (logged); one it never
+/// checked doesn't.
 /// ponytail: an unpinned package is refused if any of its versions was ever flagged; pinning a clean one gets past that.
 async fn malware_check(db: &Db, osv: &str, server: &str, command: &str, args: &[String]) -> Result<()> {
-    let Some((eco, name, version)) = package_of(command, args) else { return Ok(()) };
+    let Some(Package { eco, name, version, .. }) = package_of(command, args) else { return Ok(()) };
     let shown = format!("{name}{}", version.as_deref().map(|v| format!("@{v}")).unwrap_or_default());
     let key = format!("osv:{eco}:{shown}");
     let cached = db.setting(&key)?.unwrap_or_default();
@@ -894,10 +1007,11 @@ async fn malware_check(db: &Db, osv: &str, server: &str, command: &str, args: &[
                     db.set_setting(&key, &found.clone().unwrap_or_else(|| format!("ok:{}", crate::db::now())))?;
                     found
                 }
-                Err(e) => {
-                    eprintln!("tool server {server}: couldn't check {shown} for malware on OSV.dev, starting it anyway: {e:#}");
+                Err(e) if cached.starts_with("ok:") => {
+                    eprintln!("tool server {server}: couldn't check {shown} for malware on OSV.dev, starting it anyway (it was clean before): {e:#}");
                     None
                 }
+                Err(e) => bail!("didn't start tool server {server}: couldn't check {shown} for malware on OSV.dev, and it hasn't been checked before: {e:#}"),
             }
         }
     };
@@ -1114,8 +1228,18 @@ mod tests {
     fn package_of_commands() {
         let p = |line: &str| {
             let mut w = line.split(' ').map(String::from);
-            package_of(&w.next().unwrap(), &w.collect::<Vec<_>>()).map(|(e, n, v)| format!("{e} {n} {}", v.unwrap_or_default()))
+            package_of(&w.next().unwrap(), &w.collect::<Vec<_>>()).map(|p| format!("{} {} {}", p.eco, p.name, p.version.unwrap_or_default()))
         };
+        let pin = |line: &str| {
+            let w: Vec<String> = line.split(' ').map(String::from).collect();
+            package_of(&w[0], &w[1..]).unwrap().pinned(&w[1..], "2.0.1").join(" ")
+        };
+        assert_eq!(pin("npx -y @scope/Pkg ~/Notes"), "-y @scope/Pkg@2.0.1 ~/Notes");
+        assert_eq!(pin("npx mcp-thing@latest"), "mcp-thing@2.0.1");
+        assert_eq!(pin("npx --package=left-pad run"), "--package=left-pad@2.0.1 run");
+        assert_eq!(pin("uvx --python 3.12 Mcp_Server.Git"), "--python 3.12 Mcp_Server.Git==2.0.1");
+        assert_eq!(pin("uv tool run pkg[cli]>=1 --x"), "tool run pkg[cli]==2.0.1 --x");
+        assert_eq!(pin("pipx run --spec pkg tool"), "run --spec pkg==2.0.1 tool");
         assert_eq!(p("npx -y @modelcontextprotocol/server-filesystem ~/Notes").as_deref(), Some("npm @modelcontextprotocol/server-filesystem "));
         assert_eq!(p("/usr/local/bin/npx --yes @scope/pkg@1.2.3 --flag").as_deref(), Some("npm @scope/pkg 1.2.3"));
         assert_eq!(p("npx.cmd mcp-thing@latest").as_deref(), Some("npm mcp-thing "), "a tag isn't a pinned version");
@@ -1141,7 +1265,8 @@ mod tests {
         assert_eq!(malicious(&json!({})), None);
     }
 
-    /// Against a one-file fake OSV: a flagged package is refused, the verdict is cached, and OSV being down doesn't block.
+    /// Against a one-file fake OSV: a flagged package is refused, the verdict is cached, and OSV being down blocks only
+    /// a package it never called clean.
     #[tokio::test]
     async fn malware_check_refuses_and_caches() {
         use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1169,7 +1294,46 @@ mod tests {
         malware_check(&db, &osv, "x", "npx", &args("-y good-mcp")).await.unwrap();
         malware_check(&db, &osv, "x", "node", &args("server.js")).await.unwrap();
         assert_eq!(ASKED.load(Ordering::SeqCst), 2, "verdicts come from the cache the second time");
-        malware_check(&db, "http://127.0.0.1:9", "x", "uvx", &args("other-pkg")).await.unwrap();
+        let down = "http://127.0.0.1:9";
+        assert!(malware_check(&db, down, "x", "uvx", &args("other-pkg==1.0")).await.is_err(), "never checked: OSV down blocks");
+        db.set_setting("osv:npm:good-mcp", "ok:0").unwrap();
+        malware_check(&db, down, "x", "npx", &args("-y good-mcp")).await.unwrap();
+    }
+
+    /// `cargo test -p mimir-core settled_live -- --ignored --nocapture` (the real npm and PyPI)
+    #[tokio::test]
+    #[ignore]
+    async fn settled_live() {
+        for (eco, name) in [("npm", "@modelcontextprotocol/server-filesystem"), ("PyPI", "mcp-server-fetch")] {
+            let v = settled_version(eco, name, None).await.unwrap().unwrap();
+            println!("{name} → {v}");
+        }
+    }
+
+    #[test]
+    fn settled_versions() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-10-15T00:00:00Z").unwrap().timestamp();
+        // Like @modelcontextprotocol/server-filesystem: 0.x, then dates, then 1.0.0 (4 days old).
+        let npm = json!({
+            "dist-tags": {"latest": "1.0.0"},
+            "versions": {"0.6.2": {}, "2026.7.10": {}, "2026.8.31": {}, "1.0.0": {}, "2.0.0-rc.1": {}},
+            "time": {"created": "2024-11-21T00:00:00Z", "0.6.2": "2024-12-04T00:00:00Z", "2026.7.10": "2026-07-10T00:00:00Z",
+                "2026.8.31": "2026-08-31T20:25:55.419Z", "2026.9.30": "2026-09-30T00:00:00Z", "2.0.0-rc.1": "2026-10-01T00:00:00Z", "1.0.0": "2026-10-11T02:44:10.659Z"}
+        });
+        let pick = |doc: &Value, at: i64, current: Option<&str>| newest_settled(doc, "/dist-tags/latest", "/time", at, current);
+        // 1.0.0 is too new, 2026.9.30 was unpublished, the rc isn't stable.
+        assert_eq!(pick(&npm, now, None).as_deref(), Some("2026.8.31"));
+        assert_eq!(pick(&npm, now + 7 * 86400, None).as_deref(), Some("1.0.0"));
+        assert_eq!(pick(&npm, now, Some("2026.7.10")).as_deref(), Some("2026.8.31"), "an update");
+        assert_eq!(pick(&npm, now, Some("2026.8.31")), None, "already on it");
+        assert_eq!(pick(&npm, now, Some("1.0.0")), None, "never back down from one pinned by hand");
+        let pypi = json!({
+            "info": {"version": "0.7.0"},
+            "releases": {"0.5.0": [{"upload_time_iso_8601": "2026-01-01T00:00:00.000000Z"}], "0.6.0": [{"upload_time_iso_8601": "2026-02-01T00:00:00Z", "yanked": true}],
+                "0.7.0": [{"upload_time_iso_8601": "2026-10-14T00:00:00Z"}], "0.4.0": []}
+        });
+        assert_eq!(newest_settled(&pypi, "/info/version", "/releases", now, None).as_deref(), Some("0.5.0"));
+        assert_eq!(newest_settled(&json!({}), "/info/version", "/releases", now, None), None);
     }
 
     #[test]

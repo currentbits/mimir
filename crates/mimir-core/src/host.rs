@@ -826,6 +826,10 @@ impl Host {
                 ok(self.db.set_setting("sensitive", &serde_json::to_string(&list)?)?)
             }
             "tool_server_delete" => ok(ext::delete_server(&self.db, &arg::<String>(a, "name")?)?),
+            // Servers with a newer release (7+ days old) than the version they're pinned to: {name: version}.
+            "tool_server_updates" => ok(ext::updates(&self.db).await),
+            // Move one server to that version; returns it.
+            "tool_server_update" => ok(ext::update_server(&self.db, &arg::<String>(a, "name")?).await?),
             // A remote server that wants a sign-in (MCP's OAuth): returns the address to open; then `_wait` (desktop) or
             // `_paste` (a server: the address the browser ended up on) finishes it and saves the server. Returns its tool count.
             "tool_server_sign_in" => {

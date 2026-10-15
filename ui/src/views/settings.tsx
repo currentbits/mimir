@@ -758,6 +758,9 @@ function parseServer(text: string): ParsedServer | string | null {
 
 function ToolServerSettings({ onChange }: { onChange: () => void }) {
   const list = useLoad(() => invoke<{ servers: ToolServer[] }>('tool_servers'), [], 60000)
+  // Asks npm and PyPI, so once when Settings opens rather than every minute.
+  const updates = useLoad(() => invoke<Record<string, string>>('tool_server_updates'), [])
+  const [updating, setUpdating] = useState<string | null>(null)
   const [form, setForm] = useState<{ text: string; name: string; guess: string; env: EnvRow[]; editing: boolean } | null>(null)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
@@ -785,7 +788,7 @@ function ToolServerSettings({ onChange }: { onChange: () => void }) {
     const rows = Object.fromEntries(form.env.filter(e => e.key.trim()).map(e => [e.key.trim(), e.value]))
     return { name: form.name.trim(), command: parsed.command, args: parsed.args, url: parsed.url, ...parsed.url ? { headers: rows } : { env: rows } }
   }
-  const ready = (name: string) => (n: number) => { setMsg(`${name} is ready with ${n} tool${n === 1 ? '' : 's'}.`); setErr(null); setForm(null); list.reload(); onChange() }
+  const ready = (name: string) => (n: number) => { setMsg(`${name} is ready with ${n} tool${n === 1 ? '' : 's'}.`); setErr(null); setForm(null); list.reload(); updates.reload(); onChange() }
   const save = async () => {
     const server = conf()
     if (!server) return
@@ -797,6 +800,12 @@ function ToolServerSettings({ onChange }: { onChange: () => void }) {
   const wantsSignIn = remote && !!server && !!err && /sign in/.test(err)
   const signIn = (conf: object, name: string, label = `Sign in to ${name}`) => <SignInBrowser<number> label={label} what={name}
     start={() => invoke('tool_server_sign_in', { server: conf })} wait="tool_server_sign_in_wait" paste="tool_server_sign_in_paste" onDone={ready(name)} />
+  const update = (s: ToolServer) => {
+    setUpdating(s.name); setErr(null)
+    invoke<string>('tool_server_update', { name: s.name })
+      .then(v => { setMsg(`${s.name} now runs ${v}.`); list.reload(); updates.reload(); onChange() }, e => setErr(String(e)))
+      .finally(() => setUpdating(null))
+  }
   const remove = (s: ToolServer) => ask(`Remove ${s.name}? Your bots lose its tools.`, 'Remove', true).then(ok => { if (ok) void invoke('tool_server_delete', { name: s.name }).then(() => { setMsg(null); list.reload(); onChange() }, e => setErr(String(e))) })
 
   return (
@@ -804,6 +813,8 @@ function ToolServerSettings({ onChange }: { onChange: () => void }) {
       {servers.map(s => (
         <Row key={s.name} icon={<Icon name="plug" size={15} />} title={s.name} desc={<>{s.tools} tool{s.tools === 1 ? '' : 's'} · <code>{s.url || [s.command, ...s.args].join(' ')}</code></>}>
           {s.signed_in && signIn({ name: s.name, url: s.url, headers: Object.fromEntries(s.headers.map(k => [k, ''])) }, s.name, 'Sign in again')}
+          {updates.data?.[s.name] && <button className="btn btn-sm" disabled={!!updating} title="Released at least 7 days ago. It's checked for malware and started once before it's used."
+            onClick={() => update(s)}>{updating === s.name ? 'Updating…' : `Update to ${updates.data[s.name]}`}</button>}
           <button className="btn btn-sm" onClick={() => open(s)}>Edit</button>
           <button className="btn btn-sm btn-ghost btn-danger icon-btn" aria-label={`Remove ${s.name}`} title="Remove" onClick={() => remove(s)}><Icon name="trash" size={14} /></button>
         </Row>

@@ -167,8 +167,16 @@ servers that only offer the older SSE transport aren't supported.
 `uvx`, `pipx run`…), Mimir looks the package up in [OSV.dev](https://osv.dev)'s list of malicious packages and refuses
 to start it if it's there, naming the advisory. With a pinned version (`pkg@1.2.3`, `pkg==1.2.3`) only that version
 counts; without one, any version ever flagged blocks it, so pin a clean version to get past that. The answer is kept for
-a day (a flagged one for good), and if OSV.dev can't be reached the server starts anyway. The built-in browser is a
-fixed version and isn't checked.
+a day (a flagged one for good). If OSV.dev can't be reached, a version it called clean before starts anyway; one it
+never checked doesn't. The built-in browser is a fixed version and isn't checked.
+
+**Pinned versions.** OSV.dev only knows about a malicious release once someone reports it, so Mimir also doesn't run
+whatever was published last. When you add a server whose setup line names a package without a version
+(`npx -y pkg`, `uvx pkg`), Mimir pins it to the newest release that's at least 7 days old (`pkg@1.2.3`,
+`pkg==1.2.3`), the way pnpm and Yarn hold back brand-new releases. A hijacked release is usually found and pulled within
+days. When a newer release has been out for 7 days, the server shows **Update to …**: the new version is checked and
+started once, like adding the server, before your bots use it. A version you name yourself is kept as is, including one
+less than 7 days old.
 
 **Signing in.** A hosted server that wants a sign-in (Notion `https://mcp.notion.com/mcp`, Linear
 `https://mcp.linear.app/mcp` and the like) answers Mimir's first try with "wants you to sign in", and Settings shows
