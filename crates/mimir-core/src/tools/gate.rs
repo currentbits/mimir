@@ -240,12 +240,14 @@ pub fn looks_sensitive(name: &str) -> bool {
 }
 
 /// After a run read a sensitive source, these are the ways data leaves: an email, a web request (fetch, search, the
-/// computer's browser), a hand-off to another bot, a message to another chat, and any tool server's write (or its
+/// computer's browser), a hand-off to another bot, a message to another chat, a memory the household's guests read,
+/// and any tool server's write (or its
 /// read that reaches the internet, carrying what it's asked).
 pub(super) fn sends_out(ctx: &ToolCtx, name: &str, args: &Value) -> bool {
     match name {
         "email_send" | "web_fetch" | "web_search" | "ask_bot" | "computer_open" | "computer_type" => true,
         "routine_create" => args["for"].as_str().is_some_and(|f| !f.trim().is_empty()),
+        "memory_store" => args["household"].as_bool() == Some(true),
         "send_file" => ctx.db.chat_guest(ctx.chat_id) || !ctx.db.chat_private(ctx.chat_id),
         n => crate::ext::find(&ctx.db, n).is_some_and(|t| {
             // Reading the sensitive server again, or the browser looking at its page, sends nothing new out.
@@ -520,6 +522,10 @@ pub(super) fn precheck(ctx: &ToolCtx, name: &str, args: &Value) -> Result<()> {
             if args["prompt"].as_str().is_some_and(|p| p.trim().is_empty()) {
                 bail!("a routine needs a prompt");
             }
+            // Bots never change a schedule on their own: in a routine's run (nobody there), its times and end stay.
+            if ctx.unattended && (args["cron"].is_string() || args["until"].is_string()) {
+                bail!("a routine can't change when it runs or ends on its own; say what you'd change in your report and the person can");
+            }
             if let Some(cron) = args["cron"].as_str()
                 && crate::db::min_gap_minutes(cron)? < 15
             {
@@ -536,12 +542,17 @@ pub(super) fn precheck(ctx: &ToolCtx, name: &str, args: &Value) -> Result<()> {
             }
         }
         "routine_create" => {
+            let mut chat = ctx.chat_id;
             if args["for"].as_str().is_some_and(|f| !f.trim().is_empty()) {
                 // Only you send things to other people's chats: a guest (or a family group) can't.
                 if ctx.db.chat_guest(ctx.chat_id) {
                     bail!("only the person who runs you can set reminders for others");
                 }
-                remind_target(ctx, args)?;
+                // A follow-up is the bot checking back in this chat, not a reminder for someone else.
+                if args["followup"].as_bool() == Some(true) {
+                    bail!("a follow-up is for this chat; to remind someone else, leave out followup");
+                }
+                chat = remind_target(ctx, args)?.map_or(chat, |t| t.0);
             }
             if len("prompt") > 1000 || len("cron") > 100 {
                 bail!("a routine's prompt can be up to 1000 characters: say what to do, briefly");
@@ -553,6 +564,10 @@ pub(super) fn precheck(ctx: &ToolCtx, name: &str, args: &Value) -> Result<()> {
                     let t = local_time(at)?;
                     if t <= crate::db::now() || t > crate::db::now() + 366 * 86400 {
                         bail!("'at' must be in the future, within a year");
+                    }
+                    // A run booking the next one-off would otherwise repeat every minute.
+                    if ctx.unattended && t < crate::db::now() + 15 * 60 {
+                        bail!("from a routine, a one-off runs at least 15 minutes from now");
                     }
                 }
                 None if crate::db::min_gap_minutes(s(args, "cron").map_err(|_| anyhow::anyhow!("give cron for a recurring routine, or at for a one-off"))?)? < 15 => {
@@ -578,7 +593,7 @@ pub(super) fn precheck(ctx: &ToolCtx, name: &str, args: &Value) -> Result<()> {
                     bail!("until must be in the future");
                 }
             }
-            if ctx.db.routines(ctx.chat_id)?.len() >= 25 {
+            if ctx.db.routines(chat)?.len() >= 25 {
                 bail!("this chat already has 25 routines; ask the person to remove some first");
             }
         }

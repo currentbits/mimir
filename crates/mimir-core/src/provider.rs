@@ -976,6 +976,7 @@ async fn codex(ctx: &ToolCtx, home: &PathBuf, model: Option<&str>, system: &str,
         // A JSON array of strings is also a valid TOML array.
         format!("mcp_servers.mimir.args={}", serde_json::to_string(&ctx.mcp_args())?),
         format!("mcp_servers.mimir.env={{MIMIR_HOME={home_s}}}"),
+        codex_env_vars(),
         format!("mcp_servers.mimir.tool_timeout_sec={}", TURN_TIMEOUT.as_secs()),
         // Mimir's own gate decides (allow / ask / deny, outside content): Codex hands every call through instead of
         // refusing ones it would otherwise want approved (with approval_policy=never it rejects them outright).
@@ -1021,6 +1022,12 @@ async fn codex(ctx: &ToolCtx, home: &PathBuf, model: Option<&str>, system: &str,
     let (stdout, ()) = tokio::time::timeout(TURN_TIMEOUT, async { tokio::join!(read, drain) }).await.context("codex timed out")?;
     child.wait().await?;
     parse_codex_jsonl(&stdout?)
+}
+
+/// Codex gives its tool servers only a short list of its own environment: the computer service's address and token are
+/// passed by name (never their values on the command line, where other accounts could read the token).
+fn codex_env_vars() -> String {
+    format!("mcp_servers.mimir.env_vars={}", serde_json::to_string(&crate::computer::ENV).unwrap_or_default())
 }
 
 fn parse_codex_jsonl(stdout: &str) -> Result<Reply> {
@@ -1375,6 +1382,11 @@ mod tests {
         on_claude_event(42, 9, &json!({"type":"message_start"}));
         assert_eq!(crate::live::get(42, 9).as_deref(), Some(""), "a new message replaces the old text");
         crate::live::end(42, 9);
+    }
+
+    #[test]
+    fn codex_hands_the_computer_service_on() {
+        assert_eq!(codex_env_vars(), r#"mcp_servers.mimir.env_vars=["MIMIR_COMPUTER","MIMIR_COMPUTER_TOKEN"]"#);
     }
 
     #[test]

@@ -54,6 +54,7 @@ bot's instructions), everything that goes out asks, even if its rule says allow,
 - reading a web page or searching the web, and opening a page or typing on the bots' computer;
 - handing a task to another bot;
 - a message to someone else's chat (a reminder for them, a file in a group);
+- a memory saved for the household, which its guests read;
 - any tool server's change, and its reads that reach the internet (not the sensitive server's own).
 
 Like outside content, it never becomes "always", "all like this" or part of a plan, it sticks to the conversation until
@@ -69,12 +70,12 @@ in a group (where the reply goes to everyone) or incognito (where nothing may be
 
 **What's learned stays yours to accept.** Bots never change your memory's rules, your permissions, tool grants, saved
 logins, or your routines' schedules on their own. A bot may book a follow-up in the chat ("I'll check back Friday"):
-a one-off you see in its reply and in Routines, which asks first after outside content, is marked when made then, and
+a one-off it's told to mention in its reply, always shown in Routines, which asks first after outside content, is marked when made then, and
 counts toward the routine caps. A memory saved after reading outside content is marked *unconfirmed* and is kept
 out of the bots' standing instructions until you confirm it. That quarantine is why saving a new memory after outside
 content is the one change that doesn't ask; replacing an existing memory does, since it would take a confirmed one out
 of the instructions. The mark survives every path back in: a new version of the memory, a tidy-up suggestion drawn
-from such a conversation, or "Accept all" (which skips those suggestions). The one exception is a lesson that says
+from such a conversation, or "Accept all" (they come in unconfirmed). The one exception is a lesson that says
 what you wrote yourself (your messages only, never a file's or a forward's text): a page can't put words in your
 messages. Only your own words come back as past corrections or skill pitfalls. Files bots keep carry the same mark
 (written after outside content, or changed outside Mimir, counts as outside content), and the workspace can't be
@@ -130,6 +131,8 @@ half is built into the app); a tampered download is refused. It never restarts o
 
 - A photo you send counts as your own message, so words inside it (a screenshot of a page, a photo of a letter) aren't
   marked as outside content. Forwarded photos, audio files and documents are.
+
+- Signal doesn't mark forwards, so a message or voice note you forward there counts as your own words.
 
 - A message with a photo goes to Grok on its command line (it has no file form for that), where other accounts on the
   same computer could read it.
