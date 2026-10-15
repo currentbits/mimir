@@ -188,6 +188,8 @@ pub enum Refused {
     /// No such webhook, or the secret didn't match (said the same way, so ids can't be probed).
     Secret,
     Paused,
+    /// A signed call seen before: a captured one sent again.
+    Repeat,
 }
 
 /// A call to routine `id`'s webhook: its secret as the bearer token, or an HMAC-SHA256 of the body signed with it
@@ -196,12 +198,29 @@ pub fn webhook(db: &Db, id: i64, bearer: Option<&str>, signature: Option<&str>, 
     let r = db.routine(id).ok().flatten().filter(|r| r.cron == "webhook").ok_or(Refused::Secret)?;
     let secret = db.setting(&format!("webhook:{id}")).ok().flatten().ok_or(Refused::Secret)?;
     let signed = signature.map(|s| s.trim().trim_start_matches("sha256=").to_ascii_lowercase());
-    let ok = bearer.is_some_and(|b| same(b.trim(), &secret)) || signed.is_some_and(|s| same(&s, &hex(&hmac(secret.as_bytes(), body))));
-    if !ok {
+    let by_bearer = bearer.is_some_and(|b| same(b.trim(), &secret));
+    let sig = hex(&hmac(secret.as_bytes(), body));
+    if !by_bearer && !signed.is_some_and(|s| same(&s, &sig)) {
         return Err(Refused::Secret);
     }
     if r.paused {
         return Err(Refused::Paused);
+    }
+    // A signature has no time in it, so a captured call would stay valid forever: each signed body is taken once.
+    // Keyed on the signature, not a delivery id header, which isn't signed and could be changed.
+    // ponytail: the last 100 per routine, in settings; a sender that signs the same body twice gets the second refused
+    if !by_bearer {
+        static SEEN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _g = SEEN.lock().unwrap_or_else(|e| e.into_inner());
+        let key = format!("webhook-seen:{id}");
+        let seen = db.setting(&key).ok().flatten().unwrap_or_default();
+        let mut seen: Vec<&str> = seen.split_whitespace().collect();
+        if seen.contains(&&sig[..32]) {
+            return Err(Refused::Repeat);
+        }
+        seen.push(&sig[..32]);
+        let keep = seen.len().saturating_sub(100);
+        db.set_setting(&key, &seen[keep..].join(" ")).map_err(|_| Refused::Secret)?;
     }
     let text = String::from_utf8_lossy(body);
     let text = if text.trim().is_empty() { "(no body)".to_string() } else { crate::tools::truncate(text.trim(), 4_000) };
@@ -273,6 +292,7 @@ mod tests {
         webhook(&d, r.id, Some(&s), None, b"{\"build\":\"green\"}").unwrap();
         let sig = format!("sha256={}", hex(&hmac(s.as_bytes(), b"second")));
         webhook(&d, r.id, None, Some(&sig), b"second").unwrap();
+        assert_eq!(webhook(&d, r.id, None, Some(&sig), b"second"), Err(Refused::Repeat), "a captured call sent again");
         assert_eq!(webhook(&d, r.id, None, Some(&sig), b"tampered"), Err(Refused::Secret));
         let evs = d.routine_events(r.id).unwrap();
         assert_eq!(evs.iter().map(|e| e.1.as_str()).collect::<Vec<_>>(), ["{\"build\":\"green\"}", "second"]);

@@ -1,6 +1,6 @@
 //! Bot replies are Markdown; each messaging app wants its own dialect.
-//! Telegram → rich message blocks (HTML when those aren't taken), Slack → mrkdwn. Discord speaks Markdown already.
-//! Covers what chat models write: paragraphs, lists, headings, quotes, code, tables, bold/italic, links.
+//! Telegram → rich message blocks (HTML when those aren't taken), Slack → mrkdwn, Signal → plain text. Discord speaks
+//! Markdown already. Covers what chat models write: paragraphs, lists, headings, quotes, code, tables, bold/italic, links.
 
 use serde_json::{Value, json};
 
@@ -346,9 +346,51 @@ pub fn slack(md: &str) -> String {
         .join("\n\n")
 }
 
+// ---------------- Plain text (Signal) ----------------
+
+fn plain_inline(v: &[Inline]) -> String {
+    v.iter()
+        .map(|x| match x {
+            Inline::Text(t) | Inline::Code(t) => t.clone(),
+            Inline::Bold(v) | Inline::Italic(v) => plain_inline(v),
+            Inline::Link(v, url) => match plain_inline(v) {
+                t if t == *url => t,
+                t => format!("{t} ({url})"),
+            },
+        })
+        .collect()
+}
+
+/// Readable text without markup, for apps that show none (Signal): links keep their address.
+pub fn plain(md: &str) -> String {
+    blocks(md)
+        .iter()
+        .map(|b| match b {
+            Block::Para(t) | Block::Heading(_, t) => plain_inline(&inline(t)),
+            Block::Quote(t) => format!("> {}", plain_inline(&inline(t))),
+            Block::Code(t) => t.clone(),
+            Block::List { ordered, items } => items
+                .iter()
+                .enumerate()
+                .map(|(n, it)| format!("{} {}", if *ordered { format!("{}.", n + 1) } else { "•".into() }, plain_inline(&inline(it))))
+                .collect::<Vec<_>>()
+                .join("\n"),            Block::Table(rows) => rows.iter().map(|r| r.iter().map(|c| plain_inline(&inline(c))).collect::<Vec<_>>().join(" | ")).collect::<Vec<_>>().join("\n"),
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn plain_text() {
+        let s = plain(REPLY);
+        assert!(s.starts_with("Today\n\nTwo things:\n\n1. Send Acme the invoice — due <today> & soon."), "{s}");
+        assert!(s.contains("Dr. Lee (https://lee.example/book?a=1&b=2)"), "{s}");
+        assert!(s.contains("• snake_case_names stay as is") && s.ends_with("let x = a < b;"), "{s}");
+    }
 
     const REPLY: &str = "## Today\nTwo things:\n\n1. **Send Acme** the `invoice` — due <today> & soon.\n2. Book the dentist (see [Dr. Lee](https://lee.example/book?a=1&b=2)).\n\n- snake_case_names stay *as is*\n\n> remember the umbrella\n\n```\nlet x = a < b;\n```";
 
@@ -426,6 +468,7 @@ mod tests {
         let md = "| a | b |\n|---|---|\n| 1 | **2** |";
         assert_eq!(telegram(md, 4000), vec!["a | b\n1 | <b>2</b>"]);
         assert_eq!(slack(md), "a | b\n1 | *2*");
+        assert_eq!(plain(md), "a | b\n1 | 2");
         assert_eq!(telegram("| not | a table", 4000), vec!["| not | a table"], "no rule line: a paragraph");
     }
 
