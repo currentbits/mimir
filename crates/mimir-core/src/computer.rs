@@ -40,14 +40,18 @@ pub fn available() -> bool {
     remote().is_some() || (cfg!(target_os = "linux") && ["Xvfb", "xdotool", "scrot"].iter().all(|b| which(b)) && chromium().is_some())
 }
 
+/// Where the computer service is and its token: an AI CLI must hand these on to the `mimir mcp` it starts, or that
+/// process runs a computer of its own, inside Mimir's container.
+pub const ENV: [&str; 2] = ["MIMIR_COMPUTER", "MIMIR_COMPUTER_TOKEN"];
+
 /// The computer as a separate service (`MIMIR_COMPUTER=computer:7300`, docker compose); unset, it runs here.
 fn remote() -> Option<String> {
-    std::env::var("MIMIR_COMPUTER").ok().filter(|v| !v.trim().is_empty())
+    std::env::var(ENV[0]).ok().filter(|v| !v.trim().is_empty())
 }
 
 /// The secret both sides share for the control channel.
 fn token() -> Result<String> {
-    std::env::var("MIMIR_COMPUTER_TOKEN").ok().filter(|t| t.len() >= 24).context("set MIMIR_COMPUTER_TOKEN (24+ characters, the same for Mimir and the computer)")
+    std::env::var(ENV[1]).ok().filter(|t| t.len() >= 24).context("set MIMIR_COMPUTER_TOKEN (24+ characters, the same for Mimir and the computer)")
 }
 
 fn resolve(addr: &str) -> Result<std::net::SocketAddr> {

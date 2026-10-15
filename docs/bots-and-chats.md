@@ -132,7 +132,7 @@ one (the page shows it), so a code someone else saw can't be reused; after 5 wro
 for an hour. The bot answers **only the person who paired it**: in a group, channel or server, other members' messages
 are ignored and only you can press its Approve / Deny buttons. (A group paired before this rule asks to be paired once
 more.) Only a person writing as themselves can pair it (not an anonymous group admin or a channel), and wrong codes
-count per person. A message, photo or voice note you **forward** to it counts as outside content, like a file: it's
+count per person. A message, photo or voice note you **forward** to it counts as outside content, like a file (except on Signal, which doesn't mark forwards): it's
 someone else's words. Replies
 never show link previews (the apps fetch those on their own) and never ping @everyone, @here or roles. In Slack channels and Discord servers the bot
 answers only when @-mentioned; DMs always work. In a Slack channel it answers in a thread; in a Discord server, as a
