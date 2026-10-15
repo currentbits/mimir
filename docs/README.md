@@ -27,7 +27,7 @@ the lesson.
 | | |
 |---|---|
 | **A computer** | macOS (Apple silicon), Windows or Linux. Or a server you own (a VPS, a home server, a Raspberry Pi) for bots that are online while your laptop sleeps. |
-| **An AI account** | One of: a Claude plan with Claude Code, a ChatGPT Plus or Pro plan (signed in from Mimir), a SuperGrok or X Premium+ plan, an OpenRouter or other API key, or Ollama / LM Studio on your computer. |
+| **An AI account** | One of: a Claude plan with Claude Code, a ChatGPT Plus or Pro plan (signed in from Mimir), a Grok plan (The X Subscription, SuperGrok or X Premium+), an OpenRouter or other API key, or Ollama / LM Studio on your computer. |
 | **Optional** | A Telegram, Slack or Discord bot token, to talk to your bots from your phone. An email app password, a calendar link and a Brave Search key, to give them more to work with. |
 
 Setting it all up takes about ten minutes: [Getting started](getting-started.md).

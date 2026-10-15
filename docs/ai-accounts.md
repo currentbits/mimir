@@ -7,7 +7,7 @@ Mimir has no model of its own. Each bot uses an AI account you choose, on the bo
 | **Claude** | Runs the official `claude` CLI (`claude -p`) with your signed-in subscription | Your plan |
 | **ChatGPT** | Sign in with ChatGPT in Mimir; bots call OpenAI's API on your Plus or Pro plan. Nothing to install | Your plan |
 | **Codex CLI** | Runs the official `codex` CLI (`codex exec`) with your ChatGPT login | Your plan |
-| **Grok** | Runs Grok Build (`grok -p`) on your SuperGrok or X Premium+ plan | Your plan |
+| **Grok** | Runs Grok Build (`grok -p`) on your X Subscription plan (or an older SuperGrok or X Premium+ plan) | Your plan |
 | **OpenRouter** | One key for hundreds of models (only ones that can use tools are offered) | What OpenRouter charges |
 | **xAI API** | A per-token key from console.x.ai | Per token |
 | **Local model** | Ollama (`localhost:11434`) or LM Studio (`localhost:1234`); nothing leaves your computer | Free |
@@ -32,7 +32,15 @@ set up Brave Search or your own SearXNG once in Settings → Web search, and eve
   fails because of that, the bot says so plainly; turn on extra usage in your Claude account, or use another account
   (ChatGPT's login is supported for tools like this).
 - **Grok**: Settings → AI keys → *Sign in to Grok* (a device code). Mimir keeps that login in its own Grok home
-  (`~/.mimir/grok`), so your personal Grok plugins, hooks and tool servers never load into a bot.
+  (`~/.mimir/grok`), so your personal Grok plugins, hooks and tool servers never load into a bot, and neither do
+  your Claude or Cursor settings. Grok's own memory and `/goal` stay off, so bots can't read each other's notes and
+  incognito chats leave nothing behind. A message that starts with `/` reaches the bot as written; Grok doesn't run
+  it as one of its commands. Bots on Grok search the web, but not X: Grok Build can't yet turn on X search without
+  also turning on its shell and file tools.
+  Plans: since October 2026 Grok comes with [The X Subscription](https://x.ai/news/x-subscription) (Free, Plus,
+  Premium, Super, Ultra). Any of them can sign in, but Free and Plus allow little use; Premium ($30 a month, with
+  SuperGrok's and X Premium+'s benefits) or higher suits bots that run all day. SuperGrok and X Premium+ plans you
+  already have keep working.
 - **OpenRouter**: *Connect OpenRouter* signs you in through the browser and saves the key (OAuth PKCE with a one-off
   localhost callback). Or paste a key.
 - **Keys** (OpenAI-compatible, xAI) go to the OS keychain (or the server's private database).
@@ -42,6 +50,10 @@ set up Brave Search or your own SearXNG once in Settings → Web search, and eve
 A bot's page can name a second account for its routines while its own is at a usage limit, until the limit resets
 ([how it works](routines.md#when-a-run-doesnt-work)). It's another kind of account, not a second login of the same
 kind: Mimir uses one Claude, ChatGPT or Grok sign-in for all bots.
+
+On The X Subscription, Grok's allowance is one weekly pool shared by everything on that plan: the Grok apps, Grok
+Bot and Cursor. Coding in Cursor or chatting in Grok uses up the same allowance your bots run on, so a fallback
+account is worth setting for Grok bots.
 
 ## How tools reach the model
 

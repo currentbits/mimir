@@ -141,11 +141,12 @@ impl Db {
     }
 
     /// Decide a still-pending approval. `chat` (when given) must match, so one chat can't approve another's request.
+    /// A sign-in card can only be turned down here: it's done by signing in (`approval_claim`).
     pub fn approval_decide(&self, id: i64, approve: bool, chat: Option<i64>) -> Result<Option<Approval>> {
         let c = self.c();
         Self::expire_stale(&c)?;
         let n = c.execute(
-            "UPDATE approvals SET status=?2 WHERE id=?1 AND status='pending' AND (?3 IS NULL OR chat_id=?3)",
+            "UPDATE approvals SET status=?2 WHERE id=?1 AND status='pending' AND (?3 IS NULL OR chat_id=?3) AND kind != 'signing' AND (?2 = 'denied' OR kind != 'signin')",
             params![id, if approve { "approved" } else { "denied" }, chat],
         )?;
         if n == 0 {
@@ -153,6 +154,46 @@ impl Db {
         }
         drop(c);
         Ok(self.approvals_where("id = ?1", id)?.pop())
+    }
+
+    /// Take a waiting sign-in card for its form, once: the first submit gets it (kind `signing` while Mimir types,
+    /// with two minutes for that), any later one, or one after it ran out, gets None.
+    pub fn approval_claim(&self, id: i64) -> Result<Option<Approval>> {
+        let c = self.c();
+        Self::expire_stale(&c)?;
+        let n = c.execute("UPDATE approvals SET kind='signing', expires_at=?2 WHERE id=?1 AND status='pending' AND kind='signin'", [id, now() + 120])?;
+        drop(c);
+        Ok(if n == 1 { self.approvals_where("id = ?1", id)?.pop() } else { None })
+    }
+
+    /// How a claimed sign-in went: approved = signed in.
+    pub fn approval_signed_in(&self, id: i64, ok: bool) -> Result<()> {
+        let c = self.c();
+        c.execute("UPDATE approvals SET status=?2, kind='signin' WHERE id=?1 AND status='pending' AND kind='signing'", params![id, if ok { "approved" } else { "denied" }])?;
+        c.execute("DELETE FROM settings WHERE key=?1", [format!("signin:{id}")])?;
+        Ok(())
+    }
+
+    /// What a sign-in card's form shows besides the site (the full address, warnings), kept while it waits. Ones of
+    /// cards no longer waiting go when a new one is made.
+    pub fn signin_card_set(&self, id: i64, card: &serde_json::Value) -> Result<()> {
+        self.c().execute(
+            "DELETE FROM settings WHERE key LIKE 'signin:%' AND CAST(substr(key, 8) AS INTEGER) NOT IN (SELECT id FROM approvals WHERE status='pending')",
+            [],
+        )?;
+        self.set_setting(&format!("signin:{id}"), &card.to_string())
+    }
+
+    pub fn signin_card(&self, id: i64) -> Result<serde_json::Value> {
+        Ok(self.setting(&format!("signin:{id}"))?.and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default())
+    }
+
+    /// Sites someone signed in to with a sign-in card before.
+    pub fn signin_sites(&self) -> Result<Vec<String>> {
+        let c = self.c();
+        let mut st = c.prepare("SELECT DISTINCT site FROM approvals WHERE kind='signin' AND status='approved' AND site IS NOT NULL")?;
+        let v = st.query_map([], |r| r.get(0))?.collect::<Result<_, _>>()?;
+        Ok(v)
     }
 
     fn approvals_where(&self, sql: &str, p: i64) -> Result<Vec<Approval>> {
@@ -340,7 +381,7 @@ impl Db {
 
     pub fn approvals_pending(&self) -> Result<Vec<Approval>> {
         Self::expire_stale(&self.c())?;
-        self.approvals_where("status = 'pending' AND ?1 = ?1", 0)
+        self.approvals_where("status = 'pending' AND kind != 'signing' AND ?1 = ?1", 0)
     }
 
     /// This bot's pending Telegram approvals that haven't been sent as a card yet.

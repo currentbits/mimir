@@ -1139,6 +1139,20 @@ mod tests {
         assert!(d.approval_decide(a, false, None).unwrap().is_none(), "decided once");
         assert_eq!(d.approval_status(a).unwrap(), "approved");
 
+        // A sign-in card: done once, by its form (not an Approve), and not after it ran out.
+        let s = d.approval_create(1, 5, "computer_signin", "Sign in to github.com", 300, "signin", Some("github.com")).unwrap();
+        assert!(d.approval_decide(s, true, None).unwrap().is_none(), "approving isn't signing in");
+        assert_eq!(d.approval_claim(s).unwrap().unwrap().site.as_deref(), Some("github.com"));
+        assert!(d.approval_claim(s).unwrap().is_none(), "the link works once");
+        assert!(d.approval_decide(s, false, None).unwrap().is_none(), "nor can it be turned down while signing in");
+        d.approval_signed_in(s, true).unwrap();
+        assert_eq!(d.approval_status(s).unwrap(), "approved");
+        assert!(d.approval_claim(a).unwrap().is_none(), "only sign-in cards");
+        let late = d.approval_create(1, 5, "computer_signin", "Sign in", 0, "signin", Some("github.com")).unwrap();
+        assert!(d.approval_claim(late).unwrap().is_none(), "not once it ran out");
+        let no = d.approval_create(1, 5, "computer_signin", "Sign in", 300, "signin", Some("github.com")).unwrap();
+        assert_eq!(d.approval_decide(no, false, None).unwrap().unwrap().status, "denied", "Can't now still works");
+
         let b = d.approval_create(1, 0, "routine_delete", "Delete #2", 0, "rule", None).unwrap();
         assert_eq!(d.approval_status(b).unwrap(), "expired", "ttl 0 expires immediately");
         assert!(d.approval_decide(b, true, None).unwrap().is_none(), "can't approve expired");

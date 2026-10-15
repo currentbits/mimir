@@ -30,6 +30,11 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
   blob or download a program. Skills come in as proposals and routines come in paused; only its tool rules that are at
   least as strict as yours can be used, and its AI account uses your own settings.
   **Duplicate…** does both in one go. See [Bots and chats](docs/bots-and-chats.md#export-import-and-duplicate).
+- **Grok bots are more private:** Grok's own memory and `/goal` are always off for bots, and your Claude and Cursor
+  settings no longer load into them, so bots can't read each other's notes and incognito chats leave nothing behind
+  in Grok. A message that starts with `/` now reaches the bot instead of running as a Grok command. If a Grok update
+  ever offers a bot more tools than web search and Mimir's own, the message stops with an error instead of running.
+  The docs cover The X Subscription's plans and its shared weekly allowance.
 - **Security fixes from the fourth review:**
   - A routine can no longer change its own times or end date while it runs, or book itself again a minute later;
     from a routine, a one-off is at least 15 minutes away.
@@ -39,6 +44,16 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
   - After reading a sensitive source, saving a memory for the household asks too.
   - A bot file can't pass an option to the AI's command line as its model.
   - `mimir doctor` no longer creates a database, or upgrades an older one, while it checks.
+
+### The bots' computer
+- **Sign in from your phone:** at a sign-in page, a bot sends you a card with a link to a small masked form in Mimir,
+  instead of asking you to take over the screen. Type your login there, never in the chat; Mimir types it into the
+  page and keeps it for that bot on that site only. The bot never sees it, only whether it worked. If the bot got to
+  that site after reading a web page or a message, the site looks like one you've signed in to before, or its
+  address uses letters from another alphabet, the form warns you and shows the full address. Taking over stays for
+  captchas and payments. [Details](docs/computer.md#signing-in-from-your-phone)
+- **Authenticator codes on saved logins:** paste a site's setup key or `otpauth://` link once, and Mimir types the
+  6-digit codes itself, only on that login's site.
 
 ## 0.3.0
 
