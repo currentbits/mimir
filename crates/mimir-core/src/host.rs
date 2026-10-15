@@ -927,7 +927,34 @@ impl Host {
                 ok(true)
             }
             "vault" => ok(ext::vault(&self.db)),
-            "vault_save" => ok(ext::vault_save(&self.db, arg(a, "entry")?, arg::<Option<String>>(a, "value")?.as_deref())?),
+            "vault_save" => ok(ext::vault_save(&self.db, arg(a, "entry")?, arg::<Option<String>>(a, "value")?.as_deref(), arg::<Option<String>>(a, "totp").unwrap_or(None).as_deref())?),
+            // The masked form a bot's sign-in card links to. What you type goes from here into the page on the
+            // computer's screen (only while it's on the card's site) and into the secret store as that bot's login
+            // for the site: never into a chat, the database or a prompt. The card is used once, and runs out with it.
+            "signin_submit" => {
+                let text = |k: &str| arg::<Option<String>>(a, k).map(Option::unwrap_or_default);
+                let (user, password, code, key) = (text("user")?, text("password")?, text("code")?.trim().to_string(), text("totp")?.trim().to_string());
+                // A mistyped key is said before the card is used up.
+                let totp = (!key.is_empty()).then(|| crate::totp::parse(&key)).transpose()?;
+                if user.is_empty() && password.is_empty() && code.is_empty() && totp.is_none() {
+                    bail!("fill in your sign-in first");
+                }
+                let ap = self.db.approval_claim(arg(a, "id")?)?.context("this sign-in has been used or has run out; ask the bot again")?;
+                let site = ap.site.clone().unwrap_or_default();
+                let login = crate::computer::Login { user, password, code, totp };
+                let out = match tokio::time::timeout(std::time::Duration::from_secs(60), crate::computer::sign_in(&login, std::slice::from_ref(&site))).await {
+                    Ok(r) => r,
+                    Err(_) => Err(anyhow::anyhow!("the page didn't answer in time")),
+                };
+                // Kept only once it worked, so a mistyped password isn't saved.
+                let kept = match &out {
+                    Ok(true) if !login.password.is_empty() => ext::vault_save_signin(&self.db, ap.bot_id, &site, &login.user, &login.password, Some(&key)).map(Some),
+                    _ => Ok(None),
+                };
+                self.db.approval_signed_in(ap.id, matches!(out, Ok(true)) && kept.is_ok())?;
+                let signed_in = out?;
+                ok(json!({"signed_in": signed_in, "saved": kept?}))
+            }
             "vault_delete" => ok(ext::vault_delete(&self.db, &arg::<String>(a, "name")?)?),
             // Which bots are working right now, on what (one entry per bot, its newest run), and the step a reply is
             // on: their avatars come alive in the sidebar.

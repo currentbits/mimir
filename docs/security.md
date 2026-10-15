@@ -75,7 +75,13 @@ left: no `..`, no links, size limits.
   that uses a saved login, or from a guest's chat (your rules are yours).
 
 **Saved logins never reach the model.** They are typed by name into the browser, only on the sites you listed (the
-site is read the way the browser reads it), and each use asks.
+site is read the way the browser reads it), and each use asks. Authenticator codes are worked out by Mimir from a key
+in the secret store and typed the same way. A sign-in card's login is typed in Mimir's own masked form and goes from
+there to the page and the secret store, never through a chat, the database or a prompt. Mimir types it over the
+computer's DevTools in an isolated world, so the page's scripts can't change what it reads, and only while the page on
+screen is on the card's site, checked before each field. It keeps that login for that bot and that registrable domain
+only. The card's link holds no server, token or site: the form is behind your Mimir sign-in, uses the card the server
+has waiting, works once and runs out after 10 minutes. A plain Approve can't complete a sign-in card; only the form can.
 
 **Only you talk to your bot.** A chat is paired by one person with a one-time code, and only that person's messages
 and button presses count there. In a group, everyone else is ignored. Shared senders (an anonymous admin, a channel)
@@ -97,6 +103,7 @@ half is built into the app); a tampered download is refused. It never restarts o
 
 **Downloads and dependencies are pinned.**
 
+- Saved logins' sites are worked out with the public suffix list built into Mimir (the `psl` crate), updated with it.
 - Speech, voice and speaker models, and the speaker library Linux loads, are fixed versions checked against SHA-256.
 - The browser tool, the AI CLIs in the Docker image and the base images are fixed versions.
 - A tool server that downloads its package (`npx`, `uvx`…) is checked against OSV.dev's malicious-package list first
@@ -122,6 +129,10 @@ half is built into the app); a tampered download is refused. It never restarts o
   does).
 - Heuristics have limits: after a web page (not your email or a meeting), a bot could still spell data into short web
   addresses one fetch at a time (each fetch is in the run log).
+- A sign-in card's form signs in to whatever the page on the computer's screen is when you send it, as long as it's on
+  the card's site: a page of that site that looks like a sign-in but isn't one would get your login.
+- "Signed in" is read from the sign-in fields going away; a site that keeps a password field on every page reads as
+  failed (and the login isn't saved).
 - An email card shows exactly what's sent, but approving it is your call: after reading an email, check the recipient
   is who you meant.
 - When the bots' computer runs in Mimir's own process on a plain Linux host (not Docker), its Chromium's DevTools on

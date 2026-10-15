@@ -329,6 +329,7 @@ pub(super) fn describe(ctx: &ToolCtx, name: &str, args: &Value) -> String {
         "skill_save" => format!("Save as a skill: {}", args["title"].as_str().unwrap_or("")),
         "computer_screenshot" => "Look at the computer's screen".into(),
         "computer_handoff" => format!("Ask you to take over the computer: {}", args["reason"].as_str().unwrap_or("")),
+        "computer_signin" => "Sign in to the site on the computer".into(),
         "computer_click" => format!("Click the computer at {},{}", args["x"], args["y"]),
         "computer_type" => format!("Type on the computer: {}", args["text"].as_str().unwrap_or("")),
         "computer_key" => format!("Press {} on the computer", args["keys"].as_str().unwrap_or("")),

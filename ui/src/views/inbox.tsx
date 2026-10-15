@@ -10,6 +10,7 @@ import type { Approval, Chat, Hold, Inbox, Run, Tab } from '../types'
 
 /** What an approval would do, in a few words, and whether it can become an "always allow". */
 function approvalRisk(a: Approval): { icon: string; label: string; tone: string; always: boolean } {
+  if (a.kind === 'signin') return { icon: 'key', label: 'Sign in in Mimir, never in a chat: Mimir types it into the page and keeps it for this bot on this site only. The bot never sees it.', tone: 'login', always: false }
   if (a.kind === 'takeover') return { icon: 'laptop', label: 'A step only you should do. Take over on the live screen, then press Give back; the bot carries on.', tone: 'login', always: false }
   if (a.kind === 'login') return { icon: 'key', label: 'Types a saved login. Every use asks you.', tone: 'login', always: false }
   if (a.kind === 'send' && a.tool === 'send_file') return { icon: 'send', label: 'Sends a file where others see it (a group, or a guest\'s chat). Every file there asks you.', tone: 'rule', always: false }
@@ -55,13 +56,16 @@ function ApprovalCard({ a, where, leaving, decide, inline }: {
     <div className={'approval tone-' + risk.tone + (inline ? ' inline' : '') + (leaving ? ' leaving' : '')}>
       <Avatar id={b.id} name={b.name} size={32} mood="asking" />
       <div className="approval-main">
-        <div className="ask">{b.name} {a.kind === 'takeover' ? 'needs you on the computer' : 'needs your OK'} · {where}</div>
+        <div className="ask">{b.name} {a.kind === 'takeover' ? 'needs you on the computer' : a.kind === 'signin' ? 'needs you to sign in' : 'needs your OK'} · {where}</div>
         <div className={'what selectable' + (a.kind === 'plan' ? ' plan' : '')}>{a.summary}</div>
         <div className="risk"><Icon name={risk.icon} size={12} />{risk.label}</div>
         {learned && <div className="learned">You've allowed this {a.allowed_before} times. Stop asking?</div>}
         {a.parked && <div className="parked">From a routine. It runs when you approve; it waits {((w: string) => w.startsWith('in ') ? `for ${w.slice(3)}` : `until ${w}`)(ahead(a.expires_at))}.</div>}
       </div>
-      {a.kind === 'takeover' ? <div className="choices">
+      {a.kind === 'signin' ? <div className="choices">
+        <button className="btn" onClick={() => decide(a.id, false)}>Can’t now</button>
+        <a className="btn btn-primary" href="#signin">Sign in</a>
+      </div> : a.kind === 'takeover' ? <div className="choices">
         <button className="btn" onClick={() => decide(a.id, false)}>Can’t now</button>
         <button className="btn" onClick={() => decide(a.id, true)}>Done</button>
         <a className="btn btn-primary" href="#computer">Open the computer</a>
@@ -125,6 +129,51 @@ export function Approvals({ list, chats, chatName, onDecided }: { list: Approval
       {live.map(a => <ApprovalCard key={a.id} a={a} where={where(a.chat_id)} leaving={leaving.has(a.id)} decide={decide} />)}
       {err && <p className="error">{err}</p>}
     </section>
+  )
+}
+
+/** The masked form a sign-in card links to (#signin): for the newest card waiting. Only that card's id goes back with
+ *  what you type; the link itself carries nothing (no server, token or site), so a link someone sends you can't
+ *  point it elsewhere. */
+export function SignInForm({ list, onClose }: { list: Approval[]; onClose: () => void }) {
+  const botOf = useContext(Bots)
+  // Kept once sent: the card leaves the list as soon as Mimir starts typing.
+  const [held, setHeld] = useState<Approval>()
+  const a = held ?? list.filter(x => x.kind === 'signin').at(-1)
+  const [f, setF] = useState({ user: '', password: '', code: '', totp: '' })
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+  const [done, setDone] = useState<boolean | null>(null)
+  const field = (k: keyof typeof f) => ({ value: f[k], onChange: (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value }) })
+  const send = () => {
+    if (!a) return
+    setBusy(true); setErr(null); setHeld(a)
+    invoke<{ signed_in: boolean }>('signin_submit', { id: a.id, ...f })
+      .then(r => { setF({ user: '', password: '', code: '', totp: '' }); setDone(r.signed_in) }, e => { setErr(String(e)); setHeld(undefined) }).finally(() => setBusy(false))
+  }
+  return (
+    <div className="ask-backdrop" onMouseDown={e => e.target === e.currentTarget && !busy && onClose()}>
+      <form className="ask-box" role="dialog" aria-modal="true" aria-label="Sign in" onSubmit={e => { e.preventDefault(); send() }} onKeyDown={e => e.key === 'Escape' && !busy && onClose()}>
+        {done !== null ? <>
+          <p>{done ? `Signed in to ${a?.site ?? 'the site'}. ${botOf(a?.bot_id ?? 0).name} carries on.` : 'That didn’t sign in. The bot will tell you; it can ask again, or you can take over on the computer.'}</p>
+          <div className="ask-actions"><button type="button" className="btn btn-primary" onClick={onClose}>OK</button></div>
+        </> : !a ? <>
+          <p>{err ? `That didn’t sign in: ${err}` : 'No sign-in is waiting: it was used, or ran out after 10 minutes. Ask the bot again.'}</p>
+          <div className="ask-actions"><button type="button" className="btn btn-primary" onClick={onClose}>OK</button></div>
+        </> : <>
+          <p><b>Sign in to {a.site}</b> for {botOf(a.bot_id).name}. Mimir types this into the page on the computer and keeps it for this bot on {a.site} only. The bot never sees it.</p>
+          <input className="input" aria-label="User name or email" placeholder="User name or email" autoComplete="username" autoFocus {...field('user')} />
+          <input className="input" aria-label="Password" placeholder="Password" type="password" autoComplete="current-password" {...field('password')} />
+          <input className="input" aria-label="Code (if the site asks for one)" placeholder="Code, if the site asks for one" inputMode="numeric" autoComplete="one-time-code" {...field('code')} />
+          <input className="input" aria-label="Authenticator setup key (optional)" placeholder="Authenticator setup key or otpauth:// link (optional)" type="password" autoComplete="off" {...field('totp')} />
+          {err && <p className="error">{err}</p>}
+          <div className="ask-actions">
+            <button type="button" className="btn btn-ghost" disabled={busy} onClick={onClose}>Cancel</button>
+            <button className="btn btn-primary" disabled={busy || !(f.user || f.password || f.code || f.totp)}>{busy ? 'Signing in…' : 'Sign in'}</button>
+          </div>
+        </>}
+      </form>
+    </div>
   )
 }
 

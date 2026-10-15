@@ -337,9 +337,16 @@ pub fn specs() -> Vec<(&'static str, &'static str, Value)> {
             json!({"type":"object","properties":{"url":{"type":"string"}},"required":["url"]}),
         ),
         (
+            "computer_signin",
+            "Sign in to the site on your computer's screen. Open its sign-in page first. Mimir types a login saved for \
+             this site, or sends the person a sign-in card and types what they enter (user name, password, a code); you \
+             never see it. Returns whether it signed in. Use this for sign-ins and 2FA codes; computer_handoff for the rest.",
+            json!({"type":"object","properties":{}}),
+        ),
+        (
             "computer_handoff",
-            "Ask the person to take over your computer for a step only they should do: signing in, a verification or 2FA \
-             code, a captcha, or paying. Never type passwords, codes or card numbers yourself, and don't try to solve a captcha. \
+            "Ask the person to take over your computer for a step only they should do: a sign-in computer_signin can't \
+             do, a verification code, a captcha, or paying. Never type passwords, codes or card numbers yourself, and don't try to solve a captcha. \
              Say in reason what's needed (\"sign in to Padel Club\", \"enter the code sent to your phone\"). Mimir sends them \
              a link to the live screen and waits up to 10 minutes until they give it back; then take a screenshot and carry on.",
             json!({"type":"object","properties":{"reason":{"type":"string"}},"required":["reason"]}),
