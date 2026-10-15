@@ -2,8 +2,8 @@
 
 POST /bot<token>/<method> handles getMe, getUpdates (long-poll), sendMessage, editMessageText,
 sendChatAction, answerCallbackQuery, sendMessageDraft (private chats, non-zero draft_id; MOCK_NO_DRAFTS=1
-rejects it, like an older API), sendRichMessage (logged with "text": the rich message's words; MOCK_NO_RICH=1 rejects
-it, like an older API), and multipart uploads (sendPhoto, sendDocument: logged with each part's name and size,
+rejects it, like an older API), sendRichMessage, sendRichMessageDraft and editMessageText with rich_message
+(MOCK_NO_RICH=1 rejects them, like an API before 10.1), and multipart uploads (sendPhoto, sendDocument: logged with each part's name and size,
 and a file's name). Every call is appended to calls.jsonl.
 POST /control/push {update} queues an update for getUpdates. getFile + GET /file/bot<token>/<path> serve MOCK_FILE.
 """
@@ -12,14 +12,6 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 LOG = sys.argv[2] if len(sys.argv) > 2 else "calls.jsonl"
 updates, lock, next_id, next_msg = [], threading.Lock(), [1], [100]
-
-def words(v):
-    """A rich message's text, its blocks one per line."""
-    if isinstance(v, str): return v
-    if isinstance(v, list): return "".join(map(words, v))
-    if not isinstance(v, dict): return ""
-    if "text" in v: return words(v["text"])
-    return "\n".join(words(b) for k in ("blocks", "items", "cells") for b in v.get(k, []))
 
 class H(BaseHTTPRequestHandler):
     def log_message(self, *a): pass
@@ -42,8 +34,6 @@ class H(BaseHTTPRequestHandler):
                 data["update_id"] = next_id[0]; next_id[0] += 1; updates.append(data)
             return self.reply({"ok": True})
         method = self.path.rsplit("/", 1)[-1]
-        if "rich_message" in data:
-            data["text"] = words(data["rich_message"])
         if method != "getUpdates":
             with open(LOG, "a") as f: f.write(json.dumps({"t": round(time.time(), 2), "method": method, **data}) + "\n")
         if method == "getMe": return self.reply({"ok": True, "result": {"id": 1, "is_bot": True, "username": "mock_mimir_bot"}})
@@ -54,8 +44,9 @@ class H(BaseHTTPRequestHandler):
                     ready = [u for u in updates if u["update_id"] >= data.get("offset", 0)]
                 if ready or time.time() > deadline: return self.reply({"ok": True, "result": ready})
                 time.sleep(0.1)
-        if method == "sendRichMessage" and os.environ.get("MOCK_NO_RICH"):
+        if os.environ.get("MOCK_NO_RICH") and (method.startswith("sendRich") or "rich_message" in data):
             return self.reply({"ok": False, "description": "Not Found: method not found"})
+        if method == "sendRichMessageDraft": method = "sendMessageDraft"
         if method in ("sendMessage", "editMessageText", "sendRichMessage"):
             if "<b>" in data.get("text", "") and data.get("parse_mode") != "HTML":
                 return self.reply({"ok": False, "description": "HTML without parse_mode"})

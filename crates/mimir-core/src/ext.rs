@@ -164,6 +164,7 @@ pub async fn save_server(db: &Db, mut conf: ServerConf) -> Result<usize> {
         }
     }
     validate(&conf)?;
+    pin(&mut conf, false).await?;
     let n = refresh(db, &conf).await?;
     let mut list = servers(db);
     let mut old = list.iter().find(|s| s.name == conf.name).cloned().unwrap_or_default();
@@ -807,9 +808,26 @@ fn write_secrets_file(dir: &std::path::Path, values: &[(String, String)]) -> Res
     Ok(path)
 }
 
-/// The registry package a server's command fetches and runs (`npx -y pkg@1.2.3`, `uvx pkg`, `pipx run pkg`…):
-/// (OSV ecosystem, name, exact version if pinned). None for anything else (a local program, a path, a git URL).
-fn package_of(command: &str, args: &[String]) -> Option<(&'static str, String, Option<String>)> {
+/// The registry package a server's command fetches and runs (`npx -y pkg@1.2.3`, `uvx pkg`, `pipx run pkg`…).
+/// None for anything else (a local program, a path, a git URL).
+#[derive(Debug)]
+struct Pkg {
+    /// OSV's ecosystem: npm or PyPI.
+    eco: &'static str,
+    /// As the registry and OSV compare it (lowercase; PyPI's normalized).
+    name: String,
+    /// The exact version, if pinned (a tag like `latest` or a range isn't).
+    version: Option<String>,
+    /// Which arg names it, and the package as written there (after `--from=` when given inline).
+    at: usize,
+    spec: String,
+    /// The spec without its version, as written: None when it names a range (`pkg>=1`), which pinning leaves alone.
+    base: Option<String>,
+    /// Given as a flag's value (`--from pkg`, `--spec pkg`): a pip requirement there, so `pkg==1.2.3`.
+    flag: bool,
+}
+
+fn package_of(command: &str, args: &[String]) -> Option<Pkg> {
     let tool = std::path::Path::new(command).file_stem()?.to_str()?.to_ascii_lowercase();
     let a: Vec<&str> = args.iter().map(String::as_str).collect();
     // The runner, the args after it, and its flags that name the package or take a value.
@@ -821,39 +839,141 @@ fn package_of(command: &str, args: &[String]) -> Option<(&'static str, String, O
         ("pipx", ["run", r @ ..]) => ("PyPI", r, &["--spec"], &["--python", "--index-url", "--pip-args"]),
         _ => return None,
     };
-    let mut spec = None;
+    let skipped = a.len() - rest.len();
+    let mut found = None;
     let mut i = 0;
     while i < rest.len() {
         let (flag, inline) = rest[i].split_once('=').map_or((rest[i], None), |(f, v)| (f, Some(v)));
         if pkg_flags.contains(&flag) || value_flags.contains(&flag) {
+            let at = if inline.is_some() { i } else { i + 1 };
             let v = inline.or_else(|| rest.get(i + 1).copied());
             i += if inline.is_some() { 1 } else { 2 };
             if pkg_flags.contains(&flag) {
-                spec = v;
+                found = v.map(|v| (skipped + at, v, true));
                 break;
             }
         } else if flag.starts_with('-') {
             i += 1;
         } else {
-            spec = Some(rest[i]);
+            found = Some((skipped + i, rest[i], false));
             break;
         }
     }
-    let spec = spec?;
+    let (at, spec, flag) = found?;
     if spec.is_empty() || spec.starts_with(['.', '/', '~', '\\']) || spec.contains(':') || (eco == "PyPI" && spec.contains('/')) {
         return None;
     }
     let pinned = |v: &str| (v.starts_with(|c: char| c.is_ascii_digit()) && v.chars().all(|c| c.is_ascii_alphanumeric() || ".-+".contains(c))).then(|| v.to_string());
+    let pkg = |name: String, version, base: Option<&str>| Some(Pkg { eco, name, version, at, spec: spec.to_string(), base: base.map(Into::into), flag });
     if eco == "npm" {
         // A scoped name starts with @: the version's @ is the one after it.
         let at = spec[1..].find('@').map(|i| i + 1);
         let (name, version) = at.map_or((spec, None), |i| (&spec[..i], pinned(&spec[i + 1..])));
-        return Some((eco, name.to_lowercase(), version));
+        return pkg(name.to_lowercase(), version, Some(name));
     }
     let (name, version) = spec.split_once("==").or_else(|| spec.split_once('@')).map_or((spec, None), |(n, v)| (n, pinned(v.trim())));
     // Drop extras and any other specifier (`pkg[cli]>=1`); PyPI names compare normalized (PEP 503).
-    let name = name.split(['[', '<', '>', '=', '!', '~', ';', ' ']).next().unwrap_or(name);
-    Some((eco, name.to_lowercase().replace(['_', '.'], "-"), version))
+    let bare = name.split(['[', '<', '>', '=', '!', '~', ';', ' ']).next().unwrap_or(name);
+    let base = (!name.contains(['<', '>', '=', '!', '~', ';', ' '])).then_some(name);
+    pkg(bare.to_lowercase().replace(['_', '.'], "-"), version, base)
+}
+
+/// How old a release must be before Mimir picks it: a hijacked package's bad release is usually caught within days.
+const SETTLE: i64 = 7 * 24 * 3600;
+
+/// The release to pin: the registry's latest once it's a week old, else the newest stable one that is.
+fn settled(latest: &str, published: &[(String, i64)], now: i64) -> Option<String> {
+    let old = |t: i64| now - t >= SETTLE;
+    if published.iter().any(|(v, t)| v == latest && old(*t)) {
+        return Some(latest.into());
+    }
+    published.iter().filter(|(_, t)| old(*t)).max_by_key(|(_, t)| *t).map(|(v, _)| v.clone())
+}
+
+/// A package's stable releases with when each came out, and the one its registry calls latest.
+async fn releases(eco: &str, name: &str) -> Result<(String, Vec<(String, i64)>)> {
+    let http = reqwest::Client::builder().timeout(Duration::from_secs(20)).build()?;
+    let get = |url: String| async move { anyhow::Ok(http.get(url).header("Accept", "application/json").send().await?.error_for_status()?.json::<Value>().await?) };
+    let time = |s: &str| chrono::DateTime::parse_from_rfc3339(s).ok().map(|t| t.timestamp());
+    if eco == "npm" {
+        let base = std::env::var("MIMIR_NPM_REGISTRY").unwrap_or_else(|_| "https://registry.npmjs.org".into());
+        let doc = get(format!("{base}/{}", name.replace('/', "%2f"))).await?;
+        let latest = doc["dist-tags"]["latest"].as_str().context("no latest release")?.to_string();
+        // `time` also holds "created" and "modified"; a version with a `-` is a prerelease.
+        let published = doc["time"].as_object().into_iter().flatten().filter(|(v, _)| doc["versions"].get(v.as_str()).is_some() && !v.contains('-')).filter_map(|(v, t)| Some((v.clone(), time(t.as_str()?)?))).collect();
+        return Ok((latest, published));
+    }
+    let base = std::env::var("MIMIR_PYPI").unwrap_or_else(|_| "https://pypi.org".into());
+    let doc = get(format!("{base}/pypi/{name}/json")).await?;
+    let latest = doc["info"]["version"].as_str().context("no latest release")?.to_string();
+    // A release's time is its first file's; one with only yanked files (or none) doesn't count, nor a pre/dev release.
+    let published = doc["releases"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter(|(v, _)| v.chars().all(|c| c.is_ascii_digit() || c == '.'))
+        .filter_map(|(v, files)| Some((v.clone(), files.as_array()?.iter().filter(|f| f["yanked"] != true).filter_map(|f| time(f["upload_time_iso_8601"].as_str()?)).min()?)))
+        .collect();
+    Ok((latest, published))
+}
+
+async fn newest_settled(eco: &str, name: &str) -> Result<String> {
+    let (latest, published) = releases(eco, name).await?;
+    settled(&latest, &published, crate::db::now()).with_context(|| format!("every release of {name} is under a week old"))
+}
+
+/// `args` with the package pinned to `version`, or None when it names a range or the runner can't take a pin there.
+fn pinned_args(command: &str, args: &[String], p: &Pkg, version: &str) -> Option<Vec<String>> {
+    // uvx's own form is pkg@1.2.3; a pip requirement (--from, --spec) and npm say it as written below.
+    // ponytail: `pipx run pkg` stays unpinned (it takes a version only through --spec).
+    let sep = match (p.eco, p.flag) {
+        ("npm", _) => "@",
+        (_, true) => "==",
+        _ if std::path::Path::new(command).file_stem()?.eq_ignore_ascii_case("pipx") => return None,
+        _ => "@",
+    };
+    let mut args = args.to_vec();
+    let head = args[p.at].strip_suffix(p.spec.as_str())?.to_string();
+    args[p.at] = format!("{head}{}{sep}{version}", p.base.as_deref()?);
+    Some(args)
+}
+
+/// Pin the package a server's command fetches to the newest release at least a week old, so it doesn't change on
+/// its own between starts. `again`: even when it's pinned already (Update). A command naming a range stays as is.
+async fn pin(conf: &mut ServerConf, again: bool) -> Result<()> {
+    let Some(p) = package_of(&conf.command, &conf.args) else { return Ok(()) };
+    if (p.version.is_some() && !again) || p.base.is_none() {
+        return Ok(());
+    }
+    let v = newest_settled(p.eco, &p.name).await.with_context(|| format!("couldn't pick a release of {} to pin; name one yourself ({}@1.2.3) to add it anyway", p.name, p.name))?;
+    if let Some(args) = pinned_args(&conf.command, &conf.args, &p, &v) {
+        conf.args = args;
+    }
+    Ok(())
+}
+
+/// A newer release (a week old or more) than the one a server is pinned to, for its Update button. Asks the
+/// registry at most once a day per package; not reachable is "no update".
+pub async fn update_for(db: &Db, conf: &ServerConf) -> Option<String> {
+    let p = package_of(&conf.command, &conf.args).filter(|p| p.base.is_some())?;
+    let key = format!("pin_latest:{}:{}", p.eco, p.name);
+    let cached = db.setting(&key).ok().flatten().unwrap_or_default();
+    let newest = match cached.split_once(':') {
+        Some((t, v)) if t.parse::<i64>().is_ok_and(|t| crate::db::now() - t < OSV_FRESH) => v.to_string(),
+        _ => {
+            let v = newest_settled(p.eco, &p.name).await.unwrap_or_default();
+            let _ = db.set_setting(&key, &format!("{}:{v}", crate::db::now()));
+            v
+        }
+    };
+    (!newest.is_empty() && p.version.as_deref() != Some(newest.as_str())).then_some(newest)
+}
+
+/// Move a server to the release its Update button named (or newer, if one has settled since). Starts it once.
+pub async fn update_server(db: &Db, name: &str) -> Result<usize> {
+    let mut conf = servers(db).into_iter().find(|s| s.name == name && s.preset.is_none()).with_context(|| format!("no tool server {name}"))?;
+    pin(&mut conf, true).await?;
+    save_server(db, conf).await
 }
 
 /// The malicious-package advisory (OSV `MAL-…`) in an OSV query answer, if any.
@@ -872,7 +992,7 @@ const OSV_FRESH: i64 = 24 * 3600;
 /// settings; when OSV can't be reached the server starts anyway (logged).
 /// ponytail: an unpinned package is refused if any of its versions was ever flagged; pinning a clean one gets past that.
 async fn malware_check(db: &Db, osv: &str, server: &str, command: &str, args: &[String]) -> Result<()> {
-    let Some((eco, name, version)) = package_of(command, args) else { return Ok(()) };
+    let Some(Pkg { eco, name, version, .. }) = package_of(command, args) else { return Ok(()) };
     let shown = format!("{name}{}", version.as_deref().map(|v| format!("@{v}")).unwrap_or_default());
     let key = format!("osv:{eco}:{shown}");
     let cached = db.setting(&key)?.unwrap_or_default();
@@ -1114,7 +1234,7 @@ mod tests {
     fn package_of_commands() {
         let p = |line: &str| {
             let mut w = line.split(' ').map(String::from);
-            package_of(&w.next().unwrap(), &w.collect::<Vec<_>>()).map(|(e, n, v)| format!("{e} {n} {}", v.unwrap_or_default()))
+            package_of(&w.next().unwrap(), &w.collect::<Vec<_>>()).map(|p| format!("{} {} {}", p.eco, p.name, p.version.unwrap_or_default()))
         };
         assert_eq!(p("npx -y @modelcontextprotocol/server-filesystem ~/Notes").as_deref(), Some("npm @modelcontextprotocol/server-filesystem "));
         assert_eq!(p("/usr/local/bin/npx --yes @scope/pkg@1.2.3 --flag").as_deref(), Some("npm @scope/pkg 1.2.3"));
@@ -1131,6 +1251,29 @@ mod tests {
         for none in ["node server.js", "npx ./local", "npx github:user/repo", "uvx git+https://x/y", "python -m pkg", "npm install x", "npx -y"] {
             assert_eq!(p(none), None, "{none}");
         }
+    }
+
+    #[test]
+    fn pinning() {
+        let pin = |line: &str, v: &str| {
+            let w: Vec<String> = line.split(' ').map(String::from).collect();
+            pinned_args(&w[0], &w[1..], &package_of(&w[0], &w[1..]).unwrap(), v).map(|a| a.join(" "))
+        };
+        assert_eq!(pin("npx -y @scope/pkg ~/Notes", "1.2.3").as_deref(), Some("-y @scope/pkg@1.2.3 ~/Notes"));
+        assert_eq!(pin("npx -y pkg@latest", "2.0.0").as_deref(), Some("-y pkg@2.0.0"));
+        assert_eq!(pin("npx --package=pkg@1.0.0 run", "1.1.0").as_deref(), Some("--package=pkg@1.1.0 run"), "an update replaces the pin");
+        assert_eq!(pin("uvx mcp-server-fetch", "0.6.2").as_deref(), Some("mcp-server-fetch@0.6.2"));
+        assert_eq!(pin("uvx --from Mcp_Server[cli] run", "1.0").as_deref(), Some("--from Mcp_Server[cli]==1.0 run"));
+        assert_eq!(pin("pipx run --spec=pkg tool", "1.0").as_deref(), Some("run --spec=pkg==1.0 tool"));
+        assert_eq!(pin("uv tool run pkg>=1", "1.0"), None, "a range is left alone");
+        assert_eq!(pin("pipx run pkg", "1.0"), None);
+
+        let day = 24 * 3600;
+        let rel = |v: &str, days: i64| (v.to_string(), 100 * day - days * day);
+        let now = 100 * day;
+        assert_eq!(settled("2.0.0", &[rel("1.0.0", 30), rel("2.0.0", 8)], now).as_deref(), Some("2.0.0"));
+        assert_eq!(settled("2.0.0", &[rel("1.0.0", 30), rel("1.1.0", 9), rel("2.0.0", 2)], now).as_deref(), Some("1.1.0"), "a release under a week old is skipped");
+        assert_eq!(settled("1.0.0", &[rel("1.0.0", 1)], now), None, "nothing settled yet");
     }
 
     #[test]

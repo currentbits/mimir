@@ -4,7 +4,7 @@ waiting on an approval (another chat isn't held up). Then steering (issue #90): 
 reply in progress (the draft says it changed course, one reply takes both in), and /stop still cuts one off.
 
     cargo build -p mimir && cp $CARGO_TARGET_DIR/debug/mimir /tmp/busy/mimir   # worktrees share the target: copy it out
-    python3 scripts/e2e-busy-chat.py /tmp/busy
+    python3 scripts/e2e-busy-chat.py /tmp/busy              # MOCK_NO_RICH=1: as on a Bot API before 10.1
 """
 import json, os, re, sqlite3, subprocess, sys, time, urllib.request
 
@@ -52,8 +52,15 @@ def q(sql, *p):
     c = sqlite3.connect(f"{HOME}/mimir.db"); r = c.execute(sql, p).fetchall(); c.commit(); return r
 
 
+def text(c):
+    # A rich message's HTML, tags dropped.
+    return c.get("text") or re.sub(r"<[^>]+>", "", c.get("rich_message", {}).get("html", "")).replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+
+
 def texts(since, chat=42):
-    return [c.get("text", "") for c in calls(since) if c["method"] in ("sendMessage", "sendRichMessage", "editMessageText", "sendMessageDraft") and str(c.get("chat_id")) == str(chat)]
+    # MOCK_NO_RICH=1 (an API before 10.1): the rich attempts it rejected aren't in the chat.
+    sent = lambda c: not (os.environ.get("MOCK_NO_RICH") and "rich_message" in c)
+    return [text(c) for c in calls(since) if c["method"] in ("sendMessage", "editMessageText", "sendMessageDraft", "sendRichMessage", "sendRichMessageDraft") and str(c.get("chat_id")) == str(chat) and sent(c)]
 
 
 try:
@@ -68,7 +75,7 @@ try:
     t = time.time(); msg("hello one")
     typing = until(lambda: [c for c in calls(t) if c["method"] == "sendChatAction"], 3)
     check("same chat: typing at once", typing and typing[0]["t"] - t < 2, calls(t))
-    note = until(lambda: [c for c in calls(t) if "Finishing a routine first" in c.get("text", "")], 10)
+    note = until(lambda: [c for c in calls(t) if "Finishing a routine first" in text(c)], 10)
     check("same chat: busy note after a few seconds", note and 3 < note[0]["t"] - t < 7, calls(t))
     check("same chat: no reply before the routine's", not any("OK: hello one" in x for x in texts(t)), texts(t))
     got = until(lambda: any("OK: hello one" in x for x in texts(t)), 20)

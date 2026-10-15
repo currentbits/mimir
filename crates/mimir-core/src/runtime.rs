@@ -1193,7 +1193,7 @@ impl Core {
                     }
                     3 => match self.db.routines(chat)?.into_iter().find(|r| r.id == id) {
                         Some(r) => {
-                            self.db.routine_update(chat, id, &r.cron, &r.prompt, r.quiet, true)?;
+                            self.db.routine_update(chat, id, &r.cron, &r.prompt, r.quiet, true, None)?;
                             trf("⏸ Paused routine #{id}. Ask me, or use Mimir, to start it again.", &[("id", &id.to_string())])
                         }
                         None => tr("That routine is gone.").into(),

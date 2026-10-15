@@ -128,7 +128,7 @@ fn bring_in(db: &Db, bot: i64, chat: i64, label: &str, home: &Path, found: &Foun
 /// read outside content.
 fn propose_routine(db: &Db, bot: i64, chat: i64, cron: &str, prompt: &str, quiet: bool) -> Result<()> {
     let r = db.routine_create(bot, chat, cron, prompt, quiet)?;
-    db.routine_update(chat, r.id, &r.cron, &r.prompt, quiet, true)?;
+    db.routine_update(chat, r.id, &r.cron, &r.prompt, quiet, true, None)?;
     db.routine_taint(r.id)
 }
 

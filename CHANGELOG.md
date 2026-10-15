@@ -74,6 +74,12 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
   get an answer straight away, and when the other bot is done its result comes back in the same chat.
 - **Loop breaker:** a bot that keeps making the same call (the 3rd time in a row, the 5th for just looking) stops and
   asks you whether to go on, instead of burning time and money. Routines ask in Needs you.
+- **Tool servers stay on one version:** adding one that downloads its package (`npx -y pkg`, `uvx pkg`) pins it to
+  the newest release that's at least a week old, so a bad release published tomorrow doesn't reach you on the next
+  start. When a newer one has been out a week, the server shows **Update to x.y.z**.
+- **Hidden text doesn't reach your bots:** invisible characters that spell out words only a model reads (Unicode tag
+  characters, stray variation selectors) are taken out of pages, mail, files and tool results. A Word file's text
+  formatted to be invisible (white, 1 pt, hidden) is marked as hidden for the bot.
 
 ### Routines
 - **Follow-ups the bot books itself:** "I'll check back Friday whether they replied" becomes a one-off follow-up, said
