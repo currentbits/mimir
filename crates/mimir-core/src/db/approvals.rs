@@ -211,14 +211,16 @@ impl Db {
         Ok(())
     }
 
-    /// The pending ask (not a take-over) whose card in `chat` is the message `card`, for a reply to it. Discord's cards
-    /// are kept as "channel/message".
+    /// The pending ask (not a take-over) whose card in `chat` is the message `card`, for a reply to it (the newest if
+    /// several). Discord's cards are kept as "channel/message"; a Slack card posted in a thread as "thread/card", so a
+    /// reply in that thread (`card` = the thread) finds it.
     pub fn approval_by_card(&self, chat: i64, card: &str) -> Result<Option<i64>> {
         let c = self.c();
         Self::expire_stale(&c)?;
         Ok(c.query_row(
             "SELECT id FROM approvals WHERE status='pending' AND kind != 'takeover' AND (
-               chat_id=?1 AND (card_ref=?2 OR card_ref LIKE '%/' || ?2) OR mirror_chat=?1 AND (mirror_ref=?2 OR mirror_ref LIKE '%/' || ?2))
+               chat_id=?1 AND (card_ref=?2 OR card_ref LIKE '%/' || ?2 OR card_ref LIKE ?2 || '/%')
+               OR mirror_chat=?1 AND (mirror_ref=?2 OR mirror_ref LIKE '%/' || ?2 OR mirror_ref LIKE ?2 || '/%'))
              ORDER BY id DESC LIMIT 1",
             params![chat, card],
             |r| r.get(0),

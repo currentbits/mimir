@@ -49,7 +49,8 @@ deny (routines park their asks for 24 hours instead; see [Needs you](routines.md
 
 **Say why.** **Deny…** in the app takes an optional reason, and in Telegram, Slack, Discord or Signal a text reply to
 the card does the same (a number on Signal still picks a button). The bot is told *"Denied: <your reason>"* in your own
-words and carries on with that, instead of only saying it wasn't done.
+words and carries on with that, instead of only saying it wasn't done. A routine's ask has moved on by the time you
+answer, so your reason goes into that chat's conversation for the bot's next turn there.
 
 **Edit before it goes.** An email's card (to send, or to draft after outside content) has **Edit** in the app: change
 the subject and text, then approve, and that's what goes. Who it's to, the cc and the account can't be changed on the

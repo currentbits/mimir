@@ -748,6 +748,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_reason_to_deny_a_routines_ask_reaches_the_chat() {
+        let p = std::env::temp_dir().join(format!("mimir-park-why-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = Db::open(&p).unwrap();
+        let id = db.store("chat:0", "knowledge", "Gym", "Mondays", "test", None).unwrap();
+        let mut ctx = ToolCtx::new(db.clone(), 1, 0);
+        ctx.unattended = true;
+        assert!(call(&ctx, "memory_forget", &json!({"id": id})).await.unwrap().starts_with("Not done yet"));
+        let a = db.approvals_pending().unwrap().pop().unwrap();
+        db.approval_set_reason(a.id, "I still go on Mondays").unwrap();
+        let a = db.approval_decide(a.id, false, None).unwrap().unwrap();
+        after_decision(&db, &a);
+        // The run that asked has moved on: the bot reads it in the chat's conversation, in the person's words.
+        let last = db.messages(0, 5).unwrap().pop().unwrap();
+        assert_eq!(last.role, "user");
+        assert!(last.content.contains("Forget memory") && last.content.ends_with("Denied: I still go on Mondays"), "{}", last.content);
+        assert_eq!(db.entries("chat:0").unwrap().iter().filter(|e| e.status == "active").count(), 1, "nothing was done");
+        // Without a reason, nothing is added.
+        let n = db.messages(0, 50).unwrap().len();
+        assert!(call(&ctx, "memory_forget", &json!({"id": id})).await.unwrap().starts_with("Not done yet"));
+        let b = db.approvals_pending().unwrap().pop().unwrap();
+        after_decision(&db, &db.approval_decide(b.id, false, None).unwrap().unwrap());
+        assert_eq!(db.messages(0, 50).unwrap().len(), n);
+    }
+
+    #[tokio::test]
     async fn routines_park_asks_and_run_them_when_approved() {
         let p = std::env::temp_dir().join(format!("mimir-park-{}.db", std::process::id()));
         let _ = std::fs::remove_file(&p);

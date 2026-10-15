@@ -867,4 +867,16 @@ pub fn after_decision(db: &Db, a: &crate::db::Approval) {
     if a.parked && a.status == "approved" {
         tokio::spawn(run_parked(db.clone(), a.clone()));
     }
+    // A routine's ask said no to with a reason: its run has moved on, so the reason goes into the chat's conversation,
+    // in the person's words, for the bot's next turn there (and to the tidy-up, like a live no).
+    if let Some(why) = a.reason.as_deref().filter(|_| a.parked && a.status == "denied") {
+        let said = denied_note(&a.summary, why);
+        let _ = db.log(a.bot_id, a.chat_id, "user", &said, None);
+        let _ = db.signal_add(a.bot_id, a.chat_id, "denied", &format!("{} (Denied: {why})", a.summary));
+    }
+}
+
+/// What a no with a reason to a routine's ask says in the chat: what it was about, then the person's words.
+pub fn denied_note(summary: &str, why: &str) -> String {
+    format!("About what a routine asked to do ({}): Denied: {why}", truncate(summary, 300))
 }
