@@ -228,7 +228,7 @@ fn lines(v: &[Entry]) -> String {
 /// Pages, mail, files, tool servers: nothing the model reads back keeps characters hidden from the person, an error
 /// included (a tool server's error text is its own words, and one can repeat what came in).
 pub async fn call(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
-    gated(ctx, name, args).await.map(|r| crate::unhide(&r)).map_err(|e| anyhow::anyhow!(crate::unhide(&format!("{e:#}"))))
+    gated(ctx, name, args).await.map(|r| crate::visible(&r)).map_err(|e| anyhow::anyhow!(crate::visible(&format!("{e:#}"))))
 }
 
 async fn gated(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
@@ -323,6 +323,8 @@ async fn gated(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
         },
         _ => exec(ctx, name, args).await,
     };
+    // A page, a mail, a tool server's answer: hidden characters don't reach the model (or the run log).
+    let out = out.map(|r| crate::visible(&r));
     if ctx.stream {
         crate::live::set_step(ctx.bot_id, ctx.chat_id, None);
     }
