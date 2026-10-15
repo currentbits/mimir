@@ -275,6 +275,10 @@ pub(crate) fn skill_md_propose(db: &Db, scope: &str, bot: i64, origin: &str, nam
     if let Some(p) = crate::tools::instruction_like(&format!("{description}\n{body}")) {
         reason.push_str(&format!(" Warning: it contains instruction-like text (\"{p}\")."));
     }
+    let risky = crate::imports::risky(&format!("{description}\n{body}"));
+    if !risky.is_empty() {
+        reason.push_str(&format!(" Warning: it {}. Mimir never runs a skill's setup steps; don't run them yourself unless you trust where it came from.", risky.join(", ")));
+    }
     db.skill_taught_propose(scope, bot, name, description, body, &reason)
 }
 

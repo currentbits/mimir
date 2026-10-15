@@ -79,8 +79,56 @@ function Templates({ picked, pick }: { picked: string; pick: (id: string) => voi
   )
 }
 
-export function BotPage({ bot, status, canDelete, onSaved, onDeleted, onChat }: {
+type Flagged = { title: string; text: string; flags: string[] }
+type BotFilePreview = {
+  name: string; look: string; role: string; provider: string; model: string; tools: string; skills: Flagged[]; routines: Flagged[]
+  rules: { tool: string; action: string; yours: string; looser: boolean }[]; servers: { name: string; what: string; here: boolean }[]; warnings: string[]
+}
+
+const Flags = ({ flags }: { flags: string[] }) => flags.length ? <span className="hint warn"><Icon name="alert" size={13} />It {flags.join(', ')}.</span> : null
+
+/** What a bot file would add, before anything is: you read it, and Add bot adds it (skills as proposals, routines paused). */
+export function BotImport({ text, duplicateOf, onClose, onAdded }: { text: string; duplicateOf?: number; onClose: () => void; onAdded: (id: number) => void }) {
+  const p = useLoad(() => invoke<BotFilePreview>('import_bot_preview', { text, duplicateOf }), [text])
+  const [rules, setRules] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+  const add = () => invoke<{ id: number }>('import_bot', { text, rules, duplicateOf }).then(r => onAdded(r.id), e => setErr(String(e)))
+  const f = p.data
+  return (
+    <div className="ask-backdrop" onMouseDown={e => e.target === e.currentTarget && onClose()}>
+      <div className="ask-box" role="dialog" aria-modal="true" aria-label="Add a bot from a file" onKeyDown={e => e.key === 'Escape' && onClose()}
+        style={{ width: 'min(560px, calc(100vw - 32px))', maxHeight: 'calc(100vh - 64px)', overflow: 'auto' }}>
+        {p.error || !f ? <p>{p.error ? String(p.error) : 'Reading the file…'}</p> : <>
+          <div className="page-head">
+            <Avatar id={99} name={f.name} size={44} look={parseLook(f.look)} />
+            <div><b>{f.name}</b><p className="hint">{[f.provider, f.model].filter(Boolean).join(' · ')}{f.tools ? ` · ${f.tools.split(',').length} tools` : ' · all tools'}</p></div>
+          </div>
+          <p className="hint">Nothing is added until you press <b>Add bot</b>. Its skills and routines are someone else's words: read them first.</p>
+          {f.warnings.map(w => <span key={w} className="hint warn"><Icon name="alert" size={13} />{w}</span>)}
+          {f.role && <div><span className="field-label">Role</span><p className="selectable" style={{ whiteSpace: 'pre-wrap', maxHeight: 120, overflow: 'auto' }}>{f.role}</p></div>}
+          {f.skills.length > 0 && <div><span className="field-label">Skills, as proposals to accept in Memory</span>
+            <ul>{f.skills.map((k, i) => <li key={i}><b>{k.title}</b>: {k.text}<Flags flags={k.flags} /></li>)}</ul></div>}
+          {f.routines.length > 0 && <div><span className="field-label">Routines, paused until you resume them</span>
+            <ul>{f.routines.map((r, i) => <li key={i}><b>{schedule(r.title)}</b>: {r.text}<Flags flags={r.flags} /></li>)}</ul></div>}
+          {f.servers.length > 0 && <div><span className="field-label">Tool servers it uses</span>
+            <ul>{f.servers.map(s => <li key={s.name}><b>{s.name}</b>: <code>{s.what}</code>{s.here ? '' : ' (not set up here: nothing from the file is run or added; set it up under Settings if you trust it)'}</li>)}</ul></div>}
+          {f.rules.length > 0 && <div><span className="field-label">Its tool rules, different from yours</span>
+            <ul>{f.rules.map(r => <li key={r.tool}><code>{r.tool}</code>: {r.action} (yours: {r.yours}){r.looser && <span className="hint warn"><Icon name="alert" size={13} />Looser than yours, so not used. Change it under Settings → Permissions if you want it.</span>}</li>)}</ul>
+            {f.rules.some(r => !r.looser) && <label className="hint"><input type="checkbox" checked={rules} onChange={e => setRules(e.target.checked)} /> Use its stricter rules too (they apply to all your bots)</label>}</div>}
+          {err && <span className="hint warn"><Icon name="alert" size={13} />{err}</span>}
+        </>}
+        <div className="ask-actions">
+          <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
+          <button type="button" className="btn btn-primary" disabled={!f} onClick={add}>Add bot</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+export function BotPage({ bot, status, canDelete, onSaved, onDeleted, onChat, onImport }: {
   bot?: Bot; status?: Status; canDelete: boolean; onSaved: (id: number) => void; onDeleted: () => void; onChat?: () => void
+  onImport?: (text: string) => void
 }) {
   // A new bot starts as a random creature you can change; it's saved with the bot, so what you see is what you get.
   const [b, setB] = useState<Bot>(bot ?? { ...BLANK, look: JSON.stringify(randomLook()) })
@@ -149,7 +197,8 @@ export function BotPage({ bot, status, canDelete, onSaved, onDeleted, onChat }: 
           })()}</span></div>
       )}
 
-      {isNew && <Group title="Start from"><div className="row-block"><Templates picked={template} pick={applyTemplate} /></div></Group>}
+      {isNew && <Group title="Start from" action={onImport && <label className="btn btn-ghost btn-sm"><Icon name="file" size={13} />From a file…
+        <input type="file" accept=".json,application/json" hidden onChange={e => { void e.target.files?.[0]?.text().then(onImport); e.target.value = '' }} /></label>}><div className="row-block"><Templates picked={template} pick={applyTemplate} /></div></Group>}
 
       <Group title="Identity">
         <div className="row-block">
