@@ -373,7 +373,7 @@ function Main() {
         </header>
 
         {view !== 'inbox' && <Approvals list={approvals} chats={list} chatName={chatName} onDecided={inbox.reload} />}
-        {signIn && inbox.data && <SignInForm list={approvals} onClose={() => { setSignIn(false); inbox.reload() }} />}
+        {signIn && <SignInForm onClose={() => { setSignIn(false); inbox.reload() }} />}
 
         {view === 'chat' ? (
           <ChatView key={`chat-${chat.chat_id}-${incognito && chat.chat_id === LOCAL}-${botChat ? chatBot ?? botList[0]?.id : 'all'}`} only={botChat} chat={chat} bots={botList} onTurn={chats.reload}

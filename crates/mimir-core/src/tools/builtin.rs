@@ -806,6 +806,12 @@ pub(crate) async fn delegate(ctx: &ToolCtx, target: &crate::db::Bot, task: &str)
 /// One computer action, then a screenshot of what it led to.
 /// One user of the computer at a time: this run holds it while it works; another bot waits a little; the person
 /// taking over in the app always wins (bots wait until they give it back).
+/// The bot may have been sent to the page it's on by someone other than the person: the conversation read outside
+/// content, or the run is on words that aren't theirs (another bot's task, a document).
+pub(super) fn steered(ctx: &ToolCtx) -> bool {
+    ctx.is_tainted() || ctx.run_id.and_then(|r| ctx.db.brief(r).ok().flatten()).is_some_and(|b| !crate::own_words(&b))
+}
+
 /// Sign in to the page on the computer's screen without the AI seeing the login: a login this bot saved for the site
 /// is typed by Mimir (after an OK, like every saved login); otherwise the person gets a card with a link to a masked
 /// form in Mimir, and Mimir types what they enter there and keeps it as this bot's login for the site. The model only
@@ -843,8 +849,19 @@ async fn computer_signin(ctx: &ToolCtx) -> Result<String> {
         Some(u) => format!("{}/#signin", u.trim_end_matches('/')),
         None => "Open Mimir, Needs you".into(),
     };
-    let summary = format!("Sign in to {site}\n\n{link}: type your login there, never in this chat. Mimir types it into the page and keeps it for this bot on {site}.");
+    // Phishing: a bot steered by a page or a message can open a look-alike sign-in. The card says so, with the full
+    // address, before anyone types a password.
+    let steered = steered(ctx);
+    let card = crate::ext::signin_warnings(&ctx.db, &url, &site, steered);
+    let host = card["host"].as_str().unwrap_or(&site).to_string();
+    let check = match (steered, card["lookalike"].as_str()) {
+        (_, Some(k)) => format!("\n\n⚠️ This isn't {k}, where you've signed in before. Check the address: {host}"),
+        (true, None) => format!("\n\n⚠️ I came to this site after reading a web page or a message. Check the address: {host}"),
+        _ => String::new(),
+    };
+    let summary = format!("Sign in to {site} ({host}){check}\n\n{link}: type your login there, never in this chat. Mimir types it into the page and keeps it for this bot on {site}.");
     let id = ctx.db.approval_create(ctx.bot_id, ctx.chat_id, "computer_signin", &summary, HANDOFF_SECS, "signin", Some(&site))?;
+    ctx.db.signin_card_set(id, &card)?;
     // Filled in from the form (host.rs, signin_submit): approved = signed in. Held meanwhile, so no other bot's profile
     // takes the screen; and a fill that never reports back still ends.
     let who = ctx.run_id.map(|r| format!("run:{r}")).unwrap_or_else(|| format!("bot:{}", ctx.bot_id));

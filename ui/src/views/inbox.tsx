@@ -132,24 +132,28 @@ export function Approvals({ list, chats, chatName, onDecided }: { list: Approval
   )
 }
 
+type SignInCard = { id: number; bot_id: number; site: string; host?: string; steered?: boolean; lookalike?: string | null }
+
 /** The masked form a sign-in card links to (#signin): for the newest card waiting. Only that card's id goes back with
  *  what you type; the link itself carries nothing (no server, token or site), so a link someone sends you can't
- *  point it elsewhere. */
-export function SignInForm({ list, onClose }: { list: Approval[]; onClose: () => void }) {
+ *  point it elsewhere. The page's full address shows above the fields, with a warning when the bot came there after
+ *  outside content or the site looks like one you've signed in to before. */
+export function SignInForm({ onClose }: { onClose: () => void }) {
   const botOf = useContext(Bots)
-  // Kept once sent: the card leaves the list as soon as Mimir starts typing.
-  const [held, setHeld] = useState<Approval>()
-  const a = held ?? list.filter(x => x.kind === 'signin').at(-1)
+  const [a, setA] = useState<SignInCard | null | undefined>()
+  useEffect(() => { invoke<SignInCard | null>('signin_card').then(setA, () => setA(null)) }, [])
   const [f, setF] = useState({ user: '', password: '', code: '', totp: '' })
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const [done, setDone] = useState<boolean | null>(null)
+  if (a === undefined) return null
   const field = (k: keyof typeof f) => ({ value: f[k], onChange: (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value }) })
+  const host = a?.host || a?.site
   const send = () => {
     if (!a) return
-    setBusy(true); setErr(null); setHeld(a)
+    setBusy(true); setErr(null)
     invoke<{ signed_in: boolean }>('signin_submit', { id: a.id, ...f })
-      .then(r => { setF({ user: '', password: '', code: '', totp: '' }); setDone(r.signed_in) }, e => { setErr(String(e)); setHeld(undefined) }).finally(() => setBusy(false))
+      .then(r => { setF({ user: '', password: '', code: '', totp: '' }); setDone(r.signed_in) }, e => setErr(String(e))).finally(() => setBusy(false))
   }
   return (
     <div className="ask-backdrop" onMouseDown={e => e.target === e.currentTarget && !busy && onClose()}>
@@ -158,10 +162,14 @@ export function SignInForm({ list, onClose }: { list: Approval[]; onClose: () =>
           <p>{done ? `Signed in to ${a?.site ?? 'the site'}. ${botOf(a?.bot_id ?? 0).name} carries on.` : 'That didn’t sign in. The bot will tell you; it can ask again, or you can take over on the computer.'}</p>
           <div className="ask-actions"><button type="button" className="btn btn-primary" onClick={onClose}>OK</button></div>
         </> : !a ? <>
-          <p>{err ? `That didn’t sign in: ${err}` : 'No sign-in is waiting: it was used, or ran out after 10 minutes. Ask the bot again.'}</p>
+          <p>No sign-in is waiting: it was used, or ran out after 10 minutes. Ask the bot again.</p>
           <div className="ask-actions"><button type="button" className="btn btn-primary" onClick={onClose}>OK</button></div>
         </> : <>
           <p><b>Sign in to {a.site}</b> for {botOf(a.bot_id).name}. Mimir types this into the page on the computer and keeps it for this bot on {a.site} only. The bot never sees it.</p>
+          {a.lookalike
+            ? <p className="error" role="alert">This isn’t {a.lookalike}, where you’ve signed in before. Check the address before you type a password: <b className="mono">{host}</b></p>
+            : a.steered && <p className="error" role="alert">{botOf(a.bot_id).name} came to this site after reading a web page or a message. Check the address before you type a password: <b className="mono">{host}</b></p>}
+          <p className="hint">Page: <span className="mono selectable">{host}</span></p>
           <input className="input" aria-label="User name or email" placeholder="User name or email" autoComplete="username" autoFocus {...field('user')} />
           <input className="input" aria-label="Password" placeholder="Password" type="password" autoComplete="current-password" {...field('password')} />
           <input className="input" aria-label="Code (if the site asks for one)" placeholder="Code, if the site asks for one" inputMode="numeric" autoComplete="one-time-code" {...field('code')} />

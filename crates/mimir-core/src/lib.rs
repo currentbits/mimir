@@ -93,6 +93,7 @@ pub mod email;
 pub mod events;
 pub mod files;
 pub mod library;
+pub mod lookalike;
 pub mod transcribe;
 
 use anyhow::Result;

@@ -909,7 +909,8 @@ pub struct Login {
     pub totp: Option<crate::totp::Totp>,
 }
 
-/// Type a login into the page on screen, only while that page is on one of `domains`, and press Enter, step by step
+/// Type a login into the page on screen, only while that page is on one of `domains` (checked by the same script that
+/// fills each field), and press Enter, step by step
 /// (a site that asks the email first, then the password, then a code). Each field is typed once: a password field
 /// back again after Mimir typed the password means it was wrong, and isn't tried again (which could lock the
 /// account). True when signed in: no password or code field left on the page.
@@ -935,13 +936,24 @@ pub async fn sign_in(login: &Login, domains: &[String]) -> Result<bool> {
             if v.is_empty() || !on(k) || typed.contains(&k) {
                 continue;
             }
-            // Focused and checked in one step, right before typing: a page that just went elsewhere gets nothing.
-            let focus = format!("(() => {{ const f = {FIELDS}, e = f.{k}; if (!e) return null; e.focus(); try {{ e.select() }} catch {{}} return f.url }})()");
-            let at = tab.eval(&focus).await;
-            if !at.as_ref().and_then(|u| u.as_str()).is_some_and(|u| crate::ext::host_allowed(u, domains)) {
-                bail!("the page changed while signing in");
+            // The site check and the typing are one script in the page's isolated world, run without a break in
+            // between: a page that has just gone to another site can't get the value. Set the way a framework (React,
+            // Vue…) still notices: the input's own value setter, then input and change events.
+            let fill = format!(
+                "(() => {{ const D = {}, h = location.hostname.toLowerCase();
+                  if (!/^https?:$/.test(location.protocol) || !D.some(d => h === d || h.endsWith('.' + d))) return 'elsewhere';
+                  const e = {FIELDS}.{k}; if (!e) return 'gone';
+                  e.focus(); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(e, {});
+                  e.dispatchEvent(new Event('input', {{ bubbles: true }})); e.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                  return 'ok' }})()",
+                serde_json::to_string(domains)?,
+                serde_json::to_string(v)?
+            );
+            match tab.eval(&fill).await.as_ref().and_then(|r| r.as_str()) {
+                Some("ok") => {}
+                Some("elsewhere") => bail!("the page went to another site while signing in"),
+                _ => bail!("couldn't type into the page"),
             }
-            tab.call("Input.insertText", serde_json::json!({"text": v})).await.context("couldn't type into the page")?;
             typed.push(k);
             now += 1;
         }
@@ -991,6 +1003,10 @@ mod tests {
         let login = Login { user: "me@example.com".into(), password: "hunter2!".into(), totp: crate::totp::parse("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ").ok(), ..Default::default() };
         assert!(sign_in(&login, &["elsewhere.example".into()]).await.is_err(), "not on another site");
         assert!(sign_in(&login, &[host]).await.unwrap(), "email and password, then the code");
+        let typed = screen_tab().await.unwrap().eval("document.getElementById('x').textContent").await.unwrap();
+        let code = crate::totp::parse("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ").unwrap();
+        let now = crate::db::now() as u64;
+        assert!([code.at(now), code.at(now - 30)].iter().any(|c| typed == format!("me@example.com|hunter2!|{c}")), "{typed}");
     }
 
     #[test]

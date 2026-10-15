@@ -160,8 +160,32 @@ impl Db {
 
     /// How a claimed sign-in went: approved = signed in.
     pub fn approval_signed_in(&self, id: i64, ok: bool) -> Result<()> {
-        self.c().execute("UPDATE approvals SET status=?2, kind='signin' WHERE id=?1 AND status='pending' AND kind='signing'", params![id, if ok { "approved" } else { "denied" }])?;
+        let c = self.c();
+        c.execute("UPDATE approvals SET status=?2, kind='signin' WHERE id=?1 AND status='pending' AND kind='signing'", params![id, if ok { "approved" } else { "denied" }])?;
+        c.execute("DELETE FROM settings WHERE key=?1", [format!("signin:{id}")])?;
         Ok(())
+    }
+
+    /// What a sign-in card's form shows besides the site (the full address, warnings), kept while it waits. Ones of
+    /// cards no longer waiting go when a new one is made.
+    pub fn signin_card_set(&self, id: i64, card: &serde_json::Value) -> Result<()> {
+        self.c().execute(
+            "DELETE FROM settings WHERE key LIKE 'signin:%' AND CAST(substr(key, 8) AS INTEGER) NOT IN (SELECT id FROM approvals WHERE status='pending')",
+            [],
+        )?;
+        self.set_setting(&format!("signin:{id}"), &card.to_string())
+    }
+
+    pub fn signin_card(&self, id: i64) -> Result<serde_json::Value> {
+        Ok(self.setting(&format!("signin:{id}"))?.and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default())
+    }
+
+    /// Sites someone signed in to with a sign-in card before.
+    pub fn signin_sites(&self) -> Result<Vec<String>> {
+        let c = self.c();
+        let mut st = c.prepare("SELECT DISTINCT site FROM approvals WHERE kind='signin' AND status='approved' AND site IS NOT NULL")?;
+        let v = st.query_map([], |r| r.get(0))?.collect::<Result<_, _>>()?;
+        Ok(v)
     }
 
     fn approvals_where(&self, sql: &str, p: i64) -> Result<Vec<Approval>> {

@@ -389,6 +389,17 @@ pub fn site_of(url: &str) -> Option<String> {
     psl::domain_str(&host).filter(|d| d.contains('.')).map(String::from)
 }
 
+/// What a sign-in card's form warns about: the page's full address next to the site the login is kept for; whether the
+/// bot came there after outside content or on someone else's words (`steered`); and, for a site with no saved login or
+/// earlier sign-in, one that has them which this one looks like (`lookalike`).
+pub fn signin_warnings(db: &Db, url: &str, site: &str, steered: bool) -> Value {
+    let mut known: Vec<String> = vault(db).iter().flat_map(|e| e.domains.iter()).filter_map(|d| site_of(&format!("https://{d}/"))).collect();
+    known.extend(db.signin_sites().unwrap_or_default());
+    let lookalike = if known.iter().any(|k| k == site) { None } else { crate::lookalike::of(site, known.iter().map(String::as_str)) };
+    let host = url::Url::parse(url).ok().and_then(|u| u.host_str().map(str::to_lowercase)).unwrap_or_default();
+    json!({"host": host, "site": site, "steered": steered, "lookalike": lookalike})
+}
+
 /// The authenticator code of a saved login right now, if it has a key.
 pub(crate) fn vault_code(name: &str) -> Option<String> {
     crate::host::secret_get(&format!("vault:{name}:totp")).and_then(|k| crate::totp::parse(&k).ok()).map(|t| t.now())

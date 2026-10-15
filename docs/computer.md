@@ -53,10 +53,20 @@ At a sign-in page, a bot asks Mimir to sign in (`computer_signin`). It never typ
   first, then the password, then a code. Once it's signed in, Mimir keeps the login (and the key) for **that bot on
   that site** only: under Settings → Browser → Saved logins, as e.g. `GITHUB_COM_BOT3`.
 
+**Check the address.** The card and the form show the page's full address (`login.github.com`) next to the site the
+login is kept for. They warn you before you type when:
+- the bot came to the site after reading a web page, an email or a message, or is doing a task another bot handed it:
+  *Padel Bot came to this site after reading a web page or a message. Check the address before you type a password*;
+- the site has no saved login and no earlier sign-in, but looks like one that does (`githuh.com`, `github.dev` or
+  `github-login.example` when you've signed in to `github.com`): *This isn't github.com, where you've signed in
+  before.*
+
+A page a bot reads can tell it to open a fake sign-in page; this is where you'd catch that.
+
 The site is the page's registrable domain: a sign-in on `accounts.google.com` is kept for `google.com` and works on its
 subdomains, while one on `alice.github.io` stays on `alice.github.io` (anyone can have a `github.io` site). Mimir types
-only while the page on screen is on that site, checked right before each field, and only into the page itself, not a
-frame embedded from elsewhere. It types each field once: when the password field comes back after a wrong password,
+only while the page on screen is on that site, checked by the same script that fills each field, and only into the
+page itself, not a frame embedded from elsewhere. It types each field once: when the password field comes back after a wrong password,
 it stops instead of trying again (which could lock the account). The bot hears only *signed in* or *failed*.
 
 The link is only `#signin` on the address you last opened the web app at: you sign in to Mimir as usual, and the form

@@ -931,6 +931,17 @@ impl Host {
             // The masked form a bot's sign-in card links to. What you type goes from here into the page on the
             // computer's screen (only while it's on the card's site) and into the secret store as that bot's login
             // for the site: never into a chat, the database or a prompt. The card is used once, and runs out with it.
+            // The newest sign-in card waiting, for the form: its site, the page's full address and its warnings.
+            "signin_card" => match self.db.approvals_pending()?.into_iter().rfind(|a| a.kind == "signin") {
+                Some(ap) => {
+                    let mut card = self.db.signin_card(ap.id)?;
+                    card["id"] = json!(ap.id);
+                    card["bot_id"] = json!(ap.bot_id);
+                    card["site"] = json!(ap.site);
+                    ok(card)
+                }
+                None => ok(Value::Null),
+            },
             "signin_submit" => {
                 let text = |k: &str| arg::<Option<String>>(a, k).map(Option::unwrap_or_default);
                 let (user, password, code, key) = (text("user")?, text("password")?, text("code")?.trim().to_string(), text("totp")?.trim().to_string());

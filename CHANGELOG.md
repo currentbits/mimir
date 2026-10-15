@@ -4,8 +4,6 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 
 ## Unreleased
 
-## Unreleased
-
 - **Security:** the TLS library (rustls 0.23.46) is updated for four advisories published on October 14
   (RUSTSEC-2026-0346 to 0349).
 - **Sign in from your phone:** at a sign-in page, a bot sends you a card with a link to a small masked form in Mimir,
@@ -16,7 +14,6 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
   [Details](docs/computer.md#signing-in-from-your-phone)
 - **Authenticator codes on saved logins:** paste a site's setup key or `otpauth://` link once, and Mimir types the
   6-digit codes itself, only on that login's site.
-
 
 ## 0.3.0
 
