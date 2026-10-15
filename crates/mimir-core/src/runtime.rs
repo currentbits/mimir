@@ -134,7 +134,12 @@ impl Chan {
                 let Some(draft) = crate::live::get(bot, chat_id).filter(|d| !d.trim().is_empty()) else { continue };
                 // A long reply's draft stops growing at DRAFT_MAX; the final message has all of it.
                 let head: String = draft.chars().take(DRAFT_MAX).collect();
-                let text = if head.len() < draft.len() { format!("{}… ▍", head.trim_end()) } else { format!("{head} ▍") };
+                // No cursor on Slack: a draft there may be a stream, which is only appended to, so one would stay in the text.
+                let text = match &chan {
+                    Chan::Slack(_) => head,
+                    _ if head.len() < draft.len() => format!("{}… ▍", head.trim_end()),
+                    _ => format!("{head} ▍"),
+                };
                 if text == shown {
                     continue;
                 }
@@ -166,13 +171,13 @@ impl Chan {
         }
     }
 
-    /// "typing…" indicator until the handle is aborted (Slack bots have none).
+    /// "typing…" indicator until the handle is aborted (Slack's only in a reply thread).
     fn typing(&self, ext: &str) -> Option<JoinHandle<()>> {
         match self {
             Chan::Telegram(c) => Some(c.typing(ext)),
             Chan::Discord(c) => Some(c.typing(ext)),
             Chan::Signal(c) => Some(c.typing(ext)),
-            Chan::Slack(_) => None,
+            Chan::Slack(c) => c.typing(ext),
         }
     }
 
