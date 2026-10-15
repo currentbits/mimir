@@ -30,7 +30,7 @@ export type Run = {
   delivered?: string | null; repeats?: number; cache_read?: number; estimated?: boolean
 }
 
-export type Approval = { id: number; bot_id: number; chat_id: number; tool: string; summary: string; created_at: number; expires_at: number; kind?: 'rule' | 'guarded' | 'guest' | 'login' | 'plan' | 'bot' | 'send' | 'takeover' | 'remind' | 'unasked' | 'loop' | 'sensitive'; site?: string | null; parked?: boolean; allowed_before?: number }
+export type Approval = { id: number; bot_id: number; chat_id: number; tool: string; summary: string; created_at: number; expires_at: number; kind?: 'rule' | 'guarded' | 'guest' | 'login' | 'plan' | 'bot' | 'send' | 'takeover' | 'signin' | 'remind' | 'unasked' | 'loop' | 'sensitive'; site?: string | null; parked?: boolean; allowed_before?: number }
 
 export type Busy = { bot_id: number; chat_id: number; trigger: string; step: string | null }
 

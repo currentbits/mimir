@@ -10,7 +10,7 @@ import { BotImport, BotPage } from './views/bot'
 import { Paused, pausedText, ChatView, Menu, pauseChoices } from './views/chat'
 import { GoalLine } from './views/cards'
 import { ComputerView } from './views/computer'
-import { inboxCount, Approvals, InboxView } from './views/inbox'
+import { inboxCount, Approvals, InboxView, SignInForm } from './views/inbox'
 import { MeetingsView } from './views/meetings'
 import { MemoryView } from './views/memory'
 import { Onboarding } from './views/onboarding'
@@ -110,10 +110,17 @@ function Main() {
   const [incognito, setIncognito] = useState(false)
   // Incognito ends when you go to another chat.
   useEffect(() => setIncognito(false), [chatId])
-  // A link to the live computer (a bot asking you to take over) opens it: #computer.
+  // A link to the live computer (a bot asking you to take over) opens it: #computer. A sign-in card's opens the
+  // sign-in form: #signin.
   const [view, setView] = useState<View>(() => location.hash === '#computer' ? 'computer' : 'chat')
+  const [signIn, setSignIn] = useState(false)
   useEffect(() => {
-    const go = () => { if (location.hash === '#computer') { setView('computer'); history.replaceState(null, '', location.pathname + location.search) } }
+    const go = () => {
+      if (location.hash === '#computer') setView('computer')
+      else if (location.hash === '#signin') setSignIn(true)
+      else return
+      history.replaceState(null, '', location.pathname + location.search)
+    }
     go()
     window.addEventListener('hashchange', go)
     return () => window.removeEventListener('hashchange', go)
@@ -369,6 +376,7 @@ function Main() {
         </header>
 
         {view !== 'inbox' && <Approvals list={approvals} chats={list} chatName={chatName} onDecided={inbox.reload} />}
+        {signIn && <SignInForm onClose={() => { setSignIn(false); inbox.reload() }} />}
 
         {view === 'chat' ? (
           <ChatView key={`chat-${chat.chat_id}-${incognito && chat.chat_id === LOCAL}-${botChat ? chatBot ?? botList[0]?.id : 'all'}`} only={botChat} chat={chat} bots={botList} onTurn={chats.reload}

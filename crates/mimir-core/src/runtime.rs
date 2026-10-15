@@ -399,6 +399,10 @@ pub(crate) fn card_buttons(a: &Approval) -> Vec<Vec<(String, String)>> {
     if a.kind == "takeover" {
         return vec![vec![b(tr("Done").into(), 'y'), b(tr("Can't now").into(), 'n')]];
     }
+    // Signing in happens in Mimir's own form (the link on the card), never in the chat.
+    if a.kind == "signin" {
+        return vec![vec![b(tr("Can't now").into(), 'n')]];
+    }
     let mut rows = vec![vec![b(tr("Approve").into(), 'y'), b(tr("Deny").into(), 'n')]];
     if offers_all(a) {
         rows.push(vec![b(tr("Approve all like this").into(), 'a')]);
@@ -581,6 +585,9 @@ pub(crate) fn card_text(a: &Approval) -> String {
     if a.kind == "takeover" {
         return trf("🖐 I need you on the computer\n\n{summary}\n\nWaits {wait}.", &[("summary", &a.summary), ("wait", &wait)]);
     }
+    if a.kind == "signin" {
+        return trf("🔑 I need you to sign in\n\n{summary}\n\nWaits {wait}.", &[("summary", &a.summary), ("wait", &wait)]);
+    }
     trf("🔐 Approve this action?\n\n{summary}\n\nWaits {wait}. {then}", &[("summary", &a.summary), ("wait", &wait), ("then", then)]) + &again
 }
 
@@ -589,6 +596,9 @@ pub(crate) fn verdict(a: &Approval) -> String {
         "approved" if a.kind == "takeover" => tr("✅ Done, carrying on"),
         "expired" if a.kind == "takeover" => tr("⌛ Nobody took over in time"),
         _ if a.kind == "takeover" => tr("Not now"),
+        "approved" if a.kind == "signin" => tr("✅ Signed in"),
+        "expired" if a.kind == "signin" => tr("⌛ Nobody signed in in time"),
+        _ if a.kind == "signin" => tr("❌ Not signed in"),
         "approved" => tr("✅ Approved"),
         "expired" => tr("⌛ No answer in time, so not done"),
         _ => tr("❌ Denied"),

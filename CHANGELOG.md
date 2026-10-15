@@ -40,6 +40,16 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
   - A bot file can't pass an option to the AI's command line as its model.
   - `mimir doctor` no longer creates a database, or upgrades an older one, while it checks.
 
+### The bots' computer
+- **Sign in from your phone:** at a sign-in page, a bot sends you a card with a link to a small masked form in Mimir,
+  instead of asking you to take over the screen. Type your login there, never in the chat; Mimir types it into the
+  page and keeps it for that bot on that site only. The bot never sees it, only whether it worked. If the bot got to
+  that site after reading a web page or a message, the site looks like one you've signed in to before, or its
+  address uses letters from another alphabet, the form warns you and shows the full address. Taking over stays for
+  captchas and payments. [Details](docs/computer.md#signing-in-from-your-phone)
+- **Authenticator codes on saved logins:** paste a site's setup key or `otpauth://` link once, and Mimir types the
+  6-digit codes itself, only on that login's site.
+
 ## 0.3.0
 
 ### Talking to your bots

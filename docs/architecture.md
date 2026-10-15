@@ -25,9 +25,11 @@ For contributors: how the pieces fit together.
 | `lib.rs` (`turn`) | One run: builds the instructions (role, standing memory, skills), calls the provider, records the run; `/skill` commands (`skill_command`) |
 | `tools` | `mod.rs`: `ToolCtx`, `call` (every tool call), taint, shared helpers; `specs.rs`: tool definitions; `gate.rs`: the allow / ask / deny gate, plans, loops, parked calls; `builtin.rs`: the built-in tools' code |
 | `mcp` | The MCP server the CLIs start for each run (`<app> mcp --bot B --chat C --run R`, plus `--read-only` for quiet checks, `--no-tools`, `--depth` for hand-offs), exposing Mimir's tools |
-| `ext` | Tool servers (MCP clients over stdio and Streamable HTTP, MCP's OAuth sign-in for remote ones), the browser, saved logins |
+| `ext` | Tool servers (MCP clients over stdio and Streamable HTTP, MCP's OAuth sign-in for remote ones), the browser, saved logins (per bot and registrable domain, `site_of`) |
+| `totp` | Authenticator codes for saved logins (RFC 6238, from a base32 key or an `otpauth://` link) |
+| `lookalike` | Domains made to pass for ones you know (sign-in cards' warnings; meant for email recipients too) |
 | `tidy` | The daily memory tidy-up (on `tidy_model` if set): corrections, skills from good runs, fixes for skills that went wrong, weekly upkeep (retire / merge / move to background), the weekly review; teaching a skill from a source or a SKILL.md |
-| `computer` | The bots' computer (Xvfb, xdotool, scrot, Chromium), self-hosted Linux only; recording a showing for teach by showing (page details through Chromium's DevTools port) |
+| `computer` | The bots' computer (Xvfb, xdotool, scrot, Chromium), self-hosted Linux only; recording a showing for teach by showing (page details through Chromium's DevTools port); typing a sign-in into the page on screen (`sign_in`, from a sign-in card's form, `signin_submit` in `host`) |
 | `transcribe` | Speech to text (whisper.cpp built in, or `whisper-cli`, or an API), voice activity, speaker separation |
 | `calendar` | iCal links: parsing, recurrence (`rrule`), the meeting on now, events between dates (`calendar_list`) |
 | `email` | The mailbox list; IMAP (async-imap, mail-parser): search, read, drafts by APPEND, all EXAMINE/PEEK; SMTP sending (lettre); app passwords or Outlook's XOAUTH2; every operation within 60 s |

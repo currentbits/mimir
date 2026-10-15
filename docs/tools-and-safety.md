@@ -32,7 +32,7 @@ Bots act through **tools**. Every tool call is checked against your rules before
 | `skill_save` | Propose a skill from what the conversation did, when you ask; you press Save ([Skills](skills.md)) | allow |
 | `plan_propose` | Propose a plan you approve once (below) | allow |
 | `ask_choice` | Ask you one question with 2 to 4 answers to tap, plus "Something else". The buttons go under the reply, and your tap is your next message. Only in Telegram, Slack and Discord chats, never in routines or another bot's task. A tap is never an approval | allow |
-| `computer_*` | Use the bots' computer, self-hosted only ([The bots' computer](computer.md)) | allow; `computer_open` **asks** |
+| `computer_*` | Use the bots' computer, self-hosted only ([The bots' computer](computer.md)) | allow; `computer_open` **asks**, and `computer_signin` with a saved login |
 | `browser__*` | The headless browser, when switched on (below) | opening a page **asks** |
 | *tool servers* | Tools from MCP servers you added (below) | read-only allow, the rest **ask** |
 
@@ -139,6 +139,9 @@ checks the address in the link, not where the name leads.
 
 **Saved logins** are typed by name (e.g. `GITHUB_PASSWORD`): the browser fills in the value, the AI never sees it, it
 only works on the sites you listed for it, and you approve each use. Values are scrubbed from every result and log.
+A login can have an authenticator key too: a bot types `NAME_CODE` and Mimir fills in the current code, only on the
+login's sites. On the bots' computer, a bot can also ask you to sign in with a masked form in Mimir instead of the
+chat ([Signing in from your phone](computer.md#signing-in-from-your-phone)); that login is kept for that bot and site.
 
 ## Tool servers (MCP)
 

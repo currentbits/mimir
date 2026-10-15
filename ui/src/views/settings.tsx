@@ -1,13 +1,13 @@
-import { Fragment, useEffect, useRef, useState } from 'react'
+import { Fragment, useContext, useEffect, useRef, useState } from 'react'
 import { inDesktop, insecureServer, invoke, saveDownload, localInvoke, probe, remoteServer, setWebToken, connectServer, shortcut, trayName } from '../api'
 import { ago, fullTime } from '../format'
 import { openLink } from '../markdown'
 import { ask, tell, Empty, Group, Icon, Row, Segmented, Switch } from '../ui'
 import { SignInChatGPT, SignInGrok, ConnectOpenRouter, SignInBrowser } from './accounts'
-import { useLoad, SECRETS_AT, LOCAL } from '../shared'
+import { useLoad, Bots, SECRETS_AT, LOCAL } from '../shared'
 import type { Bot, ComputerStatus, Chat, Account, ToolServer } from '../types'
 
-type VaultEntry = { name: string; domains: string[] }
+type VaultEntry = { name: string; domains: string[]; bot?: number; totp?: boolean }
 
 type Rule = { tool: string; description: string; action: 'allow' | 'ask' | 'deny'; default: string }
 
@@ -670,25 +670,28 @@ function BrowserSettings({ onChange }: { onChange: () => void }) {
   const vault = useLoad(() => invoke<VaultEntry[]>('vault'), [], 60000)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
-  const [draft, setDraft] = useState({ name: '', value: '', domains: '' })
+  const botOf = useContext(Bots)
+  const [draft, setDraft] = useState({ name: '', value: '', domains: '', totp: '' })
+  const exists = (vault.data ?? []).some(v => v.name === draft.name.trim().toUpperCase())
   const on = !!servers.data?.servers.some(s => s.name === 'browser')
   const toggle = (v: boolean) => {
     setBusy(true); setErr(null)
     invoke('browser_enable', { enabled: v }).then(() => { servers.reload(); onChange() }, e => setErr(String(e))).finally(() => setBusy(false))
   }
   const save = () => invoke('vault_save', {
-    entry: { name: draft.name.trim().toUpperCase(), domains: draft.domains.split(/[,\s]+/).filter(Boolean) }, value: draft.value,
-  }).then(() => { setDraft({ name: '', value: '', domains: '' }); setErr(null); vault.reload() }, e => setErr(String(e)))
+    entry: { name: draft.name.trim().toUpperCase(), domains: draft.domains.split(/[,\s]+/).filter(Boolean) }, value: draft.value, totp: draft.totp,
+  }).then(() => { setDraft({ name: '', value: '', domains: '', totp: '' }); setErr(null); vault.reload() }, e => setErr(String(e)))
   return (
     <Group title="Browser" note="Opening a new page asks you first. Running page scripts is off. Needs Node.js; the first time downloads Chromium (~100 MB).">
       <Row icon={<Icon name="browser" size={15} />} title="Web browser" desc={busy ? (on ? 'Turning off…' : 'Setting up — downloading Chromium the first time…') : 'A real headless browser bots can use: open pages, click, fill in forms.'}>
         <Switch label="Web browser" checked={on} disabled={busy} onChange={toggle} />
       </Row>
-      {on && (
+      {(on || !!vault.data?.length) && (
         <>
-          <Row icon={<Icon name="shield" size={15} />} title="Saved logins" desc="Bots type these by name; the browser fills in the real value, which the AI never sees. Each works only on its sites, and you approve every use." />
+          <Row icon={<Icon name="shield" size={15} />} title="Saved logins" desc="Bots type these by name; the browser fills in the real value, which the AI never sees. Each works only on its sites, and you approve every use. With an authenticator key, Mimir types the current code too (NAME_CODE)." />
           {(vault.data ?? []).map(v => (
-            <Row key={v.name} title={<code>{v.name}</code>} desc={v.domains.join(', ')}>
+            <Row key={v.name} title={<code>{v.name}</code>} desc={v.domains.join(', ') + (v.bot ? ` · ${botOf(v.bot).name}'s, from signing in` : '') + (v.totp ? ' · authenticator codes' : '')}>
+              <button className="btn btn-sm btn-ghost icon-btn" aria-label={`Change ${v.name}`} title="Change, or add an authenticator key" onClick={() => setDraft({ name: v.name, value: '', domains: v.domains.join(', '), totp: '' })}><Icon name="pencil" size={14} /></button>
               <button className="btn btn-sm btn-ghost btn-danger icon-btn" aria-label={`Remove ${v.name}`} title="Remove" onClick={() => invoke('vault_delete', { name: v.name }).then(vault.reload, e => setErr(String(e)))}><Icon name="trash" size={14} /></button>
             </Row>
           ))}
@@ -697,7 +700,8 @@ function BrowserSettings({ onChange }: { onChange: () => void }) {
               <input className="input mono" aria-label="Login name" placeholder="GITHUB_PASSWORD" value={draft.name} onChange={e => setDraft({ ...draft, name: e.target.value })} />
               <input className="input" aria-label="Secret value" type="password" placeholder="Password or token" value={draft.value} onChange={e => setDraft({ ...draft, value: e.target.value })} autoComplete="new-password" />
               <input className="input" aria-label="Allowed sites" placeholder="github.com" value={draft.domains} onChange={e => setDraft({ ...draft, domains: e.target.value })} />
-              <button className="btn" disabled={!draft.name.trim() || !draft.value || !draft.domains.trim()}>Save</button>
+              <input className="input" aria-label="Authenticator setup key (optional)" type="password" placeholder="Authenticator key (optional)" value={draft.totp} onChange={e => setDraft({ ...draft, totp: e.target.value })} autoComplete="off" />
+              <button className="btn" disabled={!draft.name.trim() || !(draft.value || (exists && draft.totp)) || !draft.domains.trim()}>Save</button>
             </div></div>
           </form>
         </>
