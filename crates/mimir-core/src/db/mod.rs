@@ -1488,14 +1488,14 @@ mod tests {
         d.routine_advance(&r).unwrap();
         assert!(d.routines(7).unwrap()[0].next_fire > r.next_fire);
         // Paused routines aren't due; resuming schedules from now.
-        assert!(d.routine_update(7, r.id, "*/5 * * * *", "ping", true, true).unwrap());
+        assert!(d.routine_update(7, r.id, "*/5 * * * *", "ping", true, true, None).unwrap());
         assert!(d.due(2, i64::MAX).unwrap().is_empty());
-        assert!(d.routine_update(7, r.id, "0 9 * * *", "pong", false, false).unwrap());
+        assert!(d.routine_update(7, r.id, "0 9 * * *", "pong", false, false, None).unwrap());
         let r2 = &d.routines(7).unwrap()[0];
         assert_eq!((r2.cron.as_str(), r2.prompt.as_str(), r2.quiet, r2.paused), ("0 9 * * *", "pong", false, false));
         assert!(r2.next_fire > now() && d.due(2, i64::MAX).unwrap().len() == 1);
-        assert!(!d.routine_update(8, r.id, "0 9 * * *", "x", false, false).unwrap(), "other chat");
-        assert!(d.routine_update(7, r.id, "nonsense", "x", false, false).is_err());
+        assert!(!d.routine_update(8, r.id, "0 9 * * *", "x", false, false, None).unwrap(), "other chat");
+        assert!(d.routine_update(7, r.id, "nonsense", "x", false, false, None).is_err());
         assert!(!d.routine_delete(8, r.id).unwrap(), "other chat can't delete");
         assert!(d.routine_delete(7, r.id).unwrap());
         // Timed off the calendar: it waits until the scheduler has read the calendar, and only where it's private.

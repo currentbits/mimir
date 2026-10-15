@@ -38,13 +38,14 @@ impl Tg {
 
     async fn call(&self, method: &str, mut body: Value) -> Result<Value> {
         // No link previews: Telegram fetches them itself, so a link a misled bot wrote could carry data out unclicked.
-        if matches!(method, "sendMessage" | "editMessageText") && body.get("link_preview_options").is_none() {
+        // Rich messages have no previews (nor the option); what would fetch there is media, which `fmt::telegram_rich` never writes.
+        if matches!(method, "sendMessage" | "editMessageText") && body.get("link_preview_options").is_none() && body.get("rich_message").is_none() {
             body["link_preview_options"] = json!({"is_disabled": true});
         }
         // "chat:topic" (a topic in a private chat, see `listen`): the chat, and the topic new messages go to.
         if let Some((chat, topic)) = body["chat_id"].as_str().and_then(|c| c.split_once(':')).map(|(c, t)| (c.to_string(), t.parse::<i64>().unwrap_or(0))) {
             body["chat_id"] = json!(chat);
-            if matches!(method, "sendMessage" | "sendMessageDraft" | "sendChatAction") {
+            if matches!(method, "sendMessage" | "sendMessageDraft" | "sendRichMessage" | "sendRichMessageDraft" | "sendChatAction") {
                 body["message_thread_id"] = json!(topic);
             }
         }
@@ -67,12 +68,29 @@ impl Tg {
         Ok(())
     }
 
-    /// Markdown → Telegram HTML, split between blocks under the 4096-char cap. If Telegram
-    /// rejects the markup, that piece goes out as plain text instead of being lost.
-    /// Markdown → Telegram HTML, split between blocks under the 4096-char cap. If Telegram rejects the markup, that piece
-    /// goes out as plain text instead of being lost. Buttons go under the last part. With a streamed draft, the draft is replaced by the first part.
+    /// One rich message (Bot API 10.1: tables, headings, task lists, up to 32768 characters). Failing that (too long, an
+    /// older Bot API server, rejected markup): Markdown → Telegram HTML, split between blocks under the 4096-char cap. If
+    /// Telegram rejects the markup, that piece goes out as plain text instead of being lost. Buttons go under the last part.
+    /// With a streamed draft, the draft is replaced by the first part.
     pub(crate) async fn finish(&self, chat: &str, draft: Option<&str>, text: &str, rows: &[Row]) -> Result<()> {
         let draft = draft.and_then(|d| d.parse::<i64>().ok());
+        let html = crate::fmt::telegram_rich(text);
+        if crate::fmt::html_to_plain(&html).chars().count() <= 32768 {
+            let mut msg = json!({"chat_id": chat, "rich_message": {"html": html}});
+            if !rows.is_empty() {
+                msg["reply_markup"] = keyboard(rows);
+            }
+            let method = match draft {
+                Some(mid) => {
+                    msg["message_id"] = json!(mid);
+                    "editMessageText"
+                }
+                None => "sendRichMessage",
+            };
+            if self.call(method, msg).await.is_ok() {
+                return Ok(());
+            }
+        }
         let parts = crate::fmt::telegram(text, 3800);
         let last = parts.len().saturating_sub(1);
         for (i, html) in parts.into_iter().enumerate() {
@@ -110,10 +128,10 @@ impl Tg {
         Ok(())
     }
 
-    /// Streaming drafts are plain text (half-written Markdown can be unbalanced); `finish` formats.
-    /// Private chats get Telegram's native streaming draft (Bot API 10), with its own stop button; the final
+    /// Private chats get Telegram's native streaming draft (Bot API 10), with its own stop button: a rich one where the
+    /// server has it (10.1; our converter leaves half-written Markdown literal), else plain text. The final
     /// reply is then sent as a new message (`finish` sees "draft:N" isn't a message id). Groups, and any
-    /// error, fall back to posting a message and editing it.
+    /// error, fall back to posting a plain message and editing it; `finish` formats.
     pub(crate) async fn draft_post(&self, chat: &str, text: &str) -> Option<String> {
         if crate::db::tg_chat(chat).parse::<i64>().is_ok_and(|c| c > 0) {
             let id = crate::random_hex(4).ok().and_then(|h| u32::from_str_radix(&h, 16).ok()).map_or(1, |n| (n & 0x7fff_ffff).max(1));
@@ -133,7 +151,12 @@ impl Tg {
     }
 
     async fn draft(&self, chat: &str, id: u32, text: &str) -> bool {
-        // Drafts can't turn link previews off (sendMessageDraft has no such option), so links in one aren't left
+        // ponytail: a server without rich drafts gets two calls a tick; remember that it lacks them if that matters
+        let rich = json!({"chat_id": chat, "draft_id": id, "rich_message": {"html": crate::fmt::telegram_rich(text)}, "can_stop": true});
+        if self.call("sendRichMessageDraft", rich).await.is_ok() {
+            return true;
+        }
+        // Plain drafts can't turn link previews off (sendMessageDraft has no such option), so links in one aren't left
         // recognisable as links while it's written: an invisible word joiner inside "://". The final message has
         // previews off and its links whole.
         let text = text.replace("://", ":/\u{2060}/");
@@ -364,7 +387,33 @@ fn replied_to(m: &Value, me_id: Option<i64>) -> Option<String> {
     if me_id.is_none() || !r.is_object() || r["forum_topic_created"].is_object() || r["from"]["id"].as_i64() != me_id {
         return None;
     }
-    m["quote"]["text"].as_str().or(r["text"].as_str()).or(r["caption"].as_str()).filter(|q| !q.trim().is_empty()).map(str::to_string)
+    let rich = r["rich_message"]["blocks"].is_array().then(|| rich_plain(&r["rich_message"]["blocks"]));
+    m["quote"]["text"].as_str().or(r["text"].as_str()).or(r["caption"].as_str()).or(rich.as_deref()).filter(|q| !q.trim().is_empty()).map(str::to_string)
+}
+
+/// A received rich message's text: a line per block (paragraph, heading, list item, table cell…).
+fn rich_plain(blocks: &Value) -> String {
+    // RichText: a string, an array of RichText, or a span ({"type": "bold", "text": RichText, …}).
+    fn text(v: &Value) -> String {
+        match v {
+            Value::String(s) => s.clone(),
+            Value::Array(a) => a.iter().map(text).collect(),
+            _ => text(&v["text"]),
+        }
+    }
+    fn walk(v: &Value, out: &mut Vec<String>) {
+        match v {
+            Value::Array(a) => a.iter().for_each(|x| walk(x, out)),
+            Value::Object(o) => match o.get("text") {
+                Some(t) => out.push(text(t)),
+                None => o.values().for_each(|x| walk(x, out)),
+            },
+            _ => {}
+        }
+    }
+    let mut out = vec![];
+    walk(blocks, &mut out);
+    out.join("\n")
 }
 
 #[cfg(test)]
@@ -393,6 +442,11 @@ mod tests {
         assert!(super::replied_to(&reply(json!({"from": {"id": 9}, "text": "someone else's"})), Some(7)).is_none());
         assert!(super::replied_to(&reply(json!({"from": {"id": 7}, "forum_topic_created": {"name": "Trip"}})), Some(7)).is_none());
         assert!(super::replied_to(&json!({"text": "hi"}), Some(7)).is_none());
+        let rich = json!({"from": {"id": 7}, "rich_message": {"blocks": [
+            {"type": "heading", "size": 2, "text": "Today"},
+            {"type": "list", "items": [{"label": "1.", "blocks": [{"type": "paragraph", "text": ["Call ", {"type": "bold", "text": "Sam"}]}]}]}
+        ]}});
+        assert_eq!(super::replied_to(&reply(rich), Some(7)).as_deref(), Some("Today\nCall Sam"), "a rich message's text");
         let t = crate::with_reply("move this one", "2. Call <b>Sam</b>");
         assert_eq!(crate::own_part(&t), "move this one");
         assert!(t.contains("‹b›Sam‹/b›"), "the quote can't close the tag");

@@ -1397,7 +1397,7 @@ mod tests {
         assert!(r.once && r.next_fire > crate::db::now());
         assert!(ctx.db.due(1, r.next_fire).unwrap().iter().any(|x| x.id == r.id));
         // Editing keeps its time; after it has run, it's gone.
-        assert!(ctx.db.routine_update(9, r.id, "", "Remind me to call mum and dad", false, false).unwrap());
+        assert!(ctx.db.routine_update(9, r.id, "", "Remind me to call mum and dad", false, false, None).unwrap());
         assert_eq!(ctx.db.routines(9).unwrap()[0].next_fire, r.next_fire);
         ctx.db.routine_advance(&r).unwrap();
         ctx.db.routine_done(&r, true).unwrap();
@@ -1431,7 +1431,14 @@ mod tests {
         call(&ctx, "routine_update", &json!({"id": r.id, "until": ""})).await.unwrap();
         assert_eq!(ctx.db.routine(r.id).unwrap().unwrap().ends, 0, "cleared");
         assert!(ctx.db.routine_set_ends(9, r.id, r.next_fire + 60).unwrap());
-        assert!(ctx.db.routine_update(9, r.id, "0 8 1 1 *", "Brief me", false, false).is_err(), "would first run after the end");
+        assert!(ctx.db.routine_update(9, r.id, "0 8 1 1 *", "Brief me", false, false, None).is_err(), "would first run after the end");
+        // A new schedule and a new end that don't fit together: refused whole, the end isn't moved on its own.
+        let before = ctx.db.routine(r.id).unwrap().unwrap().ends;
+        assert!(call(&ctx, "routine_update", &json!({"id": r.id, "cron": "0 8 1 1 *", "until": day(20)})).await.is_err());
+        assert_eq!(ctx.db.routine(r.id).unwrap().unwrap().ends, before, "end left as it was");
+        // Together they fit: a later end with a slower schedule.
+        call(&ctx, "routine_update", &json!({"id": r.id, "cron": "0 8 * * 1", "until": day(20)})).await.unwrap();
+        ctx.db.routine_update(9, r.id, "0 8 * * *", "Brief me", false, false, Some(r.next_fire + 60)).unwrap();
         let r = ctx.db.routine(r.id).unwrap().unwrap();
         ctx.db.routine_advance(&r).unwrap();
         assert!(ctx.db.routine(r.id).unwrap().is_some(), "still there for its last run");

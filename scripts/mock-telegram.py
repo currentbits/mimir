@@ -2,7 +2,8 @@
 
 POST /bot<token>/<method> handles getMe, getUpdates (long-poll), sendMessage, editMessageText,
 sendChatAction, answerCallbackQuery, sendMessageDraft (private chats, non-zero draft_id; MOCK_NO_DRAFTS=1
-rejects it, like an older API), and multipart uploads (sendPhoto, sendDocument: logged with each part's name and size,
+rejects it, like an older API), sendRichMessage, sendRichMessageDraft and editMessageText with rich_message
+(MOCK_NO_RICH=1 rejects them, like an API before 10.1), and multipart uploads (sendPhoto, sendDocument: logged with each part's name and size,
 and a file's name). Every call is appended to calls.jsonl.
 POST /control/push {update} queues an update for getUpdates. getFile + GET /file/bot<token>/<path> serve MOCK_FILE.
 """
@@ -43,12 +44,15 @@ class H(BaseHTTPRequestHandler):
                     ready = [u for u in updates if u["update_id"] >= data.get("offset", 0)]
                 if ready or time.time() > deadline: return self.reply({"ok": True, "result": ready})
                 time.sleep(0.1)
-        if method in ("sendMessage", "editMessageText"):
+        if os.environ.get("MOCK_NO_RICH") and (method.startswith("sendRich") or "rich_message" in data):
+            return self.reply({"ok": False, "description": "Not Found: method not found"})
+        if method == "sendRichMessageDraft": method = "sendMessageDraft"
+        if method in ("sendMessage", "editMessageText", "sendRichMessage"):
             if "<b>" in data.get("text", "") and data.get("parse_mode") != "HTML":
                 return self.reply({"ok": False, "description": "HTML without parse_mode"})
             with lock:
                 mid = data.get("message_id") or next_msg[0]
-                if method == "sendMessage": next_msg[0] += 1
+                if method != "editMessageText": next_msg[0] += 1
             return self.reply({"ok": True, "result": {"message_id": mid, "chat": {"id": data.get("chat_id")}}})
         if method == "sendMessageDraft":
             if os.environ.get("MOCK_NO_DRAFTS") or not data.get("draft_id") or int(data.get("chat_id", 0)) <= 0:
