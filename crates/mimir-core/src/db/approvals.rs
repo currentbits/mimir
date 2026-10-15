@@ -20,6 +20,14 @@ pub struct Approval {
     pub parked: bool,
     /// How often you already allowed this same kind of request (tool and site): the card offers "always" after a few.
     pub allowed_before: i64,
+    /// The card's text you can change before it goes (an email's subject and body): field → text. Only these fields;
+    /// who it's to never is.
+    pub draft: Option<serde_json::Value>,
+    /// Why you said no, in your words (the bot is told).
+    pub reason: Option<String>,
+    /// A link to this card in the app, for chat-app cards you can edit there. Not stored.
+    #[serde(skip)]
+    pub edit_link: Option<String>,
 }
 
 impl Db {
@@ -133,11 +141,12 @@ impl Db {
     }
 
     /// Decide a still-pending approval. `chat` (when given) must match, so one chat can't approve another's request.
+    /// A sign-in card can only be turned down here: it's done by signing in (`approval_claim`).
     pub fn approval_decide(&self, id: i64, approve: bool, chat: Option<i64>) -> Result<Option<Approval>> {
         let c = self.c();
         Self::expire_stale(&c)?;
         let n = c.execute(
-            "UPDATE approvals SET status=?2 WHERE id=?1 AND status='pending' AND (?3 IS NULL OR chat_id=?3)",
+            "UPDATE approvals SET status=?2 WHERE id=?1 AND status='pending' AND (?3 IS NULL OR chat_id=?3) AND kind != 'signing' AND (?2 = 'denied' OR kind != 'signin')",
             params![id, if approve { "approved" } else { "denied" }, chat],
         )?;
         if n == 0 {
@@ -147,11 +156,52 @@ impl Db {
         Ok(self.approvals_where("id = ?1", id)?.pop())
     }
 
+    /// Take a waiting sign-in card for its form, once: the first submit gets it (kind `signing` while Mimir types,
+    /// with two minutes for that), any later one, or one after it ran out, gets None.
+    pub fn approval_claim(&self, id: i64) -> Result<Option<Approval>> {
+        let c = self.c();
+        Self::expire_stale(&c)?;
+        let n = c.execute("UPDATE approvals SET kind='signing', expires_at=?2 WHERE id=?1 AND status='pending' AND kind='signin'", [id, now() + 120])?;
+        drop(c);
+        Ok(if n == 1 { self.approvals_where("id = ?1", id)?.pop() } else { None })
+    }
+
+    /// How a claimed sign-in went: approved = signed in.
+    pub fn approval_signed_in(&self, id: i64, ok: bool) -> Result<()> {
+        let c = self.c();
+        c.execute("UPDATE approvals SET status=?2, kind='signin' WHERE id=?1 AND status='pending' AND kind='signing'", params![id, if ok { "approved" } else { "denied" }])?;
+        c.execute("DELETE FROM settings WHERE key=?1", [format!("signin:{id}")])?;
+        Ok(())
+    }
+
+    /// What a sign-in card's form shows besides the site (the full address, warnings), kept while it waits. Ones of
+    /// cards no longer waiting go when a new one is made.
+    pub fn signin_card_set(&self, id: i64, card: &serde_json::Value) -> Result<()> {
+        self.c().execute(
+            "DELETE FROM settings WHERE key LIKE 'signin:%' AND CAST(substr(key, 8) AS INTEGER) NOT IN (SELECT id FROM approvals WHERE status='pending')",
+            [],
+        )?;
+        self.set_setting(&format!("signin:{id}"), &card.to_string())
+    }
+
+    pub fn signin_card(&self, id: i64) -> Result<serde_json::Value> {
+        Ok(self.setting(&format!("signin:{id}"))?.and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default())
+    }
+
+    /// Sites someone signed in to with a sign-in card before.
+    pub fn signin_sites(&self) -> Result<Vec<String>> {
+        let c = self.c();
+        let mut st = c.prepare("SELECT DISTINCT site FROM approvals WHERE kind='signin' AND status='approved' AND site IS NOT NULL")?;
+        let v = st.query_map([], |r| r.get(0))?.collect::<Result<_, _>>()?;
+        Ok(v)
+    }
+
     fn approvals_where(&self, sql: &str, p: i64) -> Result<Vec<Approval>> {
         let c = self.c();
         let mut st = c.prepare(&format!(
             "SELECT id, chat_id, tool, summary, status, created_at, expires_at, tg_message_id, bot_id, kind, site, parked_args IS NOT NULL,
-             (SELECT COUNT(*) FROM approvals p WHERE p.tool = approvals.tool AND p.site IS approvals.site AND p.kind = 'rule' AND p.status = 'approved' AND p.id < approvals.id)
+             (SELECT COUNT(*) FROM approvals p WHERE p.tool = approvals.tool AND p.site IS approvals.site AND p.kind = 'rule' AND p.status = 'approved' AND p.id < approvals.id),
+             draft, reason
              FROM approvals WHERE {sql} ORDER BY id"
         ))?;
         let v = st
@@ -170,10 +220,53 @@ impl Db {
                     site: r.get(10)?,
                     parked: r.get(11)?,
                     allowed_before: r.get(12)?,
+                    draft: r.get::<_, Option<String>>(13)?.and_then(|d| serde_json::from_str(&d).ok()),
+                    reason: r.get(14)?,
+                    edit_link: None,
                 })
             })?
             .collect::<Result<_, _>>()?;
         Ok(v)
+    }
+
+    pub fn approval(&self, id: i64) -> Result<Option<Approval>> {
+        Ok(self.approvals_where("id = ?1", id)?.pop())
+    }
+
+    /// What a card you can edit holds, as it's made.
+    pub fn approval_set_draft(&self, id: i64, draft: &serde_json::Value) -> Result<()> {
+        self.c().execute("UPDATE approvals SET draft=?2 WHERE id=?1", params![id, draft.to_string()])?;
+        Ok(())
+    }
+
+    /// Your edits, while it's still pending, and the card's text with them. False if it isn't pending any more.
+    pub fn approval_edit(&self, id: i64, draft: &serde_json::Value, summary: &str) -> Result<bool> {
+        let c = self.c();
+        Self::expire_stale(&c)?;
+        Ok(c.execute("UPDATE approvals SET draft=?2, summary=?3 WHERE id=?1 AND status='pending' AND draft IS NOT NULL", params![id, draft.to_string(), summary])? > 0)
+    }
+
+    /// Why you said no (before denying it).
+    pub fn approval_set_reason(&self, id: i64, reason: &str) -> Result<()> {
+        self.c().execute("UPDATE approvals SET reason=?2 WHERE id=?1 AND status='pending'", params![id, reason])?;
+        Ok(())
+    }
+
+    /// The pending ask (not a take-over) whose card in `chat` is the message `card`, for a reply to it (the newest if
+    /// several). Discord's cards are kept as "channel/message"; a Slack card posted in a thread as "thread/card", so a
+    /// reply in that thread (`card` = the thread) finds it.
+    pub fn approval_by_card(&self, chat: i64, card: &str) -> Result<Option<i64>> {
+        let c = self.c();
+        Self::expire_stale(&c)?;
+        Ok(c.query_row(
+            "SELECT id FROM approvals WHERE status='pending' AND kind != 'takeover' AND (
+               chat_id=?1 AND (card_ref=?2 OR card_ref LIKE '%/' || ?2 OR card_ref LIKE ?2 || '/%')
+               OR mirror_chat=?1 AND (mirror_ref=?2 OR mirror_ref LIKE '%/' || ?2 OR mirror_ref LIKE ?2 || '/%'))
+             ORDER BY id DESC LIMIT 1",
+            params![chat, card],
+            |r| r.get(0),
+        )
+        .optional()?)
     }
 
     /// Park an approval for an unattended run: the call's arguments are kept so it can run once approved.
@@ -288,7 +381,7 @@ impl Db {
 
     pub fn approvals_pending(&self) -> Result<Vec<Approval>> {
         Self::expire_stale(&self.c())?;
-        self.approvals_where("status = 'pending' AND ?1 = ?1", 0)
+        self.approvals_where("status = 'pending' AND kind != 'signing' AND ?1 = ?1", 0)
     }
 
     /// This bot's pending Telegram approvals that haven't been sent as a card yet.

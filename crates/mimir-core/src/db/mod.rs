@@ -14,6 +14,7 @@ mod approvals;
 mod bots;
 mod cards;
 mod chats;
+mod goals;
 mod meetings;
 mod memory;
 mod messages;
@@ -28,6 +29,7 @@ pub use approvals::*;
 pub use bots::*;
 pub use cards::*;
 pub use chats::*;
+pub use goals::*;
 pub use memory::*;
 pub use messages::*;
 pub use outbox::*;
@@ -51,7 +53,7 @@ PRAGMA secure_delete=ON;
 
 /// The schema version this build writes (`PRAGMA user_version`). A schema change bumps it and adds a step to
 /// `migrate`; each step runs once per database.
-const VERSION: i64 = 9;
+pub(crate) const VERSION: i64 = 12;
 
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS entries(
@@ -147,7 +149,7 @@ pub(crate) fn alike(a: &str, b: &str) -> bool {
     shared >= 2 && shared * 5 >= 3 * a.len().min(b.len())
 }
 
-fn user_version(c: &Connection) -> Result<i64> {
+pub(crate) fn user_version(c: &Connection) -> Result<i64> {
     Ok(c.query_row("PRAGMA user_version", [], |r| r.get(0))?)
 }
 
@@ -213,6 +215,15 @@ fn migrate(c: &Connection) -> Result<()> {
     }
     if v < 9 {
         migrate_v9(c)?;
+    }
+    if v < 10 {
+        migrate_v10(c)?;
+    }
+    if v < 11 {
+        migrate_v11(c)?;
+    }
+    if v < 12 {
+        migrate_v12(c)?;
     }
     c.execute(
         "INSERT INTO settings(key, value) VALUES ('schema_written_by', ?1) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -460,6 +471,42 @@ fn migrate_v9(c: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Version 10: tasks handed to another bot that report back later (ask_bot's `later`), until the result is told.
+fn migrate_v10(c: &Connection) -> Result<()> {
+    c.execute_batch(
+        "CREATE TABLE IF NOT EXISTS delegations(id INTEGER PRIMARY KEY, bot_id INTEGER NOT NULL, to_bot INTEGER NOT NULL, chat_id INTEGER NOT NULL,
+           conv INTEGER NOT NULL, run_id INTEGER, task TEXT NOT NULL, unattended INTEGER NOT NULL DEFAULT 0, tainted INTEGER NOT NULL DEFAULT 0,
+           status TEXT NOT NULL DEFAULT 'pending', reply TEXT, failed INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL)",
+    )?;
+    Ok(())
+}
+
+/// Version 11: a chat's goal, and the routines, follow-ups, handed-over tasks and runs that belong to it.
+fn migrate_v11(c: &Connection) -> Result<()> {
+    c.execute_batch(
+        "CREATE TABLE IF NOT EXISTS goals(id INTEGER PRIMARY KEY, bot_id INTEGER NOT NULL, chat_id INTEGER NOT NULL UNIQUE, text TEXT NOT NULL,
+           done_when TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','paused','blocked','done')),
+           progress TEXT NOT NULL DEFAULT '', why TEXT NOT NULL DEFAULT '', budget INTEGER NOT NULL DEFAULT 0, budget_from INTEGER NOT NULL DEFAULT 0,
+           tainted INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
+    )?;
+    for table in ["routines", "delegations", "runs"] {
+        if !c.prepare(&format!("SELECT 1 FROM pragma_table_info('{table}') WHERE name='goal_id'"))?.exists([])? {
+            c.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN goal_id INTEGER"))?;
+        }
+    }
+    Ok(())
+}
+
+/// Version 12: an approval card's text you can edit before it goes (an email's subject and body), and why you said no.
+fn migrate_v12(c: &Connection) -> Result<()> {
+    for col in ["draft", "reason"] {
+        if !c.prepare(&format!("SELECT 1 FROM pragma_table_info('approvals') WHERE name='{col}'"))?.exists([])? {
+            c.execute_batch(&format!("ALTER TABLE approvals ADD COLUMN {col} TEXT"))?;
+        }
+    }
+    Ok(())
+}
+
 impl Db {
     /// Opens the database, migrating it first if an older Mimir wrote it. An up-to-date database only reads its
     /// version: the tools process opens it on every turn, and mustn't compete with the app for the write lock.
@@ -488,6 +535,12 @@ impl Db {
         self.c().execute(
             "UPDATE runs SET status='error', error='interrupted', ended_at=started_at WHERE status='running' AND started_at < ?1",
             [now() - 900],
+        )?;
+        // ponytail: a handed-over task Mimir stopped in the middle isn't run again (it may have sent half of something):
+        // the bot that asked says it didn't finish. Assumes one Mimir per data folder, like the rest.
+        self.c().execute(
+            "UPDATE delegations SET status='done', failed=1, reply='Mimir stopped while it was on this task, so it didn''t finish.' WHERE status='running'",
+            [],
         )?;
         Ok(())
     }
@@ -574,6 +627,23 @@ mod tests {
         let n: i64 = d.c().query_row("SELECT count(*) FROM sqlite_master WHERE name IN ('tool_calls_chat', 'messages_chat')", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 2);
         drop(d);
+
+        // Version 10 → 12: the goals (11), then an approval's draft and reason (12).
+        Connection::open(&p)
+            .unwrap()
+            .execute_batch(
+                "DROP TABLE goals; ALTER TABLE routines DROP COLUMN goal_id; ALTER TABLE delegations DROP COLUMN goal_id; ALTER TABLE runs DROP COLUMN goal_id;
+                 ALTER TABLE approvals DROP COLUMN draft; ALTER TABLE approvals DROP COLUMN reason; PRAGMA user_version = 10",
+            )
+            .unwrap();
+        let d = Db::open(&p).unwrap();
+        assert_eq!(user_version(&d.c()).unwrap(), 12);
+        assert!(d.c().prepare("SELECT goal_id FROM runs").is_ok() && d.c().prepare("SELECT id FROM goals").is_ok(), "v11 ran");
+        assert!(d.c().prepare("SELECT draft, reason FROM approvals").is_ok(), "v12 ran");
+        drop(d);
+        // A new database starts at the latest.
+        let fresh = dir.join("fresh.db");
+        assert_eq!(user_version(&Db::open(&fresh).unwrap().c()).unwrap(), 12);
 
         // Written by a newer Mimir: refused, untouched.
         Connection::open(&p).unwrap().execute_batch("PRAGMA user_version = 99; UPDATE settings SET value='9.9.9' WHERE key='schema_written_by'").unwrap();
@@ -1069,6 +1139,20 @@ mod tests {
         assert!(d.approval_decide(a, false, None).unwrap().is_none(), "decided once");
         assert_eq!(d.approval_status(a).unwrap(), "approved");
 
+        // A sign-in card: done once, by its form (not an Approve), and not after it ran out.
+        let s = d.approval_create(1, 5, "computer_signin", "Sign in to github.com", 300, "signin", Some("github.com")).unwrap();
+        assert!(d.approval_decide(s, true, None).unwrap().is_none(), "approving isn't signing in");
+        assert_eq!(d.approval_claim(s).unwrap().unwrap().site.as_deref(), Some("github.com"));
+        assert!(d.approval_claim(s).unwrap().is_none(), "the link works once");
+        assert!(d.approval_decide(s, false, None).unwrap().is_none(), "nor can it be turned down while signing in");
+        d.approval_signed_in(s, true).unwrap();
+        assert_eq!(d.approval_status(s).unwrap(), "approved");
+        assert!(d.approval_claim(a).unwrap().is_none(), "only sign-in cards");
+        let late = d.approval_create(1, 5, "computer_signin", "Sign in", 0, "signin", Some("github.com")).unwrap();
+        assert!(d.approval_claim(late).unwrap().is_none(), "not once it ran out");
+        let no = d.approval_create(1, 5, "computer_signin", "Sign in", 300, "signin", Some("github.com")).unwrap();
+        assert_eq!(d.approval_decide(no, false, None).unwrap().unwrap().status, "denied", "Can't now still works");
+
         let b = d.approval_create(1, 0, "routine_delete", "Delete #2", 0, "rule", None).unwrap();
         assert_eq!(d.approval_status(b).unwrap(), "expired", "ttl 0 expires immediately");
         assert!(d.approval_decide(b, true, None).unwrap().is_none(), "can't approve expired");
@@ -1482,5 +1566,72 @@ mod tests {
         assert_eq!(d.cards(5).unwrap().len(), 2);
         d.routine_set_delivery(5, r.id, "card").unwrap();
         assert!(d.card_delete(5, c.id).unwrap() && d.cards(5).unwrap().len() == 1);
+    }
+
+    #[test]
+    fn pausing_a_goal_holds_its_followups_and_deleting_removes_them() {
+        let d = db();
+        let g = d.goal_set(1, 5, "Find a plumber who can come this week", "a plumber is booked", 0, false).unwrap();
+        assert_eq!(g.status, "active");
+        assert!(d.goal_set(1, 5, "Another", "x", 0, false).is_err(), "one goal per chat");
+        // A follow-up booked while the goal is on is the goal's; one in another chat isn't.
+        let f = d.routine_once(1, 5, now() + 60, "Check whether the plumber replied", false).unwrap();
+        d.routine_set_followup(f.id).unwrap();
+        d.goal_claim_routine(f.id, 5).unwrap();
+        let other = d.routine_once(1, 6, now() + 60, "Unrelated", false).unwrap();
+        d.goal_claim_routine(other.id, 6).unwrap();
+        let later = now() + 120;
+        assert_eq!(d.due(1, later).unwrap().len(), 2);
+        // Paused: its follow-up doesn't run, though it's due; the other chat's still does.
+        d.goal_status(5, "paused", "").unwrap();
+        assert_eq!(d.due(1, later).unwrap().iter().map(|r| r.id).collect::<Vec<_>>(), vec![other.id]);
+        assert!(d.routine(f.id).unwrap().unwrap().goal_held && !d.routine(other.id).unwrap().unwrap().goal_held, "shown as paused with its goal");
+        assert!(d.goal_progress(5, "x", None, "", false).is_err(), "a paused goal is the person's to resume");
+        d.goal_status(5, "active", "").unwrap();
+        assert_eq!(d.due(1, later).unwrap().len(), 2, "resumed, it runs again");
+        // A task handed over for the goal: pausing stops it mid-run (and reports it), deleting stops a waiting one.
+        let t1 = d.delegation_add(&Delegation { bot_id: 1, to_bot: 2, chat_id: 5, task: "call plumbers".into(), ..Default::default() }).unwrap();
+        d.goal_claim_delegation(t1, 5).unwrap();
+        d.delegation_status(t1, "running").unwrap();
+        assert_eq!(d.goal_status(5, "paused", "").unwrap(), vec![t1]);
+        d.delegation_done(t1, "found one", false, false).unwrap();
+        assert!(d.delegations(1, "done").unwrap().is_empty(), "a stopped task's result isn't told");
+        d.goal_status(5, "active", "").unwrap();
+        let t2 = d.delegation_add(&Delegation { bot_id: 1, to_bot: 2, chat_id: 5, task: "again".into(), ..Default::default() }).unwrap();
+        d.goal_claim_delegation(t2, 5).unwrap();
+        d.goal_delete(5).unwrap();
+        assert!(d.goal(5).unwrap().is_none());
+        assert!(d.routine(f.id).unwrap().is_none(), "its follow-up went with it");
+        assert!(d.routine(other.id).unwrap().is_some());
+        assert!(d.delegations(1, "pending").unwrap().is_empty(), "its waiting task too");
+    }
+
+    #[test]
+    fn a_goal_over_budget_pauses_and_asks() {
+        let d = db();
+        let g = d.goal_set(1, 5, "Get the insurance refund paid", "the refund is in the account", 1000, false).unwrap();
+        assert!(!d.goal_check_budget(&g).unwrap());
+        // Only its own runs count: a turn in its chat while it's on, not a routine of the chat that isn't its.
+        let other = d.routine_create(1, 5, "0 8 * * *", "news", false).unwrap();
+        let o = d.run_start(1, 5, "routine", Some(other.id), "x").unwrap();
+        d.goal_claim_run(o, 5, Some(other.id), None).unwrap();
+        let r = d.run_start(1, 5, "message", None, "x").unwrap();
+        d.goal_claim_run(r, 5, None, None).unwrap();
+        d.c().execute("UPDATE runs SET tokens_in=1500 WHERE id IN (?1, ?2)", [r, o]).unwrap();
+        let g = d.goal(5).unwrap().unwrap();
+        assert_eq!(g.spent, 1500);
+        assert!(d.goal_check_budget(&g).unwrap());
+        let g = d.goal(5).unwrap().unwrap();
+        assert!(g.status == "paused" && g.why.contains("budget"), "{g:?}");
+        assert_eq!(d.goals_waiting().unwrap().len(), 1, "Needs you asks");
+        // Going on starts the budget over.
+        d.goal_status(5, "active", "").unwrap();
+        let g = d.goal(5).unwrap().unwrap();
+        assert!(g.status == "active" && g.why.is_empty() && !d.goal_check_budget(&g).unwrap());
+        assert!(d.goals_waiting().unwrap().is_empty());
+        // Done is done: removed or replaced, never taken up again (its routines are gone).
+        d.goal_status(5, "done", "").unwrap();
+        assert!(d.goal_status(5, "active", "").is_err() && d.goal_status(5, "paused", "").is_err());
+        assert_eq!(d.goal_set(1, 5, "Next thing", "x", 0, false).unwrap().status, "active", "a new goal replaces it");
     }
 }
