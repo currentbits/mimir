@@ -19,6 +19,11 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
   health are suggested, never marked for you.
 - **Security:** the TLS library (rustls 0.23.46) is updated for four advisories published on October 14
   (RUSTSEC-2026-0346 to 0349).
+- **Edit an email before it goes, and say why when you deny:** on an email's approval card in the app, **Edit** lets
+  you change the subject and text before you send it. What you approve is what goes; who it's to stays as shown. In
+  Telegram, Slack, Discord and Signal, **Edit in Mimir** opens the card in the web app (on a server with an https
+  address). **Deny…** takes an optional "Why?", and in a messaging app a reply to the card does the same: the bot
+  reads your reason and changes course instead of just stopping.
 - **Export, import and duplicate a bot:** right-click a bot to save it as one file (its role, look, skills, routines,
   tool rules and the tool servers it uses), without tokens, keys, saved logins, memories or chats. **From a file…** on
   the new-bot page shows everything in it first, and flags skill steps that pipe a download into a shell, hold a base64

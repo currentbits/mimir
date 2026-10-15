@@ -44,21 +44,35 @@ export function useLeave() {
   return { leaving, leave }
 }
 
-/** One approval: what it does, and Deny / Always / Allow once. Shared by the floating banner and the inbox. */
+type Decide = (id: number, approve: boolean, always?: 'tool' | 'site' | 'run', more?: { edits?: Record<string, string>; reason?: string }) => void
+
+/** One approval: what it does, and Deny / Always / Allow once. Shared by the floating banner and the inbox. An email's
+ *  subject and text can be edited first (who it's to can't); Deny can say why, for the bot. */
 function ApprovalCard({ a, where, leaving, decide, inline }: {
-  a: Approval; where: string; leaving: boolean; decide: (id: number, approve: boolean, always?: 'tool' | 'site' | 'run') => void; inline?: boolean
+  a: Approval; where: string; leaving: boolean; decide: Decide; inline?: boolean
 }) {
   const botOf = useContext(Bots)
   const b = botOf(a.bot_id)
   const risk = approvalRisk(a)
   // Allowed the same thing a few times already: offer to stop asking.
   const learned = risk.always && (a.allowed_before ?? 0) >= 2
+  const [edits, setEdits] = useState<Record<string, string> | null>(null)
+  const [why, setWhy] = useState<string | null>(null)
+  const d = a.draft
+  // Only what changed goes back; approving sends what's on the card.
+  const changed = edits && d ? Object.fromEntries(Object.entries(edits).filter(([k, v]) => v !== d[k])) : {}
+  const approve = (always?: 'tool' | 'site' | 'run') => decide(a.id, true, always, Object.keys(changed).length ? { edits: changed } : undefined)
+  const deny = () => decide(a.id, false, undefined, why?.trim() ? { reason: why.trim() } : undefined)
   return (
     <div className={'approval tone-' + risk.tone + (inline ? ' inline' : '') + (leaving ? ' leaving' : '')}>
       <Avatar id={b.id} name={b.name} size={32} mood="asking" />
       <div className="approval-main">
         <div className="ask">{b.name} {a.kind === 'takeover' ? 'needs you on the computer' : a.kind === 'signin' ? 'needs you to sign in' : 'needs your OK'} · {where}</div>
-        <div className={'what selectable' + (a.kind === 'plan' ? ' plan' : '')}>{a.summary}</div>
+        {edits && d ? <div className="draft-edit">
+          <div className="what">To {d.to}{d.cc ? ` (cc ${d.cc})` : ''}{d.account ? `, from ${d.account}` : ''}</div>
+          <input className="input" aria-label="Subject" value={edits.subject ?? ''} onChange={e => setEdits({ ...edits, subject: e.target.value })} />
+          <textarea className="textarea" aria-label="Text" rows={6} value={edits.body ?? ''} onChange={e => setEdits({ ...edits, body: e.target.value })} />
+        </div> : <div className={'what selectable' + (a.kind === 'plan' ? ' plan' : '')}>{a.summary}</div>}
         <div className="risk"><Icon name={risk.icon} size={12} />{risk.label}</div>
         {learned && <div className="learned">You've allowed this {a.allowed_before} times. Stop asking?</div>}
         {a.parked && <div className="parked">From a routine. It runs when you approve; it waits {((w: string) => w.startsWith('in ') ? `for ${w.slice(3)}` : `until ${w}`)(ahead(a.expires_at))}.</div>}
@@ -70,19 +84,25 @@ function ApprovalCard({ a, where, leaving, decide, inline }: {
         <button className="btn" onClick={() => decide(a.id, false)}>Can’t now</button>
         <button className="btn" onClick={() => decide(a.id, true)}>Done</button>
         <a className="btn btn-primary" href="#computer">Open the computer</a>
-      </div> : <div className="choices">
-        <button className="btn" onClick={() => decide(a.id, false)}>Deny</button>
+      </div> : why !== null ? <form className="choices deny-why" onSubmit={e => { e.preventDefault(); deny() }}>
+        <input className="input" autoFocus placeholder="Why? (optional; the bot reads it)" aria-label="Why not" value={why} onChange={e => setWhy(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Escape') setWhy(null) }} />
+        <button type="button" className="btn" onClick={() => setWhy(null)}>Back</button>
+        <button type="submit" className="btn btn-danger">Deny</button>
+      </form> : <div className="choices">
+        <button className="btn" onClick={() => setWhy('')}>Deny…</button>
+        {d && <button className="btn" onClick={() => setEdits(edits ? null : { subject: d.subject ?? '', body: d.body ?? '' })}>{edits ? 'Undo edits' : 'Edit'}</button>}
         {risk.always && (
-          <button className={'btn' + (learned ? ' btn-primary' : '')} onClick={() => decide(a.id, true, a.site ? 'site' : 'tool')}
+          <button className={'btn' + (learned ? ' btn-primary' : '')} onClick={() => approve(a.site ? 'site' : 'tool')}
             title={a.site ? `Stop asking before this on ${a.site}. Change it in Settings → Permissions.` : `Stop asking before ${toolLabel(a.tool).toLowerCase()}. Change it in Settings → Permissions.`}>
             {/* It allows the whole tool, not just this one call: say which. */}
             {a.site ? `Always on ${a.site}` : `Always: ${toolLabel(a.tool).toLowerCase()}`}
           </button>
         )}
         {a.kind === 'rule' && !a.parked && (
-          <button className="btn" onClick={() => decide(a.id, true, 'run')} title="Allow this, and anything else like it while the bot finishes this reply.">All like this</button>
+          <button className="btn" onClick={() => approve('run')} title="Allow this, and anything else like it while the bot finishes this reply.">All like this</button>
         )}
-        <button className={'btn' + (learned ? '' : ' btn-primary')} onClick={() => decide(a.id, true)}>{a.kind === 'plan' ? 'Approve plan' : 'Allow once'}</button>
+        <button className={'btn' + (learned ? '' : ' btn-primary')} onClick={() => approve()}>{a.kind === 'plan' ? 'Approve plan' : Object.keys(changed).length ? (a.tool === 'email_send' ? 'Send as edited' : 'Allow as edited') : 'Allow once'}</button>
       </div>}
       {!a.parked && <Countdown until={a.expires_at} />}
     </div>
@@ -93,8 +113,8 @@ function ApprovalCard({ a, where, leaving, decide, inline }: {
 function useDecide(onDecided: () => unknown) {
   const [err, setErr] = useState<string | null>(null)
   const { leaving, leave } = useLeave()
-  const decide = (id: number, approve: boolean, always?: 'tool' | 'site' | 'run') =>
-    leave(id, () => invoke('decide', { id, approve, always: always ?? null }).then(() => { setErr(null); return onDecided() }, e => setErr(String(e))))
+  const decide: Decide = (id, approve, always, more) =>
+    leave(id, () => invoke('decide', { id, approve, always: always ?? null, edits: more?.edits ?? null, reason: more?.reason ?? null }).then(() => { setErr(null); return onDecided() }, e => setErr(String(e))))
   return { err, leaving, decide }
 }
 

@@ -278,7 +278,7 @@ pub async fn call(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
     }
     // Going round in circles: what would run without asking stops and asks first. From the run's log, so it works
     // the same for tools run in the MCP subprocess.
-    let summary = describe(ctx, name, args);
+    let mut summary = describe(ctx, name, args);
     let card = match &from {
         Some(src) => format!("This run read from {src}, which you marked sensitive. {summary}"),
         None => summary.clone(),
@@ -302,13 +302,17 @@ pub async fn call(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
             if would_ask { "first ask the user for an OK" } else { "happen without asking" }
         )),
         "ask" if ctx.unattended => park(ctx, name, args, &card, why, site.as_deref()),
-        "ask" => match wait_for_approval_with(ctx, name, &card, why, site.as_deref()).await {
-            Ok(()) => exec(ctx, name, args).await,
+        // What goes is what was approved: with any text the person edited on the card.
+        "ask" => match wait_for_approval_with(ctx, name, args, &card, why, site.as_deref()).await {
+            Ok(edited) => {
+                summary = describe(ctx, name, &edited);
+                exec(ctx, name, &edited).await
+            }
             Err(e) => Err(e),
         },
         "loop" if ctx.unattended => park(ctx, name, args, &format!("{LOOP_CARD}{summary}"), "loop", None),
-        "loop" => match wait_for_approval_with(ctx, name, &format!("{LOOP_CARD}{summary}"), "loop", None).await {
-            Ok(()) => exec(ctx, name, args).await,
+        "loop" => match wait_for_approval_with(ctx, name, &Value::Null, &format!("{LOOP_CARD}{summary}"), "loop", None).await {
+            Ok(_) => exec(ctx, name, args).await,
             Err(_) => Err(anyhow::anyhow!("stopped: you are repeating the same step ({summary}) and the user didn't let it go on. Don't call it again; stop and tell the user what you found and where you got stuck.")),
         },
         _ => exec(ctx, name, args).await,
@@ -745,6 +749,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_reason_to_deny_a_routines_ask_reaches_the_chat() {
+        let p = std::env::temp_dir().join(format!("mimir-park-why-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = Db::open(&p).unwrap();
+        let id = db.store("chat:0", "knowledge", "Gym", "Mondays", "test", None).unwrap();
+        let mut ctx = ToolCtx::new(db.clone(), 1, 0);
+        ctx.unattended = true;
+        assert!(call(&ctx, "memory_forget", &json!({"id": id})).await.unwrap().starts_with("Not done yet"));
+        let a = db.approvals_pending().unwrap().pop().unwrap();
+        db.approval_set_reason(a.id, "I still go on Mondays").unwrap();
+        let a = db.approval_decide(a.id, false, None).unwrap().unwrap();
+        after_decision(&db, &a);
+        // The run that asked has moved on: the bot reads it in the chat's conversation, in the person's words.
+        let last = db.messages(0, 5).unwrap().pop().unwrap();
+        assert_eq!(last.role, "user");
+        assert!(last.content.contains("Forget memory") && last.content.ends_with("Denied: I still go on Mondays"), "{}", last.content);
+        assert_eq!(db.entries("chat:0").unwrap().iter().filter(|e| e.status == "active").count(), 1, "nothing was done");
+        // Without a reason, nothing is added.
+        let n = db.messages(0, 50).unwrap().len();
+        assert!(call(&ctx, "memory_forget", &json!({"id": id})).await.unwrap().starts_with("Not done yet"));
+        let b = db.approvals_pending().unwrap().pop().unwrap();
+        after_decision(&db, &db.approval_decide(b.id, false, None).unwrap().unwrap());
+        assert_eq!(db.messages(0, 50).unwrap().len(), n);
+    }
+
+    #[tokio::test]
     async fn routines_park_asks_and_run_them_when_approved() {
         let p = std::env::temp_dir().join(format!("mimir-park-{}.db", std::process::id()));
         let _ = std::fs::remove_file(&p);
@@ -1008,6 +1038,109 @@ mod tests {
         assert!(sugg.iter().find(|s| s.title == "Invoices").unwrap().tainted, "a page's words stay marked");
     }
 
+    /// The first pending ask, once the waiting call has made it.
+    async fn asked(db: &Db) -> crate::db::Approval {
+        for _ in 0..200 {
+            if let Some(a) = db.approvals_pending().unwrap().pop() {
+                return a;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        panic!("nothing asked")
+    }
+
+    #[tokio::test]
+    async fn an_edited_email_sends_the_edited_text_to_the_same_people_even_after_outside_content() {
+        let p = std::env::temp_dir().join(format!("mimir-edit-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = Db::open(&p).unwrap();
+        // A Microsoft sign-in that isn't there (no password to keep anywhere): the send fails after the approval, which
+        // is all this needs.
+        db.set_setting("email_accounts", r#"[{"host":"127.0.0.1","port":9,"smtp_host":"127.0.0.1","smtp_port":9,"user":"me@example.com","oauth":"gone"}]"#).unwrap();
+        let run = db.run_start(1, 0, "message", None, "test").unwrap();
+        let ctx = ToolCtx::new(db.clone(), 1, 0).with_run(Some(run));
+        ctx.taint();
+        let mail = json!({"to": "sam@example.com", "cc": "kim@example.com", "subject": "Invoice 4411", "body": "I'll pay on Fridy."});
+        let c = ctx.clone();
+        let waiting = tokio::spawn(async move { call(&c, "email_send", &mail).await });
+        let a = asked(&db).await;
+        assert_eq!(a.kind, "guarded");
+        let d = a.draft.clone().unwrap();
+        assert_eq!((d["to"].as_str(), d["body"].as_str()), (Some("sam@example.com"), Some("I'll pay on Fridy.")));
+        // Recipients can't be edited on the card, nor anything but the text.
+        for bad in [json!({"to": "eve@evil.example"}), json!({"cc": "eve@evil.example"}), json!({"account": "x"}), json!({"body": 5})] {
+            assert!(edit_card(&db, &a, &bad).is_err(), "{bad}");
+        }
+        assert!(edit_card(&db, &a, &json!({"subject": "two\r\nBcc: eve@evil.example"})).is_err(), "one-line subject");
+        assert!(edit_card(&db, &a, &json!({"body": "word ".repeat(400)})).is_err(), "still fits on the card");
+        edit_card(&db, &a, &json!({"body": "I'll pay on Friday."})).unwrap();
+        assert!(db.approval(a.id).unwrap().unwrap().summary.ends_with("— I'll pay on Friday."), "the card says what will go");
+        // Even a draft changed behind the app's back only gives the text: who it's to stays as the bot asked.
+        let mut sneaky = db.approval(a.id).unwrap().unwrap().draft.unwrap();
+        sneaky["to"] = json!("eve@evil.example");
+        sneaky["cc"] = json!("eve@evil.example");
+        db.approval_set_draft(a.id, &sneaky).unwrap();
+        db.approval_decide(a.id, true, None).unwrap();
+        assert!(waiting.await.unwrap().is_err(), "no sign-in to send with");
+        let logged = db.tool_calls(run).unwrap().pop().unwrap();
+        assert!(logged.summary.starts_with("Send an email to sam@example.com (cc kim@example.com): \"Invoice 4411\" — I'll pay on Friday."), "{}", logged.summary);
+        assert!(!logged.summary.contains("evil"));
+        // The merge itself: only the editable fields, as text.
+        let args = json!({"to": "sam@example.com", "subject": "s", "body": "b"});
+        let out = with_draft(&ctx, "email_send", &args, Some(&json!({"to": "eve@evil.example", "subject": "s2", "body": "b2"}))).unwrap();
+        assert_eq!(out, json!({"to": "sam@example.com", "subject": "s2", "body": "b2"}));
+        assert_eq!(with_draft(&ctx, "memory_forget", &json!({"id": 1}), Some(&json!({"id": 2}))).unwrap(), json!({"id": 1}), "nothing editable there");
+    }
+
+    #[tokio::test]
+    async fn an_email_after_a_sensitive_read_is_still_editable_with_its_recipients_locked() {
+        let p = std::env::temp_dir().join(format!("mimir-edit-sens-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = Db::open(&p).unwrap();
+        db.set_setting("email_accounts", r#"[{"host":"127.0.0.1","port":9,"smtp_host":"127.0.0.1","smtp_port":9,"user":"me@example.com","oauth":"gone"}]"#).unwrap();
+        let run = db.run_start(1, 0, "message", None, "test").unwrap();
+        let ctx = ToolCtx::new(db.clone(), 1, 0).with_run(Some(run));
+        ctx.mark_sensitive("Bank");
+        let c = ctx.clone();
+        let mail = json!({"to": "sam@example.com", "subject": "Balance", "body": "It's 120."});
+        let waiting = tokio::spawn(async move { call(&c, "email_send", &mail).await });
+        let a = asked(&db).await;
+        assert_eq!(a.kind, "sensitive");
+        assert!(a.summary.starts_with("This run read from Bank, which you marked sensitive. Send an email to sam@example.com"), "{}", a.summary);
+        assert!(a.draft.is_some(), "editable by its tool, whatever the kind");
+        assert!(edit_card(&db, &a, &json!({"to": "eve@evil.example"})).is_err());
+        edit_card(&db, &a, &json!({"body": "It's about 100."})).unwrap();
+        let card = db.approval(a.id).unwrap().unwrap().summary;
+        assert!(card.starts_with("This run read from Bank") && card.ends_with("— It's about 100."), "the note stays, the text changes: {card}");
+        db.approval_decide(a.id, true, None).unwrap();
+        assert!(waiting.await.unwrap().is_err(), "no sign-in to send with");
+        let logged = db.tool_calls(run).unwrap().pop().unwrap();
+        assert!(logged.summary.starts_with("Send an email to sam@example.com: \"Balance\" — It's about 100."), "{}", logged.summary);
+    }
+
+    #[tokio::test]
+    async fn a_reason_to_deny_goes_back_to_the_bot_in_the_persons_words() {
+        let p = std::env::temp_dir().join(format!("mimir-why-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = Db::open(&p).unwrap();
+        let id = db.store("chat:0", "knowledge", "Gym", "Mondays", "test", None).unwrap();
+        let ctx = ToolCtx::new(db.clone(), 1, 0);
+        let c = ctx.clone();
+        let waiting = tokio::spawn(async move { call(&c, "memory_forget", &json!({"id": id})).await });
+        let a = asked(&db).await;
+        assert!(a.draft.is_none(), "nothing to edit on this one");
+        db.approval_set_reason(a.id, "I still go on Mondays").unwrap();
+        db.approval_decide(a.id, false, None).unwrap();
+        let e = waiting.await.unwrap().unwrap_err().to_string();
+        assert!(e.contains("\"Denied: I still go on Mondays\"") && !e.contains("tell the user it was not done"), "{e}");
+        // Without a reason it's the plain no, as before.
+        let c = ctx.clone();
+        let waiting = tokio::spawn(async move { call(&c, "memory_forget", &json!({"id": id})).await });
+        let a = asked(&db).await;
+        db.approval_decide(a.id, false, None).unwrap();
+        assert!(waiting.await.unwrap().unwrap_err().to_string().contains("tell the user it was not done"));
+    }
+
     #[tokio::test]
     async fn sending_email_always_asks_and_only_what_fits_the_card() {
         let p = std::env::temp_dir().join(format!("mimir-send-{}.db", std::process::id()));
@@ -1082,7 +1215,7 @@ mod tests {
         db.pair(200, "Sam").unwrap();
         db.chat_set_guest(200, true).unwrap();
         let ctx = ToolCtx::new(db.clone(), 1, 200);
-        let r = tokio::time::timeout(Duration::from_millis(300), wait_for_approval_with(&ctx, "memory_forget", "Forget memory #1", "rule", None)).await;
+        let r = tokio::time::timeout(Duration::from_millis(300), wait_for_approval_with(&ctx, "memory_forget", &json!({}), "Forget memory #1", "rule", None)).await;
         assert!(r.is_err(), "waits for an OK");
         let a = db.approvals_pending().unwrap().into_iter().find(|a| a.chat_id == 200).unwrap();
         assert_eq!(a.kind, "guest", "Always would change your rules for every chat");

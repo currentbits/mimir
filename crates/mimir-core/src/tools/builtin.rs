@@ -878,7 +878,7 @@ async fn computer_signin(ctx: &ToolCtx) -> Result<String> {
     // with there replaces it.
     let stale = crate::ext::vault_for(&ctx.db, ctx.bot_id).into_iter().find(|e| e.bot == Some(ctx.bot_id) && crate::ext::host_allowed(&url, &e.domains) && crate::ext::login_failed(&ctx.db, &e.name));
     if let Some(e) = crate::ext::signin_login(&ctx.db, ctx.bot_id, &url) {
-        crate::tools::wait_for_approval_with(ctx, "computer_signin", &format!("Use saved login {} on {url}", e.name), "login", None).await?;
+        crate::tools::wait_for_approval_with(ctx, "computer_signin", &Value::Null, &format!("Use saved login {} on {url}", e.name), "login", None).await?;
         // The OK can take longer than the computer's lease: take it again, and type only into this bot's own browser
         // (sign_in checks), so another bot that used the computer meanwhile never gets this login.
         hold_computer(ctx).await?;

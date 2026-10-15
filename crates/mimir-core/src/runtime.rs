@@ -393,7 +393,7 @@ pub(crate) fn offers_always(a: &Approval) -> bool {
     a.kind == "rule"
 }
 
-/// The buttons of a chat-app approval card, in rows: (label, button data "ap:<id>:<y|n|a|w>").
+/// The buttons of a chat-app approval card, in rows: (label, button data "ap:<id>:<y|n|a|w>", or a link's address).
 pub(crate) fn card_buttons(a: &Approval) -> Vec<Vec<(String, String)>> {
     let b = |label: String, d: char| (label, format!("ap:{}:{d}", a.id));
     if a.kind == "takeover" {
@@ -404,6 +404,10 @@ pub(crate) fn card_buttons(a: &Approval) -> Vec<Vec<(String, String)>> {
         return vec![vec![b(tr("Can't now").into(), 'n')]];
     }
     let mut rows = vec![vec![b(tr("Approve").into(), 'y'), b(tr("Deny").into(), 'n')]];
+    // A card whose text you can change: a link to it in the app (its data is the address, not a decision).
+    if let Some(link) = &a.edit_link {
+        rows.push(vec![(tr("Edit in Mimir").into(), link.clone())]);
+    }
     if offers_all(a) {
         rows.push(vec![b(tr("Approve all like this").into(), 'a')]);
     }
@@ -576,6 +580,13 @@ pub fn quiet(db: &Db) -> bool {
     quiet_now(db, chrono::Local::now())
 }
 
+/// Where to edit a card's text in the app, for one you can edit: the web app's address (setting public_url, https only,
+/// as Telegram refuses other links on buttons), opening Needs you.
+fn edit_link(db: &Db, a: &Approval) -> Option<String> {
+    let url = db.setting("public_url").ok()??;
+    (a.draft.is_some() && url.starts_with("https://")).then(|| format!("{}/#approval-{}", url.trim_end_matches('/'), a.id))
+}
+
 pub(crate) fn card_text(a: &Approval) -> String {
     let mins = ((a.expires_at - crate::db::now()) / 60).max(1);
     let wait = if mins >= 120 { trf("{n} h", &[("n", &(mins / 60).to_string())]) } else { trf("{n} min", &[("n", &mins.to_string())]) };
@@ -588,7 +599,7 @@ pub(crate) fn card_text(a: &Approval) -> String {
     if a.kind == "signin" {
         return trf("🔑 I need you to sign in\n\n{summary}\n\nWaits {wait}.", &[("summary", &a.summary), ("wait", &wait)]);
     }
-    trf("🔐 Approve this action?\n\n{summary}\n\nWaits {wait}. {then}", &[("summary", &a.summary), ("wait", &wait), ("then", then)]) + &again
+    trf("🔐 Approve this action?\n\n{summary}\n\nWaits {wait}. {then}", &[("summary", &a.summary), ("wait", &wait), ("then", then)]) + " " + tr("Reply to this message to say no and why.") + &again
 }
 
 pub(crate) fn verdict(a: &Approval) -> String {
@@ -603,7 +614,10 @@ pub(crate) fn verdict(a: &Approval) -> String {
         "expired" => tr("⌛ No answer in time, so not done"),
         _ => tr("❌ Denied"),
     };
-    format!("{outcome}: {}", a.summary)
+    match a.reason.as_deref().filter(|_| a.status == "denied") {
+        Some(why) => format!("{outcome}: {}\n{}", a.summary, trf("Why: {why}", &[("why", why)])),
+        None => format!("{outcome}: {}", a.summary),
+    }
 }
 
 /// The card's text once decided, saying so when it won't ask again.
@@ -1078,6 +1092,20 @@ impl Core {
             }
             None => Ok(None),
         }
+    }
+
+    /// A text reply to a pending card: no, and this is why (the bot is told, in the person's words). True if it was
+    /// one; the approvals loop then shows the outcome on the card. Only from the person who can press its buttons.
+    pub(crate) fn deny_by_reply(&self, chan: &Chan, ext: &str, from: Sender<'_>, card: &str, said: &str) -> Result<bool> {
+        let Some(chat) = self.db.chat_lookup(chan.kind(), ext)? else { return Ok(false) };
+        let Some(id) = self.db.approval_by_card(chat, card)? else { return Ok(false) };
+        if self.sender_ok(chat, from)? != Some(true) || self.db.chat_owner(chat)? != from.id || said.trim().is_empty() {
+            return Ok(false);
+        }
+        self.db.approval_set_reason(id, &crate::tools::truncate(said.trim(), 500))?;
+        let Some(a) = self.db.approval_decide(id, false, None)? else { return Ok(false) };
+        crate::tools::after_decision(&self.db, &a);
+        Ok(true)
     }
 
     /// The question ask_choice left during this chat's reply, as (question, its buttons); taken either way, so a reply
@@ -1871,9 +1899,10 @@ impl Core {
         loop {
             let quiet = quiet_now(&self.db, chrono::Local::now());
             // A routine's ask waits hours anyway: its card can wait until quiet hours end. Live asks still go.
-            for a in self.db.approvals_to_notify(self.bot).unwrap_or_default().into_iter().filter(|a| !(quiet && a.parked)) {
+            for mut a in self.db.approvals_to_notify(self.bot).unwrap_or_default().into_iter().filter(|a| !(quiet && a.parked)) {
                 // Channel not connected: leave it pending for the app banner (and a later reconnect).
                 let Some((c, ext)) = Self::chan_for(&chans, a.chat_id, &self.db) else { continue };
+                a.edit_link = edit_link(&self.db, &a);
                 let card = c.card(&ext, &a).await.unwrap_or_else(|e| {
                     eprintln!("approval #{} card failed: {e:#}", a.id);
                     None
@@ -1886,6 +1915,7 @@ impl Core {
             {
                 for mut a in self.db.approvals_to_mirror(self.bot, to).unwrap_or_default() {
                     let id = a.id;
+                    a.edit_link = edit_link(&self.db, &a);
                     a.summary = format!("{}\n\n{}", a.summary, trf("From: {chat}", &[("chat", &chat_name(&self.db, a.chat_id))]));
                     let card = c.card(&ext, &a).await.unwrap_or_else(|e| {
                         eprintln!("approval #{id} card to the decisions chat failed: {e:#}");
@@ -2537,6 +2567,44 @@ mod tests {
         assert!(db.approvals_to_close(1).unwrap().is_empty(), "the button edited its own card");
         // The decisions chat can't answer asks that weren't sent to it.
         assert!(core.decide(&tg, "42", me, live, Decision::Once).unwrap().is_none());
+        // A text reply to a card: no, and why. Only that card, in its own chat, from the person who pairs it.
+        let card = ask(5, false);
+        db.approval_mark_notified(card, Some("c9")).unwrap();
+        assert!(!core.deny_by_reply(&tg, "42", me, "c9", "not now").unwrap(), "another chat");
+        assert!(!core.deny_by_reply(&tg, "5", Sender { id: "9", dm: false }, "c9", "not now").unwrap(), "someone else");
+        assert!(!core.deny_by_reply(&tg, "5", me, "c8", "not now").unwrap(), "another message");
+        assert!(core.deny_by_reply(&tg, "5", me, "c9", " not now, after lunch ").unwrap());
+        let a = db.approval(card).unwrap().unwrap();
+        assert_eq!((a.status.as_str(), a.reason.as_deref()), ("denied", Some("not now, after lunch")));
+        assert!(verdict(&a).ends_with("Why: not now, after lunch"), "{}", verdict(&a));
+        assert!(db.approvals_to_close(1).unwrap().iter().any(|(a, _)| a.id == card), "the approvals loop shows it on the card");
+        assert!(!core.deny_by_reply(&tg, "5", me, "c9", "again").unwrap(), "answered once");
+        // Discord keeps its cards as channel/message.
+        let dc = ask(5, false);
+        db.approval_mark_notified(dc, Some("C1/123")).unwrap();
+        assert!(core.deny_by_reply(&tg, "5", me, "123", "no").unwrap());
+    }
+
+    #[test]
+    fn a_card_you_can_edit_links_to_the_app() {
+        let p = std::env::temp_dir().join(format!("mimir-link-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = Db::open(&p).unwrap();
+        let id = db.approval_create(1, 5, "email_send", "Send an email to sam@example.com: \"Hi\" — Hello", 300, "send", None).unwrap();
+        db.approval_set_draft(id, &json!({"to": "sam@example.com", "subject": "Hi", "body": "Hello"})).unwrap();
+        let plain = db.approval_create(1, 5, "memory_forget", "Forget memory #1", 300, "rule", None).unwrap();
+        let (mut a, mut b) = (db.approval(id).unwrap().unwrap(), db.approval(plain).unwrap().unwrap());
+        assert_eq!(edit_link(&db, &a), None, "no web app address known");
+        db.set_setting("public_url", "http://192.168.1.5:8080").unwrap();
+        assert_eq!(edit_link(&db, &a), None, "Telegram refuses links that aren't https");
+        db.set_setting("public_url", "https://bots.example.com/").unwrap();
+        a.edit_link = edit_link(&db, &a);
+        b.edit_link = edit_link(&db, &b);
+        assert_eq!(a.edit_link.as_deref(), Some(format!("https://bots.example.com/#approval-{id}").as_str()));
+        assert!(b.edit_link.is_none(), "nothing to edit");
+        assert!(card_buttons(&a).concat().iter().any(|(l, d)| l == "Edit in Mimir" && d.starts_with("https://")));
+        assert!(card_buttons(&b).concat().iter().all(|(_, d)| d.starts_with("ap:")));
+        assert!(card_text(&a).contains("Reply to this message to say no and why."));
     }
 
     #[tokio::test]

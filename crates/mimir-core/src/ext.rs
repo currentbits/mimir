@@ -948,7 +948,7 @@ pub async fn call(ctx: &ToolCtx, full: &str, args: &Value) -> Result<String> {
             }
         }
         let names: Vec<&str> = used.iter().map(|e| e.name.as_str()).collect();
-        crate::tools::wait_for_approval_with(ctx, full, &format!("Use saved login {} on {url}", names.join(", ")), "login", None).await?;
+        crate::tools::wait_for_approval_with(ctx, full, &Value::Null, &format!("Use saved login {} on {url}", names.join(", ")), "login", None).await?;
         codes = used.iter().filter(|e| e.totp).filter_map(|e| vault_code(&e.name).map(|c| (format!("{}_CODE", e.name), c))).collect();
     }
     let args = &fill_codes(args, &codes);

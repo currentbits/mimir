@@ -1343,10 +1343,20 @@ impl Host {
             "tool_calls" => ok(self.db.tool_calls(arg(a, "run_id")?)?),
             "approvals" => ok(self.db.approvals_pending()?),
             // Approve once, deny, or approve and keep allowing (`always`: "tool" or "site"). Guarded and
-            // saved-login asks can't become rules: those protections must keep asking.
+            // saved-login asks can't become rules: those protections must keep asking. Approving can carry your edits
+            // to the card's text (`edits`: field → text), denying a `reason` the bot is told.
             "decide" => {
                 let always: Option<String> = arg(a, "always").unwrap_or(None);
                 let (id, approve): (i64, bool) = (arg(a, "id")?, arg(a, "approve")?);
+                let edits: Option<Value> = arg(a, "edits").unwrap_or(None);
+                let reason: Option<String> = arg(a, "reason").unwrap_or(None);
+                if approve && let Some(edits) = edits.filter(|e| !e.is_null()) {
+                    let Some(ap) = self.db.approval(id)?.filter(|ap| ap.status == "pending") else { return ok(false) };
+                    tools::edit_card(&self.db, &ap, &edits)?;
+                }
+                if !approve && let Some(r) = reason.as_deref().map(str::trim).filter(|r| !r.is_empty()) {
+                    self.db.approval_set_reason(id, &tools::truncate(r, 500))?;
+                }
                 // Before approving: the waiting tool may go on (and the run end) the moment it's approved.
                 if approve && always.as_deref() == Some("run") && !self.db.approval_allow_rest_of_run(id, None)? {
                     bail!("this one can only be approved once (it isn't a plain ask from a reply that's still going)");

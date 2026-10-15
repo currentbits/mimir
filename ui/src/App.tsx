@@ -110,13 +110,15 @@ function Main() {
   const [incognito, setIncognito] = useState(false)
   // Incognito ends when you go to another chat.
   useEffect(() => setIncognito(false), [chatId])
-  // A link to the live computer (a bot asking you to take over) opens it: #computer. A sign-in card's opens the
-  // sign-in form: #signin.
-  const [view, setView] = useState<View>(() => location.hash === '#computer' ? 'computer' : 'chat')
+  // A link to the live computer (a bot asking you to take over) opens it: #computer. "Edit in Mimir" on a chat app's
+  // card opens Needs you, where the card is: #approval-<id>. A sign-in card's opens the sign-in form: #signin.
+  const linked = (): View | null => location.hash === '#computer' ? 'computer' : location.hash.startsWith('#approval-') ? 'inbox' : null
+  const [view, setView] = useState<View>(() => linked() ?? 'chat')
   const [signIn, setSignIn] = useState(false)
   useEffect(() => {
     const go = () => {
-      if (location.hash === '#computer') setView('computer')
+      const v = linked()
+      if (v) setView(v)
       else if (location.hash === '#signin') setSignIn(true)
       else return
       history.replaceState(null, '', location.pathname + location.search)
