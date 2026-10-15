@@ -239,8 +239,9 @@ pub async fn call(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
     // replacement would take a confirmed memory out of the instructions.
     let (decision, why) = if why == "guarded" && name == "memory_store" && args.get("supersedes").is_none_or(Value::is_null) { ("allow".to_string(), "rule") } else { (decision, why) };
     // Likewise a goal's progress: work on a goal is mostly reading pages and mail. The goal is marked instead (shown as
-    // outside content from then on), and done still needs a receipt.
-    let (decision, why) = if why == "guarded" && name == "goal_update" && decide(&ctx.db, name, false)? == "allow" { ("allow".to_string(), "rule") } else { (decision, why) };
+    // outside content from then on). Not done: that removes its follow-ups, so after outside content it asks.
+    let progress_only = args["status"].as_str().is_none_or(|s| s == "active" || s == "blocked");
+    let (decision, why) = if why == "guarded" && name == "goal_update" && progress_only && decide(&ctx.db, name, false)? == "allow" { ("allow".to_string(), "rule") } else { (decision, why) };
     // Reading is allowed after outside content, but not when the read itself would carry your data out.
     let (decision, why) = if decision == "allow" && ctx.is_tainted() && leaks_out(ctx, name, args) { ("ask".to_string(), "guarded") } else { (decision, why) };
     // A new bot asks every time, never "always" or "all like this" (a standing rule would let bots make bots on their
@@ -1399,6 +1400,39 @@ mod tests {
         assert!(!usable(&ToolCtx::new(ctx.db.clone(), 1, crate::INCOGNITO_CHAT), "goal_set"), "incognito keeps nothing");
         // Its approval card shows the goal itself.
         assert_eq!(describe(&ctx, "goal_set", &json!({"goal": "x", "done_when": "y"})), "Set the goal: x (done when y)");
+    }
+
+    #[tokio::test]
+    async fn a_goal_takes_only_its_follow_ups_and_done_after_outside_content_asks() {
+        let p = std::env::temp_dir().join(format!("mimir-goal-done-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = Db::open(&p).unwrap();
+        let ctx = ToolCtx::new(db.clone(), 1, 9);
+        call(&ctx, "goal_set", &json!({"goal": "Get the insurance refund paid", "done_when": "the refund is in the account"})).await.unwrap();
+        let soon = (chrono::Local::now() + chrono::Duration::hours(2)).format("%Y-%m-%d %H:%M").to_string();
+        // A routine the person asks for while the goal is on stays theirs; the bot's follow-up is the goal's.
+        call(&ctx, "routine_create", &json!({"cron": "0 8 * * *", "prompt": "Brief me on the news"})).await.unwrap();
+        let out = call(&ctx, "routine_create", &json!({"at": soon, "prompt": "Check whether the insurer replied", "followup": true})).await.unwrap();
+        assert!(out.contains("(for the goal)"), "{out}");
+        let (news, check) = { let v = db.routines(9).unwrap(); (v[0].clone(), v[1].clone()) };
+        assert!(!news.for_goal && check.for_goal);
+        assert!(call(&ctx, "routine_list", &json!({})).await.unwrap().contains(&format!("#{} (for the goal)", check.id)));
+        db.tool_call_log(None, 9, "email_send", "Send an email to claims@insurer.example: \"Bank details\"", "allow", true, "sent").unwrap();
+        // After outside content, "done" asks (a page could be saying it), and the card says what it removes.
+        let read = ToolCtx::new(db.clone(), 1, 9);
+        read.pre_taint();
+        let ask = { let read = read.clone(); tokio::spawn(async move { call(&read, "goal_update", &json!({"progress": "Paid", "status": "done"})).await }) };
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let a = db.approvals_pending().unwrap().into_iter().find(|a| a.tool == "goal_update").expect("done after outside content asks");
+        assert!(a.summary.starts_with("Mark the goal done; this removes 1 follow-up"), "{}", a.summary);
+        assert_eq!(db.goal(9).unwrap().unwrap().status, "active");
+        assert_eq!(db.routines(9).unwrap().len(), 2, "nothing removed while it asks");
+        db.approval_decide(a.id, false, None).unwrap();
+        assert!(ask.await.unwrap().is_err());
+        assert_eq!(db.routines(9).unwrap().len(), 2, "denied: both stay");
+        // Done for real: the follow-up goes with the goal, the person's routine stays.
+        call(&ctx, "goal_update", &json!({"progress": "Paid", "status": "done"})).await.unwrap();
+        assert_eq!(db.routines(9).unwrap().iter().map(|r| r.id).collect::<Vec<_>>(), vec![news.id]);
     }
 
     #[tokio::test]

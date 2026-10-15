@@ -670,14 +670,15 @@ pub(super) async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<Stri
             if followup {
                 ctx.db.routine_set_followup(r.id)?;
             }
-            if to.is_none() {
+            if to.is_none() && followup {
                 ctx.db.goal_claim_routine(r.id, chat)?;
             }
+            let for_goal = if ctx.db.routine(r.id)?.is_some_and(|r| r.for_goal) { " (for the goal)" } else { "" };
             if let Some((_, name)) = &to {
                 return Ok(format!("#{} set for {name}: it runs in their own chat, {}", r.id, if r.once { format!("once, {}", next_run(&r)) } else { format!("next {}", next_run(&r)) }));
             }
             if followup {
-                return Ok(format!("follow-up #{} booked; runs once, {}. Tell the person when you'll check back, and that they can cancel it.", r.id, next_run(&r)));
+                return Ok(format!("follow-up #{}{for_goal} booked; runs once, {}. Tell the person when you'll check back, and that they can cancel it.", r.id, next_run(&r)));
             }
             let until = args["until"].as_str().filter(|u| !r.once && !u.trim().is_empty()).map(|u| format!(", until {u}")).unwrap_or_default();
             format!("{} #{} created; {} {}{until}", if quiet { "quiet check" } else if r.once { "one-off" } else { "routine" }, r.id, if r.once { "runs once," } else { "next run" }, next_run(&r))
@@ -688,7 +689,7 @@ pub(super) async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<Stri
                 "no routines".into()
             } else {
                 v.iter()
-                    .map(|r| format!("#{} [{}]{}{}{}{} — {}", r.id, if r.followup { "follow-up" } else if r.once { "once" } else { &r.cron }, if r.ends > 0 { format!(" until {}", fmt_ts(r.ends)) } else { String::new() }, if r.quiet { " quiet" } else { "" }, if r.watch.is_empty() { String::new() } else { format!(" watching {}", r.watch) }, if r.paused || ctx.db.paused(r.bot_id, crate::db::now()).ok().flatten().is_some() { " paused".into() } else if r.goal_held { " paused (goal)".into() } else { format!(" next {}", next_run(r)) }, r.prompt))
+                    .map(|r| format!("#{}{} [{}]{}{}{}{} — {}", r.id, if r.for_goal { " (for the goal)" } else { "" }, if r.followup { "follow-up" } else if r.once { "once" } else { &r.cron }, if r.ends > 0 { format!(" until {}", fmt_ts(r.ends)) } else { String::new() }, if r.quiet { " quiet" } else { "" }, if r.watch.is_empty() { String::new() } else { format!(" watching {}", r.watch) }, if r.paused || ctx.db.paused(r.bot_id, crate::db::now()).ok().flatten().is_some() { " paused".into() } else if r.goal_held { " paused (goal)".into() } else { format!(" next {}", next_run(r)) }, r.prompt))
                     .collect::<Vec<_>>()
                     .join("\n")
             }
