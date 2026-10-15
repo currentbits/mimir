@@ -670,6 +670,9 @@ pub(super) async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<Stri
             if followup {
                 ctx.db.routine_set_followup(r.id)?;
             }
+            if to.is_none() {
+                ctx.db.goal_claim_routine(r.id, chat)?;
+            }
             if let Some((_, name)) = &to {
                 return Ok(format!("#{} set for {name}: it runs in their own chat, {}", r.id, if r.once { format!("once, {}", next_run(&r)) } else { format!("next {}", next_run(&r)) }));
             }
@@ -685,7 +688,7 @@ pub(super) async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<Stri
                 "no routines".into()
             } else {
                 v.iter()
-                    .map(|r| format!("#{} [{}]{}{}{}{} — {}", r.id, if r.followup { "follow-up" } else if r.once { "once" } else { &r.cron }, if r.ends > 0 { format!(" until {}", fmt_ts(r.ends)) } else { String::new() }, if r.quiet { " quiet" } else { "" }, if r.watch.is_empty() { String::new() } else { format!(" watching {}", r.watch) }, if r.paused || ctx.db.paused(r.bot_id, crate::db::now()).ok().flatten().is_some() { " paused".into() } else { format!(" next {}", next_run(r)) }, r.prompt))
+                    .map(|r| format!("#{} [{}]{}{}{}{} — {}", r.id, if r.followup { "follow-up" } else if r.once { "once" } else { &r.cron }, if r.ends > 0 { format!(" until {}", fmt_ts(r.ends)) } else { String::new() }, if r.quiet { " quiet" } else { "" }, if r.watch.is_empty() { String::new() } else { format!(" watching {}", r.watch) }, if r.paused || ctx.db.paused(r.bot_id, crate::db::now()).ok().flatten().is_some() { " paused".into() } else if r.goal_held { " paused (goal)".into() } else { format!(" next {}", next_run(r)) }, r.prompt))
                     .collect::<Vec<_>>()
                     .join("\n")
             }
@@ -700,6 +703,34 @@ pub(super) async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<Stri
                 "no cards".into()
             } else {
                 v.iter().map(|k| format!("## {}\n({}, {})\n{}", k.title, if k.by_you { "last changed by the person" } else { "last written by a bot" }, fmt_ts(k.updated_at), k.body)).collect::<Vec<_>>().join("\n\n")
+            }
+        }
+        "goal_set" => {
+            let budget = args["budget"].as_i64().unwrap_or(0);
+            let g = ctx.db.goal_set(ctx.bot_id, ctx.chat_id, s(args, "goal")?, s(args, "done_when")?, budget, ctx.is_tainted())?;
+            format!("Goal set: {} (done when {}). The person sees it pinned in this chat. Keep at it: book follow-ups for what you're waiting on, and goal_update as it moves.", g.text, g.done_when)
+        }
+        "goal_update" => {
+            let progress = args["progress"].as_str().unwrap_or("");
+            match args["status"].as_str() {
+                Some("done") => {
+                    let g = ctx.db.goal(ctx.chat_id)?.context("this chat has no goal")?;
+                    if !["active", "blocked"].contains(&g.status.as_str()) {
+                        bail!("the goal is {}; only the person can change it now", g.status);
+                    }
+                    // The log is the truth: done only on something it shows was done since the goal was set.
+                    let backed = crate::receipts::backing(&ctx.db.tool_calls_since(ctx.chat_id, g.created_at)?);
+                    if backed.is_empty() {
+                        bail!("not marked done: this chat's run log shows nothing done towards it yet (no email sent, nothing added to the calendar). Say what's left, or set it blocked and ask the person; they can mark it done themselves");
+                    }
+                    ctx.db.goal_progress(ctx.chat_id, &truncate(format!("{} ✓ {}", progress.trim(), backed.join("; ")).trim(), 300), None, "", ctx.is_tainted())?;
+                    crate::runtime::stop_handed(&ctx.db.goal_status(ctx.chat_id, "done", "")?);
+                    format!("Goal done, on: {}. Its follow-ups and routines are removed. Tell the person.", backed.join("; "))
+                }
+                status => {
+                    let g = ctx.db.goal_progress(ctx.chat_id, progress, status, args["why"].as_str().unwrap_or(""), ctx.is_tainted())?;
+                    format!("Goal {}: {}", g.status, g.progress)
+                }
             }
         }
         "card_write" => {
@@ -780,6 +811,7 @@ pub(super) async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<Stri
                     ..Default::default()
                 };
                 let id = ctx.db.delegation_add(&d)?;
+                ctx.db.goal_claim_delegation(id, ctx.chat_id)?;
                 // Read your email or a meeting: the helper's web addresses ask too, though it runs later.
                 if ctx.saw_private() {
                     ctx.db.set_setting(&delegation_private_key(id), &ctx.private_value())?;

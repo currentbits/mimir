@@ -8,6 +8,7 @@ import type { Tab, Status, Busy, Bot, Chat, Inbox, ComputerStatus, Pause } from 
 import { ActivityView } from './views/activity'
 import { BotImport, BotPage } from './views/bot'
 import { Paused, pausedText, ChatView, Menu, pauseChoices } from './views/chat'
+import { GoalLine } from './views/cards'
 import { ComputerView } from './views/computer'
 import { inboxCount, Approvals, InboxView } from './views/inbox'
 import { MeetingsView } from './views/meetings'
@@ -334,7 +335,7 @@ function Main() {
             <>
               <div className="toolbar-title" data-tauri-drag-region>
                 <span className="ri-glyph" style={{ width: 26, height: 26, borderRadius: 7, display: 'grid', placeItems: 'center', background: 'var(--hover)', color: 'var(--text-2)' }}><Icon name={ch.icon} size={14} /></span>
-                <span className="tt" data-tauri-drag-region><b>{botChat ? botOf(chatBot ?? botList[0]?.id ?? 1).name : chatName(chat)}</b><small>{ch.name} · {chat.memories} {chat.memories === 1 ? 'memory' : 'memories'}{household ? '' : ', shared by all your bots'}{chat.household && !household ? ' · reads the household' : ''}</small></span>
+                <span className="tt" data-tauri-drag-region><b>{botChat ? botOf(chatBot ?? botList[0]?.id ?? 1).name : chatName(chat)}</b><small>{ch.name} · {chat.memories} {chat.memories === 1 ? 'memory' : 'memories'}{household ? '' : ', shared by all your bots'}{chat.household && !household ? ' · reads the household' : ''}{!household && <GoalLine chatId={chat.chat_id} />}</small></span>
                 {!botChat && chat.chat_id !== LOCAL && !household && !chat.family && (
                   <button className={'btn btn-sm btn-ghost' + (chat.guest ? ' guest-on' : '')}
                     title={chat.guest ? 'Paired by someone else: bots here have their own memory, and none of your email, calendar, meetings, saved logins or tool servers. Click if this chat is yours.' : 'Click if someone else uses this chat (a partner, a housemate): bots here then get none of your email, calendar, meetings, saved logins or tool servers.'}

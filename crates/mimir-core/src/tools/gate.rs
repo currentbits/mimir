@@ -17,8 +17,8 @@ pub(super) fn is_read_only(db: &Db, tool: &str) -> bool {
 /// What a bot may do in a guest's chat: their own memory, routines, files and skills, the web, and calendar links.
 /// Nothing of yours (email, calendar, meetings, saved logins and the browser, tool servers, the computer), and no new
 /// bots in your app.
-pub(super) const GUEST_TOOLS: [&str; 23] = [
-    "memory_store", "memory_search", "memory_forget", "chat_search", "routine_create", "routine_update", "routine_list", "routine_delete", "web_fetch", "web_search",
+pub(super) const GUEST_TOOLS: [&str; 25] = [
+    "memory_store", "memory_search", "memory_forget", "chat_search", "routine_create", "routine_update", "routine_list", "routine_delete", "goal_set", "goal_update", "web_fetch", "web_search",
     "file_list", "file_read", "file_write", "file_delete", "skill_view", "skill_save", "calendar_add", "plan_propose", "ask_bot", "ask_choice", "send_file", "card_read", "card_write",
 ];
 
@@ -30,6 +30,8 @@ pub(super) fn usable(ctx: &ToolCtx, tool: &str) -> bool {
         && (!tool.starts_with("computer_") || (crate::computer::usable(&ctx.db) && !ctx.incognito() && ctx.db.chat_private(ctx.chat_id)))
         && (!ctx.read_only || is_read_only(&ctx.db, tool))
         && (tool != "ask_bot" || ctx.depth == 0)
+        // A goal is the chat's: kept by the bot the person talks to, never incognito (nothing there lasts).
+        && (!tool.starts_with("goal_") || (ctx.depth == 0 && !ctx.incognito()))
         // A file goes with the reply to the person: not from a task handed over by another bot, nor incognito (it's kept
         // on disk to show in the chat).
         && (tool != "send_file" || (ctx.depth == 0 && !ctx.incognito()))
@@ -298,6 +300,8 @@ pub(super) fn describe(ctx: &ToolCtx, name: &str, args: &Value) -> String {
             args["cron"].as_str().map(|c| format!(" [{c}]")).unwrap_or_default(),
             args["prompt"].as_str().map(|p| format!(" {p}")).unwrap_or_default()
         ),
+        "goal_set" => format!("Set the goal: {} (done when {})", args["goal"].as_str().unwrap_or(""), args["done_when"].as_str().unwrap_or("")),
+        "goal_update" => format!("Goal{}: {}", args["status"].as_str().map(|s| format!(" {s}")).unwrap_or_default(), args["progress"].as_str().unwrap_or("")),
         "routine_create" => {
             let to = args["for"].as_str().filter(|f| !f.trim().is_empty()).map(|f| format!(" in {f}'s own chat")).unwrap_or_default();
             match args["at"].as_str().filter(|a| !a.trim().is_empty()) {

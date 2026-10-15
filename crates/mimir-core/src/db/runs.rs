@@ -165,6 +165,12 @@ impl Db {
         Ok(())
     }
 
+    /// A handed-over task under `parent` was cut off (its goal was paused or removed): its run ends, stopped.
+    pub fn run_stopped_under(&self, parent: i64) -> Result<()> {
+        self.c().execute("UPDATE runs SET status='error', error='Stopped by you', ended_at=?2 WHERE parent_run=?1 AND status='running'", params![parent, now()])?;
+        Ok(())
+    }
+
     pub fn run_asked(&self, run: i64, text: &str) -> Result<()> {
         self.c().execute("UPDATE runs SET asked=?2 WHERE id=?1", params![run, text])?;
         Ok(())
@@ -369,10 +375,11 @@ impl Db {
         Ok(())
     }
 
-    /// The helper finished (or failed): what it said waits for the bot that asked to tell the person.
+    /// The helper finished (or failed): what it said waits for the bot that asked to tell the person. Not one its
+    /// goal stopped meanwhile.
     pub fn delegation_done(&self, id: i64, reply: &str, failed: bool, tainted: bool) -> Result<()> {
         self.c().execute(
-            "UPDATE delegations SET status='done', reply=?2, failed=?3, tainted = tainted OR ?4 WHERE id=?1",
+            "UPDATE delegations SET status='done', reply=?2, failed=?3, tainted = tainted OR ?4 WHERE id=?1 AND status='running'",
             params![id, crate::tools::truncate(reply, 8000), failed, tainted],
         )?;
         Ok(())
@@ -441,6 +448,18 @@ impl Db {
         )?;
         let v = st
             .query_map([chat, since], |r| {
+                Ok(ToolCall { id: r.get(0)?, tool: r.get(1)?, summary: r.get(2)?, decision: r.get(3)?, ok: r.get(4)?, result: r.get(5)?, ts: r.get(6)? })
+            })?
+            .collect::<Result<_, _>>()?;
+        Ok(v)
+    }
+
+    /// Every tool call in a chat since `ts` (any run, a handed-over task's too), oldest first.
+    pub fn tool_calls_since(&self, chat: i64, ts: i64) -> Result<Vec<ToolCall>> {
+        let c = self.c();
+        let mut st = c.prepare("SELECT id, tool, summary, decision, ok, result, ts FROM tool_calls WHERE chat_id=?1 AND ts >= ?2 ORDER BY id")?;
+        let v = st
+            .query_map(params![chat, ts], |r| {
                 Ok(ToolCall { id: r.get(0)?, tool: r.get(1)?, summary: r.get(2)?, decision: r.get(3)?, ok: r.get(4)?, result: r.get(5)?, ts: r.get(6)? })
             })?
             .collect::<Result<_, _>>()?;

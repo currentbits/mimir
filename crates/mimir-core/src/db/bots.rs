@@ -39,7 +39,8 @@ impl Bot {
     /// Allowlist check; "browser__*" style entries match a whole tool server.
     pub fn allows(&self, tool: &str) -> bool {
         // A bot that may set routines may also change them.
-        if tool == "routine_update" {
+        // So may it keep a goal (its follow-ups are routines).
+        if tool == "routine_update" || tool.starts_with("goal_") {
             return self.allows("routine_create");
         }
         self.tools.trim().is_empty()

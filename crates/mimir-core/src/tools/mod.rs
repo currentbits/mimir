@@ -238,6 +238,9 @@ pub async fn call(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
     // instructions until you confirm it), and a rule becomes a suggestion anyway. Replacing one still asks, since the
     // replacement would take a confirmed memory out of the instructions.
     let (decision, why) = if why == "guarded" && name == "memory_store" && args.get("supersedes").is_none_or(Value::is_null) { ("allow".to_string(), "rule") } else { (decision, why) };
+    // Likewise a goal's progress: work on a goal is mostly reading pages and mail. The goal is marked instead (shown as
+    // outside content from then on), and done still needs a receipt.
+    let (decision, why) = if why == "guarded" && name == "goal_update" && decide(&ctx.db, name, false)? == "allow" { ("allow".to_string(), "rule") } else { (decision, why) };
     // Reading is allowed after outside content, but not when the read itself would carry your data out.
     let (decision, why) = if decision == "allow" && ctx.is_tainted() && leaks_out(ctx, name, args) { ("ask".to_string(), "guarded") } else { (decision, why) };
     // A new bot asks every time, never "always" or "all like this" (a standing rule would let bots make bots on their
@@ -1473,6 +1476,36 @@ mod tests {
         call(&ctx, "card_read", &json!({})).await.unwrap();
         assert!(ctx.is_tainted());
         assert!(!usable(&ToolCtx::new(ctx.db.clone(), 1, crate::INCOGNITO_CHAT), "card_write"), "incognito keeps nothing");
+    }
+
+    #[tokio::test]
+    async fn a_goal_owns_its_follow_ups_and_is_done_only_on_receipts() {
+        let p = std::env::temp_dir().join(format!("mimir-goal-tool-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let ctx = ToolCtx::new(Db::open(&p).unwrap(), 1, 9);
+        assert!(call(&ctx, "goal_update", &json!({"progress": "x"})).await.is_err(), "no goal yet");
+        call(&ctx, "goal_set", &json!({"goal": "Find a plumber who can come this week", "done_when": "a plumber is booked"})).await.unwrap();
+        let soon = (chrono::Local::now() + chrono::Duration::hours(2)).format("%Y-%m-%d %H:%M").to_string();
+        call(&ctx, "routine_create", &json!({"at": soon, "prompt": "Check whether the plumbers replied", "followup": true})).await.unwrap();
+        let g = ctx.db.goal(9).unwrap().unwrap();
+        assert_eq!(ctx.db.goal_of("routines", ctx.db.routines(9).unwrap()[0].id).unwrap().map(|g| g.id), Some(g.id), "booked while the goal is on: it's the goal's");
+        // Saying it's done isn't enough: booking a follow-up is more work, not a result.
+        let no = call(&ctx, "goal_update", &json!({"progress": "Asked three plumbers", "status": "done"})).await.unwrap_err().to_string();
+        assert!(no.contains("not marked done"), "{no}");
+        assert_eq!(ctx.db.goal(9).unwrap().unwrap().status, "active");
+        call(&ctx, "goal_update", &json!({"progress": "Waiting on two quotes", "status": "blocked", "why": "which quote to take"})).await.unwrap();
+        let g = ctx.db.goal(9).unwrap().unwrap();
+        assert!(g.status == "blocked" && g.why == "which quote to take" && g.progress == "Waiting on two quotes");
+        // With a receipt in the run log, it's done, and its follow-up goes.
+        ctx.db.tool_call_log(None, 9, "email_send", "Send an email to bob@plumbing.example: \"Tuesday works\"", "allow", true, "sent").unwrap();
+        let out = call(&ctx, "goal_update", &json!({"progress": "Bob comes Tuesday", "status": "done"})).await.unwrap();
+        assert!(out.contains("Sent an email to bob@plumbing.example"), "{out}");
+        let g = ctx.db.goal(9).unwrap().unwrap();
+        assert!(g.status == "done" && g.progress.contains("✓"), "{g:?}");
+        assert!(ctx.db.routines(9).unwrap().is_empty(), "its follow-up is removed");
+        assert!(!usable(&ToolCtx::new(ctx.db.clone(), 1, crate::INCOGNITO_CHAT), "goal_set"), "incognito keeps nothing");
+        // Its approval card shows the goal itself.
+        assert_eq!(describe(&ctx, "goal_set", &json!({"goal": "x", "done_when": "y"})), "Set the goal: x (done when y)");
     }
 
     #[tokio::test]

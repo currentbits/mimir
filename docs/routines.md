@@ -35,6 +35,39 @@ minutes); one added with less notice than the lead time gets no run. Such a rout
 your calendar is private. For "the evening before tomorrow's first meeting", use a plain cron (`0 20 * * *`) and have
 the routine look at tomorrow's calendar.
 
+## Goals
+
+A goal is one thing you want a bot to see through, over days if need be: "find a plumber who can come this week", "get
+the insurance refund paid". Ask the bot to keep at it and it sets the chat's goal (`goal_set`): the goal in your words,
+what has to be true for it to be done, and a progress line it keeps up to date (`goal_update`). A chat has one goal at a
+time. It's pinned at the top of the chat, and the chat's header shows it.
+
+While the goal is on, the follow-ups and routines the bot books in that chat, and tasks it hands to another bot, belong
+to it. Its card has these buttons, and they work in Mimir itself, whatever the AI is doing:
+
+- **Pause:** its follow-ups and routines don't run, and a task it handed to another bot stops, even mid-run. Its result
+  is never told. **Resume** picks up where it was, without a rush of missed runs.
+- **Done:** it's finished. Its follow-ups and routines are removed.
+- **Remove:** the goal goes, and so do its follow-ups, routines and handed-over tasks.
+
+**Blocked.** When the bot needs something from you (which quote to take), it marks the goal *blocked*, says what it
+needs, and the goal shows in **Needs you** until you answer in the chat. Its follow-ups keep running.
+
+**Done means done.** A bot can only mark a goal done when the chat's run log shows something done towards it since the
+goal was set, like an email sent or an event added. Saying so isn't enough, and neither is booking another follow-up.
+Otherwise it's refused, and the bot says what's left. You can always mark it done yourself. A done goal stays done:
+remove it, or ask for a new one.
+
+**Outside content.** Working on a goal usually means reading pages and email, so a bot can update its progress after
+reading outside content without asking you. The goal is marked as such (its card says so): from then on bots read it as
+outside content, never as instructions from you, and a turn that reads it counts as having read outside content.
+Setting a new goal after reading outside content still asks you first.
+
+**Budget.** On top of the [daily caps](#caps), a goal can have a token budget of its own ("don't spend more than 200k on
+this"). It counts the goal's own runs since it was set: its routines and follow-ups, the tasks it handed over and their
+reports, and replies in its chat while it's on. Other routines in the chat don't count. When the budget runs out, the goal pauses and **Needs you** asks: *Go on* gives it
+the same budget again.
+
 ## Started by something happening
 
 A routine can start when something comes in instead of at a time. In the Routines tab, pick it under **When**:
@@ -220,7 +253,7 @@ routine's "come through right away if" rule (above).
 The first item in the sidebar collects what's waiting on you: approvals, runs that didn't work (in plain words, with a
 fix button: "Couldn't reach the AI. Is it running?" → *Check the AI account*), bots that can't connect (a rejected
 token, an AI account that's signed out; the bot's chat says so too, with a way to its settings), approvals nobody
-answered in time, and memory suggestions.
+answered in time, memory suggestions, and [goals](#goals) that are over their budget or blocked on you.
 
 Routines run with nobody watching, so an approval a routine needs is **parked** there for 24 hours instead of being
 denied after 5 minutes; when you approve, that exact action runs and the chat says so. The menu-bar / tray icon shows
