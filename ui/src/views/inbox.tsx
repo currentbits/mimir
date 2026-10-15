@@ -10,6 +10,7 @@ import type { Approval, Chat, Hold, Inbox, Run, Tab } from '../types'
 
 /** What an approval would do, in a few words, and whether it can become an "always allow". */
 function approvalRisk(a: Approval): { icon: string; label: string; tone: string; always: boolean } {
+  if (a.kind === 'signin') return { icon: 'key', label: 'Sign in in Mimir, never in a chat: Mimir types it into the page and keeps it for this bot on this site only. The bot never sees it.', tone: 'login', always: false }
   if (a.kind === 'takeover') return { icon: 'laptop', label: 'A step only you should do. Take over on the live screen, then press Give back; the bot carries on.', tone: 'login', always: false }
   if (a.kind === 'login') return { icon: 'key', label: 'Types a saved login. Every use asks you.', tone: 'login', always: false }
   if (a.kind === 'send' && a.tool === 'send_file') return { icon: 'send', label: 'Sends a file where others see it (a group, or a guest\'s chat). Every file there asks you.', tone: 'rule', always: false }
@@ -43,42 +44,65 @@ export function useLeave() {
   return { leaving, leave }
 }
 
-/** One approval: what it does, and Deny / Always / Allow once. Shared by the floating banner and the inbox. */
+type Decide = (id: number, approve: boolean, always?: 'tool' | 'site' | 'run', more?: { edits?: Record<string, string>; reason?: string }) => void
+
+/** One approval: what it does, and Deny / Always / Allow once. Shared by the floating banner and the inbox. An email's
+ *  subject and text can be edited first (who it's to can't); Deny can say why, for the bot. */
 function ApprovalCard({ a, where, leaving, decide, inline }: {
-  a: Approval; where: string; leaving: boolean; decide: (id: number, approve: boolean, always?: 'tool' | 'site' | 'run') => void; inline?: boolean
+  a: Approval; where: string; leaving: boolean; decide: Decide; inline?: boolean
 }) {
   const botOf = useContext(Bots)
   const b = botOf(a.bot_id)
   const risk = approvalRisk(a)
   // Allowed the same thing a few times already: offer to stop asking.
   const learned = risk.always && (a.allowed_before ?? 0) >= 2
+  const [edits, setEdits] = useState<Record<string, string> | null>(null)
+  const [why, setWhy] = useState<string | null>(null)
+  const d = a.draft
+  // Only what changed goes back; approving sends what's on the card.
+  const changed = edits && d ? Object.fromEntries(Object.entries(edits).filter(([k, v]) => v !== d[k])) : {}
+  const approve = (always?: 'tool' | 'site' | 'run') => decide(a.id, true, always, Object.keys(changed).length ? { edits: changed } : undefined)
+  const deny = () => decide(a.id, false, undefined, why?.trim() ? { reason: why.trim() } : undefined)
   return (
     <div className={'approval tone-' + risk.tone + (inline ? ' inline' : '') + (leaving ? ' leaving' : '')}>
       <Avatar id={b.id} name={b.name} size={32} mood="asking" />
       <div className="approval-main">
-        <div className="ask">{b.name} {a.kind === 'takeover' ? 'needs you on the computer' : 'needs your OK'} · {where}</div>
-        <div className={'what selectable' + (a.kind === 'plan' ? ' plan' : '')}>{a.summary}</div>
+        <div className="ask">{b.name} {a.kind === 'takeover' ? 'needs you on the computer' : a.kind === 'signin' ? 'needs you to sign in' : 'needs your OK'} · {where}</div>
+        {edits && d ? <div className="draft-edit">
+          <div className="what">To {d.to}{d.cc ? ` (cc ${d.cc})` : ''}{d.account ? `, from ${d.account}` : ''}</div>
+          <input className="input" aria-label="Subject" value={edits.subject ?? ''} onChange={e => setEdits({ ...edits, subject: e.target.value })} />
+          <textarea className="textarea" aria-label="Text" rows={6} value={edits.body ?? ''} onChange={e => setEdits({ ...edits, body: e.target.value })} />
+        </div> : <div className={'what selectable' + (a.kind === 'plan' ? ' plan' : '')}>{a.summary}</div>}
         <div className="risk"><Icon name={risk.icon} size={12} />{risk.label}</div>
         {learned && <div className="learned">You've allowed this {a.allowed_before} times. Stop asking?</div>}
         {a.parked && <div className="parked">From a routine. It runs when you approve; it waits {((w: string) => w.startsWith('in ') ? `for ${w.slice(3)}` : `until ${w}`)(ahead(a.expires_at))}.</div>}
       </div>
-      {a.kind === 'takeover' ? <div className="choices">
+      {a.kind === 'signin' ? <div className="choices">
+        <button className="btn" onClick={() => decide(a.id, false)}>Can’t now</button>
+        <a className="btn btn-primary" href="#signin">Sign in</a>
+      </div> : a.kind === 'takeover' ? <div className="choices">
         <button className="btn" onClick={() => decide(a.id, false)}>Can’t now</button>
         <button className="btn" onClick={() => decide(a.id, true)}>Done</button>
         <a className="btn btn-primary" href="#computer">Open the computer</a>
-      </div> : <div className="choices">
-        <button className="btn" onClick={() => decide(a.id, false)}>Deny</button>
+      </div> : why !== null ? <form className="choices deny-why" onSubmit={e => { e.preventDefault(); deny() }}>
+        <input className="input" autoFocus placeholder="Why? (optional; the bot reads it)" aria-label="Why not" value={why} onChange={e => setWhy(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Escape') setWhy(null) }} />
+        <button type="button" className="btn" onClick={() => setWhy(null)}>Back</button>
+        <button type="submit" className="btn btn-danger">Deny</button>
+      </form> : <div className="choices">
+        <button className="btn" onClick={() => setWhy('')}>Deny…</button>
+        {d && <button className="btn" onClick={() => setEdits(edits ? null : { subject: d.subject ?? '', body: d.body ?? '' })}>{edits ? 'Undo edits' : 'Edit'}</button>}
         {risk.always && (
-          <button className={'btn' + (learned ? ' btn-primary' : '')} onClick={() => decide(a.id, true, a.site ? 'site' : 'tool')}
+          <button className={'btn' + (learned ? ' btn-primary' : '')} onClick={() => approve(a.site ? 'site' : 'tool')}
             title={a.site ? `Stop asking before this on ${a.site}. Change it in Settings → Permissions.` : `Stop asking before ${toolLabel(a.tool).toLowerCase()}. Change it in Settings → Permissions.`}>
             {/* It allows the whole tool, not just this one call: say which. */}
             {a.site ? `Always on ${a.site}` : `Always: ${toolLabel(a.tool).toLowerCase()}`}
           </button>
         )}
         {a.kind === 'rule' && !a.parked && (
-          <button className="btn" onClick={() => decide(a.id, true, 'run')} title="Allow this, and anything else like it while the bot finishes this reply.">All like this</button>
+          <button className="btn" onClick={() => approve('run')} title="Allow this, and anything else like it while the bot finishes this reply.">All like this</button>
         )}
-        <button className={'btn' + (learned ? '' : ' btn-primary')} onClick={() => decide(a.id, true)}>{a.kind === 'plan' ? 'Approve plan' : 'Allow once'}</button>
+        <button className={'btn' + (learned ? '' : ' btn-primary')} onClick={() => approve()}>{a.kind === 'plan' ? 'Approve plan' : Object.keys(changed).length ? (a.tool === 'email_send' ? 'Send as edited' : 'Allow as edited') : 'Allow once'}</button>
       </div>}
       {!a.parked && <Countdown until={a.expires_at} />}
     </div>
@@ -89,8 +113,8 @@ function ApprovalCard({ a, where, leaving, decide, inline }: {
 function useDecide(onDecided: () => unknown) {
   const [err, setErr] = useState<string | null>(null)
   const { leaving, leave } = useLeave()
-  const decide = (id: number, approve: boolean, always?: 'tool' | 'site' | 'run') =>
-    leave(id, () => invoke('decide', { id, approve, always: always ?? null }).then(() => { setErr(null); return onDecided() }, e => setErr(String(e))))
+  const decide: Decide = (id, approve, always, more) =>
+    leave(id, () => invoke('decide', { id, approve, always: always ?? null, edits: more?.edits ?? null, reason: more?.reason ?? null }).then(() => { setErr(null); return onDecided() }, e => setErr(String(e))))
   return { err, leaving, decide }
 }
 
@@ -126,6 +150,61 @@ export function Approvals({ list, chats, chatName, onDecided }: { list: Approval
       {live.map(a => <ApprovalCard key={a.id} a={a} where={where(a.chat_id)} leaving={leaving.has(a.id)} decide={decide} />)}
       {err && <p className="error">{err}</p>}
     </section>
+  )
+}
+
+type SignInCard = { id: number; bot_id: number; site: string; host?: string; steered?: boolean; lookalike?: string | null; foreign?: boolean }
+
+/** The masked form a sign-in card links to (#signin): for the newest card waiting. Only that card's id goes back with
+ *  what you type; the link itself carries nothing (no server, token or site), so a link someone sends you can't
+ *  point it elsewhere. The page's full address shows above the fields, with a warning when the bot came there after
+ *  outside content or the site looks like one you've signed in to before. */
+export function SignInForm({ onClose }: { onClose: () => void }) {
+  const botOf = useContext(Bots)
+  const [a, setA] = useState<SignInCard | null | undefined>()
+  useEffect(() => { invoke<SignInCard | null>('signin_card').then(setA, () => setA(null)) }, [])
+  const [f, setF] = useState({ user: '', password: '', code: '', totp: '' })
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+  const [done, setDone] = useState<boolean | null>(null)
+  if (a === undefined) return null
+  const field = (k: keyof typeof f) => ({ value: f[k], onChange: (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value }) })
+  const host = a?.host || a?.site
+  const send = () => {
+    if (!a) return
+    setBusy(true); setErr(null)
+    invoke<{ signed_in: boolean }>('signin_submit', { id: a.id, ...f })
+      .then(r => { setF({ user: '', password: '', code: '', totp: '' }); setDone(r.signed_in) }, e => setErr(String(e))).finally(() => setBusy(false))
+  }
+  return (
+    <div className="ask-backdrop" onMouseDown={e => e.target === e.currentTarget && !busy && onClose()}>
+      <form className="ask-box" role="dialog" aria-modal="true" aria-label="Sign in" onSubmit={e => { e.preventDefault(); send() }} onKeyDown={e => e.key === 'Escape' && !busy && onClose()}>
+        {done !== null ? <>
+          <p>{done ? `Signed in to ${a?.site ?? 'the site'}. ${botOf(a?.bot_id ?? 0).name} carries on.` : 'That didn’t sign in. The bot will tell you; it can ask again, or you can take over on the computer.'}</p>
+          <div className="ask-actions"><button type="button" className="btn btn-primary" onClick={onClose}>OK</button></div>
+        </> : !a ? <>
+          <p>No sign-in is waiting: it was used, or ran out after 10 minutes. Ask the bot again.</p>
+          <div className="ask-actions"><button type="button" className="btn btn-primary" onClick={onClose}>OK</button></div>
+        </> : <>
+          <p><b>Sign in to {a.site}</b> for {botOf(a.bot_id).name}. Mimir types this into the page on the computer and keeps it for this bot on {a.site} only. The bot never sees it.</p>
+          {a.foreign
+            ? <p className="error" role="alert">This address uses letters from another alphabet{a.lookalike ? `, made to look like ${a.lookalike}` : ''}: <b className="mono">{host}</b></p>
+            : a.lookalike
+            ? <p className="error" role="alert">This isn’t {a.lookalike}, where you’ve signed in before. Check the address before you type a password: <b className="mono">{host}</b></p>
+            : a.steered && <p className="error" role="alert">{botOf(a.bot_id).name} came to this site after reading a web page or a message. Check the address before you type a password: <b className="mono">{host}</b></p>}
+          <p className="hint">Page: <span className="mono selectable">{host}</span></p>
+          <input className="input" aria-label="User name or email" placeholder="User name or email" autoComplete="username" autoFocus {...field('user')} />
+          <input className="input" aria-label="Password" placeholder="Password" type="password" autoComplete="current-password" {...field('password')} />
+          <input className="input" aria-label="Code (if the site asks for one)" placeholder="Code, if the site asks for one" inputMode="numeric" autoComplete="one-time-code" {...field('code')} />
+          <input className="input" aria-label="Authenticator setup key (optional)" placeholder="Authenticator setup key or otpauth:// link (optional)" type="password" autoComplete="off" {...field('totp')} />
+          {err && <p className="error">{err}</p>}
+          <div className="ask-actions">
+            <button type="button" className="btn btn-ghost" disabled={busy} onClick={onClose}>Cancel</button>
+            <button className="btn btn-primary" disabled={busy || !(f.user || f.password || f.code || f.totp)}>{busy ? 'Signing in…' : 'Sign in'}</button>
+          </div>
+        </>}
+      </form>
+    </div>
   )
 }
 

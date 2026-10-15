@@ -108,9 +108,14 @@ fn numbered(text: &mut String, rows: &[Row], card: bool) -> Vec<String> {
     if all.is_empty() {
         return vec![];
     }
+    // A link isn't a choice: it goes on its own line, after them.
+    let (links, all): (Vec<_>, Vec<_>) = all.into_iter().partition(|(_, d)| d.starts_with("https://"));
     text.push_str("\n\n");
     for (n, (label, _)) in all.iter().enumerate() {
         text.push_str(&format!("{}. {label}\n", n + 1));
+    }
+    for (label, url) in links {
+        text.push_str(&format!("{label}: {url}\n"));
     }
     text.push_str(if card { tr("(Reply with a number. If I've written since, reply to this message with it.)") } else { tr("(Reply with a number.)") });
     all.into_iter().map(|(_, d)| d.clone()).collect()
@@ -275,6 +280,13 @@ impl Signal {
             && let Some(data) = self.picked(chat, &m.said, m.quoted.as_deref())
         {
             return self.choose(me, core, chat, from, &data).await;
+        }
+        // A reply to a card waiting for an answer, not a number: no, and why.
+        if m.files.is_empty()
+            && let Some(card) = m.quoted.as_deref()
+            && core.deny_by_reply(me, chat, from, card, &m.said)?
+        {
+            return Ok(());
         }
         if !m.files.is_empty() {
             let files: Vec<File> = m.files.iter().map(|(name, mime, size, id, voice)| File { name: name.clone(), mime: mime.clone(), size: *size, url: id.clone(), voice: *voice }).collect();

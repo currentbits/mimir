@@ -32,7 +32,7 @@ Bots act through **tools**. Every tool call is checked against your rules before
 | `skill_save` | Propose a skill from what the conversation did, when you ask; you press Save ([Skills](skills.md)) | allow |
 | `plan_propose` | Propose a plan you approve once (below) | allow |
 | `ask_choice` | Ask you one question with 2 to 4 answers to tap, plus "Something else". The buttons go under the reply, and your tap is your next message. Only in Telegram, Slack and Discord chats, never in routines or another bot's task. A tap is never an approval | allow |
-| `computer_*` | Use the bots' computer, self-hosted only ([The bots' computer](computer.md)) | allow; `computer_open` **asks** |
+| `computer_*` | Use the bots' computer, self-hosted only ([The bots' computer](computer.md)) | allow; `computer_open` **asks**, and `computer_signin` with a saved login |
 | `browser__*` | The headless browser, when switched on (below) | opening a page **asks** |
 | *tool servers* | Tools from MCP servers you added (below) | read-only allow, the rest **ask** |
 
@@ -45,7 +45,17 @@ to Telegram, Slack or Discord and shows a card in the app with **Allow once**, *
 for opening pages: "Always on this site") and **Deny**. Every "always" becomes a visible rule in Settings → Permissions.
 Once you've allowed the same thing twice, the card makes "always" the main button. No answer within 5 minutes means
 deny (routines park their asks for 24 hours instead; see [Needs you](routines.md#needs-you)). From the command line:
-`mimir approvals`, `mimir approve <id>`, `mimir deny <id>`.
+`mimir approvals`, `mimir approve <id>`, `mimir deny <id> [why]`.
+
+**Say why.** **Deny…** in the app takes an optional reason, and in Telegram, Slack, Discord or Signal a text reply to
+the card does the same (a number on Signal still picks a button). The bot is told *"Denied: <your reason>"* in your own
+words and carries on with that, instead of only saying it wasn't done. A routine's ask has moved on by the time you
+answer, so your reason goes into that chat's conversation for the bot's next turn there.
+
+**Edit before it goes.** An email's card (to send, or to draft after outside content) has **Edit** in the app: change
+the subject and text, then approve, and that's what goes. Who it's to, the cc and the account can't be changed on the
+card, and the edited email is checked again (one-line subject, whole on the card). In a messaging app the card has
+**Edit in Mimir**, a link to it in the web app, when Mimir runs as a server with an https address.
 
 ## Outside content (taint)
 
@@ -139,6 +149,9 @@ checks the address in the link, not where the name leads.
 
 **Saved logins** are typed by name (e.g. `GITHUB_PASSWORD`): the browser fills in the value, the AI never sees it, it
 only works on the sites you listed for it, and you approve each use. Values are scrubbed from every result and log.
+A login can have an authenticator key too: a bot types `NAME_CODE` and Mimir fills in the current code, only on the
+login's sites. On the bots' computer, a bot can also ask you to sign in with a masked form in Mimir instead of the
+chat ([Signing in from your phone](computer.md#signing-in-from-your-phone)); that login is kept for that bot and site.
 
 ## Tool servers (MCP)
 

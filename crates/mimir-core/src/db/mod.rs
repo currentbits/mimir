@@ -53,7 +53,7 @@ PRAGMA secure_delete=ON;
 
 /// The schema version this build writes (`PRAGMA user_version`). A schema change bumps it and adds a step to
 /// `migrate`; each step runs once per database.
-pub(crate) const VERSION: i64 = 11;
+pub(crate) const VERSION: i64 = 12;
 
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS entries(
@@ -221,6 +221,9 @@ fn migrate(c: &Connection) -> Result<()> {
     }
     if v < 11 {
         migrate_v11(c)?;
+    }
+    if v < 12 {
+        migrate_v12(c)?;
     }
     c.execute(
         "INSERT INTO settings(key, value) VALUES ('schema_written_by', ?1) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -494,6 +497,16 @@ fn migrate_v11(c: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Version 12: an approval card's text you can edit before it goes (an email's subject and body), and why you said no.
+fn migrate_v12(c: &Connection) -> Result<()> {
+    for col in ["draft", "reason"] {
+        if !c.prepare(&format!("SELECT 1 FROM pragma_table_info('approvals') WHERE name='{col}'"))?.exists([])? {
+            c.execute_batch(&format!("ALTER TABLE approvals ADD COLUMN {col} TEXT"))?;
+        }
+    }
+    Ok(())
+}
+
 impl Db {
     /// Opens the database, migrating it first if an older Mimir wrote it. An up-to-date database only reads its
     /// version: the tools process opens it on every turn, and mustn't compete with the app for the write lock.
@@ -614,6 +627,23 @@ mod tests {
         let n: i64 = d.c().query_row("SELECT count(*) FROM sqlite_master WHERE name IN ('tool_calls_chat', 'messages_chat')", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 2);
         drop(d);
+
+        // Version 10 → 12: the goals (11), then an approval's draft and reason (12).
+        Connection::open(&p)
+            .unwrap()
+            .execute_batch(
+                "DROP TABLE goals; ALTER TABLE routines DROP COLUMN goal_id; ALTER TABLE delegations DROP COLUMN goal_id; ALTER TABLE runs DROP COLUMN goal_id;
+                 ALTER TABLE approvals DROP COLUMN draft; ALTER TABLE approvals DROP COLUMN reason; PRAGMA user_version = 10",
+            )
+            .unwrap();
+        let d = Db::open(&p).unwrap();
+        assert_eq!(user_version(&d.c()).unwrap(), 12);
+        assert!(d.c().prepare("SELECT goal_id FROM runs").is_ok() && d.c().prepare("SELECT id FROM goals").is_ok(), "v11 ran");
+        assert!(d.c().prepare("SELECT draft, reason FROM approvals").is_ok(), "v12 ran");
+        drop(d);
+        // A new database starts at the latest.
+        let fresh = dir.join("fresh.db");
+        assert_eq!(user_version(&Db::open(&fresh).unwrap().c()).unwrap(), 12);
 
         // Written by a newer Mimir: refused, untouched.
         Connection::open(&p).unwrap().execute_batch("PRAGMA user_version = 99; UPDATE settings SET value='9.9.9' WHERE key='schema_written_by'").unwrap();
@@ -1108,6 +1138,20 @@ mod tests {
         assert_eq!(d.approval_decide(a, true, Some(5)).unwrap().unwrap().status, "approved");
         assert!(d.approval_decide(a, false, None).unwrap().is_none(), "decided once");
         assert_eq!(d.approval_status(a).unwrap(), "approved");
+
+        // A sign-in card: done once, by its form (not an Approve), and not after it ran out.
+        let s = d.approval_create(1, 5, "computer_signin", "Sign in to github.com", 300, "signin", Some("github.com")).unwrap();
+        assert!(d.approval_decide(s, true, None).unwrap().is_none(), "approving isn't signing in");
+        assert_eq!(d.approval_claim(s).unwrap().unwrap().site.as_deref(), Some("github.com"));
+        assert!(d.approval_claim(s).unwrap().is_none(), "the link works once");
+        assert!(d.approval_decide(s, false, None).unwrap().is_none(), "nor can it be turned down while signing in");
+        d.approval_signed_in(s, true).unwrap();
+        assert_eq!(d.approval_status(s).unwrap(), "approved");
+        assert!(d.approval_claim(a).unwrap().is_none(), "only sign-in cards");
+        let late = d.approval_create(1, 5, "computer_signin", "Sign in", 0, "signin", Some("github.com")).unwrap();
+        assert!(d.approval_claim(late).unwrap().is_none(), "not once it ran out");
+        let no = d.approval_create(1, 5, "computer_signin", "Sign in", 300, "signin", Some("github.com")).unwrap();
+        assert_eq!(d.approval_decide(no, false, None).unwrap().unwrap().status, "denied", "Can't now still works");
 
         let b = d.approval_create(1, 0, "routine_delete", "Delete #2", 0, "rule", None).unwrap();
         assert_eq!(d.approval_status(b).unwrap(), "expired", "ttl 0 expires immediately");

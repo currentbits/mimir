@@ -19,12 +19,22 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
   health are suggested, never marked for you.
 - **Security:** the TLS library (rustls 0.23.46) is updated for four advisories published on October 14
   (RUSTSEC-2026-0346 to 0349).
+- **Edit an email before it goes, and say why when you deny:** on an email's approval card in the app, **Edit** lets
+  you change the subject and text before you send it. What you approve is what goes; who it's to stays as shown. In
+  Telegram, Slack, Discord and Signal, **Edit in Mimir** opens the card in the web app (on a server with an https
+  address). **Deny…** takes an optional "Why?", and in a messaging app a reply to the card does the same: the bot
+  reads your reason and changes course instead of just stopping.
 - **Export, import and duplicate a bot:** right-click a bot to save it as one file (its role, look, skills, routines,
   tool rules and the tool servers it uses), without tokens, keys, saved logins, memories or chats. **From a file…** on
   the new-bot page shows everything in it first, and flags skill steps that pipe a download into a shell, hold a base64
   blob or download a program. Skills come in as proposals and routines come in paused; only its tool rules that are at
   least as strict as yours can be used, and its AI account uses your own settings.
   **Duplicate…** does both in one go. See [Bots and chats](docs/bots-and-chats.md#export-import-and-duplicate).
+- **Grok bots are more private:** Grok's own memory and `/goal` are always off for bots, and your Claude and Cursor
+  settings no longer load into them, so bots can't read each other's notes and incognito chats leave nothing behind
+  in Grok. A message that starts with `/` now reaches the bot instead of running as a Grok command. If a Grok update
+  ever offers a bot more tools than web search and Mimir's own, the message stops with an error instead of running.
+  The docs cover The X Subscription's plans and its shared weekly allowance.
 - **Security fixes from the fourth review:**
   - A routine can no longer change its own times or end date while it runs, or book itself again a minute later;
     from a routine, a one-off is at least 15 minutes away.
@@ -34,6 +44,16 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
   - After reading a sensitive source, saving a memory for the household asks too.
   - A bot file can't pass an option to the AI's command line as its model.
   - `mimir doctor` no longer creates a database, or upgrades an older one, while it checks.
+
+### The bots' computer
+- **Sign in from your phone:** at a sign-in page, a bot sends you a card with a link to a small masked form in Mimir,
+  instead of asking you to take over the screen. Type your login there, never in the chat; Mimir types it into the
+  page and keeps it for that bot on that site only. The bot never sees it, only whether it worked. If the bot got to
+  that site after reading a web page or a message, the site looks like one you've signed in to before, or its
+  address uses letters from another alphabet, the form warns you and shows the full address. Taking over stays for
+  captchas and payments. [Details](docs/computer.md#signing-in-from-your-phone)
+- **Authenticator codes on saved logins:** paste a site's setup key or `otpauth://` link once, and Mimir types the
+  6-digit codes itself, only on that login's site.
 
 ## 0.3.0
 
