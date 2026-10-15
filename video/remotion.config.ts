@@ -12,7 +12,8 @@ Config.setRspack(true);
 Config.setVideoImageFormat("jpeg");
 Config.setOverwriteOutput(true);
 // The faces, icons and pigments are imported from ../ui/src: resolve their React from here.
-Config.overrideWebpackConfig((c) => ({
+// overrideBundlerConfig, not overrideWebpackConfig: with Rspack on, the webpack override is silently ignored.
+Config.overrideBundlerConfig((c) => ({
   ...c,
   resolve: { ...c.resolve, modules: [path.resolve("node_modules"), "node_modules"] },
 }));
