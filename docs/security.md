@@ -117,6 +117,9 @@ half is built into the app); a tampered download is refused. It never restarts o
   does).
 - Heuristics have limits: after a web page (not your email or a meeting), a bot could still spell data into short web
   addresses one fetch at a time (each fetch is in the run log).
+- On a plain Linux host without Docker, the bots' computer runs in Mimir's own process, and its Chromium DevTools on
+  `127.0.0.1:9222` have no token: any account on that machine can drive it. Docker compose keeps it in a container of
+  its own. `mimir doctor` warns about this.
 - An email card shows exactly what's sent, but approving it is your call: after reading an email, check the recipient
   is who you meant.
 

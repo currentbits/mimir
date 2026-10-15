@@ -105,6 +105,12 @@ pub fn reach() -> Option<Result<()>> {
     Some(ask(&a, serde_json::json!({"op": "status"})).map(drop))
 }
 
+/// For `mimir doctor`: switched on and run in Mimir's own process outside a container, where Chromium's DevTools
+/// (127.0.0.1:9222, no token) are open to every account on this machine.
+pub fn devtools_shared(db: &crate::db::Db) -> bool {
+    enabled(db) && remote().is_none() && cfg!(target_os = "linux") && !crate::server_update::in_docker()
+}
+
 /// Is the screen up?
 pub fn running() -> bool {
     if let Some(a) = remote() {

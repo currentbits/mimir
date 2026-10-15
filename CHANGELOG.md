@@ -12,6 +12,9 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 - **Check everything:** `mimir doctor` (and Settings → Your data → *Check everything*) checks each bot's AI sign-in,
   its Telegram, Slack and Discord connection, your mailboxes, the bots' computer, free disk space, the database and its
   backups, one line each with what to do. Nothing is spent or sent.
+- **Security checks in `mimir doctor`:** it warns when the web app is reached over plain HTTP from the internet,
+  Permissions are at "Allow all", a tool server's package has no fixed version, a newer Mimir is out, or the bots'
+  computer runs in Mimir's own process on a Linux host without Docker (its DevTools have no token there).
 - **Each bot has its own sign-ins on the computer:** a site you sign in to for one bot (when it asks you to take over)
   is signed in for that bot only. **Sign out everywhere** on a bot's page clears its sign-ins. Sign-ins from before
   go to the first bot that uses the computer after the update.

@@ -87,6 +87,10 @@ pub fn is_server() -> bool {
     MODE.get() == Some(&"server")
 }
 
+pub fn is_desktop() -> bool {
+    MODE.get() == Some(&"desktop")
+}
+
 fn key(bot: i64, name: &str) -> String {
     if bot == 1 && name == TG { name.into() } else { format!("{name}:{bot}") }
 }

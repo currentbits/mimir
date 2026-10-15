@@ -18,7 +18,7 @@ USAGE:
   mimir runs                recent runs with tokens, cost and tool calls
   mimir approvals           list actions waiting for your approval
   mimir approve <id>        approve one (deny <id> to refuse)
-  mimir doctor              check AI logins, channels, the computer, disk, database and backups
+  mimir doctor              check AI logins, channels, the computer, disk, database, backups and security
 
 ENV:
   TELEGRAM_BOT_TOKEN         from @BotFather (serve)
