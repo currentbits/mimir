@@ -750,18 +750,13 @@ pub(super) async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<Stri
             if r.once && args["cron"].is_string() {
                 bail!("a one-off has a time, not a schedule: delete it and create a new one");
             }
-            if let Some(u) = args["until"].as_str() {
-                if r.once && !u.trim().is_empty() {
-                    bail!("a one-off has no end: it runs once");
-                }
-                // The end first, so a new schedule is checked against the new end.
-                ctx.db.routine_set_ends(ctx.chat_id, id, if u.trim().is_empty() { 0 } else { until_time(u)? })?;
-            }
-            // A schedule that fails leaves the routine as it was, its old end too.
-            if let Err(e) = ctx.db.routine_update(ctx.chat_id, id, args["cron"].as_str().unwrap_or(&r.cron), prompt, quiet, r.paused) {
-                ctx.db.c().execute("UPDATE routines SET ends=?2 WHERE id=?1", [id, r.ends])?;
-                return Err(e);
-            }
+            // The end with the schedule: checked together, so a refused change leaves both as they were.
+            let ends = match args["until"].as_str().map(str::trim) {
+                Some("") => Some(0),
+                Some(u) => Some(until_time(u)?),
+                None => None,
+            };
+            ctx.db.routine_update(ctx.chat_id, id, args["cron"].as_str().unwrap_or(&r.cron), prompt, quiet, r.paused, ends)?;
             // Watching only makes sense for a quiet check: one that stops being quiet stops watching.
             let watch = if quiet { args["watch"].as_str().unwrap_or(&r.watch) } else { "" };
             ctx.db.routine_set_watch(ctx.chat_id, id, watch)?;
