@@ -54,6 +54,7 @@ bot's instructions), everything that goes out asks, even if its rule says allow,
 - reading a web page or searching the web, and opening a page or typing on the bots' computer;
 - handing a task to another bot;
 - a message to someone else's chat (a reminder for them, a file in a group);
+- a memory saved for the household, which its guests read;
 - any tool server's change, and its reads that reach the internet (not the sensitive server's own).
 
 Like outside content, it never becomes "always", "all like this" or part of a plan, it sticks to the conversation until

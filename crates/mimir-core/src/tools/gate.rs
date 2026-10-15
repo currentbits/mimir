@@ -238,12 +238,14 @@ pub fn looks_sensitive(name: &str) -> bool {
 }
 
 /// After a run read a sensitive source, these are the ways data leaves: an email, a web request (fetch, search, the
-/// computer's browser), a hand-off to another bot, a message to another chat, and any tool server's write (or its
+/// computer's browser), a hand-off to another bot, a message to another chat, a memory the household's guests read,
+/// and any tool server's write (or its
 /// read that reaches the internet, carrying what it's asked).
 pub(super) fn sends_out(ctx: &ToolCtx, name: &str, args: &Value) -> bool {
     match name {
         "email_send" | "web_fetch" | "web_search" | "ask_bot" | "computer_open" | "computer_type" => true,
         "routine_create" => args["for"].as_str().is_some_and(|f| !f.trim().is_empty()),
+        "memory_store" => args["household"].as_bool() == Some(true),
         "send_file" => ctx.db.chat_guest(ctx.chat_id) || !ctx.db.chat_private(ctx.chat_id),
         n => crate::ext::find(&ctx.db, n).is_some_and(|t| {
             // Reading the sensitive server again, or the browser looking at its page, sends nothing new out.

@@ -1744,6 +1744,19 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn after_a_sensitive_read_a_household_memory_asks() {
+        let db = sensitive_db("household");
+        db.pair(100, "Willem").unwrap();
+        db.chat_set_owner(100, "7").unwrap();
+        // The guests in the household read its memories: a balance saved there has gone to them.
+        let said = before_and_after_sensitive(&db, 100, "memory_store", json!({"type": "knowledge", "title": "Rent", "body": "R 12 400 left", "household": true})).await;
+        assert!(said.starts_with("rehearsal:") && said.contains("happen without asking"), "{said}");
+        let mut after = ToolCtx::new(db.clone(), 1, 100);
+        after.mark_sensitive("bank");
+        call(&after, "memory_store", &json!({"type": "knowledge", "title": "Rent", "body": "R 12 400 left"})).await.unwrap();
+    }
+
+    #[tokio::test]
     async fn after_a_sensitive_read_a_tool_server_write_asks() {
         let db = sensitive_db("mcpwrite");
         db.set_rule("notes__append", "allow").unwrap(); // a write you let run without asking
