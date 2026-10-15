@@ -51,6 +51,10 @@ pub async fn run(home: &Path) -> Vec<Check> {
     let path = home.join("mimir.db");
     let p = path.clone();
     let mut out = vec![tokio::task::spawn_blocking(move || database(&p)).await.unwrap_or_else(|e| bad(State::Fail, "Database", e.to_string()))];
+    // A check only looks: no database is made, and an older one isn't upgraded under a server that may still use it.
+    if out[0].state != State::Ok {
+        return out;
+    }
     let Ok(db) = Db::open(&path) else { return out };
     // The server's secrets (in the database). The app's own store is already installed, and kept.
     crate::host::install_secrets(std::sync::Arc::new(crate::host::DbSecrets(db.clone())));
@@ -148,18 +152,20 @@ fn database(path: &Path) -> Check {
     if !path.exists() {
         return bad(State::Warn, "No database yet", "Mimir makes one the first time it starts.");
     }
-    let check = || -> anyhow::Result<Option<String>> {
+    let check = || -> anyhow::Result<Check> {
         let c = rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)?;
         c.busy_timeout(Duration::from_secs(5))?;
         crate::db::check_not_newer(&c)?;
+        if crate::db::user_version(&c)? < crate::db::VERSION {
+            return Ok(bad(State::Warn, "The database is from an older Mimir", "Mimir upgrades it the next time the app or `mimir server` starts; the other checks run after that."));
+        }
         let lines: Vec<String> = c.prepare("PRAGMA integrity_check(5)")?.query_map([], |r| r.get(0))?.collect::<Result<_, _>>()?;
-        Ok((lines != ["ok"]).then(|| lines.join("; ")))
+        Ok(match lines.as_slice() {
+            [one] if one == "ok" => ok("Database is sound"),
+            _ => bad(State::Fail, format!("The database reports damage: {}", lines.join("; ")), "Restore the latest backup: Settings → Your data → Restore a backup…"),
+        })
     };
-    match check() {
-        Ok(None) => ok("Database is sound"),
-        Ok(Some(damage)) => bad(State::Fail, format!("The database reports damage: {damage}"), "Restore the latest backup: Settings → Your data → Restore a backup…"),
-        Err(e) => bad(State::Fail, format!("Database: {e:#}"), "Update Mimir, or check the data folder can be read."),
-    }
+    check().unwrap_or_else(|e| bad(State::Fail, format!("Database: {e:#}"), "Update Mimir, or check the data folder can be read."))
 }
 
 /// A copy from the last two days (they're taken daily while the app or server runs).
@@ -221,6 +227,10 @@ async fn channels(bot: &str, ch: crate::runtime::Channels) -> Vec<Check> {
         let r = match crate::slack::Slack::new(&b, &a) { Ok(c) => within(c.check()).await, Err(e) => Err(e) };
         out.push(("Slack", r, "Check both tokens (xoxb-… and xapp-…) in the bot's settings."));
     }
+    if let Some((api, n)) = ch.signal {
+        let r = match crate::signal::Signal::new(&api, &n) { Ok(c) => within(c.check()).await, Err(e) => Err(e) };
+        out.push(("Signal", r, "Check that signal-cli-rest-api is running (MODE=json-rpc) and the bot's number is linked to it."));
+    }
     out.into_iter()
         .map(|(name, r, fix)| match r {
             Ok(me) => ok(format!("{bot}: {name} reaches {me}")),
@@ -264,6 +274,9 @@ mod tests {
         assert_eq!(database(&path).state, State::Warn, "none yet");
         let db = Db::open(&path).unwrap();
         assert_eq!(database(&path).state, State::Ok);
+        db.c().execute_batch("PRAGMA user_version = 1").unwrap();
+        assert!(database(&path).what.contains("older Mimir"));
+        db.c().execute_batch(&format!("PRAGMA user_version = {}", crate::db::VERSION)).unwrap();
         db.c().execute_batch("PRAGMA user_version = 9999").unwrap();
         let c = database(&path);
         assert!(c.state == State::Fail && c.what.contains("Update the app"), "{c}");

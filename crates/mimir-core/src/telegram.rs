@@ -233,6 +233,10 @@ impl Tg {
                         // A forwarded message is someone else's words: outside content, like a file.
                         let said = crate::with_document("(I forwarded you a message.)", "a forwarded message", text);
                         core.incoming_outside(me, &chat, who, title, &said, u["message"]["date"].as_i64()).await
+                    } else if let Some(card) = replied_to(&u["message"], me_id).and(u["message"]["reply_to_message"]["message_id"].as_i64())
+                        && core.deny_by_reply(me, &chat, who, &card.to_string(), text)?
+                    {
+                        Ok(())
                     } else if let Some(quoted) = replied_to(&u["message"], me_id) {
                         core.incoming(me, &chat, who, title, &crate::with_reply(text, &quoted), u["message"]["date"].as_i64()).await
                     } else {
@@ -281,10 +285,12 @@ impl Tg {
             }
             return core.incoming_with(me, chat, from, "", &text, vec![saved], m["date"].as_i64()).await;
         }
-        if let Some(id) = m["voice"]["file_id"].as_str().or(m["audio"]["file_id"].as_str()) {
+        // A voice note is recorded in the app; an audio file (a song, a recording someone made) is outside content.
+        let audio = m["voice"]["file_id"].as_str().map(|id| (id, forwarded.then_some("a forwarded voice note"))).or_else(|| m["audio"]["file_id"].as_str().map(|id| (id, Some("an audio file"))));
+        if let Some((id, outside)) = audio {
             let (bytes, path) = self.download(id).await?;
             let name = path.rsplit('/').next().unwrap_or("voice.ogg");
-            return core.incoming_voice(me, chat, from, bytes, name, forwarded, m["date"].as_i64()).await;
+            return core.incoming_voice(me, chat, from, bytes, name, outside, m["date"].as_i64()).await;
         }
         if let Some(id) = m["document"]["file_id"].as_str() {
             // Telegram's bots can download files up to 20 MB.
@@ -347,7 +353,8 @@ fn address(m: &Value, topics: bool) -> String {
 }
 
 fn keyboard(rows: &[Row]) -> Value {
-    json!({"inline_keyboard": rows.iter().map(|row| row.iter().map(|(text, data)| json!({"text": text, "callback_data": data})).collect::<Vec<_>>()).collect::<Vec<_>>()})
+    let button = |text: &str, data: &str| if data.starts_with("https://") { json!({"text": text, "url": data}) } else { json!({"text": text, "callback_data": data}) };
+    json!({"inline_keyboard": rows.iter().map(|row| row.iter().map(|(text, data)| button(text, data)).collect::<Vec<_>>()).collect::<Vec<_>>()})
 }
 
 /// The bot's own message this one replies to (swipe-to-reply): the part the person selected, else the whole message.

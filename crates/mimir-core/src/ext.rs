@@ -104,6 +104,12 @@ pub struct VaultEntry {
     pub name: String,
     /// Sites it may be typed into (exact host or subdomain).
     pub domains: Vec<String>,
+    /// Only this bot's (a login saved from its sign-in card); none = every bot's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bot: Option<i64>,
+    /// Has an authenticator key: Mimir types the current code for NAME_CODE.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub totp: bool,
 }
 
 pub fn servers(db: &Db) -> Vec<ServerConf> {
@@ -118,8 +124,7 @@ fn validate(s: &ServerConf) -> Result<()> {
         bail!("server {} needs a command or a URL", s.name);
     }
     // Plain http only to this machine: header tokens would otherwise travel in the clear.
-    let local_http = ["http://localhost", "http://127.0.0.1", "http://[::1]"].iter().any(|p| s.url.starts_with(p));
-    if !(s.url.is_empty() || s.url.starts_with("https://") || local_http) {
+    if !(s.url.is_empty() || secure(&s.url)) {
         bail!("server {}'s URL must start with https:// (plain http only for localhost)", s.name);
     }
     Ok(())
@@ -204,9 +209,17 @@ pub fn signed_in(server: &str) -> bool {
 /// The server a sign-in in progress is for: saved once the sign-in is done.
 static SIGNING_IN: std::sync::Mutex<Option<ServerConf>> = std::sync::Mutex::new(None);
 
-/// https, or plain http to this computer only (a server of your own, a test).
+/// https, or plain http to this computer only (a server of your own, a test). Parsed, not prefix-matched, so
+/// `http://localhost.evil.com` and `http://localhost@evil.com` aren't this computer.
 fn secure(url: &str) -> bool {
-    url.starts_with("https://") || ["http://localhost", "http://127.0.0.1", "http://[::1]"].iter().any(|p| url.starts_with(p))
+    let Ok(u) = url::Url::parse(url) else { return false };
+    match (u.scheme(), u.host()) {
+        ("https", Some(_)) => true,
+        ("http", Some(url::Host::Domain(d))) => d == "localhost",
+        ("http", Some(url::Host::Ipv4(ip))) => ip.is_loopback(),
+        ("http", Some(url::Host::Ipv6(ip))) => ip.is_loopback(),
+        _ => false,
+    }
 }
 
 async fn get_json(http: &reqwest::Client, url: &str) -> Option<Value> {
@@ -234,7 +247,13 @@ pub async fn sign_in(conf: ServerConf, listen: bool) -> Result<String> {
     if conf.url.is_empty() {
         bail!("only a server with a URL signs in");
     }
-    let http = reqwest::Client::builder().timeout(Duration::from_secs(20)).build()?;
+    // Metadata comes from the server: its redirects can't bounce Mimir onto this computer or the local network,
+    // unless the server itself is there.
+    let mut http = reqwest::Client::builder().timeout(Duration::from_secs(20));
+    if !crate::tools::is_private_host(&conf.url) {
+        http = http.redirect(crate::tools::public_redirects());
+    }
+    let http = http.build()?;
     let server = url::Url::parse(&conf.url)?;
     // The server's 401 says where its metadata is; else the well-known places (path first, then the root).
     let probe = http
@@ -356,7 +375,43 @@ pub fn vault(db: &Db) -> Vec<VaultEntry> {
     db.setting("vault").ok().flatten().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
 }
 
-pub fn vault_save(db: &Db, entry: VaultEntry, value: Option<&str>) -> Result<()> {
+/// The saved logins a bot may use: everyone's, and its own.
+pub fn vault_for(db: &Db, bot: i64) -> Vec<VaultEntry> {
+    vault(db).into_iter().filter(|e| e.bot.is_none_or(|b| b == bot)).collect()
+}
+
+/// The site a sign-in is kept for: the registrable domain of a page's address ("accounts.google.com" → google.com,
+/// while alice.github.io stays alice.github.io, since anyone can have a github.io site). None for an IP or a bare name.
+pub fn site_of(url: &str) -> Option<String> {
+    let u = url::Url::parse(url).ok()?;
+    let Some(url::Host::Domain(host)) = u.host() else { return None };
+    let host = host.trim_end_matches('.').to_lowercase();
+    psl::domain_str(&host).filter(|d| d.contains('.')).map(String::from)
+}
+
+/// What a sign-in card's form warns about: the page's full address next to the site the login is kept for; whether the
+/// bot came there after outside content or on someone else's words (`steered`); and, for a site with no saved login or
+/// earlier sign-in, one that has them which this one looks like (`lookalike`); and an address with letters from
+/// another alphabet (`foreign`: always, naming what it's made to look like when that's one of them).
+pub fn signin_warnings(db: &Db, url: &str, site: &str, steered: bool) -> Value {
+    let mut known: Vec<String> = vault(db).iter().flat_map(|e| e.domains.iter()).filter_map(|d| site_of(&format!("https://{d}/"))).collect();
+    known.extend(db.signin_sites().unwrap_or_default());
+    let host = url::Url::parse(url).ok().and_then(|u| u.host_str().map(str::to_lowercase)).unwrap_or_default();
+    let foreign = crate::lookalike::foreign(&host);
+    let lookalike = match known.iter().any(|k| k == site) {
+        true => None,
+        false => crate::lookalike::skeleton_of(site, known.iter().map(String::as_str)).or_else(|| crate::lookalike::of(site, known.iter().map(String::as_str))),
+    };
+    json!({"host": host, "site": site, "steered": steered, "lookalike": lookalike, "foreign": foreign})
+}
+
+/// The authenticator code of a saved login right now, if it has a key.
+pub(crate) fn vault_code(name: &str) -> Option<String> {
+    crate::host::secret_get(&format!("vault:{name}:totp")).and_then(|k| crate::totp::parse(&k).ok()).map(|t| t.now())
+}
+
+/// `totp`: an authenticator setup key or otpauth:// link to add (None or empty keeps what's there).
+pub fn vault_save(db: &Db, entry: VaultEntry, value: Option<&str>, totp: Option<&str>) -> Result<()> {
     let name = entry.name.trim().to_string();
     if name.len() < 3 || !name.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_') {
         bail!("use a name like GITHUB_PASSWORD (capitals, digits, underscores)");
@@ -366,22 +421,71 @@ pub fn vault_save(db: &Db, entry: VaultEntry, value: Option<&str>) -> Result<()>
         bail!("add at least one site this login may be used on");
     }
     let mut list = vault(db);
-    let exists = list.iter().any(|e| e.name == name);
+    let old = list.iter().find(|e| e.name == name).cloned();
+    let totp = totp.map(str::trim).filter(|t| !t.is_empty());
+    if let Some(t) = totp {
+        crate::totp::parse(t)?;
+    }
     if let Some(v) = value.filter(|v| !v.is_empty()) {
         crate::host::secret_set(&format!("vault:{name}"), v)?;
-    } else if !exists {
+    } else if old.is_none() {
         bail!("a new login needs its secret value");
     }
+    if let Some(t) = totp {
+        crate::host::secret_set(&format!("vault:{name}:totp"), t)?;
+    }
     list.retain(|e| e.name != name);
-    list.push(VaultEntry { name, domains });
+    // Changing a login in Settings keeps whose it is.
+    let (bot, had) = old.map_or((None, false), |o| (o.bot, o.totp));
+    list.push(VaultEntry { name, domains, bot: entry.bot.or(bot), totp: had || totp.is_some() });
     db.set_setting("vault", &serde_json::to_string(&list)?)
 }
 
 pub fn vault_delete(db: &Db, name: &str) -> Result<()> {
+    db.set_setting(&format!("login_failed:{name}"), "")?;
     let mut list = vault(db);
     list.retain(|e| e.name != name);
-    crate::host::secret_set(&format!("vault:{name}"), "")?;
+    for k in ["", ":user", ":totp"] {
+        crate::host::secret_set(&format!("vault:{name}{k}"), "")?;
+    }
     db.set_setting("vault", &serde_json::to_string(&list)?)
+}
+
+/// The login this bot saved for the page's site with a sign-in card, unless the site turned it down last time.
+pub fn signin_login(db: &Db, bot: i64, url: &str) -> Option<VaultEntry> {
+    vault_for(db, bot).into_iter().find(|e| e.bot == Some(bot) && host_allowed(url, &e.domains) && !login_failed(db, &e.name))
+}
+
+/// A saved login the site turned down (the password changed, say): not typed again until it's replaced.
+pub fn login_failed_set(db: &Db, name: &str) -> Result<()> {
+    db.set_setting(&format!("login_failed:{name}"), &crate::db::now().to_string())
+}
+
+pub fn login_failed(db: &Db, name: &str) -> bool {
+    db.setting(&format!("login_failed:{name}")).ok().flatten().is_some_and(|v| !v.is_empty())
+}
+
+/// What a sign-in card saves: the login for one bot on one site, under a name like GITHUB_COM_BOT3.
+pub fn vault_save_signin(db: &Db, bot: i64, site: &str, user: &str, password: &str, totp: Option<&str>) -> Result<String> {
+    let name = format!("{}_BOT{bot}", site.to_uppercase().replace(|c: char| !c.is_ascii_alphanumeric(), "_"));
+    // Replaces what this bot had for the site (a login that stopped working, kept under another name).
+    for old in vault(db).into_iter().filter(|e| e.bot == Some(bot) && e.name != name && e.domains == [site]) {
+        vault_delete(db, &old.name)?;
+    }
+    vault_save(db, VaultEntry { name: name.clone(), domains: vec![site.to_string()], bot: Some(bot), totp: false }, Some(password), totp)?;
+    crate::host::secret_set(&format!("vault:{name}:user"), user)?;
+    db.set_setting(&format!("login_failed:{name}"), "")?;
+    Ok(name)
+}
+
+/// Every NAME_CODE in the arguments, as the code it stands for.
+fn fill_codes(v: &Value, codes: &[(String, String)]) -> Value {
+    match v {
+        Value::String(s) => Value::String(codes.iter().fold(s.clone(), |s, (n, c)| s.replace(n.as_str(), c))),
+        Value::Array(a) => a.iter().map(|x| fill_codes(x, codes)).collect(),
+        Value::Object(o) => Value::Object(o.iter().map(|(k, x)| (k.clone(), fill_codes(x, codes))).collect()),
+        x => x.clone(),
+    }
 }
 
 /// Every string anywhere in the arguments.
@@ -645,15 +749,21 @@ impl Http {
 /// Start a stdio server. Returns the browser's secrets file too, to delete once it has started.
 fn spawn(conf: &ServerConf, db: &Db, bot: i64) -> Result<(Io, Option<std::path::PathBuf>)> {
     let dir = db.dir().join("browser");
+    let mut env = values_of(&conf.name, "env", &conf.env);
     let (command, args, secrets_file) = match conf.preset.as_deref() {
         Some("playwright") => {
             std::fs::create_dir_all(&dir)?;
-            let file = write_secrets_file(&dir, &vault_values(db))?;
+            let mine: Vec<String> = vault_for(db, bot).into_iter().map(|e| e.name).collect();
+            let file = write_secrets_file(&dir, &vault_values(db).into_iter().filter(|(n, _)| mine.contains(n)).collect::<Vec<_>>())?;
             let mut args: Vec<String> = vec!["-y".into(), PLAYWRIGHT.into()];
             if crate::computer::usable(db) {
                 // The bots' computer is on: drive the Chromium on its screen, so you can watch (and take over).
                 crate::computer::start(&db.dir(), (bot > 0).then_some(bot))?;
                 args.extend(["--cdp-endpoint".into(), crate::computer::cdp_endpoint()?]);
+                // A computer service wants its token on DevTools too: in the environment, not the command line `ps` shows.
+                if let Some(h) = crate::computer::cdp_auth()? {
+                    env.push(("PLAYWRIGHT_MCP_CDP_HEADERS".into(), format!("Authorization: {h}")));
+                }
             } else {
                 // Bundled Chromium (see install_browser), so Google Chrome needn't be installed.
                 args.extend(["--headless".into(), "--browser".into(), "chromium".into()]);
@@ -670,7 +780,7 @@ fn spawn(conf: &ServerConf, db: &Db, bot: i64) -> Result<(Io, Option<std::path::
     };
     let mut child = tokio::process::Command::new(&command)
         .args(&args)
-        .envs(values_of(&conf.name, "env", &conf.env))
+        .envs(env)
         .current_dir(db.dir())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -828,7 +938,9 @@ pub async fn call(ctx: &ToolCtx, full: &str, args: &Value) -> Result<String> {
     let (server, tool) = split(full).context("not an external tool")?;
     let conf = servers(&ctx.db).into_iter().find(|s| s.name == server).with_context(|| format!("tool server {server} is not configured"))?;
 
-    let used = secrets_used(&vault(&ctx.db), args);
+    let used = secrets_used(&vault_for(&ctx.db, ctx.bot_id), args);
+    // Authenticator codes change every 30 seconds: worked out now, after the checks below, typed for NAME_CODE.
+    let mut codes = vec![];
     if !used.is_empty() {
         if server != BROWSER {
             bail!("saved logins can only be typed into the browser");
@@ -841,8 +953,10 @@ pub async fn call(ctx: &ToolCtx, full: &str, args: &Value) -> Result<String> {
             }
         }
         let names: Vec<&str> = used.iter().map(|e| e.name.as_str()).collect();
-        crate::tools::wait_for_approval_with(ctx, full, &format!("Use saved login {} on {url}", names.join(", ")), "login", None).await?;
+        crate::tools::wait_for_approval_with(ctx, full, &Value::Null, &format!("Use saved login {} on {url}", names.join(", ")), "login", None).await?;
+        codes = used.iter().filter(|e| e.totp).filter_map(|e| vault_code(&e.name).map(|c| (format!("{}_CODE", e.name), c))).collect();
     }
+    let args = &fill_codes(args, &codes);
 
     if server == BROWSER && crate::computer::usable(&ctx.db) {
         // On the bots' computer: hold it like its own tools do, in this bot's browser profile.
@@ -862,7 +976,7 @@ pub async fn call(ctx: &ToolCtx, full: &str, args: &Value) -> Result<String> {
     if let Some(url) = text.split("\n### Page").nth(1).and_then(|page| page.lines().find_map(|l| l.trim().trim_start_matches("- ").strip_prefix("Page URL: "))) {
         *ctx.page_url.lock().unwrap() = Some(url.trim().to_string());
     }
-    let text = redact(&text, &vault_values(&ctx.db));
+    let text = redact(&text, &[vault_values(&ctx.db), codes].concat());
     if res["isError"].as_bool() == Some(true) {
         bail!("{}", crate::tools::truncate(&text, 2000));
     }
@@ -882,8 +996,35 @@ mod tests {
     }
 
     #[test]
+    fn signin_logins_stay_on_their_site_and_bot() {
+        assert_eq!(site_of("https://accounts.google.com/signin?x=1").as_deref(), Some("google.com"));
+        assert_eq!(site_of("https://www.bbc.co.uk/account").as_deref(), Some("bbc.co.uk"));
+        assert_eq!(site_of("https://alice.github.io/login").as_deref(), Some("alice.github.io"), "a github.io site is someone's own");
+        assert_eq!(site_of("http://192.168.1.10/login"), None);
+        assert_eq!(site_of("http://localhost:8080/"), None);
+        assert_eq!(site_of("about:blank"), None);
+        let site = |u: &str| vec![site_of(u).unwrap()];
+        assert!(host_allowed("https://mail.google.com/", &site("https://accounts.google.com/")));
+        assert!(!host_allowed("https://google.com.evil.example/", &site("https://accounts.google.com/")));
+        assert!(!host_allowed("https://bob.github.io/", &site("https://alice.github.io/")));
+
+        let p = std::env::temp_dir().join(format!("mimir-vault-bots-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = Db::open(&p).unwrap();
+        let e = |name: &str, bot| VaultEntry { name: name.into(), domains: vec!["github.com".into()], bot, totp: false };
+        db.set_setting("vault", &serde_json::to_string(&[e("SHARED", None), e("GITHUB_COM_BOT3", Some(3))]).unwrap()).unwrap();
+        let names = |bot| vault_for(&db, bot).into_iter().map(|e| e.name).collect::<Vec<_>>();
+        assert_eq!(names(3), ["SHARED", "GITHUB_COM_BOT3"]);
+        assert_eq!(names(4), ["SHARED"], "another bot doesn't get it");
+        assert!(secrets_used(&vault_for(&db, 4), &json!({"text": "GITHUB_COM_BOT3"})).is_empty(), "nor can it type it");
+        assert!(db.setting("vault").unwrap().unwrap().starts_with(r#"[{"name":"SHARED","domains":["github.com"]}"#), "older lists read and write the same");
+        let codes = [("GH_CODE".to_string(), "123456".to_string())];
+        assert_eq!(fill_codes(&json!({"fields": [{"value": "GH_CODE"}], "n": 1}), &codes), json!({"fields": [{"value": "123456"}], "n": 1}));
+    }
+
+    #[test]
     fn vault_rules() {
-        let v = vec![VaultEntry { name: "GH_PASS".into(), domains: vec!["github.com".into()] }];
+        let v = vec![VaultEntry { name: "GH_PASS".into(), domains: vec!["github.com".into()], bot: None, totp: false }];
         assert_eq!(secrets_used(&v, &json!({"ref":"e3","text":"GH_PASS"})).len(), 1);
         assert_eq!(secrets_used(&v, &json!({"fields":[{"value":"x GH_PASS y"}]})).len(), 1, "nested + substring");
         assert!(secrets_used(&v, &json!({"text":"hello"})).is_empty());
@@ -937,6 +1078,10 @@ mod tests {
         let root = url::Url::parse("https://auth.example.com").unwrap();
         assert_eq!(well_known(&root, "oauth-authorization-server"), "https://auth.example.com/.well-known/oauth-authorization-server");
         assert!(secure("https://a.example") && secure("http://127.0.0.1:9/x") && !secure("http://evil.example"));
+        assert!(secure("http://localhost:8000/mcp") && secure("http://[::1]/") && secure("http://127.8.0.1/") && secure("http://LOCALHOST/"));
+        for bad in ["http://localhost.evil.com/", "http://127.0.0.1.evil.com/", "http://localhost@evil.com/", "http://[::1].evil/", "ftp://localhost/", "localhost", "https://"] {
+            assert!(!secure(bad), "{bad}");
+        }
     }
 
     /// Against scripts/fake-mcp-oauth.py: the whole sign-in (metadata, registration, PKCE, token) then a tool list

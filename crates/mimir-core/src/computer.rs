@@ -40,14 +40,18 @@ pub fn available() -> bool {
     remote().is_some() || (cfg!(target_os = "linux") && ["Xvfb", "xdotool", "scrot"].iter().all(|b| which(b)) && chromium().is_some())
 }
 
+/// Where the computer service is and its token: an AI CLI must hand these on to the `mimir mcp` it starts, or that
+/// process runs a computer of its own, inside Mimir's container.
+pub const ENV: [&str; 2] = ["MIMIR_COMPUTER", "MIMIR_COMPUTER_TOKEN"];
+
 /// The computer as a separate service (`MIMIR_COMPUTER=computer:7300`, docker compose); unset, it runs here.
 fn remote() -> Option<String> {
-    std::env::var("MIMIR_COMPUTER").ok().filter(|v| !v.trim().is_empty())
+    std::env::var(ENV[0]).ok().filter(|v| !v.trim().is_empty())
 }
 
 /// The secret both sides share for the control channel.
 fn token() -> Result<String> {
-    std::env::var("MIMIR_COMPUTER_TOKEN").ok().filter(|t| t.len() >= 24).context("set MIMIR_COMPUTER_TOKEN (24+ characters, the same for Mimir and the computer)")
+    std::env::var(ENV[1]).ok().filter(|t| t.len() >= 24).context("set MIMIR_COMPUTER_TOKEN (24+ characters, the same for Mimir and the computer)")
 }
 
 fn resolve(addr: &str) -> Result<std::net::SocketAddr> {
@@ -70,6 +74,16 @@ fn ask(addr: &str, mut req: serde_json::Value) -> Result<serde_json::Value> {
         bail!("{e}");
     }
     Ok(v)
+}
+
+/// The Authorization header a computer service wants on DevTools (its token); None when the computer runs here.
+pub fn cdp_auth() -> Result<Option<String>> {
+    remote().map(|_| token().map(|t| format!("Bearer {t}"))).transpose()
+}
+
+/// Constant time: no hints about the token from how long a refusal takes.
+fn same(a: &str, b: &str) -> bool {
+    a.len() == b.len() && a.bytes().zip(b.bytes()).fold(0, |d, (x, y)| d | (x ^ y)) == 0
 }
 
 /// Chromium's DevTools, for Playwright and the page lookups. The computer service is asked by IP: Chromium refuses
@@ -442,6 +456,15 @@ pub fn open_url(home: &Path, bot: i64, url: &str) -> Result<()> {
     Ok(())
 }
 
+/// Whose browser profile is on the screen now (the record `start` keeps, checked against the running Chromium), or
+/// None when that can't be told: then nobody's login may be typed there.
+pub fn screen_bot(home: &Path) -> Option<i64> {
+    match remote() {
+        Some(a) => ask(&a, serde_json::json!({"op": "status"})).ok()?["bot"].as_i64(),
+        None => on_screen(home).map(|(b, _)| b),
+    }
+}
+
 /// Sign a bot out of every site on the computer: its profile is emptied (closing the browser if it's that bot's).
 pub fn forget(home: &Path, bot: i64) -> Result<()> {
     if let Some(a) = remote() {
@@ -464,7 +487,7 @@ pub fn forget(home: &Path, bot: i64) -> Result<()> {
 
 /// `mimir computer --listen 0.0.0.0:7300`: run the screen and browser here and take Mimir's requests (screenshots,
 /// clicks, typing, keys, opening pages) over a control channel that needs MIMIR_COMPUTER_TOKEN. Chromium's DevTools
-/// are passed on at CDP_SHARED_PORT on the same address. Meant for a container with none of Mimir's data in it.
+/// are passed on at CDP_SHARED_PORT on the same address, behind the same token. Meant for a container with none of Mimir's data in it.
 pub fn serve(listen: &str) -> Result<()> {
     if remote().is_some() {
         bail!("MIMIR_COMPUTER is set: that's for Mimir, pointing at this service");
@@ -476,9 +499,11 @@ pub fn serve(listen: &str) -> Result<()> {
     let home = PathBuf::from(std::env::var_os("HOME").context("HOME isn't set")?);
     let listen: std::net::SocketAddr = listen.parse().context("--listen takes an address like 0.0.0.0:7300")?;
     let cdp = std::net::TcpListener::bind((listen.ip(), CDP_SHARED_PORT))?;
+    let t = token.clone();
     std::thread::spawn(move || {
         for c in cdp.incoming().flatten() {
-            std::thread::spawn(move || pass_on(c));
+            let t = t.clone();
+            std::thread::spawn(move || pass_on(c, &t));
         }
     });
     let control = std::net::TcpListener::bind(listen)?;
@@ -494,10 +519,7 @@ pub fn serve(listen: &str) -> Result<()> {
                 return;
             }
             let req: serde_json::Value = serde_json::from_str(&line).unwrap_or_default();
-            let given = req["token"].as_str().unwrap_or("");
-            // Constant time: no hints about the token from how long a refusal takes.
-            let same = given.len() == token.len() && given.bytes().zip(token.bytes()).fold(0, |d, (a, b)| d | (a ^ b)) == 0;
-            let out = if same { act(&home, &req).unwrap_or_else(|e| serde_json::json!({"error": format!("{e:#}")})) } else { serde_json::json!({"error": "the computer refused: wrong MIMIR_COMPUTER_TOKEN"}) };
+            let out = if same(req["token"].as_str().unwrap_or(""), &token) { act(&home, &req).unwrap_or_else(|e| serde_json::json!({"error": format!("{e:#}")})) } else { serde_json::json!({"error": "the computer refused: wrong MIMIR_COMPUTER_TOKEN"}) };
             let _ = writeln!(&c, "{out}");
         });
     }
@@ -510,7 +532,7 @@ fn act(home: &Path, v: &serde_json::Value) -> Result<serde_json::Value> {
     let n = |k: &str| v[k].as_i64().unwrap_or(0);
     let s = |k: &str| v[k].as_str().unwrap_or("");
     match s("op") {
-        "status" => return Ok(serde_json::json!({"running": running()})),
+        "status" => return Ok(serde_json::json!({"running": running(), "bot": on_screen(home).map(|(b, _)| b)})),
         "screenshot" => return Ok(serde_json::json!({"image": base64::engine::general_purpose::STANDARD.encode(screenshot_jpeg()?)})),
         "start" => start(home, v["bot"].as_i64())?,
         "stop" => stop(home),
@@ -525,17 +547,45 @@ fn act(home: &Path, v: &serde_json::Value) -> Result<serde_json::Value> {
     Ok(serde_json::json!({}))
 }
 
-/// Pass a DevTools connection on to Chromium, which only listens inside this container.
-fn pass_on(c: std::net::TcpStream) {
-    let Ok(up) = std::net::TcpStream::connect(("127.0.0.1", CDP_PORT)) else { return };
+/// Pass a DevTools connection on to Chromium, which only listens inside this container, once its first request
+/// carries the token (`Authorization: Bearer …`): DevTools is the whole browser, saved logins and all.
+fn pass_on(mut c: std::net::TcpStream, token: &str) {
+    use std::io::{Read, Write};
+    // The request's head: at most 16 KB, within 10 s.
+    let start = std::time::Instant::now();
+    let _ = c.set_read_timeout(Some(Duration::from_secs(10)));
+    let (mut head, mut buf) = (vec![], [0u8; 4096]);
+    while !head.windows(4).any(|w| w == b"\r\n\r\n") {
+        match c.read(&mut buf) {
+            Ok(n) if n > 0 && head.len() + n <= 16 << 10 && start.elapsed() < Duration::from_secs(10) => head.extend_from_slice(&buf[..n]),
+            _ => return,
+        }
+    }
+    if !authorized(&head, token) {
+        let _ = c.write_all(b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+        return;
+    }
+    let _ = c.set_read_timeout(None);
+    let Ok(mut up) = std::net::TcpStream::connect(("127.0.0.1", CDP_PORT)) else { return };
+    if up.write_all(&head).is_err() {
+        return;
+    }
     let (Ok(mut c2), Ok(mut up2)) = (c.try_clone(), up.try_clone()) else { return };
     std::thread::spawn(move || {
         let _ = std::io::copy(&mut c2, &mut up2);
         let _ = up2.shutdown(std::net::Shutdown::Write);
     });
-    let (mut c, mut up) = (c, up);
     let _ = std::io::copy(&mut up, &mut c);
     let _ = c.shutdown(std::net::Shutdown::Write);
+}
+
+/// An HTTP request head with `Authorization: Bearer <token>`.
+fn authorized(head: &[u8], token: &str) -> bool {
+    let head = String::from_utf8_lossy(head);
+    let head = head.split("\r\n\r\n").next().unwrap_or("");
+    head.lines().skip(1).filter_map(|l| l.split_once(':')).any(|(k, v)| {
+        k.trim().eq_ignore_ascii_case("authorization") && v.trim().strip_prefix("Bearer ").is_some_and(|t| same(t.trim(), token))
+    })
 }
 
 // ---------- teaching by showing ----------
@@ -764,8 +814,6 @@ fn element_label(v: &serde_json::Value) -> String {
 
 /// What's under a screen point (or focused, for None) in the Chromium on screen, through its DevTools port.
 async fn page_info(at: Option<(i64, i64)>) -> Option<serde_json::Value> {
-    use futures_util::{SinkExt, StreamExt};
-    use tokio_tungstenite::tungstenite::Message;
     let (x, y) = at.unwrap_or((-1, -1));
     let js = format!(
         "(() => {{ if (document.visibilityState !== 'visible') return null; const X = {x}, Y = {y}; let e;
@@ -784,44 +832,177 @@ async fn page_info(at: Option<(i64, i64)>) -> Option<serde_json::Value> {
             text: e ? t(e.getAttribute('aria-label') || (field ? (e.labels && e.labels[0] && e.labels[0].innerText) || e.placeholder || e.name : e.innerText) || e.title || e.alt) : '' }};
         }})()"
     );
-    // Each tab is asked in turn; only the one on screen (visible) answers.
-    let ask_tab = |ws: String| {
-        let js = js.clone();
-        async move {
-            let (mut sock, _) = tokio_tungstenite::connect_async(ws).await.ok()?;
-            // One DevTools call at a time: send, then read until its answer.
-            let mut id = 0;
-            let mut call = async |method: &str, params: serde_json::Value| -> Option<serde_json::Value> {
-                id += 1;
-                sock.send(Message::text(serde_json::json!({"id": id, "method": method, "params": params}).to_string())).await.ok()?;
-                while let Some(Ok(m)) = sock.next().await {
-                    let v: serde_json::Value = serde_json::from_str(m.to_text().ok()?).ok()?;
-                    if v["id"] == id {
-                        return Some(v["result"].clone());
-                    }
-                }
-                None
-            };
-            // In an isolated world: it sees the page's elements, but not its scripts, so a page can't change what the
-            // lookup reports (e.g. make a password field read as plain text).
-            let frame = call("Page.getFrameTree", serde_json::json!({})).await?["frameTree"]["frame"]["id"].as_str()?.to_string();
-            let ctx = call("Page.createIsolatedWorld", serde_json::json!({"frameId": frame, "worldName": "mimir"})).await?["executionContextId"].as_i64()?;
-            let r = call("Runtime.evaluate", serde_json::json!({"expression": js, "returnByValue": true, "contextId": ctx})).await?;
-            Some(r["result"]["value"].clone()).filter(|v| v.is_object())
+    let get = async { screen_tab().await?.eval(&js).await.filter(|v| v.is_object()) };
+    tokio::time::timeout(Duration::from_secs(2), get).await.ok().flatten()
+}
+
+/// A DevTools session on the tab on screen, in an isolated world of its page: it sees the page's elements, but not its
+/// scripts, so a page can't change what Mimir reads there (e.g. make a password field read as plain text).
+struct Tab {
+    sock: tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+    id: i64,
+    world: i64,
+}
+
+impl Tab {
+    async fn open(ws: &str) -> Option<Tab> {
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+        let mut req = ws.into_client_request().ok()?;
+        if let Some(h) = cdp_auth().ok()? {
+            req.headers_mut().insert("authorization", h.parse().ok()?);
         }
-    };
-    let get = async {
-        let pages: serde_json::Value = reqwest::Client::new().get(format!("{}/json/list", cdp_endpoint().ok()?)).send().await.ok()?.json().await.ok()?;
-        // Chromium's own pages (the address bar's popup is one) aren't the page you're on.
-        let real = |p: &&serde_json::Value| p["type"] == "page" && !p["url"].as_str().unwrap_or("").starts_with("chrome");
-        for ws in pages.as_array()?.iter().filter(real).filter_map(|p| p["webSocketDebuggerUrl"].as_str()) {
-            if let Some(v) = ask_tab(ws.to_string()).await {
-                return Some(v);
+        let (sock, _) = tokio_tungstenite::connect_async(req).await.ok()?;
+        let mut tab = Tab { sock, id: 0, world: 0 };
+        let frame = tab.call("Page.getFrameTree", serde_json::json!({})).await?["frameTree"]["frame"]["id"].as_str()?.to_string();
+        tab.world = tab.call("Page.createIsolatedWorld", serde_json::json!({"frameId": frame, "worldName": "mimir"})).await?["executionContextId"].as_i64()?;
+        Some(tab)
+    }
+
+    /// One DevTools call at a time: send, then read until its answer.
+    async fn call(&mut self, method: &str, params: serde_json::Value) -> Option<serde_json::Value> {
+        use futures_util::{SinkExt, StreamExt};
+        self.id += 1;
+        let msg = serde_json::json!({"id": self.id, "method": method, "params": params}).to_string();
+        self.sock.send(tokio_tungstenite::tungstenite::Message::text(msg)).await.ok()?;
+        while let Some(Ok(m)) = self.sock.next().await {
+            let v: serde_json::Value = serde_json::from_str(m.to_text().ok()?).ok()?;
+            if v["id"] == self.id {
+                return v.get("error").is_none().then(|| v["result"].clone());
             }
         }
         None
+    }
+
+    async fn eval(&mut self, js: &str) -> Option<serde_json::Value> {
+        let r = self.call("Runtime.evaluate", serde_json::json!({"expression": js, "returnByValue": true, "contextId": self.world})).await?;
+        Some(r["result"]["value"].clone())
+    }
+}
+
+/// The tab on screen in the computer's Chromium: each page tab is asked in turn; only the visible one is it.
+async fn screen_tab() -> Option<Tab> {
+    let mut list = reqwest::Client::new().get(format!("{}/json/list", cdp_endpoint().ok()?));
+    if let Some(h) = cdp_auth().ok()? {
+        list = list.header("Authorization", h);
+    }
+    let pages: serde_json::Value = list.send().await.ok()?.json().await.ok()?;
+    // Chromium's own pages (the address bar's popup is one) aren't the page you're on.
+    let real = |p: &&serde_json::Value| p["type"] == "page" && !p["url"].as_str().unwrap_or("").starts_with("chrome");
+    for ws in pages.as_array()?.iter().filter(real).filter_map(|p| p["webSocketDebuggerUrl"].as_str()) {
+        if let Some(mut tab) = Tab::open(ws).await
+            && tab.eval("document.visibilityState === 'visible'").await == Some(serde_json::Value::Bool(true))
+        {
+            return Some(tab);
+        }
+    }
+    None
+}
+
+/// The sign-in fields on the page (main frame only: an embedded form from another site isn't the page's own), found
+/// the way password managers do. `F` is the expression's result: {url, user, password, code}, each field or undefined.
+const FIELDS: &str = "(() => {
+  const shown = e => !e.disabled && !e.readOnly && e.getClientRects().length > 0 && getComputedStyle(e).visibility !== 'hidden';
+  const ins = [...document.querySelectorAll('input')].filter(shown);
+  const hint = e => [e.name, e.id, e.autocomplete, e.placeholder, e.getAttribute('aria-label')].join(' ');
+  const code = ins.find(e => e.autocomplete === 'one-time-code' || (/^(text|tel|number|password)$/.test(e.type)
+    && /otp|totp|2fa|mfa|one.?time|passcode|verif|security.?code|auth.?code|\\bcode\\b/i.test(hint(e))));
+  const password = ins.find(e => e.type === 'password' && e !== code);
+  const user = ins.find(e => e !== code && (/^(email|tel)$/.test(e.type) || (e.type === 'text' && /user|e-?mail|login|account|identifier|phone/i.test(hint(e)))));
+  return { url: location.href, user, password, code };
+})()";
+
+/// Which sign-in fields the page on screen has, and its address: {url, user, password, code} (true/false).
+pub async fn sign_in_form() -> Option<serde_json::Value> {
+    let js = format!("(() => {{ const f = {FIELDS}; return {{ url: f.url, user: !!f.user, password: !!f.password, code: !!f.code }} }})()");
+    let get = async { screen_tab().await?.eval(&js).await.filter(|v| v.is_object()) };
+    tokio::time::timeout(Duration::from_secs(3), get).await.ok().flatten()
+}
+
+/// What Mimir types into a sign-in for you. Empty fields are left alone.
+#[derive(Default)]
+pub struct Login {
+    pub user: String,
+    pub password: String,
+    /// A code you typed in, or worked out from the login's authenticator key at the moment it's typed.
+    pub code: String,
+    pub totp: Option<crate::totp::Totp>,
+}
+
+/// Type a login into the page on screen, only while that page is on one of `domains` (checked by the same script that
+/// fills each field), and press Enter, step by step
+/// (a site that asks the email first, then the password, then a code). Each field is typed once: a password field
+/// back again after Mimir typed the password means it was wrong, and isn't tried again (which could lock the
+/// account). True when signed in: no password or code field left on the page.
+/// ponytail: "signed in" is read from the fields going away; a site that keeps a password field on its home page
+/// reads as failed.
+/// Only into `bot`'s own browser profile: checked before the first field and before each later step, so a login is never
+/// typed into another bot's Chromium (one that took the computer while this bot waited for an OK, say).
+pub async fn sign_in(home: &Path, bot: i64, login: &Login, domains: &[String]) -> Result<bool> {
+    let home = home.to_path_buf();
+    let mine = move || {
+        let home = home.clone();
+        async move {
+            match tokio::task::spawn_blocking(move || screen_bot(&home)).await? {
+                Some(b) if b == bot => Ok(()),
+                _ => bail!("the computer isn't on this bot's browser now (another bot used it meanwhile); nothing was typed. Call computer_signin again"),
+            }
+        }
     };
-    tokio::time::timeout(Duration::from_secs(2), get).await.ok().flatten()
+    fill(login, domains, mine).await
+}
+
+async fn fill<F: std::future::Future<Output = Result<()>>>(login: &Login, domains: &[String], mine: impl Fn() -> F) -> Result<bool> {
+    let mut typed: Vec<&str> = vec![];
+    loop {
+        mine().await?;
+        let mut tab = screen_tab().await.context("couldn't reach the browser on the computer")?;
+        let js = format!("(() => {{ const f = {FIELDS}; return {{ url: f.url, user: !!f.user, password: !!f.password, code: !!f.code }} }})()");
+        let seen = tab.eval(&js).await.filter(|v| v.is_object()).context("couldn't read the page on the computer")?;
+        let url = seen["url"].as_str().unwrap_or("");
+        if !crate::ext::host_allowed(url, domains) {
+            bail!("the computer is on {} now, not {}", url.split(['?', '#']).next().unwrap_or(""), domains.join(", "));
+        }
+        let on = |k: &str| seen[k] == true;
+        if typed.iter().any(|k| *k != "user" && on(k)) {
+            return Ok(false);
+        }
+        let code = if login.code.is_empty() { login.totp.as_ref().map(|t| t.now()).unwrap_or_default() } else { login.code.clone() };
+        let mut now = 0;
+        for (k, v) in [("user", login.user.as_str()), ("password", login.password.as_str()), ("code", code.as_str())] {
+            if v.is_empty() || !on(k) || typed.contains(&k) {
+                continue;
+            }
+            // The site check and the typing are one script in the page's isolated world, run without a break in
+            // between: a page that has just gone to another site can't get the value. Set the way a framework (React,
+            // Vue…) still notices: the input's own value setter, then input and change events.
+            let fill = format!(
+                "(() => {{ const D = {}, h = location.hostname.toLowerCase();
+                  if (!/^https?:$/.test(location.protocol) || !D.some(d => h === d || h.endsWith('.' + d))) return 'elsewhere';
+                  const e = {FIELDS}.{k}; if (!e) return 'gone';
+                  e.focus(); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(e, {});
+                  e.dispatchEvent(new Event('input', {{ bubbles: true }})); e.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                  return 'ok' }})()",
+                serde_json::to_string(domains)?,
+                serde_json::to_string(v)?
+            );
+            match tab.eval(&fill).await.as_ref().and_then(|r| r.as_str()) {
+                Some("ok") => {}
+                Some("elsewhere") => bail!("the page went to another site while signing in"),
+                _ => bail!("couldn't type into the page"),
+            }
+            typed.push(k);
+            now += 1;
+        }
+        if now == 0 {
+            return Ok(!typed.is_empty() && !on("password") && !on("code"));
+        }
+        // Enter sends the form, as a person would.
+        for (t, text) in [("keyDown", "\r"), ("keyUp", "")] {
+            tab.call("Input.dispatchKeyEvent", serde_json::json!({"type": t, "key": "Enter", "code": "Enter", "windowsVirtualKeyCode": 13, "text": text})).await;
+        }
+        drop(tab);
+        tokio::time::sleep(Duration::from_secs(4)).await;
+    }
 }
 
 /// A screenshot with a red ring where you clicked, saved in the media folder (where the model may read it).
@@ -845,6 +1026,26 @@ fn marked_shot(home: &Path, x: i64, y: i64) -> Result<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    /// Opt-in, on a Chromium already showing a sign-in page: `MIMIR_SIGNIN_TEST=http://127.0.0.1:8765/login.html`
+    /// with `--remote-debugging-port=9222`, where login.html posts to a code page, then to a page without fields.
+    #[tokio::test]
+    #[ignore]
+    async fn signs_in_on_a_real_page() {
+        let url = std::env::var("MIMIR_SIGNIN_TEST").unwrap();
+        let host = url::Url::parse(&url).unwrap().host_str().unwrap().to_string();
+        use super::*;
+        let form = sign_in_form().await.unwrap();
+        assert_eq!((form["user"].as_bool(), form["password"].as_bool(), form["code"].as_bool()), (Some(true), Some(true), Some(false)), "{form}");
+        let login = Login { user: "me@example.com".into(), password: "hunter2!".into(), totp: crate::totp::parse("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ").ok(), ..Default::default() };
+        let yes = || async { Ok::<(), anyhow::Error>(()) };
+        assert!(fill(&login, &["elsewhere.example".into()], yes).await.is_err(), "not on another site");
+        assert!(fill(&login, &[host], yes).await.unwrap(), "email and password, then the code");
+        let typed = screen_tab().await.unwrap().eval("document.getElementById('x').textContent").await.unwrap();
+        let code = crate::totp::parse("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ").unwrap();
+        let now = crate::db::now() as u64;
+        assert!([code.at(now), code.at(now - 30)].iter().any(|c| typed == format!("me@example.com|hunter2!|{c}")), "{typed}");
+    }
+
     #[test]
     fn showing_reads_as_steps() {
         use serde_json::json;
@@ -867,6 +1068,15 @@ mod tests {
         assert!(shown.steps[2].ends_with("typed into the \"Email\" field \"me@x.com\""), "{}", shown.steps[2]);
         assert!(!shown.steps.join("\n").contains("hunter2"));
         assert!(super::teaching().is_none());
+    }
+
+    #[test]
+    fn devtools_need_the_token() {
+        let t = "0123456789abcdef01234567";
+        assert!(super::authorized(format!("GET /json/list HTTP/1.1\r\nHost: 10.0.0.2:9223\r\nauthorization: Bearer {t}\r\n\r\n").as_bytes(), t));
+        assert!(!super::authorized(b"GET /json/list HTTP/1.1\r\nHost: 10.0.0.2:9223\r\n\r\n", t));
+        assert!(!super::authorized(b"GET /json/list HTTP/1.1\r\nAuthorization: Bearer 0123456789abcdef01234568\r\n\r\n", t));
+        assert!(!super::authorized(format!("POST / HTTP/1.1\r\nHost: x\r\n\r\nAuthorization: Bearer {t}\r\n").as_bytes(), t), "not in the body");
     }
 
 

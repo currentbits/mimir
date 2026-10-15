@@ -310,6 +310,10 @@ a { color: inherit; }
 .approval.inline { background: var(--surface); box-shadow: var(--shadow-sm); backdrop-filter: none; -webkit-backdrop-filter: none; animation: rise 460ms var(--spring) both; }
 .approval .parked { margin-top: 3px; font-size: 11.5px; color: var(--text-3); }
 .approval .what.plan { white-space: pre-line; }
+.approval .draft-edit { display: grid; gap: 6px; margin-top: 4px; }
+.approval .draft-edit .textarea { resize: vertical; }
+.approval .deny-why { flex-wrap: nowrap; }
+.approval .deny-why .input { min-width: 180px; }
 .approval .learned { margin-top: 3px; font-size: 11.5px; color: var(--text-2); font-weight: 500; }
 .inbox-list { display: grid; gap: 10px; }
 .inbox-item .badge.count { margin-left: auto; animation: pop 360ms var(--spring-soft) both; }
@@ -370,6 +374,7 @@ a { color: inherit; }
 .md th { color: var(--text-2); font-weight: 600; }
 
 /* Cards a bot keeps up to date, pinned above the chat. */
+.pinned-cards:empty { display: none; }
 .pinned-cards { max-width: 720px; width: 100%; margin: 0 auto; padding: 14px 32px 0; display: grid; gap: 8px; }
 .pinned-card { border: 0.5px solid var(--line-strong); border-left: 2px solid var(--pig); border-radius: 9px; background: var(--surface); padding: 8px 12px; }
 .pinned-card summary { display: flex; align-items: center; gap: 7px; cursor: pointer; list-style: none; color: var(--text-2); }

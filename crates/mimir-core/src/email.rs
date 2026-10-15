@@ -1,6 +1,6 @@
 //! Email, read-only: the person's mailbox over IMAP with an app password (Gmail, iCloud, Fastmail, Outlook…), for the
 //! bots' email_search and email_read. Mail is only looked at (EXAMINE, BODY.PEEK): nothing is marked read, moved or
-//! deleted. What's in a message is someone else's words, so reading it counts as outside content (see tools.rs).
+//! deleted. What's in a message is someone else's words, so reading it counts as outside content (see tools/builtin.rs).
 //! TLS always, except to this computer (a local bridge such as Proton Mail Bridge listens on 127.0.0.1 without it).
 //! Several mailboxes: a list in settings (`email_accounts`), passwords in the secret store per address. Outlook and
 //! Microsoft 365 sign in with Microsoft (OAuth, oauth.rs) and use XOAUTH2 for IMAP and SMTP, with an app the person
