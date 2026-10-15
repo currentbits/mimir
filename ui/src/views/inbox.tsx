@@ -20,6 +20,7 @@ function approvalRisk(a: Approval): { icon: string; label: string; tone: string;
   if (a.kind === 'unasked') return { icon: 'shield', label: 'Asking because this doesn’t look like what you asked for (who or what it acts on wasn’t in your message).', tone: 'guarded', always: false }
   if (a.kind === 'loop') return { icon: 'retry', label: 'The bot keeps making this same call. Allow lets it carry on; Deny tells it to stop and say where it got stuck.', tone: 'rule', always: false }
   if (a.kind === 'guest') return { icon: 'user', label: 'Asked in a guest\'s chat. An OK there is for this once; your rules stay yours.', tone: 'rule', always: false }
+  if (a.kind === 'sensitive') return { icon: 'shield', label: 'Asking because this run read from something you marked sensitive (named first). After that, everything that goes out asks.', tone: 'guarded', always: false }
   if (a.kind === 'guarded') return { icon: 'shield', label: 'Asking because this conversation read outside content (a web page, a file, a tool’s result).', tone: 'guarded', always: false }
   const t = a.tool, server = t.includes('__') ? t.split('__')[0] : null
   const label =

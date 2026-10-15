@@ -2,6 +2,23 @@
 
 What changed for people using Mimir. The newest release is at the top; "Unreleased" is what the next one brings.
 
+## Unreleased
+
+### Safety
+- **Sensitive sources:** mark a tool server (your bank's, your health records'), a single tool or a chat's memory as
+  sensitive in **Settings → Sensitive sources**. Once a reply or routine has read from one, everything that goes out
+  asks first, and the card says why ("This run read from bank"): an email, a web page or search, a task for another
+  bot, a message to someone else's chat, and any tool server's change. Servers whose names look like banking or
+  health are suggested, never marked for you.
+- **Security:** the TLS library (rustls 0.23.46) is updated for four advisories published on October 14
+  (RUSTSEC-2026-0346 to 0349).
+- **Export, import and duplicate a bot:** right-click a bot to save it as one file (its role, look, skills, routines,
+  tool rules and the tool servers it uses), without tokens, keys, saved logins, memories or chats. **From a file…** on
+  the new-bot page shows everything in it first, and flags skill steps that pipe a download into a shell, hold a base64
+  blob or download a program. Skills come in as proposals and routines come in paused; only its tool rules that are at
+  least as strict as yours can be used, and its AI account uses your own settings.
+  **Duplicate…** does both in one go. See [Bots and chats](docs/bots-and-chats.md#export-import-and-duplicate).
+
 ## 0.3.0
 
 ### Talking to your bots

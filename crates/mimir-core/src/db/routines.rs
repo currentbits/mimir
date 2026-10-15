@@ -199,6 +199,11 @@ impl Db {
         self.routines_where("chat_id = ?1", [chat])
     }
 
+    /// A bot's repeating routines, in every chat (one-offs are reminders, not part of what it does).
+    pub fn routines_of(&self, bot: i64) -> Result<Vec<Routine>> {
+        self.routines_where("bot_id = ?1 AND once = 0", [bot])
+    }
+
     /// A bot's routines that are due. Ones past their end (by more than a late run's grace) are removed first: they
     /// don't run late after it.
     pub fn due(&self, bot: i64, t: i64) -> Result<Vec<Routine>> {
