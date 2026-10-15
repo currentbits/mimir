@@ -117,6 +117,9 @@ half is built into the app); a tampered download is refused. It never restarts o
   does).
 - Heuristics have limits: after a web page (not your email or a meeting), a bot could still spell data into short web
   addresses one fetch at a time (each fetch is in the run log).
+- Codex's web search opens any address on OpenAI's side, where Mimir doesn't see the fetch. It's off once a
+  conversation has read outside content, but within one turn a page it found could still ask it to open an address
+  carrying what the bot knows.
 - An email card shows exactly what's sent, but approving it is your call: after reading an email, check the recipient
   is who you meant.
 
@@ -124,5 +127,7 @@ half is built into the app); a tampered download is refused. It never restarts o
 
 Every new way for text to reach a model must either be the person's own words, or mark the conversation
 (`ToolCtx::taint`). Every new action that changes data must go through `tools::call`. Every new kind of learned
-artefact must be a proposal that keeps the outside-content mark. Details, with the code they live in, are in
+artefact must be a proposal that keeps the outside-content mark. Never take a server address, token or scope from a URL or deep link
+(a link someone sends could point Mimir at their server, as in OpenClaw's CVE-2026-25253): those come from settings
+the person typed, or from the server they chose. Details, with the code they live in, are in
 [Architecture](architecture.md).

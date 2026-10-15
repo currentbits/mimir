@@ -181,7 +181,7 @@ pub async fn outlook_sign_in(client_id: &str, tenant: &str, listen: bool) -> Res
     let key = format!("oauth:mail:{}", crate::random_hex(8)?);
     let base = format!("{}/{tenant}/oauth2/v2.0", ms_login());
     let saved = crate::oauth::Saved { token_url: format!("{base}/token"), client_id: client_id.into(), scope: Some(OUTLOOK_SCOPES.into()), ..Default::default() };
-    let url = crate::oauth::begin(&key, "Outlook", &format!("{base}/authorize"), saved, redirect, &[("prompt", "select_account")])?;
+    let url = crate::oauth::begin(&key, "Outlook", &format!("{base}/authorize"), saved, redirect, &[("prompt", "select_account")], None)?;
     *OUTLOOK.lock().unwrap() = Some((key, client_id.into()));
     Ok(url)
 }
@@ -391,6 +391,20 @@ pub(crate) fn addresses(list: &str) -> Result<String> {
         }
     }
     Ok(v.join(", "))
+}
+
+/// Addresses for an approval card: one with non-ASCII letters (a Cyrillic "а" looks like a Latin "a") is flagged,
+/// its domain in punycode, which shows the difference.
+pub(crate) fn addresses_shown(list: &str) -> String {
+    let shown = |a: &str| {
+        if a.is_ascii() {
+            return a.to_string();
+        }
+        let (local, domain) = a.rsplit_once('@').unwrap_or(("", a));
+        let puny = url::Url::parse(&format!("http://{domain}/")).ok().and_then(|u| u.host_str().map(str::to_string)).unwrap_or_else(|| domain.into());
+        format!("{a} [⚠️ non-Latin letters: {local}@{puny}]")
+    };
+    list.split(',').map(str::trim).filter(|a| !a.is_empty()).map(shown).collect::<Vec<_>>().join(", ")
 }
 
 /// A header value as UTF-8 that any mail app reads: plain ASCII as is, anything else base64-encoded (RFC 2047).
@@ -814,6 +828,8 @@ mod tests {
         for bad in ["sam@x.com\r\nBcc: evil@z.com", "not an address", "a@b@c", "<a@b.com>"] {
             assert!(super::addresses(bad).is_err(), "{bad}");
         }
+        assert_eq!(super::addresses_shown("sam@x.com"), "sam@x.com");
+        assert!(super::addresses_shown("sam@x.com, ceo@p\u{430}ypal.com").ends_with(": ceo@xn--pypal-4ve.com]"), "look-alike flagged");
         assert!(super::header_text("Re: invoice\r\nBcc: evil@z.com").is_err());
         assert_eq!(super::header_text("Factuur €1.250").unwrap(), "=?utf-8?B?RmFjdHV1ciDigqwxLjI1MA==?=");
         assert_eq!(super::smtp_guess("imap.gmail.com"), "smtp.gmail.com");

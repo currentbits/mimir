@@ -964,7 +964,9 @@ async fn codex(ctx: &ToolCtx, home: &PathBuf, model: Option<&str>, system: &str,
     for kv in [
         r#"sandbox_mode="read-only""#.to_string(),
         r#"approval_policy="never""#.to_string(),
-        r#"web_search="live""#.to_string(),
+        // Its web tool opens any address on OpenAI's side (an "open_page" with data in the query is never seen here),
+        // so not after outside content: the conversation has read something that could ask for that.
+        format!("web_search={:?}", if ctx.is_tainted() { "disabled" } else { "live" }),
         // A JSON string is also a valid TOML string (Windows backslashes included).
         format!("model_instructions_file={}", serde_json::to_string(&instructions.0)?),
     ] {

@@ -879,8 +879,8 @@ fn describe(ctx: &ToolCtx, name: &str, args: &Value) -> String {
         // Who it's to first, then the whole text: what you approve is what goes.
         "email_send" => format!(
             "Send an email to {}{}{}: \"{}\" — {}",
-            args["to"].as_str().unwrap_or("?"),
-            args["cc"].as_str().filter(|c| !c.trim().is_empty()).map(|c| format!(" (cc {c})")).unwrap_or_default(),
+            crate::email::addresses_shown(args["to"].as_str().unwrap_or("?")),
+            args["cc"].as_str().filter(|c| !c.trim().is_empty()).map(|c| format!(" (cc {})", crate::email::addresses_shown(c))).unwrap_or_default(),
             args["account"].as_str().filter(|a| !a.trim().is_empty()).map(|a| format!(" from {a}")).unwrap_or_default(),
             args["subject"].as_str().unwrap_or(""),
             args["body"].as_str().unwrap_or("")
@@ -888,8 +888,8 @@ fn describe(ctx: &ToolCtx, name: &str, args: &Value) -> String {
         // Who it's to first, never cut short (card_fields' rule): that's what matters on the card.
         "email_draft" => format!(
             "Draft an email to {}{}{}: \"{}\" — {}",
-            args["to"].as_str().unwrap_or("?"),
-            args["cc"].as_str().filter(|c| !c.trim().is_empty()).map(|c| format!(" (cc {c})")).unwrap_or_default(),
+            crate::email::addresses_shown(args["to"].as_str().unwrap_or("?")),
+            args["cc"].as_str().filter(|c| !c.trim().is_empty()).map(|c| format!(" (cc {})", crate::email::addresses_shown(c))).unwrap_or_default(),
             args["account"].as_str().filter(|a| !a.trim().is_empty()).map(|a| format!(" from {a}")).unwrap_or_default(),
             args["subject"].as_str().unwrap_or(""),
             truncate(args["body"].as_str().unwrap_or(""), 400)
@@ -955,14 +955,26 @@ fn describe_external(name: &str, args: &Value) -> Option<String> {
 /// own, so a long body can't push the recipient off the card.
 fn card_fields(v: &Value) -> String {
     const WHERE: [&str; 13] = ["to", "recipient", "recipients", "email", "cc", "bcc", "url", "address", "channel", "path", "repo", "account", "chat_id"];
+    fn is_where(k: &str) -> bool {
+        WHERE.contains(&k.to_ascii_lowercase().as_str())
+    }
+    // Whether a destination is somewhere inside: such a field comes before the others.
+    fn has_where(v: &Value) -> bool {
+        match v {
+            Value::Object(m) => m.iter().any(|(k, v)| is_where(k) || has_where(v)),
+            Value::Array(a) => a.iter().any(has_where),
+            _ => false,
+        }
+    }
     let Some(m) = v.as_object() else { return String::new() };
     let mut fields: Vec<(&String, &Value)> = m.iter().collect();
-    fields.sort_by_key(|(k, _)| !WHERE.contains(&k.to_ascii_lowercase().as_str()));
+    fields.sort_by_key(|(k, v)| !is_where(k) && !has_where(v));
     fields
         .iter()
         .map(|(k, v)| {
             let shown = match v {
                 Value::Object(_) => format!("{{{}}}", card_fields(v)),
+                Value::Array(a) if has_where(v) => format!("[{}]", a.iter().map(|i| if i.is_object() { format!("{{{}}}", card_fields(i)) } else { truncate(&i.to_string(), 120) }).collect::<Vec<_>>().join(", ")),
                 Value::String(s) if WHERE.contains(&k.to_ascii_lowercase().as_str()) => truncate(s, 300),
                 Value::String(s) => truncate(s, 120),
                 other if WHERE.contains(&k.to_ascii_lowercase().as_str()) => truncate(&other.to_string(), 300),
@@ -2347,6 +2359,8 @@ mod tests {
         // A tool server's card shows where it goes, even after a long body.
         let card = describe_external("mail__send", &json!({"body": "x".repeat(600), "to": "someone@example.com"})).unwrap();
         assert!(card.starts_with("mail: Send (to: someone@example.com; body: "), "{card}");
+        let card = describe_external("mail__send", &json!({"body": "x".repeat(600), "messages": [{"text": "y".repeat(600), "to": "a@b.c"}]})).unwrap();
+        assert!(card.starts_with("mail: Send (messages: [{to: a@b.c; text: "), "nested in an array: {card}");
     }
 
     #[tokio::test]

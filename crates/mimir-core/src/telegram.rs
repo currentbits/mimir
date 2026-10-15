@@ -134,9 +134,9 @@ impl Tg {
 
     async fn draft(&self, chat: &str, id: u32, text: &str) -> bool {
         // Drafts can't turn link previews off (sendMessageDraft has no such option), so links in one aren't left
-        // recognisable as links while it's written: an invisible word joiner inside "://". The final message has
-        // previews off and its links whole.
-        let text = text.replace("://", ":/\u{2060}/");
+        // recognisable as links while it's written: an invisible word joiner inside "://" and after each dot inside a
+        // word (Telegram links a bare "evil.com/x?d=…" too). The final message has previews off and its links whole.
+        let text = unlinked(text);
         self.call("sendMessageDraft", json!({"chat_id": chat, "draft_id": id, "text": text, "can_stop": true})).await.is_ok()
     }
 
@@ -360,9 +360,31 @@ fn replied_to(m: &Value, me_id: Option<i64>) -> Option<String> {
     m["quote"]["text"].as_str().or(r["text"].as_str()).or(r["caption"].as_str()).filter(|q| !q.trim().is_empty()).map(str::to_string)
 }
 
+/// Text with a word joiner inside "://" and after every dot that has a letter or digit after it, so Telegram finds no
+/// address in it to link (and preview).
+fn unlinked(text: &str) -> String {
+    let text = text.replace("://", ":/\u{2060}/");
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        out.push(c);
+        if c == '.' && chars.peek().is_some_and(|n| n.is_alphanumeric()) {
+            out.push('\u{2060}');
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
+
+    #[test]
+    fn drafts_have_no_recognisable_links() {
+        let t = super::unlinked("see https://evil.com/x and evil.com/x?d=1. Done");
+        assert!(!t.contains("://") && !t.contains("evil.com"), "{t}");
+        assert_eq!(t.replace('\u{2060}', ""), "see https://evil.com/x and evil.com/x?d=1. Done");
+    }
 
     #[test]
     fn a_topic_in_a_private_chat_is_its_own_address_when_on() {

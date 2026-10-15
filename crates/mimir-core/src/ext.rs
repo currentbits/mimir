@@ -186,6 +186,7 @@ pub fn delete_server(db: &Db, name: &str) -> Result<()> {
         }
     }
     crate::oauth::sign_out(&oauth_key(name))?;
+    db.set_setting(&format!("mcp_read_only:{name}"), "[]")?;
     list.retain(|s| s.name != name);
     set_servers(db, &list)
 }
@@ -282,7 +283,7 @@ pub async fn sign_in(conf: ServerConf, listen: bool) -> Result<String> {
     let redirect = crate::oauth::redirect(listen, "127.0.0.1", "/callback").await?;
     let reg: Value = http
         .post(register)
-        .json(&json!({"client_name": "Mimir", "redirect_uris": [redirect.uri], "grant_types": ["authorization_code", "refresh_token"], "response_types": ["code"], "token_endpoint_auth_method": "none"}))
+        .json(&json!({"client_name": "Mimir", "application_type": "native", "redirect_uris": [redirect.uri], "grant_types": ["authorization_code", "refresh_token"], "response_types": ["code"], "token_endpoint_auth_method": "none"}))
         .send()
         .await?
         .error_for_status()
@@ -297,7 +298,8 @@ pub async fn sign_in(conf: ServerConf, listen: bool) -> Result<String> {
         bail!("{}'s sign-in metadata is for {resource}, not this server", conf.name);
     }
     let saved = crate::oauth::Saved { token_url: token, client_id, client_secret: reg["client_secret"].as_str().map(String::from), scope, resource: Some(resource), refresh: String::new() };
-    let url = crate::oauth::begin(&oauth_key(&conf.name), &conf.name, authorize, saved, redirect, &[])?;
+    let issuer = meta["issuer"].as_str().map(|i| (i.to_string(), meta["authorization_response_iss_parameter_supported"] == true));
+    let url = crate::oauth::begin(&oauth_key(&conf.name), &conf.name, authorize, saved, redirect, &[], issuer)?;
     *SIGNING_IN.lock().unwrap() = Some(conf);
     Ok(url)
 }
@@ -320,8 +322,31 @@ pub async fn signed_in_save(db: &Db) -> Result<usize> {
     save_server(db, conf).await
 }
 
+/// A server's tools. A tool is read-only (allowed without asking, even after outside content) only when the server
+/// says so and the person confirmed it: a server can call a write tool read-only. The browser is ours, so trusted.
 pub fn cached_tools(db: &Db, server: &str) -> Vec<ExtTool> {
+    let mut tools = claimed_tools(db, server);
+    if server != BROWSER {
+        let ok = read_only_confirmed(db, server);
+        tools.iter_mut().for_each(|t| t.read_only &= ok.contains(&t.name));
+    }
+    tools
+}
+
+/// The tools as the server describes them (`read_only` is its claim).
+pub fn claimed_tools(db: &Db, server: &str) -> Vec<ExtTool> {
     db.setting(&format!("mcp_tools:{server}")).ok().flatten().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+}
+
+fn read_only_confirmed(db: &Db, server: &str) -> Vec<String> {
+    db.setting(&format!("mcp_read_only:{server}")).ok().flatten().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+}
+
+/// The person confirmed these of the server's read-only claims (any others are dropped).
+pub fn confirm_read_only(db: &Db, server: &str, tools: &[String]) -> Result<()> {
+    let claimed = claimed_tools(db, server);
+    let ok: Vec<&String> = tools.iter().filter(|n| claimed.iter().any(|t| t.read_only && &t.name == *n)).collect();
+    db.set_setting(&format!("mcp_read_only:{server}"), &serde_json::to_string(&ok)?)
 }
 
 /// (full name, tool) for every cached external tool of every configured server.
@@ -1035,5 +1060,19 @@ mod tests {
         assert_eq!(default_action("browser__browser_snapshot", true), "allow");
         assert_eq!(default_action("mail__send", false), "ask");
         assert_eq!(default_action("mail__list", true), "allow");
+    }
+
+    #[test]
+    fn read_only_counts_once_confirmed() {
+        let p = std::env::temp_dir().join(format!("mimir-ext-ro-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = Db::open(&p).unwrap();
+        let tool = |name: &str, read_only| ExtTool { name: name.into(), description: String::new(), input_schema: Value::Null, read_only, open_world: true };
+        db.set_setting("mcp_tools:mail", &serde_json::to_string(&[tool("list", true), tool("send", false)]).unwrap()).unwrap();
+        set_servers(&db, &[ServerConf { name: "mail".into(), command: "x".into(), ..Default::default() }]).unwrap();
+        assert!(!find(&db, "mail__list").unwrap().read_only, "the server's word alone");
+        confirm_read_only(&db, "mail", &["list".into(), "send".into()]).unwrap();
+        assert!(find(&db, "mail__list").unwrap().read_only);
+        assert!(!find(&db, "mail__send").unwrap().read_only, "only what the server claims can be confirmed");
     }
 }
