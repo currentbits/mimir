@@ -12,12 +12,20 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
   health are suggested, never marked for you.
 - **Security:** the TLS library (rustls 0.23.46) is updated for four advisories published on October 14
   (RUSTSEC-2026-0346 to 0349).
+- **Export, import and duplicate a bot:** right-click a bot to save it as one file (its role, look, skills, routines,
+  tool rules and the tool servers it uses), without tokens, keys, saved logins, memories or chats. **From a file…** on
+  the new-bot page shows everything in it first, and flags skill steps that pipe a download into a shell, hold a base64
+  blob or download a program. Skills come in as proposals and routines come in paused; only its tool rules that are at
+  least as strict as yours can be used, and its AI account uses your own settings.
+  **Duplicate…** does both in one go. See [Bots and chats](docs/bots-and-chats.md#export-import-and-duplicate).
+
+### The bots' computer
 - **Sign in from your phone:** at a sign-in page, a bot sends you a card with a link to a small masked form in Mimir,
   instead of asking you to take over the screen. Type your login there, never in the chat; Mimir types it into the
   page and keeps it for that bot on that site only. The bot never sees it, only whether it worked. If the bot got to
-  that site after reading a web page or a message, or the site looks like one you've signed in to before, the form
-  warns you and shows the full address. Taking over stays for captchas and payments.
-  [Details](docs/computer.md#signing-in-from-your-phone)
+  that site after reading a web page or a message, the site looks like one you've signed in to before, or its
+  address uses letters from another alphabet, the form warns you and shows the full address. Taking over stays for
+  captchas and payments. [Details](docs/computer.md#signing-in-from-your-phone)
 - **Authenticator codes on saved logins:** paste a site's setup key or `otpauth://` link once, and Mimir types the
   6-digit codes itself, only on that login's site.
 

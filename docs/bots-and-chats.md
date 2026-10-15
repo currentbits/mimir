@@ -29,6 +29,36 @@ What's shared and what isn't:
 | Meetings | Approvals and the run log |
 | Saved logins, tool servers (each bot can switch servers off) | Skills (unless shared with all bots), allowed tools |
 
+### Export, import and duplicate
+
+Right-click a bot and choose **Export…** to save it as one file (`<name>.mimir-bot.json`). The file holds its name, look,
+role, AI account and model, allowed tools, accepted skills, repeating routines, your tool rules for the tools it may use,
+and the tool servers it uses (their config only). It never holds tokens, keys, saved logins, memories, chats or the run
+log. A tool server's env and header values are left empty (their names stay, so you know what to fill in), an argument
+that looks like a key is blanked, and a server URL loses its `?…` part. A skill or routine that mentions a saved login or
+a key is left out. A password typed into the role or a tool server's settings isn't recognised, so check those before
+you share the file.
+
+**From a file…** on the new-bot page (**+** in the sidebar) reads one. Before anything is added you see the bot and
+everything in the file:
+
+- **Skills** arrive as proposals in Memory, to read and accept one by one.
+- **Routines** arrive paused, and count as outside content when they run.
+- Anything in a skill or routine that pipes a download into a shell (`curl … | sh`), holds a base64 blob or downloads a
+  program is flagged on its line, as is text that reads like an instruction to the assistant. Mimir never runs a skill's
+  setup steps.
+- **Tool rules** that differ from yours are listed. One looser than yours (allowing what you have asking, say) is never
+  used: change it under Settings → Permissions if you want it. Stricter ones are used only if you tick **Use its
+  stricter rules too**, because tool rules apply to all your bots.
+- **Tool servers** are listed with what they run or reach. None is added or started from the file: set one up under
+  Settings yourself if you trust it.
+- **Its AI account** uses your own settings for that account, never an address from the file (your key would go
+  there). If the file asks for one, the card shows it; set it on the bot's page afterwards if the bot needs it.
+
+Nothing is added until you press **Add bot**. The bot gets "(copy)" after its name if you already have one by that name.
+If this Mimir can't use its AI account, it uses your first bot's account instead. **Duplicate…** in the right-click menu
+does the same with the bot's own file: an export, then an import on this computer that keeps the original's AI address.
+
 ## Where you talk to them
 
 - **This computer** (the built-in chat in the app). Replies stream in, with a line showing what the bot is doing
