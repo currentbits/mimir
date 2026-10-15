@@ -44,7 +44,7 @@ function GoalCard({ chatId, botName }: { chatId: number; botName: (id: number) =
         {g.status !== 'done' && <button className="btn btn-ghost btn-sm" title="It's done: its follow-ups and routines are removed" aria-label="Mark the goal done" onClick={e => { e.preventDefault(); void status('done') }}><Icon name="check" size={13} /></button>}
         <button className="btn btn-ghost btn-danger btn-sm" title="Remove this goal" aria-label="Remove this goal" onClick={e => { e.preventDefault(); void remove() }}><Icon name="trash" size={13} /></button>
       </summary>
-      <p className="hint">Done when {g.done_when}.{g.budget > 0 && ` ${tokens(g.spent)} of ${tokens(g.budget)} tokens used.`}{g.why && ` ${g.why[0].toUpperCase()}${g.why.slice(1)}.`}</p>
+      <p className="hint">Done when {g.done_when}.{g.budget > 0 && ` ${tokens(g.spent)} of ${tokens(g.budget)} tokens used.`}{g.why && ` ${g.why[0].toUpperCase()}${g.why.slice(1)}.`}{g.tainted && ' Written after reading outside content: bots treat it as such.'}</p>
       {g.progress && <Markdown text={g.progress} />}
     </details>
   )

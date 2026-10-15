@@ -208,6 +208,9 @@ pub async fn call(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
     // instructions until you confirm it), and a rule becomes a suggestion anyway. Replacing one still asks, since the
     // replacement would take a confirmed memory out of the instructions.
     let (decision, why) = if why == "guarded" && name == "memory_store" && args.get("supersedes").is_none_or(Value::is_null) { ("allow".to_string(), "rule") } else { (decision, why) };
+    // Likewise a goal's progress: work on a goal is mostly reading pages and mail. The goal is marked instead (shown as
+    // outside content from then on), and done still needs a receipt.
+    let (decision, why) = if why == "guarded" && name == "goal_update" && decide(&ctx.db, name, false)? == "allow" { ("allow".to_string(), "rule") } else { (decision, why) };
     // Reading is allowed after outside content, but not when the read itself would carry your data out.
     let (decision, why) = if decision == "allow" && ctx.is_tainted() && leaks_out(ctx, name, args) { ("ask".to_string(), "guarded") } else { (decision, why) };
     // A new bot asks every time, never "always" or "all like this" (a standing rule would let bots make bots on their
@@ -1356,6 +1359,8 @@ mod tests {
         assert!(g.status == "done" && g.progress.contains("✓"), "{g:?}");
         assert!(ctx.db.routines(9).unwrap().is_empty(), "its follow-up is removed");
         assert!(!usable(&ToolCtx::new(ctx.db.clone(), 1, crate::INCOGNITO_CHAT), "goal_set"), "incognito keeps nothing");
+        // Its approval card shows the goal itself.
+        assert_eq!(describe(&ctx, "goal_set", &json!({"goal": "x", "done_when": "y"})), "Set the goal: x (done when y)");
     }
 
     #[tokio::test]

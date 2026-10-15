@@ -55,11 +55,17 @@ needs, and the goal shows in **Needs you** until you answer in the chat. Its fol
 
 **Done means done.** A bot can only mark a goal done when the chat's run log shows something done towards it since the
 goal was set, like an email sent or an event added. Saying so isn't enough, and neither is booking another follow-up.
-Otherwise it's refused, and the bot says what's left. You can always mark it done yourself.
+Otherwise it's refused, and the bot says what's left. You can always mark it done yourself. A done goal stays done:
+remove it, or ask for a new one.
+
+**Outside content.** Working on a goal usually means reading pages and email, so a bot can update its progress after
+reading outside content without asking you. The goal is marked as such (its card says so): from then on bots read it as
+outside content, never as instructions from you, and a turn that reads it counts as having read outside content.
+Setting a new goal after reading outside content still asks you first.
 
 **Budget.** On top of the [daily caps](#caps), a goal can have a token budget of its own ("don't spend more than 200k on
-this"). It counts the bot's own work in that chat since the goal was set: routines, follow-ups, handed-over tasks and
-their reports, not your messages. When the budget runs out, the goal pauses and **Needs you** asks: *Go on* gives it
+this"). It counts the goal's own runs since it was set: its routines and follow-ups, the tasks it handed over and their
+reports, and replies in its chat while it's on. Other routines in the chat don't count. When the budget runs out, the goal pauses and **Needs you** asks: *Go on* gives it
 the same budget again.
 
 ## Started by something happening

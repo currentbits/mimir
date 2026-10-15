@@ -22,7 +22,9 @@ pub struct Goal {
     pub budget: i64,
     #[serde(skip)]
     pub budget_from: i64,
-    /// Tokens used since it was set (or last resumed).
+    /// Set or updated by a run that had read outside content: its words may be someone else's.
+    pub tainted: bool,
+    /// Tokens its own runs used since it was set (or last resumed).
     pub spent: i64,
     pub created_at: i64,
     pub updated_at: i64,
@@ -37,7 +39,7 @@ impl Db {
         let c = self.c();
         let g = c
             .query_row(
-                "SELECT id, bot_id, chat_id, text, done_when, status, progress, why, budget, budget_from, created_at, updated_at FROM goals WHERE chat_id=?1",
+                "SELECT id, bot_id, chat_id, text, done_when, status, progress, why, budget, budget_from, created_at, updated_at, tainted FROM goals WHERE chat_id=?1",
                 [chat],
                 |r| {
                     Ok(Goal {
@@ -54,16 +56,16 @@ impl Db {
                         spent: 0,
                         created_at: r.get(10)?,
                         updated_at: r.get(11)?,
+                        tainted: r.get(12)?,
                     })
                 },
             )
             .optional()?;
         let Some(mut g) = g else { return Ok(None) };
-        // ponytail: the bots' own work in the goal's chat since then (routines, follow-ups, handed-over tasks and their
-        // reports), not the person's messages; a routine there that isn't the goal's counts too
+        // Its own runs: its routines and follow-ups, tasks it handed over and their reports, and turns in its chat while it was on.
         g.spent = c.query_row(
-            &format!("SELECT coalesce(sum({WEIGHED}), 0) FROM runs WHERE chat_id=?1 AND id > ?2 AND trigger IN ('routine','delegated','reported')"),
-            params![chat, g.budget_from],
+            &format!("SELECT coalesce(sum({WEIGHED}), 0) FROM runs WHERE goal_id=?1 AND id > ?2"),
+            params![g.id, g.budget_from],
             |r| r.get(0),
         )?;
         Ok(Some(g))
@@ -71,7 +73,7 @@ impl Db {
 
     /// A bot sets the chat's goal. One per chat: a finished one is replaced, one still going has to be finished or
     /// removed by the person first.
-    pub fn goal_set(&self, bot: i64, chat: i64, text: &str, done_when: &str, budget: i64) -> Result<Goal> {
+    pub fn goal_set(&self, bot: i64, chat: i64, text: &str, done_when: &str, budget: i64, tainted: bool) -> Result<Goal> {
         let flat = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
         let (text, done_when) = (flat(text), flat(done_when));
         if text.is_empty() || text.chars().count() > 300 {
@@ -91,15 +93,16 @@ impl Db {
         }
         let t = now();
         self.c().execute(
-            "INSERT INTO goals(bot_id, chat_id, text, done_when, status, budget, budget_from, created_at, updated_at) VALUES (?1,?2,?3,?4,'active',?5,(SELECT coalesce(max(id), 0) FROM runs),?6,?6)",
-            params![bot, chat, text, done_when, budget, t],
+            "INSERT INTO goals(bot_id, chat_id, text, done_when, status, budget, budget_from, tainted, created_at, updated_at) VALUES (?1,?2,?3,?4,'active',?5,(SELECT coalesce(max(id), 0) FROM runs),?6,?7,?7)",
+            params![bot, chat, text, done_when, budget, tainted, t],
         )?;
         self.goal(chat)?.context("goal gone")
     }
 
     /// The bot's progress line, and optionally a new state (active or blocked; done goes through goal_status after its
     /// check). Not on a paused or finished goal: that's the person's to change.
-    pub fn goal_progress(&self, chat: i64, progress: &str, status: Option<&str>, why: &str) -> Result<Goal> {
+    /// `tainted`: written by a run that had read outside content; the goal stays marked from then on.
+    pub fn goal_progress(&self, chat: i64, progress: &str, status: Option<&str>, why: &str, tainted: bool) -> Result<Goal> {
         let g = self.goal(chat)?.context("this chat has no goal")?;
         if !["active", "blocked"].contains(&g.status.as_str()) {
             bail!("the goal is {}; only the person can change it now", g.status);
@@ -113,7 +116,7 @@ impl Db {
             bail!("status is active, blocked or done");
         }
         let why = if status == "blocked" { why.split_whitespace().collect::<Vec<_>>().join(" ") } else { String::new() };
-        self.c().execute("UPDATE goals SET progress=?2, status=?3, why=?4, updated_at=?5 WHERE id=?1", params![g.id, progress, status, why, now()])?;
+        self.c().execute("UPDATE goals SET progress=?2, status=?3, why=?4, updated_at=?5, tainted = tainted OR ?6 WHERE id=?1", params![g.id, progress, status, why, now(), tainted])?;
         self.goal(chat)?.context("goal gone")
     }
 
@@ -126,6 +129,10 @@ impl Db {
             bail!("a goal is active, paused or done");
         }
         let g = self.goal(chat)?.context("this chat has no goal")?;
+        // Its routines are gone: a finished goal is removed, or replaced by a new one, not taken up again.
+        if g.status == "done" {
+            bail!("this goal is done; remove it, or set a new one");
+        }
         let t = now();
         if status == "active" && g.status == "paused" {
             for r in self.routines_where("goal_id = ?1 AND next_fire <= ?2 AND once = 0", params![g.id, t])? {
@@ -165,6 +172,18 @@ impl Db {
         let running: Vec<i64> = c.prepare("SELECT id FROM delegations WHERE goal_id=?1 AND status='running'")?.query_map([goal], |r| r.get(0))?.collect::<Result<_, _>>()?;
         c.execute(&format!("UPDATE delegations SET status='stopped' WHERE goal_id=?1 AND status IN ({})", if all { "'pending','running'" } else { "'running'" }), [goal])?;
         Ok(running)
+    }
+
+    /// A run counts for a goal: a routine's run for the routine's goal, a handed-over task's (or its report's) for the
+    /// asking run's, and a turn in a chat for the chat's goal while it's on.
+    pub fn goal_claim_run(&self, run: i64, chat: i64, routine: Option<i64>, parent: Option<i64>) -> Result<()> {
+        let c = self.c();
+        match (routine, parent) {
+            (Some(r), _) => c.execute("UPDATE runs SET goal_id=(SELECT goal_id FROM routines WHERE id=?2) WHERE id=?1", [run, r])?,
+            (None, Some(p)) => c.execute("UPDATE runs SET goal_id=(SELECT goal_id FROM runs WHERE id=?2) WHERE id=?1", [run, p])?,
+            (None, None) => c.execute(&format!("UPDATE runs SET goal_id=(SELECT id FROM goals WHERE chat_id=?2 AND status IN {LIVE}) WHERE id=?1"), [run, chat])?,
+        };
+        Ok(())
     }
 
     /// A routine or follow-up booked in a chat whose goal is on belongs to that goal.

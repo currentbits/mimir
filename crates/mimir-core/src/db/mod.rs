@@ -478,15 +478,15 @@ fn migrate_v10(c: &Connection) -> Result<()> {
     Ok(())
 }
 
-/// Version 11: a chat's goal, and the routines, follow-ups and handed-over tasks that belong to it.
+/// Version 11: a chat's goal, and the routines, follow-ups, handed-over tasks and runs that belong to it.
 fn migrate_v11(c: &Connection) -> Result<()> {
     c.execute_batch(
         "CREATE TABLE IF NOT EXISTS goals(id INTEGER PRIMARY KEY, bot_id INTEGER NOT NULL, chat_id INTEGER NOT NULL UNIQUE, text TEXT NOT NULL,
            done_when TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','paused','blocked','done')),
            progress TEXT NOT NULL DEFAULT '', why TEXT NOT NULL DEFAULT '', budget INTEGER NOT NULL DEFAULT 0, budget_from INTEGER NOT NULL DEFAULT 0,
-           created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
+           tainted INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
     )?;
-    for table in ["routines", "delegations"] {
+    for table in ["routines", "delegations", "runs"] {
         if !c.prepare(&format!("SELECT 1 FROM pragma_table_info('{table}') WHERE name='goal_id'"))?.exists([])? {
             c.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN goal_id INTEGER"))?;
         }
@@ -1527,9 +1527,9 @@ mod tests {
     #[test]
     fn pausing_a_goal_holds_its_followups_and_deleting_removes_them() {
         let d = db();
-        let g = d.goal_set(1, 5, "Find a plumber who can come this week", "a plumber is booked", 0).unwrap();
+        let g = d.goal_set(1, 5, "Find a plumber who can come this week", "a plumber is booked", 0, false).unwrap();
         assert_eq!(g.status, "active");
-        assert!(d.goal_set(1, 5, "Another", "x", 0).is_err(), "one goal per chat");
+        assert!(d.goal_set(1, 5, "Another", "x", 0, false).is_err(), "one goal per chat");
         // A follow-up booked while the goal is on is the goal's; one in another chat isn't.
         let f = d.routine_once(1, 5, now() + 60, "Check whether the plumber replied", false).unwrap();
         d.goal_claim_routine(f.id, 5).unwrap();
@@ -1540,7 +1540,8 @@ mod tests {
         // Paused: its follow-up doesn't run, though it's due; the other chat's still does.
         d.goal_status(5, "paused", "").unwrap();
         assert_eq!(d.due(1, later).unwrap().iter().map(|r| r.id).collect::<Vec<_>>(), vec![other.id]);
-        assert!(d.goal_progress(5, "x", None, "").is_err(), "a paused goal is the person's to resume");
+        assert!(d.routine(f.id).unwrap().unwrap().goal_held && !d.routine(other.id).unwrap().unwrap().goal_held, "shown as paused with its goal");
+        assert!(d.goal_progress(5, "x", None, "", false).is_err(), "a paused goal is the person's to resume");
         d.goal_status(5, "active", "").unwrap();
         assert_eq!(d.due(1, later).unwrap().len(), 2, "resumed, it runs again");
         // A task handed over for the goal: pausing stops it mid-run (and reports it), deleting stops a waiting one.
@@ -1563,10 +1564,15 @@ mod tests {
     #[test]
     fn a_goal_over_budget_pauses_and_asks() {
         let d = db();
-        let g = d.goal_set(1, 5, "Get the insurance refund paid", "the refund is in the account", 1000).unwrap();
+        let g = d.goal_set(1, 5, "Get the insurance refund paid", "the refund is in the account", 1000, false).unwrap();
         assert!(!d.goal_check_budget(&g).unwrap());
-        let r = d.run_start(1, 5, "routine", None, "x").unwrap();
-        d.c().execute("UPDATE runs SET tokens_in=1500 WHERE id=?1", [r]).unwrap();
+        // Only its own runs count: a turn in its chat while it's on, not a routine of the chat that isn't its.
+        let other = d.routine_create(1, 5, "0 8 * * *", "news", false).unwrap();
+        let o = d.run_start(1, 5, "routine", Some(other.id), "x").unwrap();
+        d.goal_claim_run(o, 5, Some(other.id), None).unwrap();
+        let r = d.run_start(1, 5, "message", None, "x").unwrap();
+        d.goal_claim_run(r, 5, None, None).unwrap();
+        d.c().execute("UPDATE runs SET tokens_in=1500 WHERE id IN (?1, ?2)", [r, o]).unwrap();
         let g = d.goal(5).unwrap().unwrap();
         assert_eq!(g.spent, 1500);
         assert!(d.goal_check_budget(&g).unwrap());
@@ -1578,5 +1584,9 @@ mod tests {
         let g = d.goal(5).unwrap().unwrap();
         assert!(g.status == "active" && g.why.is_empty() && !d.goal_check_budget(&g).unwrap());
         assert!(d.goals_waiting().unwrap().is_empty());
+        // Done is done: removed or replaced, never taken up again (its routines are gone).
+        d.goal_status(5, "done", "").unwrap();
+        assert!(d.goal_status(5, "active", "").is_err() && d.goal_status(5, "paused", "").is_err());
+        assert_eq!(d.goal_set(1, 5, "Next thing", "x", 0, false).unwrap().status, "active", "a new goal replaces it");
     }
 }

@@ -1041,6 +1041,7 @@ impl Host {
                             urgent: String::new(),
                             ends: 0,
                             followup: false,
+                            goal_held: false,
                         }
                     }
                 };
