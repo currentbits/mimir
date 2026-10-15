@@ -1193,7 +1193,7 @@ impl Core {
                     }
                     3 => match self.db.routines(chat)?.into_iter().find(|r| r.id == id) {
                         Some(r) => {
-                            self.db.routine_update(chat, id, &r.cron, &r.prompt, r.quiet, true)?;
+                            self.db.routine_update(chat, id, &r.cron, &r.prompt, r.quiet, true, None)?;
                             trf("⏸ Paused routine #{id}. Ask me, or use Mimir, to start it again.", &[("id", &id.to_string())])
                         }
                         None => tr("That routine is gone.").into(),
@@ -2466,7 +2466,8 @@ mod tests {
             while let Ok((mut s, _)) = l.accept().await {
                 let mut buf = vec![0u8; 65536];
                 let n = s.read(&mut buf).await.unwrap_or(0);
-                if String::from_utf8_lossy(&buf[..n]).contains("/sendMessage") {
+                let req = String::from_utf8_lossy(&buf[..n]);
+                if req.contains("/sendMessage") || req.contains("/sendRichMessage") {
                     count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 }
                 let body = r#"{"ok":true,"result":{"message_id":1}}"#;
