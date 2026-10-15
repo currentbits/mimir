@@ -27,5 +27,8 @@
     "upgrade": "remotion upgrade",
     "lint": "eslint src && tsc",
     "render": "remotion render Mimir out/mimir-film.mp4 --crf=16 --audio-bitrate=256k"
+  },
+  "overrides": {
+    "typescript-eslint": "8.71.2"
   }
 }

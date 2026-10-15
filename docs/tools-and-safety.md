@@ -90,6 +90,7 @@ allow:
 - `web_fetch` and `web_search`, whatever the address or query, and `computer_open`, `computer_type`;
 - `ask_bot`: a task for another bot;
 - a message to someone else's chat: a reminder `for` them, `send_file` in a group or a guest's chat;
+- `memory_store` with `household`: the household's guests read those memories;
 - any tool server's tool that changes something, and its read-only tools that reach the internet (except the sensitive
   server's own).
 

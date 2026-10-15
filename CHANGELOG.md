@@ -23,6 +23,15 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
   in Grok. A message that starts with `/` now reaches the bot instead of running as a Grok command. If a Grok update
   ever offers a bot more tools than web search and Mimir's own, the message stops with an error instead of running.
   The docs cover The X Subscription's plans and its shared weekly allowance.
+- **Security fixes from the fourth review:**
+  - A routine can no longer change its own times or end date while it runs, or book itself again a minute later;
+    from a routine, a one-off is at least 15 minutes away.
+  - A follow-up stays in the chat it was booked in, and a reminder for someone else counts toward their chat's limit.
+  - With docker compose, Codex bots now use the separate computer service; before, they started a browser inside
+    Mimir's own container.
+  - After reading a sensitive source, saving a memory for the household asks too.
+  - A bot file can't pass an option to the AI's command line as its model.
+  - `mimir doctor` no longer creates a database, or upgrades an older one, while it checks.
 
 ## 0.3.0
 
