@@ -45,7 +45,8 @@ handoff).
 At a sign-in page, a bot asks Mimir to sign in (`computer_signin`). It never types a password itself, and never sees one.
 
 - **A login it saved for this site before:** Mimir types it, after you OK it on a card (like every saved login), and
-  types the authenticator code too if the login has a key.
+  types the authenticator code too if the login has a key. If the site turns it down (the password changed), it isn't
+  tried again: next time you get a sign-in card, and what you sign in with there replaces it.
 - **Otherwise, a sign-in card:** where you talk to the bot (your messaging app, the chat in Mimir, and Needs you) you
   get *I need you to sign in to github.com*, with a link to a small form in Mimir: user name or email, password, a code
   if the site asks for one, and optionally the site's authenticator setup key. Never type them into the chat. Mimir

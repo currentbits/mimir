@@ -442,6 +442,7 @@ pub fn vault_save(db: &Db, entry: VaultEntry, value: Option<&str>, totp: Option<
 }
 
 pub fn vault_delete(db: &Db, name: &str) -> Result<()> {
+    db.set_setting(&format!("login_failed:{name}"), "")?;
     let mut list = vault(db);
     list.retain(|e| e.name != name);
     for k in ["", ":user", ":totp"] {
@@ -450,11 +451,30 @@ pub fn vault_delete(db: &Db, name: &str) -> Result<()> {
     db.set_setting("vault", &serde_json::to_string(&list)?)
 }
 
+/// The login this bot saved for the page's site with a sign-in card, unless the site turned it down last time.
+pub fn signin_login(db: &Db, bot: i64, url: &str) -> Option<VaultEntry> {
+    vault_for(db, bot).into_iter().find(|e| e.bot == Some(bot) && host_allowed(url, &e.domains) && !login_failed(db, &e.name))
+}
+
+/// A saved login the site turned down (the password changed, say): not typed again until it's replaced.
+pub fn login_failed_set(db: &Db, name: &str) -> Result<()> {
+    db.set_setting(&format!("login_failed:{name}"), &crate::db::now().to_string())
+}
+
+pub fn login_failed(db: &Db, name: &str) -> bool {
+    db.setting(&format!("login_failed:{name}")).ok().flatten().is_some_and(|v| !v.is_empty())
+}
+
 /// What a sign-in card saves: the login for one bot on one site, under a name like GITHUB_COM_BOT3.
 pub fn vault_save_signin(db: &Db, bot: i64, site: &str, user: &str, password: &str, totp: Option<&str>) -> Result<String> {
     let name = format!("{}_BOT{bot}", site.to_uppercase().replace(|c: char| !c.is_ascii_alphanumeric(), "_"));
+    // Replaces what this bot had for the site (a login that stopped working, kept under another name).
+    for old in vault(db).into_iter().filter(|e| e.bot == Some(bot) && e.name != name && e.domains == [site]) {
+        vault_delete(db, &old.name)?;
+    }
     vault_save(db, VaultEntry { name: name.clone(), domains: vec![site.to_string()], bot: Some(bot), totp: false }, Some(password), totp)?;
     crate::host::secret_set(&format!("vault:{name}:user"), user)?;
+    db.set_setting(&format!("login_failed:{name}"), "")?;
     Ok(name)
 }
 

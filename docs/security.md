@@ -103,8 +103,10 @@ there. The card and the form show the page's full address, and warn when the bot
 on another bot's or a document's words, or when the site looks like one with a saved login or an earlier sign-in
 (a letter or two apart, the same name under another ending, or the name inside a hyphenated one: `lookalike.rs`).
 An address with letters from another alphabet (any `xn--` label) is always warned about, shown in punycode, and named
-after a known site when its plain letters line up with one. It keeps that login for that bot and that registrable domain
-only. The card's link holds no server, token or site: the form is behind your Mimir sign-in, uses the card the server
+after a known site when its plain letters line up with one. Mimir types only into the bot's own browser profile: the
+computer's record of whose Chromium is on screen is checked before the first field and before each later step, and
+the bot takes the computer again after waiting for an OK, so a bot that used the computer in the meantime never gets
+another bot's login (even on the same site). It keeps that login for that bot and that registrable domain only. The card's link holds no server, token or site: the form is behind your Mimir sign-in, uses the card the server
 has waiting, works once and runs out after 10 minutes. A plain Approve can't complete a sign-in card; only the form can.
 
 **Only you talk to your bot.** A chat is paired by one person with a one-time code, and only that person's messages

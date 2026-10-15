@@ -841,16 +841,21 @@ async fn computer_signin(ctx: &ToolCtx) -> Result<String> {
         bail!("there's no sign-in form on the screen; open the site's sign-in page first (or use computer_handoff)");
     }
     let site = crate::ext::site_of(&url).context("this page has no website address to keep a login for; use computer_handoff")?;
-    let saved = crate::ext::vault_for(&ctx.db, ctx.bot_id).into_iter().find(|e| e.bot == Some(ctx.bot_id) && crate::ext::host_allowed(&url, &e.domains));
-    if let Some(e) = saved {
+    // A saved login the site turned down last time isn't tried again: the person gets a card, and what they sign in
+    // with there replaces it.
+    let stale = crate::ext::vault_for(&ctx.db, ctx.bot_id).into_iter().find(|e| e.bot == Some(ctx.bot_id) && crate::ext::host_allowed(&url, &e.domains) && crate::ext::login_failed(&ctx.db, &e.name));
+    if let Some(e) = crate::ext::signin_login(&ctx.db, ctx.bot_id, &url) {
         crate::tools::wait_for_approval_with(ctx, "computer_signin", &format!("Use saved login {} on {url}", e.name), "login", None).await?;
+        // The OK can take longer than the computer's lease: take it again, and type only into this bot's own browser
+        // (sign_in checks), so another bot that used the computer meanwhile never gets this login.
+        hold_computer(ctx).await?;
         let get = |k: &str| crate::host::secret_get(&format!("vault:{}{k}", e.name)).unwrap_or_default();
         let login = crate::computer::Login { user: get(":user"), password: get(""), code: String::new(), totp: crate::totp::parse(&get(":totp")).ok() };
-        return Ok(if crate::computer::sign_in(&login, &e.domains).await? {
-            format!("Signed in to {site} with your saved login. Take a screenshot to see the page, then carry on.")
-        } else {
-            format!("Signing in to {site} with the saved login failed. Call computer_signin again for a new sign-in card, or computer_handoff.")
-        });
+        if crate::computer::sign_in(&ctx.db.dir(), ctx.bot_id, &login, &e.domains).await? {
+            return Ok(format!("Signed in to {site} with your saved login. Take a screenshot to see the page, then carry on."));
+        }
+        crate::ext::login_failed_set(&ctx.db, &e.name)?;
+        return Ok(format!("Signing in to {site} with the saved login failed (it may be out of date). Call computer_signin again: the person gets a sign-in card this time."));
     }
     if ctx.unattended {
         bail!("there's no saved login for {site} yet, and nobody is watching this run to sign in; use computer_handoff");
@@ -876,7 +881,8 @@ async fn computer_signin(ctx: &ToolCtx) -> Result<String> {
         (true, None) => format!("\n\n⚠️ I came to this site after reading a web page or a message. Check the address: {host}"),
         _ => String::new(),
     };
-    let summary = format!("Sign in to {site} ({host}){check}\n\n{link}: type your login there, never in this chat. Mimir types it into the page and keeps it for this bot on {site}.");
+    let again = if stale.is_some() { "\n\nThe login saved for it didn't work last time; this one replaces it." } else { "" };
+    let summary = format!("Sign in to {site} ({host}){check}{again}\n\n{link}: type your login there, never in this chat. Mimir types it into the page and keeps it for this bot on {site}.");
     let id = ctx.db.approval_create(ctx.bot_id, ctx.chat_id, "computer_signin", &summary, HANDOFF_SECS, "signin", Some(&site))?;
     ctx.db.signin_card_set(id, &card)?;
     // Filled in from the form (host.rs, signin_submit): approved = signed in. Held meanwhile, so no other bot's profile

@@ -446,6 +446,15 @@ pub fn open_url(home: &Path, bot: i64, url: &str) -> Result<()> {
     Ok(())
 }
 
+/// Whose browser profile is on the screen now (the record `start` keeps, checked against the running Chromium), or
+/// None when that can't be told: then nobody's login may be typed there.
+pub fn screen_bot(home: &Path) -> Option<i64> {
+    match remote() {
+        Some(a) => ask(&a, serde_json::json!({"op": "status"})).ok()?["bot"].as_i64(),
+        None => on_screen(home).map(|(b, _)| b),
+    }
+}
+
 /// Sign a bot out of every site on the computer: its profile is emptied (closing the browser if it's that bot's).
 pub fn forget(home: &Path, bot: i64) -> Result<()> {
     if let Some(a) = remote() {
@@ -513,7 +522,7 @@ fn act(home: &Path, v: &serde_json::Value) -> Result<serde_json::Value> {
     let n = |k: &str| v[k].as_i64().unwrap_or(0);
     let s = |k: &str| v[k].as_str().unwrap_or("");
     match s("op") {
-        "status" => return Ok(serde_json::json!({"running": running()})),
+        "status" => return Ok(serde_json::json!({"running": running(), "bot": on_screen(home).map(|(b, _)| b)})),
         "screenshot" => return Ok(serde_json::json!({"image": base64::engine::general_purpose::STANDARD.encode(screenshot_jpeg()?)})),
         "start" => start(home, v["bot"].as_i64())?,
         "stop" => stop(home),
@@ -916,9 +925,26 @@ pub struct Login {
 /// account). True when signed in: no password or code field left on the page.
 /// ponytail: "signed in" is read from the fields going away; a site that keeps a password field on its home page
 /// reads as failed.
-pub async fn sign_in(login: &Login, domains: &[String]) -> Result<bool> {
+/// Only into `bot`'s own browser profile: checked before the first field and before each later step, so a login is never
+/// typed into another bot's Chromium (one that took the computer while this bot waited for an OK, say).
+pub async fn sign_in(home: &Path, bot: i64, login: &Login, domains: &[String]) -> Result<bool> {
+    let home = home.to_path_buf();
+    let mine = move || {
+        let home = home.clone();
+        async move {
+            match tokio::task::spawn_blocking(move || screen_bot(&home)).await? {
+                Some(b) if b == bot => Ok(()),
+                _ => bail!("the computer isn't on this bot's browser now (another bot used it meanwhile); nothing was typed. Call computer_signin again"),
+            }
+        }
+    };
+    fill(login, domains, mine).await
+}
+
+async fn fill<F: std::future::Future<Output = Result<()>>>(login: &Login, domains: &[String], mine: impl Fn() -> F) -> Result<bool> {
     let mut typed: Vec<&str> = vec![];
     loop {
+        mine().await?;
         let mut tab = screen_tab().await.context("couldn't reach the browser on the computer")?;
         let js = format!("(() => {{ const f = {FIELDS}; return {{ url: f.url, user: !!f.user, password: !!f.password, code: !!f.code }} }})()");
         let seen = tab.eval(&js).await.filter(|v| v.is_object()).context("couldn't read the page on the computer")?;
@@ -1001,8 +1027,9 @@ mod tests {
         let form = sign_in_form().await.unwrap();
         assert_eq!((form["user"].as_bool(), form["password"].as_bool(), form["code"].as_bool()), (Some(true), Some(true), Some(false)), "{form}");
         let login = Login { user: "me@example.com".into(), password: "hunter2!".into(), totp: crate::totp::parse("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ").ok(), ..Default::default() };
-        assert!(sign_in(&login, &["elsewhere.example".into()]).await.is_err(), "not on another site");
-        assert!(sign_in(&login, &[host]).await.unwrap(), "email and password, then the code");
+        let yes = || async { Ok::<(), anyhow::Error>(()) };
+        assert!(fill(&login, &["elsewhere.example".into()], yes).await.is_err(), "not on another site");
+        assert!(fill(&login, &[host], yes).await.unwrap(), "email and password, then the code");
         let typed = screen_tab().await.unwrap().eval("document.getElementById('x').textContent").await.unwrap();
         let code = crate::totp::parse("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ").unwrap();
         let now = crate::db::now() as u64;

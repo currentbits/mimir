@@ -987,7 +987,7 @@ impl Host {
                 let ap = self.db.approval_claim(arg(a, "id")?)?.context("this sign-in has been used or has run out; ask the bot again")?;
                 let site = ap.site.clone().unwrap_or_default();
                 let login = crate::computer::Login { user, password, code, totp };
-                let out = match tokio::time::timeout(std::time::Duration::from_secs(60), crate::computer::sign_in(&login, std::slice::from_ref(&site))).await {
+                let out = match tokio::time::timeout(std::time::Duration::from_secs(60), crate::computer::sign_in(&self.db.dir(), ap.bot_id, &login, std::slice::from_ref(&site))).await {
                     Ok(r) => r,
                     Err(_) => Err(anyhow::anyhow!("the page didn't answer in time")),
                 };
@@ -1603,6 +1603,51 @@ mod tests {
         assert_eq!(lib.as_array().unwrap().iter().find(|k| k["slug"] == "summarize-link").unwrap()["added"], json!([0]));
         assert_eq!(host.call("skill_add", &json!({"chat_id": 0, "slug": "summarize-link", "bot_id": 0})).await.unwrap(), Value::Null);
         assert!(host.call("skill_add", &json!({"chat_id": 0, "slug": "nope", "bot_id": 0})).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn a_sign_in_is_never_typed_into_another_bots_browser() {
+        let home = Home::new("signin-bots");
+        let host = Host::new(Db::open(&home.0.join("mimir.db")).unwrap(), home.0.clone(), Arc::new(Mem(Default::default())), tokio::runtime::Handle::current(), "server");
+        let db = &host.db;
+        // Bot 3 waits for its card to be filled in; its hold on the computer runs out, and bot 4 takes the computer
+        // (its Chromium on the screen now).
+        db.set_setting("computer_lease", &json!({"who": "run:1", "name": "Bot 3", "until": crate::db::now() - 1}).to_string()).unwrap();
+        assert!(db.computer_lease("run:2", "Bot 4", 120).unwrap().is_none(), "bot 4 takes the computer");
+        std::fs::create_dir_all(home.0.join("computer")).unwrap();
+        std::fs::write(home.0.join("computer").join("browser"), format!("4 {}", std::process::id())).unwrap();
+        assert_ne!(crate::computer::screen_bot(&home.0), Some(3));
+        // The person sends the form: refused before anything reaches a page, the card is used up, nothing is kept.
+        let card = db.approval_create(3, 0, "computer_signin", "Sign in to github.com", 300, "signin", Some("github.com")).unwrap();
+        let err = host.call("signin_submit", &json!({"id": card, "user": "me@example.com", "password": "hunter2-gh"})).await.unwrap_err();
+        assert!(format!("{err:#}").contains("isn't on this bot's browser") && format!("{err:#}").contains("nothing was typed"), "{err:#}");
+        assert_eq!(db.approval_status(card).unwrap(), "denied", "the bot hears it failed");
+        assert!(ext::vault(db).is_empty(), "and no login is saved");
+        // The saved-login path refuses the same way.
+        let login = crate::computer::Login { user: "me".into(), password: "hunter2-gh".into(), ..Default::default() };
+        assert!(crate::computer::sign_in(&home.0, 3, &login, &["github.com".into()]).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn a_saved_login_that_stopped_working_gives_way_to_a_card() {
+        let home = Home::new("signin-stale");
+        let host = Host::new(Db::open(&home.0.join("mimir.db")).unwrap(), home.0.clone(), Arc::new(Mem(Default::default())), tokio::runtime::Handle::current(), "server");
+        let db = &host.db;
+        let url = "https://github.com/login";
+        ext::vault_save_signin(db, 3, "github.com", "me", "old-pass", None).unwrap();
+        let e = ext::signin_login(db, 3, url).unwrap();
+        assert_eq!(e.name, "GITHUB_COM_BOT3");
+        assert!(ext::signin_login(db, 4, url).is_none(), "another bot's isn't used");
+        // The site turned it down: the next computer_signin doesn't pick it again, so the person gets a card.
+        ext::login_failed_set(db, &e.name).unwrap();
+        assert!(ext::signin_login(db, 3, url).is_none());
+        // What they sign in with on the card replaces it (and an older one of this bot's for the site under another name).
+        let old = ext::VaultEntry { name: "GH_OLD".into(), domains: vec!["github.com".into()], bot: Some(3), totp: false };
+        ext::vault_save(db, old, Some("older-pass"), None).unwrap();
+        ext::vault_save_signin(db, 3, "github.com", "me", "new-pass", None).unwrap();
+        assert_eq!(ext::signin_login(db, 3, url).map(|e| e.name).as_deref(), Some("GITHUB_COM_BOT3"));
+        assert_eq!(secret_get("vault:GITHUB_COM_BOT3").as_deref(), Some("new-pass"));
+        assert_eq!(ext::vault(db).iter().map(|e| e.name.as_str()).collect::<Vec<_>>(), ["GITHUB_COM_BOT3"]);
     }
 
     #[tokio::test]
