@@ -167,8 +167,16 @@ servers that only offer the older SSE transport aren't supported.
 `uvx`, `pipx run`…), Mimir looks the package up in [OSV.dev](https://osv.dev)'s list of malicious packages and refuses
 to start it if it's there, naming the advisory. With a pinned version (`pkg@1.2.3`, `pkg==1.2.3`) only that version
 counts; without one, any version ever flagged blocks it, so pin a clean version to get past that. The answer is kept for
-a day (a flagged one for good), and if OSV.dev can't be reached the server starts anyway. The built-in browser is a
-fixed version and isn't checked.
+a day (a flagged one for good). If OSV.dev can't be reached, a version it called clean before starts anyway; one it
+never checked doesn't. The built-in browser is a fixed version and isn't checked.
+
+**Pinned versions.** OSV.dev only knows about a malicious release once someone reports it, so Mimir doesn't run
+whatever was published last either. A setup line without a version (`npx -y pkg`, `uvx pkg`, `pkg@latest`) is pinned
+to the newest release that's at least a week old (`pkg@1.2.3`) when you add the server, and a server added before
+Mimir did this is pinned the next time it starts (if the registry can't be reached then, it starts as before). When a
+newer release has been out for a week, the server shows **Update to …**; it never offers one older than the version
+you're on. A version you name yourself is kept, and so is a range (`pkg@^2`, `pkg>=1`) or another tag (`pkg@next`):
+those keep fetching what they name. `pipx run pkg` can't take a pin; use `pipx run --spec pkg==1.2.3 pkg`.
 
 **Signing in.** A hosted server that wants a sign-in (Notion `https://mcp.notion.com/mcp`, Linear
 `https://mcp.linear.app/mcp` and the like) answers Mimir's first try with "wants you to sign in", and Settings shows

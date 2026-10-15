@@ -556,13 +556,17 @@ struct Http {
 impl Client {
     async fn start(conf: &ServerConf, db: &Db, bot: i64) -> Result<Self> {
         let (io, secrets_file) = if conf.url.is_empty() {
-            // The browser preset is pinned (PLAYWRIGHT); a command that fetches a package is checked first.
-            if conf.preset.is_none() {
+            // The browser preset is pinned (PLAYWRIGHT); a command that fetches a package is pinned and checked first.
+            let conf = if conf.preset.is_none() {
+                let conf = pin_saved(db, conf).await;
                 let osv = std::env::var("MIMIR_OSV_API").unwrap_or_else(|_| "https://api.osv.dev".into());
                 malware_check(db, &osv, &conf.name, &conf.command, &conf.args).await?;
-            }
+                conf
+            } else {
+                conf.clone()
+            };
             // Off the async threads: bringing up the bots' computer can take seconds.
-            let (conf, db) = (conf.clone(), db.clone());
+            let db = db.clone();
             tokio::task::spawn_blocking(move || spawn(&conf, &db, bot)).await??
         } else {
             let headers = values_of(&conf.name, "header", &conf.headers);
@@ -863,13 +867,22 @@ fn package_of(command: &str, args: &[String]) -> Option<Pkg> {
     if spec.is_empty() || spec.starts_with(['.', '/', '~', '\\']) || spec.contains(':') || (eco == "PyPI" && spec.contains('/')) {
         return None;
     }
-    let pinned = |v: &str| (v.starts_with(|c: char| c.is_ascii_digit()) && v.chars().all(|c| c.is_ascii_alphanumeric() || ".-+".contains(c))).then(|| v.to_string());
+    // Exact: dotted numbers, then any prerelease or build tag (`1.2.3-beta.1`). On npm that's three numbers: `1` and
+    // `3.x` are ranges there.
+    let pinned = |v: &str| {
+        let core = v.split(['-', '+']).next().unwrap_or("");
+        let parts: Vec<&str> = core.split('.').collect();
+        let exact = parts.iter().all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit())) && (eco != "npm" || parts.len() == 3);
+        (exact && v.chars().all(|c| c.is_ascii_alphanumeric() || ".-+".contains(c))).then(|| v.to_string())
+    };
     let pkg = |name: String, version, base: Option<&str>| Some(Pkg { eco, name, version, at, spec: spec.to_string(), base: base.map(Into::into), flag });
     if eco == "npm" {
         // A scoped name starts with @: the version's @ is the one after it.
         let at = spec[1..].find('@').map(|i| i + 1);
         let (name, version) = at.map_or((spec, None), |i| (&spec[..i], pinned(&spec[i + 1..])));
-        return pkg(name.to_lowercase(), version, Some(name));
+        // Pinnable: no version, an exact one, or `latest`; a range (`^2`, `1`) or another tag (`next`) is left alone.
+        let pinnable = at.is_none_or(|i| version.is_some() || &spec[i + 1..] == "latest");
+        return pkg(name.to_lowercase(), version, pinnable.then_some(name));
     }
     let (name, version) = spec.split_once("==").or_else(|| spec.split_once('@')).map_or((spec, None), |(n, v)| (n, pinned(v.trim())));
     // Drop extras and any other specifier (`pkg[cli]>=1`); PyPI names compare normalized (PEP 503).
@@ -942,7 +955,8 @@ fn pinned_args(command: &str, args: &[String], p: &Pkg, version: &str) -> Option
 /// its own between starts. `again`: even when it's pinned already (Update). A command naming a range stays as is.
 async fn pin(conf: &mut ServerConf, again: bool) -> Result<()> {
     let Some(p) = package_of(&conf.command, &conf.args) else { return Ok(()) };
-    if (p.version.is_some() && !again) || p.base.is_none() {
+    // Not one the runner can take a pin for: don't ask the registry (this runs on every start).
+    if (p.version.is_some() && !again) || pinned_args(&conf.command, &conf.args, &p, "0").is_none() {
         return Ok(());
     }
     let v = newest_settled(p.eco, &p.name).await.with_context(|| format!("couldn't pick a release of {} to pin; name one yourself ({}@1.2.3) to add it anyway", p.name, p.name))?;
@@ -952,21 +966,53 @@ async fn pin(conf: &mut ServerConf, again: bool) -> Result<()> {
     Ok(())
 }
 
+/// A server saved before Mimir pinned packages: pin it now, and keep that for next time. If it can't be (the
+/// registry can't be reached, nothing is a week old yet), it starts unpinned as before (logged).
+async fn pin_saved(db: &Db, conf: &ServerConf) -> ServerConf {
+    let mut pinned = conf.clone();
+    match pin(&mut pinned, false).await {
+        Ok(()) if pinned.args != conf.args => {
+            let mut list = servers(db);
+            list.iter_mut().filter(|s| s.name == conf.name && s.args == conf.args).for_each(|s| s.args = pinned.args.clone());
+            if let Err(e) = set_servers(db, &list) {
+                eprintln!("tool server {}: couldn't save its pinned version: {e:#}", conf.name);
+            }
+            pinned
+        }
+        Ok(()) => pinned,
+        Err(e) => {
+            eprintln!("tool server {}: starting it unpinned: {e:#}", conf.name);
+            conf.clone()
+        }
+    }
+}
+
 /// A newer release (a week old or more) than the one a server is pinned to, for its Update button. Asks the
 /// registry at most once a day per package; not reachable is "no update".
 pub async fn update_for(db: &Db, conf: &ServerConf) -> Option<String> {
     let p = package_of(&conf.command, &conf.args).filter(|p| p.base.is_some())?;
-    let key = format!("pin_latest:{}:{}", p.eco, p.name);
+    let current = p.version.as_deref();
+    // Per pinned version: whether there's an update depends on it.
+    let key = format!("pin_update:{}:{}:{}", p.eco, p.name, current.unwrap_or(""));
     let cached = db.setting(&key).ok().flatten().unwrap_or_default();
-    let newest = match cached.split_once(':') {
+    let offer = match cached.split_once(':') {
         Some((t, v)) if t.parse::<i64>().is_ok_and(|t| crate::db::now() - t < OSV_FRESH) => v.to_string(),
         _ => {
-            let v = newest_settled(p.eco, &p.name).await.unwrap_or_default();
+            let v = releases(p.eco, &p.name).await.ok().and_then(|(latest, published)| update_over(&latest, &published, current, crate::db::now())).unwrap_or_default();
             let _ = db.set_setting(&key, &format!("{}:{v}", crate::db::now()));
             v
         }
     };
-    (!newest.is_empty() && p.version.as_deref() != Some(newest.as_str())).then_some(newest)
+    (!offer.is_empty()).then_some(offer)
+}
+
+/// What Update offers: the release `settled` picks, unless that's the one pinned, or came out before it (one you
+/// pinned by hand, newer than anything settled) and isn't the registry's latest.
+fn update_over(latest: &str, published: &[(String, i64)], current: Option<&str>, now: i64) -> Option<String> {
+    let pick = settled(latest, published, now)?;
+    let date = |v: &str| published.iter().find(|(p, _)| p == v).map(|(_, t)| *t);
+    let older = current.and_then(date).is_some_and(|t| date(&pick).is_some_and(|d| d <= t));
+    (current != Some(pick.as_str()) && (pick == latest || !older)).then_some(pick)
 }
 
 /// Move a server to the release its Update button named (or newer, if one has settled since). Starts it once.
@@ -989,7 +1035,8 @@ fn malicious(answer: &Value) -> Option<String> {
 const OSV_FRESH: i64 = 24 * 3600;
 
 /// Refuse to start a server whose package OSV.dev lists as malware. Verdicts are cached per package@version in
-/// settings; when OSV can't be reached the server starts anyway (logged).
+/// settings. When OSV can't be reached, a package it called clean before starts anyway (logged); one it never
+/// checked doesn't.
 /// ponytail: an unpinned package is refused if any of its versions was ever flagged; pinning a clean one gets past that.
 async fn malware_check(db: &Db, osv: &str, server: &str, command: &str, args: &[String]) -> Result<()> {
     let Some(Pkg { eco, name, version, .. }) = package_of(command, args) else { return Ok(()) };
@@ -1014,10 +1061,11 @@ async fn malware_check(db: &Db, osv: &str, server: &str, command: &str, args: &[
                     db.set_setting(&key, &found.clone().unwrap_or_else(|| format!("ok:{}", crate::db::now())))?;
                     found
                 }
-                Err(e) => {
-                    eprintln!("tool server {server}: couldn't check {shown} for malware on OSV.dev, starting it anyway: {e:#}");
+                Err(e) if cached.starts_with("ok:") => {
+                    eprintln!("tool server {server}: couldn't check {shown} for malware on OSV.dev, starting it anyway (it was clean before): {e:#}");
                     None
                 }
+                Err(e) => bail!("didn't start tool server {server}: couldn't check {shown} for malware on OSV.dev, and it hasn't been checked before: {e:#}"),
             }
         }
     };
@@ -1242,6 +1290,9 @@ mod tests {
         assert_eq!(p("npx -p left-pad@1.3.0 run").as_deref(), Some("npm left-pad 1.3.0"));
         assert_eq!(p("npm exec --yes -- pkg@^2").as_deref(), Some("npm pkg "));
         assert_eq!(p("pnpm dlx pkg@2.0.0").as_deref(), Some("npm pkg 2.0.0"));
+        assert_eq!(p("npx pkg@1").as_deref(), Some("npm pkg "), "a range on npm, not a version");
+        assert_eq!(p("npx pkg@3.x").as_deref(), Some("npm pkg "));
+        assert_eq!(p("npx pkg@1.2.3-beta.1").as_deref(), Some("npm pkg 1.2.3-beta.1"));
         assert_eq!(p("bunx pkg").as_deref(), Some("npm pkg "));
         assert_eq!(p("uvx mcp-server-fetch").as_deref(), Some("PyPI mcp-server-fetch "));
         assert_eq!(p("uvx --python 3.12 Mcp_Server.Git==0.6.2").as_deref(), Some("PyPI mcp-server-git 0.6.2"));
@@ -1267,6 +1318,9 @@ mod tests {
         assert_eq!(pin("pipx run --spec=pkg tool", "1.0").as_deref(), Some("run --spec=pkg==1.0 tool"));
         assert_eq!(pin("uv tool run pkg>=1", "1.0"), None, "a range is left alone");
         assert_eq!(pin("pipx run pkg", "1.0"), None);
+        for range in ["npx -y pkg@^2", "npx pkg@1", "npx pkg@3.x", "npx pkg@next"] {
+            assert_eq!(pin(range, "3.0.0"), None, "{range} is left alone");
+        }
 
         let day = 24 * 3600;
         let rel = |v: &str, days: i64| (v.to_string(), 100 * day - days * day);
@@ -1274,6 +1328,15 @@ mod tests {
         assert_eq!(settled("2.0.0", &[rel("1.0.0", 30), rel("2.0.0", 8)], now).as_deref(), Some("2.0.0"));
         assert_eq!(settled("2.0.0", &[rel("1.0.0", 30), rel("1.1.0", 9), rel("2.0.0", 2)], now).as_deref(), Some("1.1.0"), "a release under a week old is skipped");
         assert_eq!(settled("1.0.0", &[rel("1.0.0", 1)], now), None, "nothing settled yet");
+
+        let rels = [rel("1.0.0", 30), rel("1.1.0", 9), rel("1.2.0", 2)];
+        assert_eq!(update_over("1.2.0", &rels, Some("1.0.0"), now).as_deref(), Some("1.1.0"));
+        assert_eq!(update_over("1.2.0", &rels, None, now).as_deref(), Some("1.1.0"), "unpinned: pin it");
+        assert_eq!(update_over("1.2.0", &rels, Some("1.1.0"), now), None, "on it already");
+        assert_eq!(update_over("1.2.0", &rels, Some("1.2.0"), now), None, "pinned by hand to a newer one: not back down");
+        // Renumbered (2026.8.31, then 1.0.0): later by date is newer, whatever the number.
+        let renum = [rel("2026.8.31", 40), rel("1.0.0", 8)];
+        assert_eq!(update_over("1.0.0", &renum, Some("2026.8.31"), now).as_deref(), Some("1.0.0"));
     }
 
     #[test]
@@ -1284,7 +1347,8 @@ mod tests {
         assert_eq!(malicious(&json!({})), None);
     }
 
-    /// Against a one-file fake OSV: a flagged package is refused, the verdict is cached, and OSV being down doesn't block.
+    /// Against a one-file fake OSV: a flagged package is refused, the verdict is cached, and OSV being down blocks only
+    /// a package it never called clean.
     #[tokio::test]
     async fn malware_check_refuses_and_caches() {
         use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1312,7 +1376,10 @@ mod tests {
         malware_check(&db, &osv, "x", "npx", &args("-y good-mcp")).await.unwrap();
         malware_check(&db, &osv, "x", "node", &args("server.js")).await.unwrap();
         assert_eq!(ASKED.load(Ordering::SeqCst), 2, "verdicts come from the cache the second time");
-        malware_check(&db, "http://127.0.0.1:9", "x", "uvx", &args("other-pkg")).await.unwrap();
+        let down = "http://127.0.0.1:9";
+        assert!(malware_check(&db, down, "x", "uvx", &args("other-pkg==1.0")).await.is_err(), "never checked: OSV down blocks");
+        db.set_setting("osv:npm:good-mcp", "ok:0").unwrap();
+        malware_check(&db, down, "x", "npx", &args("-y good-mcp")).await.unwrap();
     }
 
     #[test]
