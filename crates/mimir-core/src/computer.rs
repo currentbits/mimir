@@ -40,14 +40,18 @@ pub fn available() -> bool {
     remote().is_some() || (cfg!(target_os = "linux") && ["Xvfb", "xdotool", "scrot"].iter().all(|b| which(b)) && chromium().is_some())
 }
 
+/// Where the computer service is and its token: an AI CLI must hand these on to the `mimir mcp` it starts, or that
+/// process runs a computer of its own, inside Mimir's container.
+pub const ENV: [&str; 2] = ["MIMIR_COMPUTER", "MIMIR_COMPUTER_TOKEN"];
+
 /// The computer as a separate service (`MIMIR_COMPUTER=computer:7300`, docker compose); unset, it runs here.
 fn remote() -> Option<String> {
-    std::env::var("MIMIR_COMPUTER").ok().filter(|v| !v.trim().is_empty())
+    std::env::var(ENV[0]).ok().filter(|v| !v.trim().is_empty())
 }
 
 /// The secret both sides share for the control channel.
 fn token() -> Result<String> {
-    std::env::var("MIMIR_COMPUTER_TOKEN").ok().filter(|t| t.len() >= 24).context("set MIMIR_COMPUTER_TOKEN (24+ characters, the same for Mimir and the computer)")
+    std::env::var(ENV[1]).ok().filter(|t| t.len() >= 24).context("set MIMIR_COMPUTER_TOKEN (24+ characters, the same for Mimir and the computer)")
 }
 
 fn resolve(addr: &str) -> Result<std::net::SocketAddr> {
@@ -70,6 +74,16 @@ fn ask(addr: &str, mut req: serde_json::Value) -> Result<serde_json::Value> {
         bail!("{e}");
     }
     Ok(v)
+}
+
+/// The Authorization header a computer service wants on DevTools (its token); None when the computer runs here.
+pub fn cdp_auth() -> Result<Option<String>> {
+    remote().map(|_| token().map(|t| format!("Bearer {t}"))).transpose()
+}
+
+/// Constant time: no hints about the token from how long a refusal takes.
+fn same(a: &str, b: &str) -> bool {
+    a.len() == b.len() && a.bytes().zip(b.bytes()).fold(0, |d, (x, y)| d | (x ^ y)) == 0
 }
 
 /// Chromium's DevTools, for Playwright and the page lookups. The computer service is asked by IP: Chromium refuses
@@ -458,7 +472,7 @@ pub fn forget(home: &Path, bot: i64) -> Result<()> {
 
 /// `mimir computer --listen 0.0.0.0:7300`: run the screen and browser here and take Mimir's requests (screenshots,
 /// clicks, typing, keys, opening pages) over a control channel that needs MIMIR_COMPUTER_TOKEN. Chromium's DevTools
-/// are passed on at CDP_SHARED_PORT on the same address. Meant for a container with none of Mimir's data in it.
+/// are passed on at CDP_SHARED_PORT on the same address, behind the same token. Meant for a container with none of Mimir's data in it.
 pub fn serve(listen: &str) -> Result<()> {
     if remote().is_some() {
         bail!("MIMIR_COMPUTER is set: that's for Mimir, pointing at this service");
@@ -470,9 +484,11 @@ pub fn serve(listen: &str) -> Result<()> {
     let home = PathBuf::from(std::env::var_os("HOME").context("HOME isn't set")?);
     let listen: std::net::SocketAddr = listen.parse().context("--listen takes an address like 0.0.0.0:7300")?;
     let cdp = std::net::TcpListener::bind((listen.ip(), CDP_SHARED_PORT))?;
+    let t = token.clone();
     std::thread::spawn(move || {
         for c in cdp.incoming().flatten() {
-            std::thread::spawn(move || pass_on(c));
+            let t = t.clone();
+            std::thread::spawn(move || pass_on(c, &t));
         }
     });
     let control = std::net::TcpListener::bind(listen)?;
@@ -488,10 +504,7 @@ pub fn serve(listen: &str) -> Result<()> {
                 return;
             }
             let req: serde_json::Value = serde_json::from_str(&line).unwrap_or_default();
-            let given = req["token"].as_str().unwrap_or("");
-            // Constant time: no hints about the token from how long a refusal takes.
-            let same = given.len() == token.len() && given.bytes().zip(token.bytes()).fold(0, |d, (a, b)| d | (a ^ b)) == 0;
-            let out = if same { act(&home, &req).unwrap_or_else(|e| serde_json::json!({"error": format!("{e:#}")})) } else { serde_json::json!({"error": "the computer refused: wrong MIMIR_COMPUTER_TOKEN"}) };
+            let out = if same(req["token"].as_str().unwrap_or(""), &token) { act(&home, &req).unwrap_or_else(|e| serde_json::json!({"error": format!("{e:#}")})) } else { serde_json::json!({"error": "the computer refused: wrong MIMIR_COMPUTER_TOKEN"}) };
             let _ = writeln!(&c, "{out}");
         });
     }
@@ -519,17 +532,45 @@ fn act(home: &Path, v: &serde_json::Value) -> Result<serde_json::Value> {
     Ok(serde_json::json!({}))
 }
 
-/// Pass a DevTools connection on to Chromium, which only listens inside this container.
-fn pass_on(c: std::net::TcpStream) {
-    let Ok(up) = std::net::TcpStream::connect(("127.0.0.1", CDP_PORT)) else { return };
+/// Pass a DevTools connection on to Chromium, which only listens inside this container, once its first request
+/// carries the token (`Authorization: Bearer …`): DevTools is the whole browser, saved logins and all.
+fn pass_on(mut c: std::net::TcpStream, token: &str) {
+    use std::io::{Read, Write};
+    // The request's head: at most 16 KB, within 10 s.
+    let start = std::time::Instant::now();
+    let _ = c.set_read_timeout(Some(Duration::from_secs(10)));
+    let (mut head, mut buf) = (vec![], [0u8; 4096]);
+    while !head.windows(4).any(|w| w == b"\r\n\r\n") {
+        match c.read(&mut buf) {
+            Ok(n) if n > 0 && head.len() + n <= 16 << 10 && start.elapsed() < Duration::from_secs(10) => head.extend_from_slice(&buf[..n]),
+            _ => return,
+        }
+    }
+    if !authorized(&head, token) {
+        let _ = c.write_all(b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+        return;
+    }
+    let _ = c.set_read_timeout(None);
+    let Ok(mut up) = std::net::TcpStream::connect(("127.0.0.1", CDP_PORT)) else { return };
+    if up.write_all(&head).is_err() {
+        return;
+    }
     let (Ok(mut c2), Ok(mut up2)) = (c.try_clone(), up.try_clone()) else { return };
     std::thread::spawn(move || {
         let _ = std::io::copy(&mut c2, &mut up2);
         let _ = up2.shutdown(std::net::Shutdown::Write);
     });
-    let (mut c, mut up) = (c, up);
     let _ = std::io::copy(&mut up, &mut c);
     let _ = c.shutdown(std::net::Shutdown::Write);
+}
+
+/// An HTTP request head with `Authorization: Bearer <token>`.
+fn authorized(head: &[u8], token: &str) -> bool {
+    let head = String::from_utf8_lossy(head);
+    let head = head.split("\r\n\r\n").next().unwrap_or("");
+    head.lines().skip(1).filter_map(|l| l.split_once(':')).any(|(k, v)| {
+        k.trim().eq_ignore_ascii_case("authorization") && v.trim().strip_prefix("Bearer ").is_some_and(|t| same(t.trim(), token))
+    })
 }
 
 // ---------- teaching by showing ----------
@@ -782,7 +823,12 @@ async fn page_info(at: Option<(i64, i64)>) -> Option<serde_json::Value> {
     let ask_tab = |ws: String| {
         let js = js.clone();
         async move {
-            let (mut sock, _) = tokio_tungstenite::connect_async(ws).await.ok()?;
+            use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+            let mut req = ws.into_client_request().ok()?;
+            if let Some(h) = cdp_auth().ok()? {
+                req.headers_mut().insert("authorization", h.parse().ok()?);
+            }
+            let (mut sock, _) = tokio_tungstenite::connect_async(req).await.ok()?;
             // One DevTools call at a time: send, then read until its answer.
             let mut id = 0;
             let mut call = async |method: &str, params: serde_json::Value| -> Option<serde_json::Value> {
@@ -805,7 +851,11 @@ async fn page_info(at: Option<(i64, i64)>) -> Option<serde_json::Value> {
         }
     };
     let get = async {
-        let pages: serde_json::Value = reqwest::Client::new().get(format!("{}/json/list", cdp_endpoint().ok()?)).send().await.ok()?.json().await.ok()?;
+        let mut list = reqwest::Client::new().get(format!("{}/json/list", cdp_endpoint().ok()?));
+        if let Some(h) = cdp_auth().ok()? {
+            list = list.header("Authorization", h);
+        }
+        let pages: serde_json::Value = list.send().await.ok()?.json().await.ok()?;
         // Chromium's own pages (the address bar's popup is one) aren't the page you're on.
         let real = |p: &&serde_json::Value| p["type"] == "page" && !p["url"].as_str().unwrap_or("").starts_with("chrome");
         for ws in pages.as_array()?.iter().filter(real).filter_map(|p| p["webSocketDebuggerUrl"].as_str()) {
@@ -861,6 +911,15 @@ mod tests {
         assert!(shown.steps[2].ends_with("typed into the \"Email\" field \"me@x.com\""), "{}", shown.steps[2]);
         assert!(!shown.steps.join("\n").contains("hunter2"));
         assert!(super::teaching().is_none());
+    }
+
+    #[test]
+    fn devtools_need_the_token() {
+        let t = "0123456789abcdef01234567";
+        assert!(super::authorized(format!("GET /json/list HTTP/1.1\r\nHost: 10.0.0.2:9223\r\nauthorization: Bearer {t}\r\n\r\n").as_bytes(), t));
+        assert!(!super::authorized(b"GET /json/list HTTP/1.1\r\nHost: 10.0.0.2:9223\r\n\r\n", t));
+        assert!(!super::authorized(b"GET /json/list HTTP/1.1\r\nAuthorization: Bearer 0123456789abcdef01234568\r\n\r\n", t));
+        assert!(!super::authorized(format!("POST / HTTP/1.1\r\nHost: x\r\n\r\nAuthorization: Bearer {t}\r\n").as_bytes(), t), "not in the body");
     }
 
 

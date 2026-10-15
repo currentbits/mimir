@@ -430,6 +430,8 @@ fn files_of(d: &Value) -> Vec<File> {
             mime: f["content_type"].as_str().unwrap_or("").split(';').next().unwrap_or("").trim().into(),
             size: f["size"].as_u64().unwrap_or(0),
             url: f["url"].as_str().unwrap_or("").into(),
+            // A voice message recorded in Discord carries its waveform; an uploaded audio file doesn't.
+            voice: f["waveform"].is_string(),
         })
         .collect()
 }
@@ -449,6 +451,16 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_voice_message_is_yours_an_audio_file_isnt() {
+        let d = json!({"attachments": [
+            {"filename": "voice-message.ogg", "content_type": "audio/ogg", "size": 9, "url": "u", "waveform": "AAAA", "duration_secs": 2.0},
+            {"filename": "song.mp3", "content_type": "audio/mpeg", "size": 9, "url": "u"}
+        ]});
+        let f = files_of(&d);
+        assert!(f[0].voice && !f[1].voice);
+    }
 
     /// Network: proves the rustls WebSocket path and HELLO parsing against the real gateway (no token needed).
     #[tokio::test]

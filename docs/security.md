@@ -40,8 +40,25 @@ Reading stays allowed after outside content, except when the read itself would c
 - jumping to the browser's address bar on the bots' computer;
 - typing one of your memories into a page;
 - read-only tool-server calls that reach the internet with a request that carries data;
-- after reading your email or a meeting, any web address at all (a short link can carry a code);
+- after reading your email or a meeting, any web address at all (a short link can carry a code), for the rest of the
+  conversation and in tasks it hands to other bots;
 - a web search whose query holds one of your memories.
+
+**What you mark sensitive keeps its data in.** In Settings → Sensitive sources you can mark a tool server (your
+bank's), one of its tools, or a chat's memory as sensitive; servers named like banking or health are suggested, never
+marked for you. Once a conversation or routine has read from one (a tool call, a memory search, or its memories in the
+bot's instructions), everything that goes out asks, even if its rule says allow, and the card starts with why
+("This run read from bank, which you marked sensitive"):
+
+- sending an email;
+- reading a web page or searching the web, and opening a page or typing on the bots' computer;
+- handing a task to another bot;
+- a message to someone else's chat (a reminder for them, a file in a group);
+- a memory saved for the household, which its guests read;
+- any tool server's change, and its reads that reach the internet (not the sensitive server's own).
+
+Like outside content, it never becomes "always", "all like this" or part of a plan, it sticks to the conversation until
+"Start fresh", and it carries over to tasks handed to other bots. It can only make things stricter.
 
 **Some actions always ask.** Sending an email and making a bot ask every time, whatever the rules say, as their own
 kind of approval: never "always", never "all like this". An email is sent only if all of it fits on the card you
@@ -53,12 +70,12 @@ in a group (where the reply goes to everyone) or incognito (where nothing may be
 
 **What's learned stays yours to accept.** Bots never change your memory's rules, your permissions, tool grants, saved
 logins, or your routines' schedules on their own. A bot may book a follow-up in the chat ("I'll check back Friday"):
-a one-off you see in its reply and in Routines, which asks first after outside content, is marked when made then, and
+a one-off it's told to mention in its reply, always shown in Routines, which asks first after outside content, is marked when made then, and
 counts toward the routine caps. A memory saved after reading outside content is marked *unconfirmed* and is kept
 out of the bots' standing instructions until you confirm it. That quarantine is why saving a new memory after outside
 content is the one change that doesn't ask; replacing an existing memory does, since it would take a confirmed one out
 of the instructions. The mark survives every path back in: a new version of the memory, a tidy-up suggestion drawn
-from such a conversation, or "Accept all" (which skips those suggestions). The one exception is a lesson that says
+from such a conversation, or "Accept all" (they come in unconfirmed). The one exception is a lesson that says
 what you wrote yourself (your messages only, never a file's or a forward's text): a page can't put words in your
 messages. Only your own words come back as past corrections or skill pitfalls. Files bots keep carry the same mark
 (written after outside content, or changed outside Mimir, counts as outside content), and the workspace can't be
@@ -70,7 +87,8 @@ left: no `..`, no links, size limits.
 - Long text is cut with a note saying so; the limits on memories, routines and hand-offs keep theirs whole.
 - Hidden direction marks are made visible.
 - Plans list what they pre-approve before their steps.
-- "Always" never comes from a request made after outside content, or from one that uses a saved login.
+- "Always" never comes from a request made after outside content (even for an action that already asks), from one
+  that uses a saved login, or from a guest's chat (your rules are yours).
 
 **Saved logins never reach the model.** They are typed by name into the browser, only on the sites you listed (the
 site is read the way the browser reads it), and each use asks.
@@ -86,8 +104,8 @@ The data folder is owner-only. Chat API tokens (for Shortcuts and the like) each
 nothing else, are checked before the body is read too, and only their SHA-256 is stored.
 
 **The bots' computer** runs its browser without Mimir's environment or secrets, with its own home. With docker compose
-it's a separate container (its own user, no data folder, no published ports, a token on its control channel), so a
-browser exploit doesn't land next to your database. In the Docker image, `file://` and internal pages and downloads
+it's a separate container (its own user, no data folder, no published ports, a token on its control channel and its
+DevTools port), so a browser exploit doesn't land next to your database. In the Docker image, `file://` and internal pages and downloads
 are blocked by policy, and the containers drop all capabilities.
 
 **Updates are signed.** The desktop app installs an update only if it's signed with Mimir's release key (the public
@@ -111,6 +129,11 @@ half is built into the app); a tampered download is refused. It never restarts o
 
 ## What's left
 
+- A photo you send counts as your own message, so words inside it (a screenshot of a page, a photo of a letter) aren't
+  marked as outside content. Forwarded photos, audio files and documents are.
+
+- Signal doesn't mark forwards, so a message or voice note you forward there counts as your own words.
+
 - A message with a photo goes to Grok on its command line (it has no file form for that), where other accounts on the
   same computer could read it.
 - After outside content, clicks in the browser on a site you set to "always" don't ask (typing your memories there
@@ -119,10 +142,16 @@ half is built into the app); a tampered download is refused. It never restarts o
   addresses one fetch at a time (each fetch is in the run log).
 - An email card shows exactly what's sent, but approving it is your call: after reading an email, check the recipient
   is who you meant.
+- Sensitive sources only work once you mark them: a bank's server you haven't marked is just a tool server (its data
+  is still outside content, and private-data rules don't apply to it).
+- When the bots' computer runs in Mimir's own process on a plain Linux host (not Docker), its Chromium's DevTools on
+  `127.0.0.1:9222` have no token, so other accounts on that machine can drive the browser. Use the Docker image or
+  compose.
 
 ## For contributors
 
 Every new way for text to reach a model must either be the person's own words, or mark the conversation
-(`ToolCtx::taint`). Every new action that changes data must go through `tools::call`. Every new kind of learned
+(`ToolCtx::taint`). Every new way for data to leave must be listed in `sends_out`, so it asks after a sensitive
+source. Every new action that changes data must go through `tools::call`. Every new kind of learned
 artefact must be a proposal that keeps the outside-content mark. Details, with the code they live in, are in
 [Architecture](architecture.md).

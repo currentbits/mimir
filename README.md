@@ -1,9 +1,9 @@
 # Mimir
 
 A free app that runs AI assistants for you, on **your own** AI subscription (Claude, ChatGPT, Grok, or any API key).
-You message (or talk to) them in Telegram, Slack, Discord or the desktop app; they remember you, work on a schedule,
-use your email, calendar and the web, and ask before they act. Mimir has no AI and no servers of its own. Website:
-[heymimir.app](https://heymimir.app).
+You message (or talk to) them in Telegram, Slack, Discord, Signal or the desktop app; they remember you, work on a
+schedule, use your email, calendar and the web, and ask before they act. Mimir has no AI and no servers of its own.
+Website: [heymimir.app](https://heymimir.app).
 
 - **Bots that know you, and learn.** They remember facts, preferences and tasks (shared by all your bots or kept for
   one, plus a household everyone shares; all visible and correctable), search your earlier conversations, and learn
