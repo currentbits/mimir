@@ -18,6 +18,15 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
   blob or download a program. Skills come in as proposals and routines come in paused; only its tool rules that are at
   least as strict as yours can be used, and its AI account uses your own settings.
   **Duplicate…** does both in one go. See [Bots and chats](docs/bots-and-chats.md#export-import-and-duplicate).
+- **Security fixes from the fourth review:**
+  - A routine can no longer change its own times or end date while it runs, or book itself again a minute later;
+    from a routine, a one-off is at least 15 minutes away.
+  - A follow-up stays in the chat it was booked in, and a reminder for someone else counts toward their chat's limit.
+  - With docker compose, Codex bots now use the separate computer service; before, they started a browser inside
+    Mimir's own container.
+  - After reading a sensitive source, saving a memory for the household asks too.
+  - A bot file can't pass an option to the AI's command line as its model.
+  - `mimir doctor` no longer creates a database, or upgrades an older one, while it checks.
 
 ## 0.3.0
 
