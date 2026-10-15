@@ -1005,7 +1005,9 @@ async fn codex(ctx: &ToolCtx, home: &PathBuf, model: Option<&str>, system: &str,
     for kv in [
         r#"sandbox_mode="read-only""#.to_string(),
         r#"approval_policy="never""#.to_string(),
-        r#"web_search="live""#.to_string(),
+        // Cached, not live: live search also opens any address (open_page) from OpenAI's servers, out of leaks_out's
+        // sight, so a URL could carry data out. Cached answers those with a cache miss; fresh pages go through web_fetch.
+        r#"web_search="cached""#.to_string(),
         // A JSON string is also a valid TOML string (Windows backslashes included).
         format!("model_instructions_file={}", serde_json::to_string(&instructions.0)?),
     ] {
