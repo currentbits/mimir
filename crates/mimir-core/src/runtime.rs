@@ -134,7 +134,12 @@ impl Chan {
                 let Some(draft) = crate::live::get(bot, chat_id).filter(|d| !d.trim().is_empty()) else { continue };
                 // A long reply's draft stops growing at DRAFT_MAX; the final message has all of it.
                 let head: String = draft.chars().take(DRAFT_MAX).collect();
-                let text = if head.len() < draft.len() { format!("{}… ▍", head.trim_end()) } else { format!("{head} ▍") };
+                // No cursor on Slack: a draft there may be a stream, which is only appended to, so one would stay in the text.
+                let text = match &chan {
+                    Chan::Slack(_) => head,
+                    _ if head.len() < draft.len() => format!("{}… ▍", head.trim_end()),
+                    _ => format!("{head} ▍"),
+                };
                 if text == shown {
                     continue;
                 }
@@ -166,13 +171,13 @@ impl Chan {
         }
     }
 
-    /// "typing…" indicator until the handle is aborted (Slack bots have none).
+    /// "typing…" indicator until the handle is aborted (Slack's only in a reply thread).
     fn typing(&self, ext: &str) -> Option<JoinHandle<()>> {
         match self {
             Chan::Telegram(c) => Some(c.typing(ext)),
             Chan::Discord(c) => Some(c.typing(ext)),
             Chan::Signal(c) => Some(c.typing(ext)),
-            Chan::Slack(_) => None,
+            Chan::Slack(c) => c.typing(ext),
         }
     }
 
@@ -1193,7 +1198,7 @@ impl Core {
                     }
                     3 => match self.db.routines(chat)?.into_iter().find(|r| r.id == id) {
                         Some(r) => {
-                            self.db.routine_update(chat, id, &r.cron, &r.prompt, r.quiet, true)?;
+                            self.db.routine_update(chat, id, &r.cron, &r.prompt, r.quiet, true, None)?;
                             trf("⏸ Paused routine #{id}. Ask me, or use Mimir, to start it again.", &[("id", &id.to_string())])
                         }
                         None => tr("That routine is gone.").into(),
@@ -2466,7 +2471,8 @@ mod tests {
             while let Ok((mut s, _)) = l.accept().await {
                 let mut buf = vec![0u8; 65536];
                 let n = s.read(&mut buf).await.unwrap_or(0);
-                if String::from_utf8_lossy(&buf[..n]).contains("/sendMessage") {
+                let req = String::from_utf8_lossy(&buf[..n]);
+                if req.contains("/sendMessage") || req.contains("/sendRichMessage") {
                     count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 }
                 let body = r#"{"ok":true,"result":{"message_id":1}}"#;

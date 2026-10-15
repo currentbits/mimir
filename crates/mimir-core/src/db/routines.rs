@@ -214,34 +214,49 @@ impl Db {
     }
 
     /// A bot's routines that are due. Ones past their end (by more than a late run's grace) are removed first: they
-    /// don't run late after it.
+    /// don't run late after it. The grace is for a slot before the end; an event (mail, webhook) after it doesn't run.
     pub fn due(&self, bot: i64, t: i64) -> Result<Vec<Routine>> {
         for r in self.routines_where("bot_id = ?1 AND ends > 0 AND ends + ?3 <= ?2", params![bot, t, MISSED_AFTER])? {
             self.routine_delete(r.chat_id, r.id)?;
         }
         // A paused or finished goal's routines wait with it.
-        self.routines_where("bot_id = ?1 AND next_fire <= ?2 AND paused = 0 AND (goal_id IS NULL OR goal_id IN (SELECT id FROM goals WHERE status IN ('active','blocked')))", [bot, t])
+        self.routines_where(
+            "bot_id = ?1 AND next_fire <= ?2 AND paused = 0 AND (ends = 0 OR next_fire <= ends) AND (goal_id IS NULL OR goal_id IN (SELECT id FROM goals WHERE status IN ('active','blocked')))",
+            [bot, t],
+        )
     }
 
     /// Edit, pause or resume. The next run is worked out from now, so resuming doesn't fire missed slots.
-    pub fn routine_update(&self, chat: i64, id: i64, cron: &str, prompt: &str, quiet: bool, paused: bool) -> Result<bool> {
+    /// `ends`: a new end (0 clears it), checked with the new schedule and written with it, so a change that's
+    /// refused leaves both as they were. `None` keeps the end.
+    #[allow(clippy::too_many_arguments)]
+    pub fn routine_update(&self, chat: i64, id: i64, cron: &str, prompt: &str, quiet: bool, paused: bool, ends: Option<i64>) -> Result<bool> {
         if prompt.trim().is_empty() {
             bail!("a routine needs a prompt");
         }
         // A one-off keeps its time (it has no schedule to work one out from).
         let once: bool = self.c().query_row("SELECT once FROM routines WHERE id=?1 AND chat_id=?2", [id, chat], |r| r.get(0)).optional()?.unwrap_or(false);
+        if once && ends.is_some_and(|e| e != 0) {
+            bail!("a one-off has no end: it runs once");
+        }
+        if ends.is_some_and(|e| e != 0 && e <= now()) {
+            bail!("that end has already passed");
+        }
         if once {
             return Ok(self.c().execute("UPDATE routines SET prompt=?3, quiet=?4, paused=?5 WHERE id=?1 AND chat_id=?2", params![id, chat, prompt.trim(), quiet, paused])? > 0);
         }
         let next = next_fire(cron, now())?;
         self.calendar_private(chat, cron)?;
-        let ends: i64 = self.c().query_row("SELECT ends FROM routines WHERE id=?1", [id], |r| r.get(0)).optional()?.unwrap_or(0);
+        let ends = match ends {
+            Some(e) => e,
+            None => self.c().query_row("SELECT ends FROM routines WHERE id=?1", [id], |r| r.get(0)).optional()?.unwrap_or(0),
+        };
         if !paused && ends > 0 && next < IDLE && next > ends {
-            bail!("on that schedule it wouldn't run again before it ends; change or clear its end first");
+            bail!("on that schedule it wouldn't run again before it ends; move or clear its end too");
         }
         Ok(self.c().execute(
-            "UPDATE routines SET cron=?3, prompt=?4, quiet=?5, paused=?6, next_fire=?7 WHERE id=?1 AND chat_id=?2",
-            params![id, chat, cron.trim(), prompt.trim(), quiet, paused, next],
+            "UPDATE routines SET cron=?3, prompt=?4, quiet=?5, paused=?6, next_fire=?7, ends=?8 WHERE id=?1 AND chat_id=?2",
+            params![id, chat, cron.trim(), prompt.trim(), quiet, paused, next, ends],
         )? > 0)
     }
 

@@ -99,7 +99,7 @@ async fn security(db: &Db) -> Vec<Check> {
     }
     let loose = crate::ext::unpinned(db);
     if !loose.is_empty() {
-        out.push(bad(State::Warn, format!("Tool servers without a fixed version: {}", loose.join(", ")), "Each start can fetch a new release. Add the version to the package in Settings → Tool servers (like `pkg@1.2.3`)."));
+        out.push(bad(State::Warn, format!("Tool servers without a fixed version: {}", loose.join(", ")), "Each start can fetch a new release. Its Update button in Settings → Tool servers pins one, or add the version yourself (like `pkg@1.2.3`)."));
     }
     out.push(match crate::server_update::latest(db).await {
         Some(v) if crate::host::is_desktop() => bad(State::Warn, format!("Mimir {v} is out (this is {})", crate::server_update::CURRENT), "Settings → Updates installs it."),

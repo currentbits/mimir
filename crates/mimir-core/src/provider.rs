@@ -139,6 +139,10 @@ impl Provider {
     /// One reply. A message the person sends while it's being written steers it: `claude -p` takes it in mid-run
     /// (see claude); the others can't, so the run stops and starts over from the same session with it added.
     pub async fn run(&self, ctx: &ToolCtx, system: &str, history: &[(String, String)], user: &str, session: Option<String>) -> Result<Reply> {
+        // Nothing reaches the model that the person couldn't see in it (a mail's tag characters, say): crate::visible.
+        let (system, user) = (crate::visible(system), crate::visible(user));
+        let history: Vec<(String, String)> = history.iter().map(|(r, t)| (r.clone(), crate::visible(t))).collect();
+        let (system, history, user) = (system.as_str(), history.as_slice(), user.as_str());
         let (b, c) = (ctx.bot_id, ctx.chat_id);
         let bell = if ctx.stream && !matches!(self, Provider::Claude { .. }) { crate::live::bell(b, c) } else { None };
         let Some(bell) = bell else { return self.run_once(ctx, system, history, user, session).await };
@@ -1001,7 +1005,9 @@ async fn codex(ctx: &ToolCtx, home: &PathBuf, model: Option<&str>, system: &str,
     for kv in [
         r#"sandbox_mode="read-only""#.to_string(),
         r#"approval_policy="never""#.to_string(),
-        r#"web_search="live""#.to_string(),
+        // Cached, not live: live search also opens any address (open_page) from OpenAI's servers, out of leaks_out's
+        // sight, so a URL could carry data out. Cached answers those with a cache miss; fresh pages go through web_fetch.
+        r#"web_search="cached""#.to_string(),
         // A JSON string is also a valid TOML string (Windows backslashes included).
         format!("model_instructions_file={}", serde_json::to_string(&instructions.0)?),
     ] {

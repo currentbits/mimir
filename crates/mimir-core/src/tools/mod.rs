@@ -317,6 +317,8 @@ pub async fn call(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
         },
         _ => exec(ctx, name, args).await,
     };
+    // A page, a mail, a tool server's answer: hidden characters don't reach the model (or the run log).
+    let out = out.map(|r| crate::visible(&r));
     if ctx.stream {
         crate::live::set_step(ctx.bot_id, ctx.chat_id, None);
     }
@@ -1397,7 +1399,7 @@ mod tests {
         assert!(r.once && r.next_fire > crate::db::now());
         assert!(ctx.db.due(1, r.next_fire).unwrap().iter().any(|x| x.id == r.id));
         // Editing keeps its time; after it has run, it's gone.
-        assert!(ctx.db.routine_update(9, r.id, "", "Remind me to call mum and dad", false, false).unwrap());
+        assert!(ctx.db.routine_update(9, r.id, "", "Remind me to call mum and dad", false, false, None).unwrap());
         assert_eq!(ctx.db.routines(9).unwrap()[0].next_fire, r.next_fire);
         ctx.db.routine_advance(&r).unwrap();
         ctx.db.routine_done(&r, true).unwrap();
@@ -1431,7 +1433,14 @@ mod tests {
         call(&ctx, "routine_update", &json!({"id": r.id, "until": ""})).await.unwrap();
         assert_eq!(ctx.db.routine(r.id).unwrap().unwrap().ends, 0, "cleared");
         assert!(ctx.db.routine_set_ends(9, r.id, r.next_fire + 60).unwrap());
-        assert!(ctx.db.routine_update(9, r.id, "0 8 1 1 *", "Brief me", false, false).is_err(), "would first run after the end");
+        assert!(ctx.db.routine_update(9, r.id, "0 8 1 1 *", "Brief me", false, false, None).is_err(), "would first run after the end");
+        // A new schedule and a new end that don't fit together: refused whole, the end isn't moved on its own.
+        let before = ctx.db.routine(r.id).unwrap().unwrap().ends;
+        assert!(call(&ctx, "routine_update", &json!({"id": r.id, "cron": "0 8 1 1 *", "until": day(20)})).await.is_err());
+        assert_eq!(ctx.db.routine(r.id).unwrap().unwrap().ends, before, "end left as it was");
+        // Together they fit: a later end with a slower schedule.
+        call(&ctx, "routine_update", &json!({"id": r.id, "cron": "0 8 * * 1", "until": day(20)})).await.unwrap();
+        ctx.db.routine_update(9, r.id, "0 8 * * *", "Brief me", false, false, Some(r.next_fire + 60)).unwrap();
         let r = ctx.db.routine(r.id).unwrap().unwrap();
         ctx.db.routine_advance(&r).unwrap();
         assert!(ctx.db.routine(r.id).unwrap().is_some(), "still there for its last run");
@@ -1459,6 +1468,14 @@ mod tests {
         assert!(ctx.db.due(1, crate::db::now()).unwrap().iter().all(|x| x.id != late.id));
         assert!(ctx.db.routine(late.id).unwrap().is_none());
         assert!(ctx.db.routine(f.id).unwrap().is_some(), "the follow-up isn't touched");
+        // Within the grace, a slot from before the end still runs; an event (webhook, mail) after the end doesn't.
+        let now = crate::db::now();
+        let slot = ctx.db.routine_create(1, 9, "0 8 * * *", "slot", false).unwrap();
+        ctx.db.c().execute("UPDATE routines SET ends=?2, next_fire=?3 WHERE id=?1", [slot.id, now - 60, now - 120]).unwrap();
+        let ev = ctx.db.routine_create(1, 9, "0 8 * * *", "event", false).unwrap();
+        ctx.db.c().execute("UPDATE routines SET ends=?2, next_fire=?3 WHERE id=?1", [ev.id, now - 60, now - 10]).unwrap();
+        let due: Vec<i64> = ctx.db.due(1, now).unwrap().iter().map(|x| x.id).collect();
+        assert!(due.contains(&slot.id) && !due.contains(&ev.id), "{due:?}");
     }
 
     #[tokio::test]

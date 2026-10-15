@@ -797,6 +797,11 @@ function ToolServerSettings({ onChange }: { onChange: () => void }) {
   const wantsSignIn = remote && !!server && !!err && /sign in/.test(err)
   const signIn = (conf: object, name: string, label = `Sign in to ${name}`) => <SignInBrowser<number> label={label} what={name}
     start={() => invoke('tool_server_sign_in', { server: conf })} wait="tool_server_sign_in_wait" paste="tool_server_sign_in_paste" onDone={ready(name)} />
+  // Moves its pinned package to the release named on the button (one at least a week old). Starts it once, like Save.
+  const update = async (s: ToolServer) => {
+    setBusy(true); setErr(null)
+    try { ready(s.name)(await invoke<number>('tool_server_update', { name: s.name })) } catch (e) { setErr(String(e)) } finally { setBusy(false) }
+  }
   const remove = (s: ToolServer) => ask(`Remove ${s.name}? Your bots lose its tools.`, 'Remove', true).then(ok => { if (ok) void invoke('tool_server_delete', { name: s.name }).then(() => { setMsg(null); list.reload(); onChange() }, e => setErr(String(e))) })
 
   return (
@@ -804,6 +809,7 @@ function ToolServerSettings({ onChange }: { onChange: () => void }) {
       {servers.map(s => (
         <Row key={s.name} icon={<Icon name="plug" size={15} />} title={s.name} desc={<>{s.tools} tool{s.tools === 1 ? '' : 's'} · <code>{s.url || [s.command, ...s.args].join(' ')}</code></>}>
           {s.signed_in && signIn({ name: s.name, url: s.url, headers: Object.fromEntries(s.headers.map(k => [k, ''])) }, s.name, 'Sign in again')}
+          {s.update && <button className="btn btn-sm" disabled={busy} title="A release at least a week old; Mimir doesn't take newer ones on its own" onClick={() => update(s)}>{busy ? 'Updating…' : `Update to ${s.update}`}</button>}
           <button className="btn btn-sm" onClick={() => open(s)}>Edit</button>
           <button className="btn btn-sm btn-ghost btn-danger icon-btn" aria-label={`Remove ${s.name}`} title="Remove" onClick={() => remove(s)}><Icon name="trash" size={14} /></button>
         </Row>

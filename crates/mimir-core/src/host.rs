@@ -802,17 +802,19 @@ impl Host {
             // Configured servers with their tool counts. Env and headers show names only; values stay in the secret store.
             "tool_servers" => {
                 let sensitive = tools::sensitive_list(&self.db);
-                let servers: Vec<Value> = ext::servers(&self.db)
-                    .into_iter()
-                    .map(|s| {
-                        let keys = |m: std::collections::HashMap<String, String>| m.into_keys().collect::<std::collections::BTreeSet<_>>();
-                        json!({"name": s.name, "preset": s.preset, "command": s.command, "args": s.args, "url": s.url, "env": keys(s.env), "headers": keys(s.headers), "tools": ext::cached_tools(&self.db, &s.name).len(), "signed_in": ext::signed_in(&s.name), "sensitive": sensitive.contains(&s.name), "suggest_sensitive": tools::looks_sensitive(&s.name)})
-                    })
-                    .collect();
+                // `update`: a newer settled release than the one its package is pinned to (or a pin, for one that isn't).
+                let mut servers: Vec<Value> = vec![];
+                for s in ext::servers(&self.db) {
+                    let keys = |m: std::collections::HashMap<String, String>| m.into_keys().collect::<std::collections::BTreeSet<_>>();
+                    let update = if s.preset.is_none() { ext::update_for(&self.db, &s).await } else { None };
+                    servers.push(json!({"name": s.name, "preset": s.preset, "command": s.command, "args": s.args, "url": s.url, "env": keys(s.env), "headers": keys(s.headers), "tools": ext::cached_tools(&self.db, &s.name).len(), "signed_in": ext::signed_in(&s.name), "sensitive": sensitive.contains(&s.name), "suggest_sensitive": tools::looks_sensitive(&s.name), "update": update}));
+                }
                 ok(json!({"servers": servers, "tools": ext::all_tools(&self.db).len()}))
             }
-            // Add or replace one server: {name, command, args, env} or {name, url, headers}. Starts it once; returns its tool count.
+            // Add or replace one server: {name, command, args, env} or {name, url, headers}. Its package is pinned to a
+            // release (see ext::pin). Starts it once; returns its tool count.
             "tool_server_save" => ok(ext::save_server(&self.db, arg(a, "server")?).await?),
+            "tool_server_update" => ok(ext::update_server(&self.db, &arg::<String>(a, "name")?).await?),
             // Sensitive sources: once a run has read one, everything that goes out asks. Only you set them.
             "sensitive" => ok(tools::sensitive_list(&self.db)),
             "set_sensitive" => {
@@ -1315,7 +1317,7 @@ impl Host {
                 if self.db.routine(id)?.is_none_or(|r| r.cron != cron.trim()) {
                     crate::events::ready(&self.db, chat, &cron)?;
                 }
-                ok(self.db.routine_update(chat, id, &cron, &arg::<String>(a, "prompt")?, arg(a, "quiet")?, arg(a, "paused")?)?)
+                ok(self.db.routine_update(chat, id, &cron, &arg::<String>(a, "prompt")?, arg(a, "quiet")?, arg(a, "paused")?, None)?)
             }
             "delete_routine" => ok(self.db.routine_delete(arg(a, "chat_id")?, arg(a, "id")?)?),
             // With bot_id: that bot's own conversation in the chat (a bot opened from the sidebar); without, everyone's.
