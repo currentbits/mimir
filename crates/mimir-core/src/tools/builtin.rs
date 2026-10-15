@@ -653,6 +653,7 @@ pub(super) async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<Stri
             if ctx.is_tainted() {
                 ctx.db.routine_taint(r.id)?;
             }
+            ctx.mark_routine(r.id)?;
             if crate::events::on(&r.cron)?.is_some() && !args["keep"].as_bool().unwrap_or(false) {
                 ctx.db.routine_set_once(r.id)?;
             }
@@ -732,6 +733,7 @@ pub(super) async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<Stri
             if ctx.is_tainted() {
                 ctx.db.routine_taint(id)?;
             }
+            ctx.mark_routine(id)?;
             let r = ctx.db.routines(ctx.chat_id)?.into_iter().find(|r| r.id == id).context("no such routine")?;
             format!("routine #{id} updated; {} {}: {}", if r.once { "runs once," } else { "next run" }, next_run(&r), r.prompt)
         }

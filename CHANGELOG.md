@@ -9,7 +9,8 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
   sensitive in **Settings → Sensitive sources**. Once a reply or routine has read from one, everything that goes out
   asks first, and the card says why ("This run read from bank"): an email, a web page or search, a task for another
   bot, a message to someone else's chat, and any tool server's change. Servers whose names look like banking or
-  health are suggested, never marked for you.
+  health are suggested, never marked for you. A routine made or changed after such a read asks the same way every time
+  it runs, and deleting a tool server clears its marks.
 - **Security:** the TLS library (rustls 0.23.46) is updated for four advisories published on October 14
   (RUSTSEC-2026-0346 to 0349).
 - **Export, import and duplicate a bot:** right-click a bot to save it as one file (its role, look, skills, routines,
@@ -17,6 +18,8 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
   the new-bot page shows everything in it first, and flags skill steps that pipe a download into a shell, hold a base64
   blob or download a program. Skills come in as proposals and routines come in paused; only its tool rules that are at
   least as strict as yours can be used, and its AI account uses your own settings.
+  Routines keep their watched page, delivery, "right away when" rule and end date, and **Show** on a skill opens its
+  full instructions before you add it. Addresses in the file never carry a password or a `?key=`.
   **Duplicate…** does both in one go. See [Bots and chats](docs/bots-and-chats.md#export-import-and-duplicate).
 
 ## 0.3.0

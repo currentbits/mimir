@@ -246,6 +246,10 @@ pub async fn turn(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) -> R
     if matches!(&trigger, Trigger::Routine(r) if r.tainted) || matches!(trigger, Trigger::Reported { tainted: true, .. }) {
         ctx.pre_taint();
     }
+    // A routine made after reading a sensitive source: its prompt may hold what was read.
+    if let Trigger::Routine(r) = &trigger {
+        ctx.restore_routine(r.id)?;
+    }
     if ctx.stream {
         live::reset(ctx.bot_id, ctx.chat_id);
         // Messages sent from now until it's answered steer this reply instead of waiting their turn.

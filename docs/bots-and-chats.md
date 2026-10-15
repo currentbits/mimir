@@ -35,15 +35,18 @@ Right-click a bot and choose **Export…** to save it as one file (`<name>.mimir
 role, AI account and model, allowed tools, accepted skills, repeating routines, your tool rules for the tools it may use,
 and the tool servers it uses (their config only). It never holds tokens, keys, saved logins, memories, chats or the run
 log. A tool server's env and header values are left empty (their names stay, so you know what to fill in), an argument
-that looks like a key is blanked, and a server URL loses its `?…` part. A skill or routine that mentions a saved login or
+that looks like a key is blanked, and every address in it (the AI account's, a server's, a page a routine watches) loses
+its `user:password@` and `?…` parts. A skill or routine that mentions a saved login or
 a key is left out. A password typed into the role or a tool server's settings isn't recognised, so check those before
 you share the file.
 
 **From a file…** on the new-bot page (**+** in the sidebar) reads one. Before anything is added you see the bot and
 everything in the file:
 
-- **Skills** arrive as proposals in Memory, to read and accept one by one.
-- **Routines** arrive paused, and count as outside content when they run.
+- **Skills** arrive as proposals in Memory, to read and accept one by one. **Show** opens a skill's full instructions.
+- **Routines** arrive paused, and count as outside content when they run. They keep their settings: the page or mailbox
+  a quiet check watches, where results go (digest, run log, pinned card), when one comes through right away, and when
+  it ends. One whose end has already passed is left out.
 - Anything in a skill or routine that pipes a download into a shell (`curl … | sh`), holds a base64 blob or downloads a
   program is flagged on its line, as is text that reads like an instruction to the assistant. Mimir never runs a skill's
   setup steps.
