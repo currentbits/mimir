@@ -1135,6 +1135,13 @@ mod tests {
         let out = call(&you, "routine_create", &args).await.unwrap();
         assert!(out.contains("set for Sam Jones"), "{out}");
         assert!(db.routines(200).unwrap().iter().any(|r| r.prompt == "Time to take the bins out") && db.routines(100).unwrap().is_empty());
+        // A follow-up is the bot checking back here, not in Sam's chat; and Sam's chat has its own cap of 25.
+        let followup = json!({"at": soon, "prompt": "x", "for": "sam", "followup": true});
+        assert!(call(&you, "routine_create", &followup).await.unwrap_err().to_string().contains("for this chat"));
+        while db.routines(200).unwrap().len() < 25 {
+            db.routine_create(1, 200, "0 8 * * *", "theirs", false).unwrap();
+        }
+        assert!(call(&you, "routine_create", &args).await.unwrap_err().to_string().contains("25 routines"), "counted in Sam's chat");
     }
 
     #[tokio::test]
@@ -1217,6 +1224,21 @@ mod tests {
         assert!(ctx.db.routine(r.id).unwrap().is_some(), "still there for its last run");
         ctx.db.routine_done(&r, true).unwrap();
         assert!(ctx.db.routine(r.id).unwrap().is_none(), "gone after it");
+
+        // In a routine's own run, nobody is there: it can't book itself again a minute later, or move its times or end.
+        let mut run = ctx.clone();
+        run.unattended = true;
+        let in_a_minute = (chrono::Local::now() + chrono::Duration::minutes(2)).format("%Y-%m-%d %H:%M").to_string();
+        assert!(call(&run, "routine_create", &json!({"at": in_a_minute, "prompt": "x", "followup": true})).await.unwrap_err().to_string().contains("15 minutes"));
+        call(&run, "routine_create", &json!({"at": soon, "prompt": "Check again", "followup": true})).await.unwrap();
+        let r = ctx.db.routine_create(1, 9, "0 8 * * *", "Standup notes", false).unwrap();
+        ctx.db.routine_set_ends(9, r.id, crate::db::now() + 3 * 86400).unwrap();
+        for change in [json!({"id": r.id, "until": ""}), json!({"id": r.id, "until": day(30)}), json!({"id": r.id, "cron": "0 9 * * *"})] {
+            assert!(call(&run, "routine_update", &change).await.unwrap_err().to_string().contains("on its own"), "{change}");
+        }
+        call(&run, "routine_update", &json!({"id": r.id, "prompt": "Standup notes, short"})).await.unwrap();
+        let r = ctx.db.routine(r.id).unwrap().unwrap();
+        assert!(r.ends > 0 && r.cron == "0 8 * * *");
 
         // One whose end passed while it couldn't run (Mimir was off, it was paused) is removed, not run late.
         let late = ctx.db.routine_create(1, 9, "0 8 * * *", "late", false).unwrap();

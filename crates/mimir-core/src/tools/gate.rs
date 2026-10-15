@@ -466,6 +466,10 @@ pub(super) fn precheck(ctx: &ToolCtx, name: &str, args: &Value) -> Result<()> {
             if args["prompt"].as_str().is_some_and(|p| p.trim().is_empty()) {
                 bail!("a routine needs a prompt");
             }
+            // Bots never change a schedule on their own: in a routine's run (nobody there), its times and end stay.
+            if ctx.unattended && (args["cron"].is_string() || args["until"].is_string()) {
+                bail!("a routine can't change when it runs or ends on its own; say what you'd change in your report and the person can");
+            }
             if let Some(cron) = args["cron"].as_str()
                 && crate::db::min_gap_minutes(cron)? < 15
             {
@@ -482,12 +486,17 @@ pub(super) fn precheck(ctx: &ToolCtx, name: &str, args: &Value) -> Result<()> {
             }
         }
         "routine_create" => {
+            let mut chat = ctx.chat_id;
             if args["for"].as_str().is_some_and(|f| !f.trim().is_empty()) {
                 // Only you send things to other people's chats: a guest (or a family group) can't.
                 if ctx.db.chat_guest(ctx.chat_id) {
                     bail!("only the person who runs you can set reminders for others");
                 }
-                remind_target(ctx, args)?;
+                // A follow-up is the bot checking back in this chat, not a reminder for someone else.
+                if args["followup"].as_bool() == Some(true) {
+                    bail!("a follow-up is for this chat; to remind someone else, leave out followup");
+                }
+                chat = remind_target(ctx, args)?.map_or(chat, |t| t.0);
             }
             if len("prompt") > 1000 || len("cron") > 100 {
                 bail!("a routine's prompt can be up to 1000 characters: say what to do, briefly");
@@ -499,6 +508,10 @@ pub(super) fn precheck(ctx: &ToolCtx, name: &str, args: &Value) -> Result<()> {
                     let t = local_time(at)?;
                     if t <= crate::db::now() || t > crate::db::now() + 366 * 86400 {
                         bail!("'at' must be in the future, within a year");
+                    }
+                    // A run booking the next one-off would otherwise repeat every minute.
+                    if ctx.unattended && t < crate::db::now() + 15 * 60 {
+                        bail!("from a routine, a one-off runs at least 15 minutes from now");
                     }
                 }
                 None if crate::db::min_gap_minutes(s(args, "cron").map_err(|_| anyhow::anyhow!("give cron for a recurring routine, or at for a one-off"))?)? < 15 => {
@@ -524,7 +537,7 @@ pub(super) fn precheck(ctx: &ToolCtx, name: &str, args: &Value) -> Result<()> {
                     bail!("until must be in the future");
                 }
             }
-            if ctx.db.routines(ctx.chat_id)?.len() >= 25 {
+            if ctx.db.routines(chat)?.len() >= 25 {
                 bail!("this chat already has 25 routines; ask the person to remove some first");
             }
         }
