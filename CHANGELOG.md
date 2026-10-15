@@ -101,12 +101,6 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
   its Telegram, Slack and Discord connection, your mailboxes, the bots' computer, free disk space, the database and its
   backups, one line each with what to do. Nothing is spent or sent.
 
-### Routines
-- **Follow-ups the bot books itself:** "I'll check back Friday whether they replied" becomes a one-off follow-up, said
-  in the reply and shown in the Routines tab, where you delete it to cancel. It counts like any routine.
-- **Routines that end:** "every morning until the 30th" or "for two weeks": an optional end, shown on the routine, after
-  which it's gone.
-
 ## 0.2.0
 
 ### Talking to your bots

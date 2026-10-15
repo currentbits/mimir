@@ -1001,9 +1001,10 @@ async fn codex(ctx: &ToolCtx, home: &PathBuf, model: Option<&str>, system: &str,
     for kv in [
         r#"sandbox_mode="read-only""#.to_string(),
         r#"approval_policy="never""#.to_string(),
-        // Its web tool opens any address on OpenAI's side (an "open_page" with data in the query is never seen here),
-        // so not after outside content: the conversation has read something that could ask for that.
-        format!("web_search={:?}", if ctx.is_tainted() { "disabled" } else { "live" }),
+        // Cached, not live: live search also opens any address (open_page) from OpenAI's servers, out of leaks_out's
+        // sight, so a URL could carry data out. Cached answers those with a cache miss; fresh pages go through web_fetch.
+        // Off after outside content, which could be asking for exactly that.
+        format!("web_search={:?}", if ctx.is_tainted() { "disabled" } else { "cached" }),
         // A JSON string is also a valid TOML string (Windows backslashes included).
         format!("model_instructions_file={}", serde_json::to_string(&instructions.0)?),
     ] {

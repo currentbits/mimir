@@ -164,9 +164,9 @@ half is built into the app); a tampered download is refused. It never restarts o
   flagged (one in another alphabet always is, without a name). The full address is always shown.
 - "Signed in" is read from the sign-in fields going away; a site that keeps a password field on every page reads as
   failed (and the login isn't saved).
-- Codex's web search opens any address on OpenAI's side, where Mimir doesn't see the fetch. It's off once a
-  conversation has read outside content, but within one turn a page it found could still ask it to open an address
-  carrying what the bot knows.
+- Codex's web search asks OpenAI's servers to open addresses, where Mimir doesn't see it. Mimir uses its cached mode
+  (an address that isn't cached isn't fetched), and turns it off once a conversation has read outside content; within
+  one turn, a search's query itself can still carry what the bot knows.
 - An email card shows exactly what's sent, but approving it is your call: after reading an email, check the recipient
   is who you meant.
 - Sensitive sources only work once you mark them: a bank's server you haven't marked is just a tool server (its data
