@@ -150,6 +150,25 @@ check("delete_bot: gone", not q("SELECT id FROM bots WHERE id=?", scout[0][0]))
 check("delete_bot: its routines gone", not q("SELECT id FROM routines WHERE bot_id=?", scout[0][0]), q("SELECT * FROM routines"))
 check("delete_bot: statuses don't list it", all(s.get("id") != scout[0][0] for s in (api("statuses") if isinstance(api("statuses"), list) else [])))
 
+# The request-match check, measured before it's on by default: every write here is one the person asked for, so each
+# ask it adds is a false one. (The rules allow these, so only the check could ask; a false ask is denied, not waited on.)
+api("set_ask_check", {"on": True})
+for t in ("memory_forget", "routine_delete"):
+    api("set_rule", {"tool": t, "action": "allow"})
+send(1, "REMEMBER my dentist")
+send(1, f"FORGET {q('SELECT max(id) FROM entries')[0][0]}", approve=False)
+send(1, "set a ROUTINE")
+send(1, f"DELETE ROUTINE {q('SELECT max(id) FROM routines WHERE bot_id=1')[0][0]}", approve=False)
+false_asks = q("SELECT tool, summary FROM approvals WHERE kind='unasked'")
+print(f"request-match check: {len(false_asks)} false asks in 2 asked-for writes")
+check("request-match check: no false asks", not false_asks, false_asks)
+check("request-match check: the writes ran", q("SELECT invalid FROM entries ORDER BY id DESC LIMIT 1") == [(1,)] and not q("SELECT id FROM routines WHERE bot_id=1"),
+      (q("SELECT id, invalid FROM entries"), q("SELECT id, prompt FROM routines")))
+# Back as it was for the flows after (ui-flows.mjs runs on this server too).
+api("set_ask_check", {"on": False})
+for t in ("memory_forget", "routine_delete"):
+    api("set_rule", {"tool": t, "action": "default"})
+
 # Clearing history
 n = api("clear_history", {"chatId": 0})
 check("clear_history", not q("SELECT id FROM messages WHERE chat_id=0"), (n, q("SELECT count(*) FROM messages WHERE chat_id=0")))

@@ -1,15 +1,16 @@
 import { Component, type ReactNode, useMemo, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { inDesktop, invoke, localInvoke, probe, remoteServer, setWebToken, shortcut, webToken } from './api'
+import { inDesktop, invoke, localInvoke, probe, remoteServer, saveDownload, setWebToken, shortcut, webToken } from './api'
 import { moodOf, type Mood } from './face'
 import { ahead, setLooks } from './format'
 import { ask, AskHost, tell, Avatar, Icon, Segmented } from './ui'
 import { CHANNEL, useLoad, LOCAL, HOUSEHOLD, Bots, online, presenceOf } from './shared'
 import type { Tab, Status, Busy, Bot, Chat, Inbox, ComputerStatus, Pause } from './types'
 import { ActivityView } from './views/activity'
-import { BotPage } from './views/bot'
+import { BotImport, BotPage } from './views/bot'
 import { Paused, pausedText, ChatView, Menu, pauseChoices } from './views/chat'
+import { GoalLine } from './views/cards'
 import { ComputerView } from './views/computer'
-import { inboxCount, Approvals, InboxView } from './views/inbox'
+import { inboxCount, Approvals, InboxView, SignInForm } from './views/inbox'
 import { MeetingsView } from './views/meetings'
 import { MemoryView } from './views/memory'
 import { Onboarding } from './views/onboarding'
@@ -30,7 +31,7 @@ const troubleOf = (s?: Status): string | null =>
 /** A bot at work, as its face: the step a reply is on, else what kind of work it is. */
 const busyMood = (w: Busy): Mood => w.step ? moodOf(w.step, '') : w.trigger === 'tidy' || w.trigger === 'import' || w.trigger === 'know_me' ? 'remembering' : w.trigger === 'teach' ? 'writing' : 'thinking'
 
-const BUSY_KIND: Record<string, string> = { routine: 'Running a routine', delegated: 'On a task for another bot', tidy: 'Tidying memory', check: 'Checking a preference', import: 'Importing memories', know_me: 'Getting to know you', teach: 'Writing a skill' }
+const BUSY_KIND: Record<string, string> = { routine: 'Running a routine', delegated: 'On a task for another bot', reported: 'Reporting back on a task', tidy: 'Tidying memory', check: 'Checking a preference', import: 'Importing memories', know_me: 'Getting to know you', teach: 'Writing a skill' }
 
 const busyLabel = (w: Busy) => w.step ? `${w.step}…` : BUSY_KIND[w.trigger] ?? 'Replying…'
 
@@ -109,10 +110,19 @@ function Main() {
   const [incognito, setIncognito] = useState(false)
   // Incognito ends when you go to another chat.
   useEffect(() => setIncognito(false), [chatId])
-  // A link to the live computer (a bot asking you to take over) opens it: #computer.
-  const [view, setView] = useState<View>(() => location.hash === '#computer' ? 'computer' : 'chat')
+  // A link to the live computer (a bot asking you to take over) opens it: #computer. "Edit in Mimir" on a chat app's
+  // card opens Needs you, where the card is: #approval-<id>. A sign-in card's opens the sign-in form: #signin.
+  const linked = (): View | null => location.hash === '#computer' ? 'computer' : location.hash.startsWith('#approval-') ? 'inbox' : null
+  const [view, setView] = useState<View>(() => linked() ?? 'chat')
+  const [signIn, setSignIn] = useState(false)
   useEffect(() => {
-    const go = () => { if (location.hash === '#computer') { setView('computer'); history.replaceState(null, '', location.pathname + location.search) } }
+    const go = () => {
+      const v = linked()
+      if (v) setView(v)
+      else if (location.hash === '#signin') setSignIn(true)
+      else return
+      history.replaceState(null, '', location.pathname + location.search)
+    }
     go()
     window.addEventListener('hashchange', go)
     return () => window.removeEventListener('hashchange', go)
@@ -173,6 +183,8 @@ function Main() {
   const botChat = viaBot && view === 'chat' && chat.chat_id === LOCAL
   // A bot's right-click menu, or pause choices (for one bot, or all of them: id null).
   const [menu, setMenu] = useState<{ x: number; y: number; id: number | null; pick?: boolean } | null>(null)
+  // A bot file being read before it's added (from a file, or a bot's own for Duplicate).
+  const [importing, setImporting] = useState<{ text: string; duplicateOf?: number } | null>(null)
   const pauses = useLoad(() => invoke<Pause[]>('pause'), [], 5000)
   const allPause = pauses.data?.find(p => p.bot_id === null)
   const ownPause = (id: number) => pauses.data?.find(p => p.bot_id === id)
@@ -330,7 +342,7 @@ function Main() {
             <>
               <div className="toolbar-title" data-tauri-drag-region>
                 <span className="ri-glyph" style={{ width: 26, height: 26, borderRadius: 7, display: 'grid', placeItems: 'center', background: 'var(--hover)', color: 'var(--text-2)' }}><Icon name={ch.icon} size={14} /></span>
-                <span className="tt" data-tauri-drag-region><b>{botChat ? botOf(chatBot ?? botList[0]?.id ?? 1).name : chatName(chat)}</b><small>{ch.name} · {chat.memories} {chat.memories === 1 ? 'memory' : 'memories'}{household ? '' : ', shared by all your bots'}{chat.household && !household ? ' · reads the household' : ''}</small></span>
+                <span className="tt" data-tauri-drag-region><b>{botChat ? botOf(chatBot ?? botList[0]?.id ?? 1).name : chatName(chat)}</b><small>{ch.name} · {chat.memories} {chat.memories === 1 ? 'memory' : 'memories'}{household ? '' : ', shared by all your bots'}{chat.household && !household ? ' · reads the household' : ''}{!household && <GoalLine chatId={chat.chat_id} />}</small></span>
                 {!botChat && chat.chat_id !== LOCAL && !household && !chat.family && (
                   <button className={'btn btn-sm btn-ghost' + (chat.guest ? ' guest-on' : '')}
                     title={chat.guest ? 'Paired by someone else: bots here have their own memory, and none of your email, calendar, meetings, saved logins or tool servers. Click if this chat is yours.' : 'Click if someone else uses this chat (a partner, a housemate): bots here then get none of your email, calendar, meetings, saved logins or tool servers.'}
@@ -366,6 +378,7 @@ function Main() {
         </header>
 
         {view !== 'inbox' && <Approvals list={approvals} chats={list} chatName={chatName} onDecided={inbox.reload} />}
+        {signIn && <SignInForm onClose={() => { setSignIn(false); inbox.reload() }} />}
 
         {view === 'chat' ? (
           <ChatView key={`chat-${chat.chat_id}-${incognito && chat.chat_id === LOCAL}-${botChat ? chatBot ?? botList[0]?.id : 'all'}`} only={botChat} chat={chat} bots={botList} onTurn={chats.reload}
@@ -388,7 +401,7 @@ function Main() {
                 <BotPage key={`${botId}:${botList.some(b => b.id === botId)}`} bot={botList.find(b => b.id === botId)} status={statusOf(botId)} canDelete={botList.length > 1}
                   // Only a new bot's page moves (to the bot it made): a slow save mustn't pull you back from another bot.
                   onSaved={id => { bots.reload(); statuses.reload(); if (botId === 0) setBotId(id) }}
-                  onDeleted={() => { bots.reload(); if (chatBot === botId) { setChatBot(null); setViaBot(false) } setView('chat') }} onChat={() => talkTo(botId)} />
+                  onDeleted={() => { bots.reload(); if (chatBot === botId) { setChatBot(null); setViaBot(false) } setView('chat') }} onChat={() => talkTo(botId)} onImport={text => setImporting({ text })} />
               )}
             </div>
           </div>
@@ -410,9 +423,16 @@ function Main() {
           return <Menu key="bot" at={menu} name={name} onClose={() => setMenu(null)} items={[
             ['chat', `Chat with ${name}`, () => talkTo(id)],
             ['settings', 'Settings', () => openBot(id)],
+            ['copy', 'Duplicate…', () => { setMenu(null); invoke('export_bot', { id }).then(f => setImporting({ text: JSON.stringify(f), duplicateOf: id }), e => tell(String(e))) }],
+            ['archive', 'Export…', () => {
+              setMenu(null)
+              invoke('export_bot', { id }).then(f => saveDownload(`${name.replace(/[^\p{L}\p{N}]+/gu, '-')}.mimir-bot.json`, JSON.stringify(f, null, 2)))
+                .then(where => tell(`Saved to ${where}. It has no tokens, keys, memories or chats. Check the role and tool server settings for passwords before you share this file.`), e => tell(String(e)))
+            }],
             ownPause(id) ? ['play', `Resume ${name}`, () => setPause(id, false)] : ['pause', `Pause ${name}…`, () => setMenu({ ...menu, pick: true })],
           ]} />
         })())}
+      {importing && <BotImport text={importing.text} duplicateOf={importing.duplicateOf} onClose={() => setImporting(null)} onAdded={id => { setImporting(null); bots.reload(); statuses.reload(); openBot(id) }} />}
     </div>
     </Paused.Provider>
     </Bots.Provider>
