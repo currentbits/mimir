@@ -563,13 +563,17 @@ struct Http {
 impl Client {
     async fn start(conf: &ServerConf, db: &Db, bot: i64) -> Result<Self> {
         let (io, secrets_file) = if conf.url.is_empty() {
-            // The browser preset is pinned (PLAYWRIGHT); a command that fetches a package is checked first.
-            if conf.preset.is_none() {
+            // The browser preset is pinned (PLAYWRIGHT); a command that fetches a package is pinned and checked first.
+            let conf = if conf.preset.is_none() {
+                let conf = pin_saved(db, conf).await;
                 let osv = std::env::var("MIMIR_OSV_API").unwrap_or_else(|_| "https://api.osv.dev".into());
                 malware_check(db, &osv, &conf.name, &conf.command, &conf.args).await?;
-            }
+                conf
+            } else {
+                conf.clone()
+            };
             // Off the async threads: bringing up the bots' computer can take seconds.
-            let (conf, db) = (conf.clone(), db.clone());
+            let db = db.clone();
             tokio::task::spawn_blocking(move || spawn(&conf, &db, bot)).await??
         } else {
             let headers = values_of(&conf.name, "header", &conf.headers);
@@ -823,6 +827,8 @@ struct Package {
     name: String,
     /// The exact version, if pinned (a tag or range isn't).
     version: Option<String>,
+    /// Not pinned, but a range that names a major version (`^2`, `~2.1`, `~=2.1`, `2.x`): pinning stays on it.
+    major: Option<u64>,
     /// The arg holding the spec (it ends the arg: `pkg@1`, or `--from=pkg@1`), and the name as written (with extras).
     at: usize,
     spec_len: usize,
@@ -876,29 +882,44 @@ fn package_of(command: &str, args: &[String]) -> Option<Package> {
         return None;
     }
     let at = i + a.len() - rest.len();
-    let pinned = |v: &str| (v.starts_with(|c: char| c.is_ascii_digit()) && v.chars().all(|c| c.is_ascii_alphanumeric() || ".-+".contains(c))).then(|| v.to_string());
+    // Exact: dotted numbers, then any prerelease or build tag (`1.2.3-beta.1`). On npm that's three numbers: `1`
+    // and `3.x` are ranges there.
+    let pinned = |v: &str| {
+        let core = v.split(['-', '+']).next().unwrap_or("");
+        let parts: Vec<&str> = core.split('.').collect();
+        let exact = parts.iter().all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit())) && (eco != "npm" || parts.len() == 3);
+        (exact && v.chars().all(|c| c.is_ascii_alphanumeric() || ".-+".contains(c))).then(|| v.to_string())
+    };
+    // A bound (`>=1`, `<2`) or a tag (`latest`) names no major: what's left doesn't start with a number.
+    let major = |range: &str, version: &Option<String>| {
+        let r = range.trim_start_matches(['^', '~', '=', 'v', '@', ' ']);
+        version.is_none().then(|| r.split(['.', '-', ',', ' ']).next()?.parse().ok()).flatten()
+    };
     if eco == "npm" {
         // A scoped name starts with @: the version's @ is the one after it.
         let v_at = spec[1..].find('@').map(|i| i + 1);
         let (name, version) = v_at.map_or((spec, None), |i| (&spec[..i], pinned(&spec[i + 1..])));
-        return Some(Package { eco, name: name.to_lowercase(), version, at, spec_len: spec.len(), written: name.into() });
+        let major = major(&spec[name.len()..], &version);
+        return Some(Package { eco, name: name.to_lowercase(), version, major, at, spec_len: spec.len(), written: name.into() });
     }
     let (name, version) = spec.split_once("==").or_else(|| spec.split_once('@')).map_or((spec, None), |(n, v)| (n, pinned(v.trim())));
     // Drop any other specifier (`pkg[cli]>=1`), keeping extras to write back; PyPI names compare normalized (PEP 503).
     let written = name.split(['<', '>', '=', '!', '~', ';', ' ']).next().unwrap_or(name);
+    let major = major(&spec[written.len()..], &version);
     let name = written.split('[').next().unwrap_or(written);
-    Some(Package { eco, name: name.to_lowercase().replace(['_', '.'], "-"), version, at, spec_len: spec.len(), written: written.into() })
+    Some(Package { eco, name: name.to_lowercase().replace(['_', '.'], "-"), version, major, at, spec_len: spec.len(), written: written.into() })
 }
 
 /// How old a release must be before Mimir picks it: a hijacked package is usually caught and pulled within days
 /// (pnpm and Yarn hold back new releases the same way).
 const SETTLE_DAYS: i64 = 7;
 
-/// The release to run from npm or PyPI: the one the registry calls latest once it's SETTLE_DAYS old, else the last
-/// stable one published before that. By date, not number: packages renumber (2026.8.31, then 1.0.0). None if there's
-/// none, or none published after `current`.
-/// ponytail: "stable" is dotted numbers only, so prereleases and odd forms are never picked.
-async fn settled_version(eco: &str, name: &str, current: Option<&str>) -> Result<Option<String>> {
+/// The release to run from npm or PyPI, of those at least SETTLE_DAYS old (and on `major`, if given): the one the
+/// registry calls latest, else the newest stable one on latest's major, else the newest stable one, else (a package
+/// with no stable releases at all) the newest one. Newest by date, not number: packages renumber (2026.8.31, then
+/// 1.0.0). None if there's none, or it's `current`, or it's older than `current` and not latest.
+/// ponytail: "stable" is dotted numbers only, so a prerelease is only picked for a package that has nothing else.
+async fn settled_version(eco: &str, name: &str, current: Option<&str>, major: Option<u64>) -> Result<Option<String>> {
     let http = reqwest::Client::builder().timeout(Duration::from_secs(15)).build()?;
     let (url, latest_at, releases) = if eco == "npm" {
         let base = std::env::var("MIMIR_NPM_REGISTRY").unwrap_or_else(|_| "https://registry.npmjs.org".into());
@@ -908,10 +929,10 @@ async fn settled_version(eco: &str, name: &str, current: Option<&str>) -> Result
         (format!("{base}/pypi/{name}/json"), "/info/version", "/releases")
     };
     let doc: Value = http.get(&url).send().await?.error_for_status()?.json().await?;
-    Ok(newest_settled(&doc, latest_at, releases, crate::db::now(), current))
+    Ok(newest_settled(&doc, latest_at, releases, crate::db::now(), current, major))
 }
 
-fn newest_settled(doc: &Value, latest_at: &str, releases: &str, now: i64, current: Option<&str>) -> Option<String> {
+fn newest_settled(doc: &Value, latest_at: &str, releases: &str, now: i64, current: Option<&str>, major: Option<u64>) -> Option<String> {
     // npm: {version: date}, unpublished ones still listed (gone from `versions`); PyPI: {version: [files]}, dated by
     // the first upload, and none if every file is yanked.
     let published = |v: &str, at: &Value| match at {
@@ -920,28 +941,59 @@ fn newest_settled(doc: &Value, latest_at: &str, releases: &str, now: i64, curren
         _ => None,
     };
     let stable = |v: &str| !v.is_empty() && v.split('.').all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()));
+    let major_of = |v: &str| v.split(['.', '-', '+']).next()?.parse::<u64>().ok();
     let dated: HashMap<&str, i64> = doc
         .pointer(releases)?
         .as_object()?
         .iter()
-        .filter(|(v, _)| stable(v))
         .filter_map(|(v, at)| Some((v.as_str(), chrono::DateTime::parse_from_rfc3339(&published(v, at)?).ok()?.timestamp())))
         .collect();
-    let settled = |v: &str| dated.get(v).is_some_and(|t| now - t >= SETTLE_DAYS * 86400);
-    let latest = doc.pointer(latest_at).and_then(Value::as_str).filter(|v| settled(v));
-    let pick = latest.or_else(|| dated.keys().copied().filter(|v| settled(v)).max_by_key(|v| dated[v]))?;
-    match current.and_then(|c| dated.get(c)) {
-        Some(t) if dated[pick] <= *t => None,
+    let any_stable = dated.keys().any(|v| stable(v));
+    let usable = |v: &str| dated.get(v).is_some_and(|t| now - t >= SETTLE_DAYS * 86400) && major.is_none_or(|m| major_of(v) == Some(m));
+    let newest = |keep: &dyn Fn(&str) -> bool| dated.keys().copied().filter(|v| usable(v) && keep(v)).max_by_key(|v| dated[v]);
+    let latest = doc.pointer(latest_at).and_then(Value::as_str);
+    // Not a backport to an older line just because the new major is still too new.
+    let line = latest.and_then(major_of);
+    let pick = latest
+        .filter(|v| usable(v))
+        .or_else(|| newest(&|v| stable(v) && major_of(v) == line))
+        .or_else(|| newest(&|v| stable(v)))
+        .or_else(|| newest(&|_| !any_stable))?;
+    match current {
+        Some(c) if c == pick => None,
+        // Never back to an older one than you're on, unless the registry itself moved latest back.
+        Some(c) if Some(pick) != latest && dated.get(c).is_some_and(|t| dated[pick] <= *t) => None,
         _ => Some(pick.to_string()),
     }
 }
 
 /// A version to pin `p` to, or why there isn't one.
 async fn version_to_pin(p: &Package) -> Result<String> {
-    settled_version(p.eco, &p.name, None)
+    let line = p.major.map(|m| format!(" {m}.x")).unwrap_or_default();
+    settled_version(p.eco, &p.name, None, p.major)
         .await
         .with_context(|| format!("couldn't look up {}'s versions on {}", p.name, p.eco))?
-        .with_context(|| format!("{} has no release older than {SETTLE_DAYS} days yet. To use a newer one anyway, name its version (pkg@1.2.3, pkg==1.2.3)", p.name))
+        .with_context(|| format!("{} has no{line} release older than {SETTLE_DAYS} days yet. To use a newer one anyway, name its version (pkg@1.2.3, pkg==1.2.3)", p.name))
+}
+
+/// A server saved before Mimir pinned packages: pin it now, and keep that for next time. If it can't be (the
+/// registry can't be reached, nothing is old enough yet), it starts unpinned as before (logged).
+async fn pin_saved(db: &Db, conf: &ServerConf) -> ServerConf {
+    let mut conf = conf.clone();
+    let Some(p) = package_of(&conf.command, &conf.args).filter(|p| p.version.is_none()) else { return conf };
+    match version_to_pin(&p).await {
+        Ok(v) => {
+            let pinned = p.pinned(&conf.args, &v);
+            let old = std::mem::replace(&mut conf.args, pinned);
+            let mut list = servers(db);
+            list.iter_mut().filter(|s| s.name == conf.name && s.args == old).for_each(|s| s.args = conf.args.clone());
+            if let Err(e) = set_servers(db, &list) {
+                eprintln!("tool server {}: couldn't save its pinned version {v}: {e:#}", conf.name);
+            }
+        }
+        Err(e) => eprintln!("tool server {}: couldn't pin {}, starting it unpinned: {e:#}", conf.name, p.name),
+    }
+    conf
 }
 
 /// Servers that have a newer settled release than the one they're pinned to (or aren't pinned): name → version.
@@ -949,7 +1001,7 @@ async fn version_to_pin(p: &Package) -> Result<String> {
 pub async fn updates(db: &Db) -> HashMap<String, String> {
     let checks = servers(db).into_iter().filter(|s| s.preset.is_none() && s.url.is_empty()).filter_map(|s| {
         let p = package_of(&s.command, &s.args)?;
-        Some(async move { settled_version(p.eco, &p.name, p.version.as_deref()).await.ok().flatten().map(|v| (s.name, v)) })
+        Some(async move { settled_version(p.eco, &p.name, p.version.as_deref(), p.major).await.ok().flatten().map(|v| (s.name, v)) })
     });
     futures_util::future::join_all(checks).await.into_iter().flatten().collect()
 }
@@ -1240,6 +1292,18 @@ mod tests {
         assert_eq!(pin("uvx --python 3.12 Mcp_Server.Git"), "--python 3.12 Mcp_Server.Git==2.0.1");
         assert_eq!(pin("uv tool run pkg[cli]>=1 --x"), "tool run pkg[cli]==2.0.1 --x");
         assert_eq!(pin("pipx run --spec pkg tool"), "run --spec pkg==2.0.1 tool");
+        let major = |line: &str| {
+            let w: Vec<String> = line.split(' ').map(String::from).collect();
+            package_of(&w[0], &w[1..]).unwrap().major
+        };
+        assert_eq!(major("npx -y @scope/pkg@^2"), Some(2));
+        assert_eq!(major("npx pkg@~1.4.0"), Some(1));
+        assert_eq!(major("npx pkg@3.x"), Some(3));
+        assert_eq!(major("uvx pkg~=0.6"), Some(0));
+        assert_eq!(major("uvx pkg[cli]==2.*"), Some(2));
+        for none in ["npx pkg", "npx pkg@latest", "npx pkg@>=1", "uvx pkg>=1,<2", "npx pkg@1.2.3", "uvx pkg==1.2"] {
+            assert_eq!(major(none), None, "{none}");
+        }
         assert_eq!(p("npx -y @modelcontextprotocol/server-filesystem ~/Notes").as_deref(), Some("npm @modelcontextprotocol/server-filesystem "));
         assert_eq!(p("/usr/local/bin/npx --yes @scope/pkg@1.2.3 --flag").as_deref(), Some("npm @scope/pkg 1.2.3"));
         assert_eq!(p("npx.cmd mcp-thing@latest").as_deref(), Some("npm mcp-thing "), "a tag isn't a pinned version");
@@ -1305,7 +1369,7 @@ mod tests {
     #[ignore]
     async fn settled_live() {
         for (eco, name) in [("npm", "@modelcontextprotocol/server-filesystem"), ("PyPI", "mcp-server-fetch")] {
-            let v = settled_version(eco, name, None).await.unwrap().unwrap();
+            let v = settled_version(eco, name, None, None).await.unwrap().unwrap();
             println!("{name} → {v}");
         }
     }
@@ -1320,7 +1384,7 @@ mod tests {
             "time": {"created": "2024-11-21T00:00:00Z", "0.6.2": "2024-12-04T00:00:00Z", "2026.7.10": "2026-07-10T00:00:00Z",
                 "2026.8.31": "2026-08-31T20:25:55.419Z", "2026.9.30": "2026-09-30T00:00:00Z", "2.0.0-rc.1": "2026-10-01T00:00:00Z", "1.0.0": "2026-10-11T02:44:10.659Z"}
         });
-        let pick = |doc: &Value, at: i64, current: Option<&str>| newest_settled(doc, "/dist-tags/latest", "/time", at, current);
+        let pick = |doc: &Value, at: i64, current: Option<&str>| newest_settled(doc, "/dist-tags/latest", "/time", at, current, None);
         // 1.0.0 is too new, 2026.9.30 was unpublished, the rc isn't stable.
         assert_eq!(pick(&npm, now, None).as_deref(), Some("2026.8.31"));
         assert_eq!(pick(&npm, now + 7 * 86400, None).as_deref(), Some("1.0.0"));
@@ -1332,8 +1396,28 @@ mod tests {
             "releases": {"0.5.0": [{"upload_time_iso_8601": "2026-01-01T00:00:00.000000Z"}], "0.6.0": [{"upload_time_iso_8601": "2026-02-01T00:00:00Z", "yanked": true}],
                 "0.7.0": [{"upload_time_iso_8601": "2026-10-14T00:00:00Z"}], "0.4.0": []}
         });
-        assert_eq!(newest_settled(&pypi, "/info/version", "/releases", now, None).as_deref(), Some("0.5.0"));
-        assert_eq!(newest_settled(&json!({}), "/info/version", "/releases", now, None), None);
+        assert_eq!(newest_settled(&pypi, "/info/version", "/releases", now, None, None).as_deref(), Some("0.5.0"));
+        assert_eq!(newest_settled(&json!({}), "/info/version", "/releases", now, None, None), None);
+        // 2.1.0 is too new; 1.9.5 is a backport published after 2.0.0, so the newest by date, but not on latest's line.
+        let lines = json!({
+            "dist-tags": {"latest": "2.1.0"},
+            "versions": {"1.9.0": {}, "2.0.0": {}, "1.9.5": {}, "2.1.0": {}},
+            "time": {"1.9.0": "2026-06-01T00:00:00Z", "2.0.0": "2026-08-01T00:00:00Z", "1.9.5": "2026-09-01T00:00:00Z", "2.1.0": "2026-10-14T00:00:00Z"}
+        });
+        assert_eq!(pick(&lines, now, None).as_deref(), Some("2.0.0"));
+        assert_eq!(newest_settled(&lines, "/dist-tags/latest", "/time", now, None, Some(1)).as_deref(), Some("1.9.5"), "a ^1 range stays on 1.x");
+        assert_eq!(newest_settled(&lines, "/dist-tags/latest", "/time", now, None, Some(3)), None);
+        // Pinned to the backport: once latest settles it's offered, though 1.9.5 came out after 2.0.0.
+        assert_eq!(pick(&lines, now, Some("1.9.5")), None);
+        assert_eq!(pick(&lines, now + 7 * 86400, Some("1.9.5")).as_deref(), Some("2.1.0"));
+        // Only prereleases: the newest settled one. With any stable release around, never a prerelease.
+        let pre = json!({
+            "dist-tags": {"latest": "0.2.0-beta.2"},
+            "versions": {"0.2.0-beta.1": {}, "0.2.0-beta.2": {}},
+            "time": {"0.2.0-beta.1": "2026-09-01T00:00:00Z", "0.2.0-beta.2": "2026-10-13T00:00:00Z"}
+        });
+        assert_eq!(pick(&pre, now, None).as_deref(), Some("0.2.0-beta.1"));
+        assert_eq!(pick(&pre, now + 7 * 86400, None).as_deref(), Some("0.2.0-beta.2"));
     }
 
     #[test]

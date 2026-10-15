@@ -176,7 +176,9 @@ whatever was published last. When you add a server whose setup line names a pack
 `pkg==1.2.3`), the way pnpm and Yarn hold back brand-new releases. A hijacked release is usually found and pulled within
 days. When a newer release has been out for 7 days, the server shows **Update to …**: the new version is checked and
 started once, like adding the server, before your bots use it. A version you name yourself is kept as is, including one
-less than 7 days old.
+less than 7 days old. A range keeps its major version (`pkg@^2` pins the newest settled 2.x). A server added before
+Mimir pinned packages is pinned the next time it starts; if the registry can't be reached then, it starts as before.
+Prereleases are only picked for a package that has no stable release at all.
 
 **Signing in.** A hosted server that wants a sign-in (Notion `https://mcp.notion.com/mcp`, Linear
 `https://mcp.linear.app/mcp` and the like) answers Mimir's first try with "wants you to sign in", and Settings shows
