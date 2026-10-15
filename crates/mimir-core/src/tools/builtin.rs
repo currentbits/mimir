@@ -265,10 +265,22 @@ pub(super) fn event_when(start: &str, minutes: i64) -> Result<(crate::caldav::Wh
     Ok((crate::caldav::When::At(from, to), format!("{}–{}", at(from, "%a %-d %b %Y %H:%M"), at(to, "%H:%M"))))
 }
 
+/// Memories from a scope marked sensitive were read (searched, or in standing memory): what goes out asks from here on.
+pub(crate) fn mark_sensitive_memory(ctx: &ToolCtx, scope: &str, read: &[Entry]) {
+    if !read.is_empty() && is_sensitive(&ctx.db, scope) {
+        let title = scope.trim_start_matches("chat:").parse().ok().and_then(|c| ctx.db.chat_title(c).ok()).filter(|t| !t.is_empty());
+        ctx.mark_sensitive(&format!("the memory of {}", title.as_deref().unwrap_or(scope)));
+    }
+}
+
 pub(super) async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
     if crate::ext::find(&ctx.db, name).is_some() {
         // Pages, files, issues, mail: whatever a tool server returns is untrusted content.
         ctx.taint();
+        // A server (or tool) you marked sensitive: from here on, what goes out asks.
+        if is_sensitive(&ctx.db, name) {
+            ctx.mark_sensitive(crate::ext::split(name).map_or(name, |(server, _)| server));
+        }
         return crate::ext::call(ctx, name, args).await;
     }
     let scope = ctx.scope();
@@ -372,6 +384,8 @@ pub(super) async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<Stri
             if hits.iter().chain(&shared).any(|e| e.tainted) {
                 ctx.taint();
             }
+            mark_sensitive_memory(ctx, &scope, &hits);
+            mark_sensitive_memory(ctx, crate::HOUSEHOLD, &shared);
             match (hits.is_empty(), shared.is_empty()) {
                 (_, true) => lines(&hits),
                 (true, false) => format!("household:\n{}", lines(&shared)),
@@ -768,7 +782,7 @@ pub(super) async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<Stri
                 let id = ctx.db.delegation_add(&d)?;
                 // Read your email or a meeting: the helper's web addresses ask too, though it runs later.
                 if ctx.saw_private() {
-                    ctx.db.set_setting(&delegation_private_key(id), "1")?;
+                    ctx.db.set_setting(&delegation_private_key(id), &ctx.private_value())?;
                 }
                 return Ok(format!("Handed to {}. Its result comes back to you in this chat when it's done; tell the person then.", target.name));
             }
@@ -788,6 +802,7 @@ pub(crate) async fn delegate(ctx: &ToolCtx, target: &crate::db::Bot, task: &str)
     // Taint flows both ways: a tainted caller hands it on, and a delegate that read the web taints the caller.
     sub.tainted = ctx.tainted.clone();
     sub.private = ctx.private.clone();
+    sub.sensitive = ctx.sensitive.clone();
     sub.depth = ctx.depth + 1;
     // Inside a routine, the helper's asks wait in the inbox too, rather than sending a live card.
     sub.unattended = ctx.unattended;

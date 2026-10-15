@@ -22,6 +22,7 @@ const SETTING_WORDS: Record<string, string> = {
   'Permissions': 'allow ask deny approve rules tools safety always',
   'Browser': 'playwright chromium saved logins passwords vault',
   'Tool servers': 'mcp plugins integrations connectors',
+  'Sensitive sources': 'bank banking health medical private finance money leak',
   'Your data': 'export backup download delete privacy doctor check health troubleshoot problem',
   'Chat API': 'openai token shortcuts siri home assistant integration v1 completions',
 }
@@ -103,6 +104,7 @@ export function SettingsView({ onComputer, find = '' }: { onComputer: () => void
       <ComputerSettings onChange={() => { onComputer(); toolsChanged() }} />
       <BrowserSettings onChange={toolsChanged} />
       <ToolServerSettings onChange={toolsChanged} />
+      <SensitiveSettings key={'s' + tools} />
       <Permissions key={tools} />
       <DataSettings />
       {(!inDesktop || remoteServer()) && <ChatApiSettings />}
@@ -839,6 +841,44 @@ function ToolServerSettings({ onChange }: { onChange: () => void }) {
         </form>
       )}
       {err && !form && <div className="row-block"><p className="error" style={{ margin: 0 }}>{err}</p></div>}
+    </Group>
+  )
+}
+
+/** What you mark sensitive: once a run reads from one, everything that goes out asks. Suggested, never set, for banks and health. */
+function SensitiveSettings() {
+  const list = useLoad(() => invoke<string[]>('sensitive'), [], 60000)
+  const servers = useLoad(() => invoke<{ servers: ToolServer[] }>('tool_servers'), [], 60000)
+  const chats = useLoad(() => invoke<Chat[]>('chats'), [], 60000)
+  const rules = useLoad(() => invoke<Rule[]>('rules'), [], 60000)
+  const [err, setErr] = useState<string | null>(null)
+  const on = new Set(list.data ?? [])
+  const set = (name: string, v: boolean) => invoke('set_sensitive', { name, on: v }).then(() => { setErr(null); list.reload() }, e => setErr(String(e)))
+  const toggle = (name: string, label: string) => <Switch label={`${label} is sensitive`} checked={on.has(name)} onChange={v => set(name, v)} />
+  const srv = (servers.data?.servers ?? []).filter(s => s.name !== 'browser')
+  const scopes = (chats.data ?? []).filter(c => c.memories > 0)
+  const tools = (rules.data ?? []).map(r => r.tool).filter(t => t.includes('__') && !t.startsWith('browser__'))
+  if (!srv.length && !scopes.length) return null
+  return (
+    <Group title="Sensitive sources" note={err ?? 'Your bank, your health records. Once a reply or routine has read from one, everything that goes out asks first, saying why: an email, a web page or search, a task for another bot, a message to another chat, and any tool server’s change.'}>
+      {srv.map(s => (
+        <Row key={s.name} icon={<Icon name="plug" size={15} />} title={s.name}
+          desc={s.suggest_sensitive && !on.has(s.name) ? 'Looks like banking or health: mark it sensitive?' : `Tool server · ${s.tools} tool${s.tools === 1 ? '' : 's'}`}>{toggle(s.name, s.name)}</Row>
+      ))}
+      {scopes.map(c => (
+        <Row key={c.chat_id} icon={<Icon name="user" size={15} />} title={`${c.title}’s memory`} desc={`${c.memories} memor${c.memories === 1 ? 'y' : 'ies'}`}>{toggle(`chat:${c.chat_id}`, `${c.title}’s memory`)}</Row>
+      ))}
+      {[...on].filter(n => n.includes('__')).map(t => (
+        <Row key={t} icon={<Icon name="plug" size={15} />} title={toolLabel(t)} desc={`One tool of ${t.split('__')[0]}`}>{toggle(t, toolLabel(t))}</Row>
+      ))}
+      {tools.some(t => !on.has(t)) && (
+        <Row icon={<Icon name="plus" size={15} />} title="Just one tool" desc="When only some of a server’s tools read private things.">
+          <select className="select" style={{ width: 'auto' }} value="" aria-label="Mark one tool sensitive" onChange={e => e.target.value && set(e.target.value, true)}>
+            <option value="">Pick a tool</option>
+            {tools.filter(t => !on.has(t)).map(t => <option key={t} value={t}>{t.split('__')[0]}: {toolLabel(t)}</option>)}
+          </select>
+        </Row>
+      )}
     </Group>
   )
 }
