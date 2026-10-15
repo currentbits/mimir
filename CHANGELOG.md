@@ -4,26 +4,106 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 
 ## Unreleased
 
-- **Replies survive a crash, an update or a restart:** a reply, a routine's result or a note for your decisions chat
-  is kept until Telegram, Slack or Discord has it. If Mimir stops before then, it sends it when it starts again. One
-  that didn't go through is tried again for a while. A routine's run shows *waiting to send* until it's sent.
-- **Malware check for tool servers:** a tool server that downloads its package (`npx`, `uvx`…) is looked up on
-  OSV.dev's list of malicious packages first, and Mimir refuses to start it if it's there, saying which advisory.
-- **Check everything:** `mimir doctor` (and Settings → Your data → *Check everything*) checks each bot's AI sign-in,
-  its Telegram, Slack and Discord connection, your mailboxes, the bots' computer, free disk space, the database and its
-  backups, one line each with what to do. Nothing is spent or sent.
-- **Each bot has its own sign-ins on the computer:** a site you sign in to for one bot (when it asks you to take over)
-  is signed in for that bot only. **Sign out everywhere** on a bot's page clears its sign-ins. Sign-ins from before
-  go to the first bot that uses the computer after the update.
 - **Hidden characters are taken out:** text with invisible characters that only a model would read (Unicode tag
   characters, stray variation selectors) has them removed before a bot sees it, from pages, mail, files, tool results
   and messages alike. A Word file with text made hard to see (hidden, white or 1 pt) has it marked, and the bot says so.
+
+### Routines
+- **Goals:** ask a bot to see something through ("find a plumber who can come this week") and it keeps at it until
+  it's done, with a progress line pinned in the chat and in its header. The follow-ups it books and the tasks it hands to
+  other bots belong to the goal: pause it and they all stop at once, even mid-task; remove it and
+  they're gone. A bot can only call a goal done when the run log shows it, and a goal can have a token budget of its own.
+  When the budget runs out, Needs you asks whether to go on. [More](docs/routines.md#goals)
+
+### Safety
+- **Sensitive sources:** mark a tool server (your bank's, your health records'), a single tool or a chat's memory as
+  sensitive in **Settings → Sensitive sources**. Once a reply or routine has read from one, everything that goes out
+  asks first, and the card says why ("This run read from bank"): an email, a web page or search, a task for another
+  bot, a message to someone else's chat, and any tool server's change. Servers whose names look like banking or
+  health are suggested, never marked for you.
+- **Security:** the TLS library (rustls 0.23.46) is updated for four advisories published on October 14
+  (RUSTSEC-2026-0346 to 0349).
+- **Edit an email before it goes, and say why when you deny:** on an email's approval card in the app, **Edit** lets
+  you change the subject and text before you send it. What you approve is what goes; who it's to stays as shown. In
+  Telegram, Slack, Discord and Signal, **Edit in Mimir** opens the card in the web app (on a server with an https
+  address). **Deny…** takes an optional "Why?", and in a messaging app a reply to the card does the same: the bot
+  reads your reason and changes course instead of just stopping.
+- **Export, import and duplicate a bot:** right-click a bot to save it as one file (its role, look, skills, routines,
+  tool rules and the tool servers it uses), without tokens, keys, saved logins, memories or chats. **From a file…** on
+  the new-bot page shows everything in it first, and flags skill steps that pipe a download into a shell, hold a base64
+  blob or download a program. Skills come in as proposals and routines come in paused; only its tool rules that are at
+  least as strict as yours can be used, and its AI account uses your own settings.
+  **Duplicate…** does both in one go. See [Bots and chats](docs/bots-and-chats.md#export-import-and-duplicate).
+- **Grok bots are more private:** Grok's own memory and `/goal` are always off for bots, and your Claude and Cursor
+  settings no longer load into them, so bots can't read each other's notes and incognito chats leave nothing behind
+  in Grok. A message that starts with `/` now reaches the bot instead of running as a Grok command. If a Grok update
+  ever offers a bot more tools than web search and Mimir's own, the message stops with an error instead of running.
+  The docs cover The X Subscription's plans and its shared weekly allowance.
+- **Security fixes from the fourth review:**
+  - A routine can no longer change its own times or end date while it runs, or book itself again a minute later;
+    from a routine, a one-off is at least 15 minutes away.
+  - A follow-up stays in the chat it was booked in, and a reminder for someone else counts toward their chat's limit.
+  - With docker compose, Codex bots now use the separate computer service; before, they started a browser inside
+    Mimir's own container.
+  - After reading a sensitive source, saving a memory for the household asks too.
+  - A bot file can't pass an option to the AI's command line as its model.
+  - `mimir doctor` no longer creates a database, or upgrades an older one, while it checks.
+
+### The bots' computer
+- **Sign in from your phone:** at a sign-in page, a bot sends you a card with a link to a small masked form in Mimir,
+  instead of asking you to take over the screen. Type your login there, never in the chat; Mimir types it into the
+  page and keeps it for that bot on that site only. The bot never sees it, only whether it worked. If the bot got to
+  that site after reading a web page or a message, the site looks like one you've signed in to before, or its
+  address uses letters from another alphabet, the form warns you and shows the full address. Taking over stays for
+  captchas and payments. [Details](docs/computer.md#signing-in-from-your-phone)
+- **Authenticator codes on saved logins:** paste a site's setup key or `otpauth://` link once, and Mimir types the
+  6-digit codes itself, only on that login's site.
+
+## 0.3.0
+
+### Talking to your bots
+- **Signal:** a bot can be on Signal too, with a number of its own, through signal-cli-rest-api. Text, photos, voice
+  notes and files work both ways; approval cards and a bot's questions come as a numbered list you answer with the
+  number. Direct chats only. Setup is under [Connect](docs/connect.md#signal).
+- **Replies survive a crash, an update or a restart:** a reply, a routine's result or a note for your decisions chat
+  is kept until Telegram, Slack or Discord has it. If Mimir stops before then, it sends it when it starts again. One
+  that didn't go through is tried again for a while. A routine's run shows *waiting to send* until it's sent.
+- **Hand over a long task and keep talking:** a bot can pass a task to another of your bots to report back later. You
+  get an answer straight away, and when the other bot is done its result comes back in the same chat.
+- **Loop breaker:** a bot that keeps making the same call (the 3rd time in a row, the 5th for just looking) stops and
+  asks you whether to go on, instead of burning time and money. Routines ask in Needs you.
 
 ### Routines
 - **Follow-ups the bot books itself:** "I'll check back Friday whether they replied" becomes a one-off follow-up, said
   in the reply and shown in the Routines tab, where you delete it to cancel. It counts like any routine.
 - **Routines that end:** "every morning until the 30th" or "for two weeks": an optional end, shown on the routine, after
   which it's gone.
+
+### Safety and upkeep
+- **Security fixes** from a review of the whole app:
+  - A bot can't open a page in a new browser tab past the "open a site" ask and its checks.
+  - After reading outside content, no approval card offers **Always**, not even for actions that already ask. A
+    guest's OK is always for that once, so it can't change your rules.
+  - After reading your email or a meeting, every web address asks for the rest of the conversation, and in tasks
+    handed to other bots (before: that turn only).
+  - An audio file sent to a bot (not a voice note you recorded) counts as outside content, like a document.
+  - A reply that quotes the bot's message no longer counts the quote as your words when the tidy-up learns from it.
+  - The bots' computer is offered only in chats with you alone, never a group.
+  - Slack approval cards can't ping `@channel`.
+  - The computer service's DevTools port needs its token, like its control channel.
+  - A signed webhook call can't be replayed.
+  - Tool-server sign-in checks addresses properly (`http://localhost.evil.com` isn't this computer) and follows
+    redirects only to public addresses.
+  - The server no longer prints the admin token in its log; `mimir admin-token` shows it.
+  - Voice notes are written to owner-only temp files.
+- **Malware check for tool servers:** a tool server that downloads its package (`npx`, `uvx`…) is looked up on
+  OSV.dev's list of malicious packages first, and Mimir refuses to start it if it's there, saying which advisory.
+- **Each bot has its own sign-ins on the computer:** a site you sign in to for one bot (when it asks you to take over)
+  is signed in for that bot only. **Sign out everywhere** on a bot's page clears its sign-ins. Sign-ins from before
+  go to the first bot that uses the computer after the update.
+- **Check everything:** `mimir doctor` (and Settings → Your data → *Check everything*) checks each bot's AI sign-in,
+  its Telegram, Slack and Discord connection, your mailboxes, the bots' computer, free disk space, the database and its
+  backups, one line each with what to do. Nothing is spent or sent.
 
 ## 0.2.0
 

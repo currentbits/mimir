@@ -162,6 +162,11 @@ impl Db {
         self.skills_where("scope=?1 AND status IN ('proposed','active')", [scope])
     }
 
+    /// The accepted skills a bot may use, in every chat: its own and those shared with all bots.
+    pub fn skills_of(&self, bot: i64) -> Result<Vec<Skill>> {
+        self.skills_where("bot_id IN (?1, 0) AND status='active'", [bot])
+    }
+
     /// The skills one bot may use here: its own, and those shared with all bots (bot_id 0).
     pub fn skills_active(&self, scope: &str, bot: i64) -> Result<Vec<Skill>> {
         self.skills_where("scope=?1 AND bot_id IN (?2, 0) AND status='active'", params![scope, bot])

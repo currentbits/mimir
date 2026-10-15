@@ -92,5 +92,5 @@ Mimir's signing key, and installs when you choose **Restart to update**.
 
 **Something isn't working.** The first item in the sidebar, **Needs you**, lists what failed in plain words with a fix
 button. Every reply and routine is in **Activity** with each step it took. **Settings → Your data → Check everything**
-(or `mimir doctor` on a server) checks AI sign-ins, each bot's Telegram, Slack and Discord connection, email, the bots'
+(or `mimir doctor` on a server) checks AI sign-ins, each bot's Telegram, Slack, Discord and Signal connection, email, the bots'
 computer, disk space, the database and its backups, and says what to do about anything that's off.
