@@ -1076,6 +1076,7 @@ impl Host {
                             ends: 0,
                             followup: false,
                             goal_held: false,
+                            for_goal: false,
                         }
                     }
                 };

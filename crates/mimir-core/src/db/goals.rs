@@ -186,10 +186,16 @@ impl Db {
         Ok(())
     }
 
-    /// A routine or follow-up booked in a chat whose goal is on belongs to that goal.
+    /// A follow-up the bot books in a chat whose goal is on belongs to that goal (and goes with it). Not a routine the
+    /// person asked for there: finishing or removing the goal must never take that with it.
     pub fn goal_claim_routine(&self, routine: i64, chat: i64) -> Result<()> {
-        self.c().execute(&format!("UPDATE routines SET goal_id=(SELECT id FROM goals WHERE chat_id=?2 AND status IN {LIVE}) WHERE id=?1"), [routine, chat])?;
+        self.c().execute(&format!("UPDATE routines SET goal_id=(SELECT id FROM goals WHERE chat_id=?2 AND status IN {LIVE}) WHERE id=?1 AND followup=1"), [routine, chat])?;
         Ok(())
+    }
+
+    /// The routines and follow-ups that go when this chat's goal is done or removed.
+    pub fn goal_routines(&self, chat: i64) -> Result<Vec<Routine>> {
+        self.routines_where("goal_id IN (SELECT id FROM goals WHERE chat_id=?1)", [chat])
     }
 
     /// Likewise a task handed to another bot.

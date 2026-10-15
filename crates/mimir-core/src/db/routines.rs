@@ -69,6 +69,9 @@ pub struct Routine {
     /// Its goal is paused (or done): it waits with it.
     #[serde(default)]
     pub goal_held: bool,
+    /// Booked for the chat's goal: it goes when the goal is done or removed.
+    #[serde(default)]
+    pub for_goal: bool,
 }
 
 /// Routines waiting: until a usage limit resets, or a daily cap's day is over. `why` finishes "Missed 3 runs, …: ".
@@ -145,7 +148,7 @@ impl Db {
             "INSERT INTO routines(bot_id, chat_id, cron, prompt, next_fire, quiet) VALUES (?1,?2,?3,?4,?5,?6)",
             params![bot, chat, cron.trim(), prompt.trim(), next, quiet],
         )?;
-        Ok(Routine { id: c.last_insert_rowid(), bot_id: bot, chat_id: chat, cron: cron.trim().into(), prompt: prompt.trim().into(), next_fire: next, quiet, paused: false, delivery: "now".into(), tainted: false, once: false, watch: String::new(), retries: 0, urgent: String::new(), ends: 0, followup: false, goal_held: false })
+        Ok(Routine { id: c.last_insert_rowid(), bot_id: bot, chat_id: chat, cron: cron.trim().into(), prompt: prompt.trim().into(), next_fire: next, quiet, paused: false, delivery: "now".into(), tainted: false, once: false, watch: String::new(), retries: 0, urgent: String::new(), ends: 0, followup: false, goal_held: false, for_goal: false })
     }
 
     /// A one-off at `at` (unix seconds): a reminder, or a task for later. It's deleted once it has run.
@@ -161,7 +164,7 @@ impl Db {
             "INSERT INTO routines(bot_id, chat_id, cron, prompt, next_fire, quiet, once) VALUES (?1,?2,'',?3,?4,?5,1)",
             params![bot, chat, prompt.trim(), at, quiet],
         )?;
-        Ok(Routine { id: c.last_insert_rowid(), bot_id: bot, chat_id: chat, cron: String::new(), prompt: prompt.trim().into(), next_fire: at, quiet, paused: false, delivery: "now".into(), tainted: false, once: true, watch: String::new(), retries: 0, urgent: String::new(), ends: 0, followup: false, goal_held: false })
+        Ok(Routine { id: c.last_insert_rowid(), bot_id: bot, chat_id: chat, cron: String::new(), prompt: prompt.trim().into(), next_fire: at, quiet, paused: false, delivery: "now".into(), tainted: false, once: true, watch: String::new(), retries: 0, urgent: String::new(), ends: 0, followup: false, goal_held: false, for_goal: false })
     }
 
     /// A routine a bot made after reading outside content: its prompt may carry someone else's words.
@@ -173,7 +176,7 @@ impl Db {
     pub(super) fn routines_where(&self, sql: &str, p: impl rusqlite::Params) -> Result<Vec<Routine>> {
         let c = self.c();
         let mut st = c.prepare(&format!("SELECT id, chat_id, cron, prompt, next_fire, bot_id, quiet, paused, delivery, tainted, once, watch, retries, urgent, ends, followup,
-                goal_id IS NOT NULL AND goal_id NOT IN (SELECT id FROM goals WHERE status IN ('active','blocked')) FROM routines WHERE {sql} ORDER BY id"))?;
+                goal_id IS NOT NULL AND goal_id NOT IN (SELECT id FROM goals WHERE status IN ('active','blocked')), goal_id IS NOT NULL FROM routines WHERE {sql} ORDER BY id"))?;
         let v = st
             .query_map(p, |r| {
                 Ok(Routine {
@@ -194,6 +197,7 @@ impl Db {
                     ends: r.get(14)?,
                     followup: r.get(15)?,
                     goal_held: r.get(16)?,
+                    for_goal: r.get(17)?,
                 })
             })?
             .collect::<Result<_, _>>()?;

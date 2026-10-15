@@ -42,13 +42,15 @@ the insurance refund paid". Ask the bot to keep at it and it sets the chat's goa
 what has to be true for it to be done, and a progress line it keeps up to date (`goal_update`). A chat has one goal at a
 time. It's pinned at the top of the chat, and the chat's header shows it.
 
-While the goal is on, the follow-ups and routines the bot books in that chat, and tasks it hands to another bot, belong
-to it. Its card has these buttons, and they work in Mimir itself, whatever the AI is doing:
+While the goal is on, the follow-ups the bot books in that chat, and tasks it hands to another bot, belong to it
+(marked *For the goal* in the Routines tab). Routines you ask for stay yours, whatever happens to the goal. Its card has these
+buttons, and they work in Mimir itself, whatever the AI is doing:
 
-- **Pause:** its follow-ups and routines don't run, and a task it handed to another bot stops, even mid-run. Its result
+- **Pause:** its follow-ups don't run, and a task it handed to another bot stops, even mid-run. Its result
   is never told. **Resume** picks up where it was, without a rush of missed runs.
-- **Done:** it's finished. Its follow-ups and routines are removed.
-- **Remove:** the goal goes, and so do its follow-ups, routines and handed-over tasks.
+- **Done:** it's finished. Its follow-ups are removed. After reading outside content, a bot's *done* asks you first,
+  and the card says what it removes.
+- **Remove:** the goal goes, and so do its follow-ups and handed-over tasks.
 
 **Blocked.** When the bot needs something from you (which quote to take), it marks the goal *blocked*, says what it
 needs, and the goal shows in **Needs you** until you answer in the chat. Its follow-ups keep running.
@@ -64,7 +66,7 @@ outside content, never as instructions from you, and a turn that reads it counts
 Setting a new goal after reading outside content still asks you first.
 
 **Budget.** On top of the [daily caps](#caps), a goal can have a token budget of its own ("don't spend more than 200k on
-this"). It counts the goal's own runs since it was set: its routines and follow-ups, the tasks it handed over and their
+this"). It counts the goal's own runs since it was set: its follow-ups, the tasks it handed over and their
 reports, and replies in its chat while it's on. Other routines in the chat don't count. When the budget runs out, the goal pauses and **Needs you** asks: *Go on* gives it
 the same budget again.
 

@@ -204,8 +204,8 @@ pub fn specs() -> Vec<(&'static str, &'static str, Value)> {
             "goal_set",
             "Set this chat's goal: one lasting objective you keep working on across turns until it's done (\"find a plumber \
              who can come this week\", \"get the insurance refund paid\"), when the person asks you to see something through. \
-             goal in their words, done_when what has to be true for it to be done. While it's on, the routines and \
-             follow-ups you book here and tasks you hand to other bots belong to it: when you're waiting on something, book a \
+             goal in their words, done_when what has to be true for it to be done. While it's on, the follow-ups \
+             you book here and tasks you hand to other bots belong to it (routines the person asks for stay theirs): when you're waiting on something, book a \
              follow-up (routine_create with at and followup=true) rather than letting it drop. budget: a token limit the \
              person gave for it, if any. One goal per chat; the person sees it pinned and can pause or remove it.",
             json!({"type":"object","properties":{"goal":{"type":"string"},"done_when":{"type":"string"},"budget":{"type":"integer","description":"tokens; only when the person set a limit"}},"required":["goal","done_when"]}),

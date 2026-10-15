@@ -1562,6 +1562,7 @@ mod tests {
         assert!(d.goal_set(1, 5, "Another", "x", 0, false).is_err(), "one goal per chat");
         // A follow-up booked while the goal is on is the goal's; one in another chat isn't.
         let f = d.routine_once(1, 5, now() + 60, "Check whether the plumber replied", false).unwrap();
+        d.routine_set_followup(f.id).unwrap();
         d.goal_claim_routine(f.id, 5).unwrap();
         let other = d.routine_once(1, 6, now() + 60, "Unrelated", false).unwrap();
         d.goal_claim_routine(other.id, 6).unwrap();

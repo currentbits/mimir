@@ -31,7 +31,7 @@ function GoalCard({ chatId, botName }: { chatId: number; botName: (id: number) =
   const { goal: g, setGoal, load } = useGoal(chatId)
   if (!g) return null
   const status = (s: Goal['status']) => invoke<Goal>('goal_status', { chatId, status: s }).then(setGoal, e => tell(String(e)))
-  const remove = () => ask(`Remove the goal “${g.text}”? The follow-ups and routines it booked go with it, and tasks it handed to other bots stop.`, 'Remove', true)
+  const remove = () => ask(`Remove the goal “${g.text}”? The follow-ups it booked go with it, and tasks it handed to other bots stop.`, 'Remove', true)
     .then(ok => { if (ok) void invoke('goal_delete', { chatId }).then(load, e => tell(`Couldn't remove it: ${e}`)) })
   const on = g.status === 'active' || g.status === 'blocked'
   return (
@@ -39,9 +39,9 @@ function GoalCard({ chatId, botName }: { chatId: number; botName: (id: number) =
       <summary>
         <Icon name="bolt" size={13} /><span className="pinned-title">{g.text}</span>
         <span className="mono hint" title={fullTime(g.updated_at)}>{g.status} · {botName(g.bot_id)} · {ago(g.updated_at)}</span>
-        {on && <button className="btn btn-ghost btn-sm" title="Pause: its follow-ups and routines wait, and tasks it handed over stop" aria-label="Pause the goal" onClick={e => { e.preventDefault(); void status('paused') }}><Icon name="pause" size={13} /></button>}
+        {on && <button className="btn btn-ghost btn-sm" title="Pause: its follow-ups wait, and tasks it handed over stop" aria-label="Pause the goal" onClick={e => { e.preventDefault(); void status('paused') }}><Icon name="pause" size={13} /></button>}
         {g.status === 'paused' && <button className="btn btn-ghost btn-sm" title="Go on (its budget starts over)" aria-label="Resume the goal" onClick={e => { e.preventDefault(); void status('active') }}><Icon name="play" size={13} /></button>}
-        {g.status !== 'done' && <button className="btn btn-ghost btn-sm" title="It's done: its follow-ups and routines are removed" aria-label="Mark the goal done" onClick={e => { e.preventDefault(); void status('done') }}><Icon name="check" size={13} /></button>}
+        {g.status !== 'done' && <button className="btn btn-ghost btn-sm" title="It's done: its follow-ups are removed" aria-label="Mark the goal done" onClick={e => { e.preventDefault(); void status('done') }}><Icon name="check" size={13} /></button>}
         <button className="btn btn-ghost btn-danger btn-sm" title="Remove this goal" aria-label="Remove this goal" onClick={e => { e.preventDefault(); void remove() }}><Icon name="trash" size={13} /></button>
       </summary>
       <p className="hint">Done when {g.done_when}.{g.budget > 0 && ` ${tokens(g.spent)} of ${tokens(g.budget)} tokens used.`}{g.why && ` ${g.why[0].toUpperCase()}${g.why.slice(1)}.`}{g.tainted && ' Written after reading outside content: bots treat it as such.'}</p>

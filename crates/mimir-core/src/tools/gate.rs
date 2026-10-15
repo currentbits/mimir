@@ -303,6 +303,16 @@ pub(super) fn describe(ctx: &ToolCtx, name: &str, args: &Value) -> String {
             args["prompt"].as_str().map(|p| format!(" {p}")).unwrap_or_default()
         ),
         "goal_set" => format!("Set the goal: {} (done when {})", args["goal"].as_str().unwrap_or(""), args["done_when"].as_str().unwrap_or("")),
+        // Done takes its follow-ups with it: the card says how many.
+        "goal_update" if args["status"].as_str() == Some("done") => {
+            let n = ctx.db.goal_routines(ctx.chat_id).map(|v| v.len()).unwrap_or(0);
+            let gone = match n {
+                0 => String::new(),
+                1 => "; this removes 1 follow-up".into(),
+                n => format!("; this removes {n} follow-ups"),
+            };
+            format!("Mark the goal done{gone}: {}", args["progress"].as_str().unwrap_or(""))
+        }
         "goal_update" => format!("Goal{}: {}", args["status"].as_str().map(|s| format!(" {s}")).unwrap_or_default(), args["progress"].as_str().unwrap_or("")),
         "routine_create" => {
             let to = args["for"].as_str().filter(|f| !f.trim().is_empty()).map(|f| format!(" in {f}'s own chat")).unwrap_or_default();
