@@ -4,6 +4,14 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 
 ## Unreleased
 
+### Safety
+- **Sensitive sources:** mark a tool server (your bank's, your health records'), a single tool or a chat's memory as
+  sensitive in **Settings → Sensitive sources**. Once a reply or routine has read from one, everything that goes out
+  asks first, and the card says why ("This run read from bank"): an email, a web page or search, a task for another
+  bot, a message to someone else's chat, and any tool server's change. Servers whose names look like banking or
+  health are suggested, never marked for you.
+- **Security:** the TLS library (rustls 0.23.46) is updated for four advisories published on October 14
+  (RUSTSEC-2026-0346 to 0349).
 - **Grok bots are more private:** Grok's own memory and `/goal` are always off for bots, and your Claude and Cursor
   settings no longer load into them, so bots can't read each other's notes and incognito chats leave nothing behind
   in Grok. A message that starts with `/` now reaches the bot instead of running as a Grok command. If a Grok update

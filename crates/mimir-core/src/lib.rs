@@ -236,8 +236,10 @@ pub async fn turn(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) -> R
     if ctx.sticky && ctx.db.conv_tainted(ctx.bot_id, ctx.conv)? {
         ctx.pre_taint();
     }
-    if ctx.sticky && ctx.db.setting(&tools::private_key(ctx.bot_id, ctx.conv))?.is_some() {
-        ctx.pre_private();
+    if ctx.sticky
+        && let Some(kept) = ctx.db.setting(&tools::private_key(ctx.bot_id, ctx.conv))?
+    {
+        ctx.restore_private(&kept);
     }
     // A routine a bot made after reading outside content: its prompt may be someone else's words, every time it runs.
     // Likewise a report back from a helper that read some (or was handed a task after the asker did).
@@ -1023,21 +1025,29 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
             "\n<household name=\"{}\">\nShared by everyone in the household (lists, plans, who does what). To add to or change one of \
              these, use memory_store with household: true (and supersedes to update a list).\n{}</household>\n",
             name.replace(['"', '<', '>'], ""),
-            ctx.db.bootstrap(HOUSEHOLD, ctx.bot_id)?.iter().map(|e| e.line() + "\n").collect::<String>()
+            {
+                let shared = ctx.db.bootstrap(HOUSEHOLD, ctx.bot_id)?;
+                tools::mark_sensitive_memory(ctx, HOUSEHOLD, &shared);
+                shared.iter().map(|e| e.line() + "\n").collect::<String>()
+            }
         )
     } else {
         String::new()
     };
+    // Memories from a scope marked sensitive are read by every run they're in.
+    let standing = ctx.db.bootstrap(&scope, ctx.bot_id)?;
+    tools::mark_sensitive_memory(ctx, &scope, &standing);
     let system = format!(
         "Your name is {}. {PERSONA}{role}{guest}{family}{}{team}{logins}{plans}{skills}{missing}\n\nCurrent local time: {}.\n{}{household}",
         bot.name,
         if quiet { QUIET } else { "" },
         chrono::Local::now().format("%A %Y-%m-%d %H:%M %Z"),
-        block("standing_memory", &ctx.db.bootstrap(&scope, ctx.bot_id)?)
+        block("standing_memory", &standing)
     );
     // Standing memory and this automatic recall hold only confirmed memories (a word in common with an unconfirmed one
     // shouldn't mark the whole reply); the bot can still look one up with memory_search, which marks it then.
     let recall: Vec<_> = ctx.db.search(&scope, ctx.bot_id, &text, 6)?.into_iter().filter(|e| !e.tainted).collect();
+    tools::mark_sensitive_memory(ctx, &scope, &recall);
     if let Some(run) = ctx.run_id {
         ctx.db.run_recalled(run, &recall.iter().map(|e| e.id).collect::<Vec<_>>())?;
     }

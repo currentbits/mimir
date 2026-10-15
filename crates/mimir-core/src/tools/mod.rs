@@ -45,6 +45,9 @@ pub struct ToolCtx {
     /// This turn read the person's own private data (their email, a meeting): after that, nothing goes to a web
     /// address without an ask, however short (a 6-digit code fits in any path). Shared with a delegate like taint.
     private: Arc<AtomicBool>,
+    /// The source marked sensitive this turn read from (a bank's tool server, say): after that, everything that goes out
+    /// asks, saying so. It rides on `private` (set with it, kept and handed on the same way).
+    sensitive: Arc<std::sync::Mutex<Option<String>>>,
     /// A conversation turn: taint sticks to the conversation (until a fresh one) instead of the turn.
     pub sticky: bool,
     /// Nobody is watching (a routine): asks are parked in the inbox instead of blocking the run.
@@ -82,6 +85,7 @@ impl ToolCtx {
             via_bot: None,
             tainted: Arc::default(),
             private: Arc::default(),
+            sensitive: Arc::default(),
             sticky: false,
             unattended: false,
             rehearsal: false,
@@ -112,15 +116,38 @@ impl ToolCtx {
         self.private.store(true, Ordering::Relaxed);
         // Like taint, it sticks to the conversation: the email stays in its history for the next turns.
         if self.sticky {
-            let _ = self.db.set_setting(&private_key(self.bot_id, self.conv), "1");
+            let _ = self.db.set_setting(&private_key(self.bot_id, self.conv), &self.private_value());
         }
+    }
+    /// This turn read from a source the person marked sensitive (named as the card will say it).
+    pub fn mark_sensitive(&self, source: &str) {
+        let mut s = self.sensitive.lock().unwrap();
+        if s.is_none() {
+            *s = Some(source.to_string());
+        }
+        drop(s);
+        self.mark_private();
     }
     /// Start as having read private data (the conversation did, earlier).
     pub fn pre_private(&self) {
         self.private.store(true, Ordering::Relaxed);
     }
+    /// Start as having read private data, from what was kept of it: "1", or the sensitive source's name.
+    pub fn restore_private(&self, kept: &str) {
+        self.pre_private();
+        if kept != "1" {
+            self.sensitive.lock().unwrap().get_or_insert_with(|| kept.to_string());
+        }
+    }
+    /// What's kept of it: the sensitive source's name, or "1".
+    pub(crate) fn private_value(&self) -> String {
+        self.sensitive().unwrap_or_else(|| "1".into())
+    }
     pub fn saw_private(&self) -> bool {
         self.private.load(Ordering::Relaxed)
+    }
+    pub fn sensitive(&self) -> Option<String> {
+        self.sensitive.lock().unwrap().clone()
     }
     pub fn is_tainted(&self) -> bool {
         // Also when another process marked this run (the CLI's own web search, seen by the parent; the MCP server
@@ -157,6 +184,9 @@ impl ToolCtx {
         }
         if self.saw_private() {
             a.push("--private".into());
+        }
+        if let Some(s) = self.sensitive() {
+            a.extend(["--sensitive".into(), s]);
         }
         if self.sticky {
             a.push("--sticky".into());
@@ -225,6 +255,10 @@ pub async fn call(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
     } else {
         (decision, why)
     };
+    // After reading a source marked sensitive (a bank's tool server, say), everything that goes out asks, saying where the
+    // run read from, never as "always" or part of a plan. Only ever allow → ask.
+    let from = ctx.sensitive().filter(|_| decision != "deny" && sends_out(ctx, name, args));
+    let (decision, why) = if from.is_some() { ("ask".to_string(), "sensitive") } else { (decision, why) };
     // A write that doesn't fit what the person asked (or the routine's brief) asks first. Only ever allow → ask.
     let (decision, why) = if decision == "allow" && off_brief(ctx, name, args) { ("ask".to_string(), "unasked") } else { (decision, why) };
     let mut decision = decision;
@@ -241,6 +275,10 @@ pub async fn call(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
     // Going round in circles: what would run without asking stops and asks first. From the run's log, so it works
     // the same for tools run in the MCP subprocess.
     let summary = describe(ctx, name, args);
+    let card = match &from {
+        Some(src) => format!("This run read from {src}, which you marked sensitive. {summary}"),
+        None => summary.clone(),
+    };
     if matches!(decision.as_str(), "allow" | "plan") && looping(ctx, name, &summary) {
         decision = "loop".into();
     }
@@ -259,8 +297,8 @@ pub async fn call(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
             describe(ctx, name, args),
             if would_ask { "first ask the user for an OK" } else { "happen without asking" }
         )),
-        "ask" if ctx.unattended => park(ctx, name, args, &summary, why, site.as_deref()),
-        "ask" => match wait_for_approval_with(ctx, name, &summary, why, site.as_deref()).await {
+        "ask" if ctx.unattended => park(ctx, name, args, &card, why, site.as_deref()),
+        "ask" => match wait_for_approval_with(ctx, name, &card, why, site.as_deref()).await {
             Ok(()) => exec(ctx, name, args).await,
             Err(e) => Err(e),
         },
@@ -1593,5 +1631,134 @@ mod tests {
         // An ask stays an ask: the check never loosens a rule.
         assert!(off_brief(&run(Some("email bob"), None), "email_send", &json!({"to":"eve@evil.example"})));
         assert!(!off_brief(&run(Some("email bob"), None), "email_send", &json!({"to":"bob@acme.example"})));
+    }
+
+    /// A database with a bank's tool server marked sensitive, a notes server with a write, a second bot, email (Outlook-
+    /// style sign-in, so no password needed) and a search service.
+    fn sensitive_db(tag: &str) -> Db {
+        let p = std::env::temp_dir().join(format!("mimir-sensitive-{tag}-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = Db::open(&p).unwrap();
+        db.set_setting("mcp_servers", r#"[{"name":"bank","command":"/nonexistent/mimir-test-bank"},{"name":"notes","command":"/nonexistent/mimir-test-notes"}]"#).unwrap();
+        db.set_setting("mcp_tools:bank", r#"[{"name":"balance","read_only":true}]"#).unwrap();
+        db.set_setting("mcp_tools:notes", r#"[{"name":"append","read_only":false}]"#).unwrap();
+        db.set_setting("email_accounts", r#"[{"host":"127.0.0.1","port":1143,"user":"me@example.com","oauth":"outlook"}]"#).unwrap();
+        db.set_setting("searxng_url", "http://127.0.0.1:9").unwrap(); // nothing listens: a search fails at once
+        db.bot_save(&crate::db::Bot { id: 0, name: "Scout".into(), persona: String::new(), provider: "openai".into(), model: "m".into(), base_url: String::new(), tools: String::new(), look: String::new() }).unwrap();
+        db.set_setting("sensitive", r#"["bank"]"#).unwrap();
+        db
+    }
+
+    /// Before the run reads a sensitive source, the call goes ahead (a rehearsal, so nothing is sent; reads run, so their
+    /// addresses fail fast): what the run log says the gate decided. After it, the call waits for an OK as `sensitive`,
+    /// with the card saying where the run read from.
+    async fn before_and_after_sensitive(db: &Db, chat: i64, name: &str, args: Value) -> String {
+        let run = db.run_start(1, chat, "message", None, "test").unwrap();
+        let mut before = ToolCtx::new(db.clone(), 1, chat).with_run(Some(run));
+        before.rehearsal = true;
+        let out = call(&before, name, &args).await.unwrap_or_else(|e| e.to_string());
+        let said = format!("{}: {out}", db.tool_calls(run).unwrap().pop().unwrap().decision);
+        let mut after = ToolCtx::new(db.clone(), 1, chat);
+        after.unattended = true;
+        after.mark_sensitive("bank");
+        assert!(!after.is_tainted(), "the new rule on its own, not outside content");
+        let out = call(&after, name, &args).await.unwrap();
+        assert!(out.starts_with("Not done yet"), "{name}: {out}");
+        let a = db.approvals_pending().unwrap().into_iter().find(|a| a.tool == name).unwrap();
+        assert_eq!(a.kind, "sensitive", "{name}");
+        assert!(a.summary.starts_with("This run read from bank, which you marked sensitive."), "{}", a.summary);
+        db.approval_decide(a.id, false, None).unwrap();
+        said
+    }
+
+    #[tokio::test]
+    async fn after_a_sensitive_read_email_asks_why() {
+        let db = sensitive_db("email");
+        let mail = json!({"to": "sam@example.com", "subject": "Balance", "body": "R 12 400"});
+        // An email asks every time anyway; before, it's the plain "send" ask, without the reason.
+        let mut before = ToolCtx::new(db.clone(), 1, 0);
+        before.unattended = true;
+        call(&before, "email_send", &mail).await.unwrap();
+        let a = db.approvals_pending().unwrap().pop().unwrap();
+        assert!(a.kind == "send" && !a.summary.contains("sensitive"), "{a:?}");
+        db.approval_decide(a.id, false, None).unwrap();
+        before_and_after_sensitive(&db, 0, "email_send", mail).await;
+    }
+
+    #[tokio::test]
+    async fn after_a_sensitive_read_web_fetch_asks() {
+        let db = sensitive_db("fetch");
+        let said = before_and_after_sensitive(&db, 0, "web_fetch", json!({"url": "https://rates.invalid/today"})).await;
+        assert!(said.starts_with("allow:"), "{said}");
+    }
+
+    #[tokio::test]
+    async fn after_a_sensitive_read_web_search_asks() {
+        let db = sensitive_db("search");
+        let said = before_and_after_sensitive(&db, 0, "web_search", json!({"query": "best savings rate"})).await;
+        assert!(said.starts_with("allow:"), "{said}");
+    }
+
+    #[tokio::test]
+    async fn after_a_sensitive_read_a_hand_off_asks() {
+        let db = sensitive_db("askbot");
+        let said = before_and_after_sensitive(&db, 0, "ask_bot", json!({"bot": "Scout", "task": "Compare these bank fees"})).await;
+        assert!(said.starts_with("rehearsal:") && said.contains("happen without asking"), "{said}");
+    }
+
+    #[tokio::test]
+    async fn after_a_sensitive_read_a_message_to_another_chat_asks() {
+        let db = sensitive_db("remind");
+        db.pair(100, "Willem").unwrap();
+        db.chat_set_owner(100, "7").unwrap();
+        db.pair(200, "Sam Jones").unwrap();
+        db.chat_set_owner(200, "8").unwrap();
+        db.chat_set_guest(200, true).unwrap();
+        db.chat_set_household(200, true).unwrap();
+        db.set_setting("remind_ok:200", "1").unwrap(); // Sam was OK'd before: no first-time ask
+        let soon = (chrono::Local::now() + chrono::Duration::hours(2)).format("%Y-%m-%d %H:%M").to_string();
+        let said = before_and_after_sensitive(&db, 100, "routine_create", json!({"at": soon, "prompt": "Pay the rent", "for": "sam"})).await;
+        assert!(said.starts_with("rehearsal:") && said.contains("happen without asking"), "{said}");
+    }
+
+    #[tokio::test]
+    async fn after_a_sensitive_read_a_tool_server_write_asks() {
+        let db = sensitive_db("mcpwrite");
+        db.set_rule("notes__append", "allow").unwrap(); // a write you let run without asking
+        let said = before_and_after_sensitive(&db, 0, "notes__append", json!({"text": "balance: R 12 400"})).await;
+        assert!(said.starts_with("rehearsal:") && said.contains("happen without asking"), "{said}");
+    }
+
+    #[tokio::test]
+    async fn what_marks_a_run_sensitive_and_what_it_leaves_alone() {
+        let db = sensitive_db("marks");
+        // Reading the bank's server marks the run (even when the call itself fails), named as the server.
+        let ctx = ToolCtx::new(db.clone(), 1, 0);
+        let _ = call(&ctx, "bank__balance", &json!({})).await;
+        assert_eq!(ctx.sensitive().as_deref(), Some("bank"));
+        assert!(ctx.saw_private() && ctx.mcp_args().windows(2).any(|w| w == ["--sensitive", "bank"]));
+        assert_eq!(crate::mcp::ctx_from_args(db.clone(), &ctx.mcp_args()).unwrap().sensitive().as_deref(), Some("bank"), "the tools server a CLI starts knows");
+        // Reading it again, or work that stays here, doesn't ask.
+        assert!(!sends_out(&ctx, "bank__balance", &json!({})) && !sends_out(&ctx, "memory_store", &json!({})) && !sends_out(&ctx, "file_write", &json!({})));
+        assert!(!sends_out(&ctx, "routine_create", &json!({"cron": "0 9 * * *", "prompt": "x"})), "a routine in this chat");
+        // A memory scope marked sensitive: searching it marks the run. Another chat's isn't.
+        db.store("chat:5", "knowledge", "Medication", "Takes 20mg statins at night", "", None).unwrap();
+        let other = ToolCtx::new(db.clone(), 1, 5);
+        exec(&other, "memory_search", &json!({"query": "statins"})).await.unwrap();
+        assert_eq!(other.sensitive(), None);
+        db.set_setting("sensitive", r#"["bank","chat:5"]"#).unwrap();
+        exec(&other, "memory_search", &json!({"query": "statins"})).await.unwrap();
+        assert!(other.sensitive().is_some_and(|s| s.starts_with("the memory of")), "{:?}", other.sensitive());
+        // In a conversation it lasts until a fresh start, like private data; an email read later keeps the name.
+        let mut convo = ToolCtx::new(db.clone(), 1, 9);
+        convo.sticky = true;
+        convo.mark_sensitive("bank");
+        convo.mark_private();
+        let later = |db: &Db| crate::mcp::ctx_from_args(db.clone(), &["mcp".into(), "--bot".into(), "1".into(), "--chat".into(), "9".into(), "--sticky".into()]).unwrap().sensitive();
+        assert_eq!(later(&db).as_deref(), Some("bank"));
+        db.set_session(1, 9, None).unwrap();
+        assert_eq!(later(&db), None, "a fresh conversation clears it");
+        // Suggested for money and health servers, never set on its own.
+        assert!(looks_sensitive("my_bank") && looks_sensitive("health_records") && !looks_sensitive("notes") && !looks_sensitive("github"));
     }
 }
