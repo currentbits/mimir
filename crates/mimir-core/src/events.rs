@@ -299,7 +299,7 @@ mod tests {
         assert!(d.due(1, crate::db::now()).unwrap().iter().any(|x| x.id == r.id), "a call makes it due");
         d.routine_events_clear(r.id, evs[0].0).unwrap();
         assert_eq!(d.routine_events(r.id).unwrap().len(), 1, "only what the run saw is cleared");
-        d.routine_update(0, r.id, "webhook", "say what the build did", false, true).unwrap();
+        d.routine_update(0, r.id, "webhook", "say what the build did", false, true, None).unwrap();
         assert_eq!(webhook(&d, r.id, Some(&s), None, b"{}"), Err(Refused::Paused));
         assert!(d.routine_delete(0, r.id).unwrap());
         assert!(d.routine_events(r.id).unwrap().is_empty() && d.setting(&format!("webhook:{}", r.id)).unwrap().is_none(), "gone with it");
