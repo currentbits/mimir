@@ -10,6 +10,8 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
   asks first, and the card says why ("This run read from bank"): an email, a web page or search, a task for another
   bot, a message to someone else's chat, and any tool server's change. Servers whose names look like banking or
   health are suggested, never marked for you.
+- **Security:** the TLS library (rustls 0.23.46) is updated for four advisories published on October 14
+  (RUSTSEC-2026-0346 to 0349).
 
 ## 0.3.0
 
