@@ -10,6 +10,7 @@ Bots act through **tools**. Every tool call is checked against your rules before
 | `chat_search` | Search earlier conversations with you (any of your bots) for what was said but not saved | allow |
 | `memory_forget` | Forget a memory | **ask** |
 | `card_read`, `card_write` | Read this chat's pinned cards, and write one whole (a shopping list, bills due): text, checklists, tables and links, never HTML; up to 20 a chat ([Pinned cards](bots-and-chats.md#pinned-cards)). Not in incognito. A card written after reading outside content counts as outside content for whoever reads it next | allow |
+| `goal_set`, `goal_update` | Set this chat's goal (one at a time) and keep its progress line; *done* only when the chat's run log shows something done since it was set ([Goals](routines.md#goals)). Come with `routine_create`. Not in incognito, nor in a task handed over by another bot | allow |
 | `routine_create`, `routine_list` | Schedule and list routines, recurring or once (a reminder) ([Routines](routines.md)) | allow |
 | `routine_update` | Change a routine's brief, schedule, quiet or watch (when you reply to its result with what to change); a bot allowed `routine_create` may use it | allow |
 | `routine_delete` | Delete a routine | **ask** |
@@ -31,7 +32,7 @@ Bots act through **tools**. Every tool call is checked against your rules before
 | `skill_save` | Propose a skill from what the conversation did, when you ask; you press Save ([Skills](skills.md)) | allow |
 | `plan_propose` | Propose a plan you approve once (below) | allow |
 | `ask_choice` | Ask you one question with 2 to 4 answers to tap, plus "Something else". The buttons go under the reply, and your tap is your next message. Only in Telegram, Slack and Discord chats, never in routines or another bot's task. A tap is never an approval | allow |
-| `computer_*` | Use the bots' computer, self-hosted only ([The bots' computer](computer.md)) | allow; `computer_open` **asks** |
+| `computer_*` | Use the bots' computer, self-hosted only ([The bots' computer](computer.md)) | allow; `computer_open` **asks**, and `computer_signin` with a saved login |
 | `browser__*` | The headless browser, when switched on (below) | opening a page **asks** |
 | *tool servers* | Tools from MCP servers you added (below) | read-only (as you confirmed) allow, the rest **ask** |
 
@@ -44,7 +45,17 @@ to Telegram, Slack or Discord and shows a card in the app with **Allow once**, *
 for opening pages: "Always on this site") and **Deny**. Every "always" becomes a visible rule in Settings → Permissions.
 Once you've allowed the same thing twice, the card makes "always" the main button. No answer within 5 minutes means
 deny (routines park their asks for 24 hours instead; see [Needs you](routines.md#needs-you)). From the command line:
-`mimir approvals`, `mimir approve <id>`, `mimir deny <id>`.
+`mimir approvals`, `mimir approve <id>`, `mimir deny <id> [why]`.
+
+**Say why.** **Deny…** in the app takes an optional reason, and in Telegram, Slack, Discord or Signal a text reply to
+the card does the same (a number on Signal still picks a button). The bot is told *"Denied: <your reason>"* in your own
+words and carries on with that, instead of only saying it wasn't done. A routine's ask has moved on by the time you
+answer, so your reason goes into that chat's conversation for the bot's next turn there.
+
+**Edit before it goes.** An email's card (to send, or to draft after outside content) has **Edit** in the app: change
+the subject and text, then approve, and that's what goes. Who it's to, the cc and the account can't be changed on the
+card, and the edited email is checked again (one-line subject, whole on the card). In a messaging app the card has
+**Edit in Mimir**, a link to it in the web app, when Mimir runs as a server with an https address.
 
 ## Outside content (taint)
 
@@ -80,6 +91,34 @@ standing instructions until you confirm it); replacing an existing memory still 
 messages. Files in a chat's workspace keep the same mark: one written after outside content (or changed outside
 Mimir) counts as outside content when a bot reads it.
 
+**Sensitive sources.** In **Settings → Sensitive sources** you can mark a tool server (your bank's, your health
+records'), just one of its tools, or a chat's memory as sensitive. Servers whose names look like banking or health are
+suggested there; nothing is marked for you. Once a reply or routine has read from a sensitive source (called one of its
+tools, found one of its memories, or had them in its standing memory), these ask first, even if their rule says
+allow:
+
+- `email_send` (it always asks; the card now also says why);
+- `web_fetch` and `web_search`, whatever the address or query, and `computer_open`, `computer_type`;
+- `ask_bot`: a task for another bot;
+- a message to someone else's chat: a reminder `for` them, `send_file` in a group or a guest's chat;
+- `memory_store` with `household`: the household's guests read those memories;
+- any tool server's tool that changes something, and its read-only tools that reach the internet (except the sensitive
+  server's own).
+
+The card starts with *"This run read from bank, which you marked sensitive."* These asks never offer "always", aren't
+covered by a plan or "all like this", and aren't in **Allow all**. Like outside content, it lasts for the rest of the
+conversation ("Start fresh" ends it) and goes along with a task handed to another bot. It only ever turns an allow into
+an ask.
+
+**Going round in circles.** When a reply or routine makes the same tool call again and again (same tool, same
+details on the card) instead of getting anywhere, the next repeat stops and asks first: *"The bot keeps repeating this
+step. Let it go on?"*. That's the 3rd time in a row for something that acts, or the 5th for something that only looks
+(reading, searching, a screenshot, scrolling, which often repeat for a reason while a page loads). A short cycle counts
+too: the same two or three calls, round and round, that many times. Allow lets it carry on (and asks again if it's
+still at it a few more rounds later); Deny stops the step and the bot is told to wrap up and tell you where it got
+stuck. A routine's ask waits in [Needs you](routines.md#needs-you). It works the same with every AI account, including
+Claude Code and Codex.
+
 ## Approve once for a whole job
 
 Before a task that needs several actions that ask (send, delete, book, open a site), a bot can propose a **plan**
@@ -110,6 +149,9 @@ checks the address in the link, not where the name leads.
 
 **Saved logins** are typed by name (e.g. `GITHUB_PASSWORD`): the browser fills in the value, the AI never sees it, it
 only works on the sites you listed for it, and you approve each use. Values are scrubbed from every result and log.
+A login can have an authenticator key too: a bot types `NAME_CODE` and Mimir fills in the current code, only on the
+login's sites. On the bots' computer, a bot can also ask you to sign in with a masked form in Mimir instead of the
+chat ([Signing in from your phone](computer.md#signing-in-from-your-phone)); that login is kept for that bot and site.
 
 ## Tool servers (MCP)
 

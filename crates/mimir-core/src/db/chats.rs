@@ -4,7 +4,7 @@ use super::*;
 pub struct Chat {
     pub chat_id: i64,
     pub title: String,
-    /// telegram | slack | discord | local
+    /// telegram | slack | discord | signal | local
     pub channel: String,
     pub memories: i64,
     /// Paired by someone other than you (their own memory and routines; none of your email, calendar, meetings…).
@@ -137,7 +137,7 @@ impl Db {
     pub fn household_member(&self, name: &str, not: i64) -> Result<(i64, String)> {
         let want = name.trim().to_lowercase();
         let mut all: Vec<(i64, String)> = vec![];
-        for channel in ["telegram", "slack", "discord"] {
+        for channel in ["telegram", "slack", "discord", "signal"] {
             all.extend(self.household_people(channel)?.into_iter().map(|(_, chat, title)| (chat, title)).filter(|(chat, _)| *chat != not));
         }
         let first = |t: &str| t.split_whitespace().next().unwrap_or("").to_lowercase();
@@ -192,6 +192,7 @@ impl Db {
     pub fn incognito_leftovers(&self) -> Result<()> {
         self.c().execute("DELETE FROM approvals WHERE chat_id = -1", [])?;
         self.c().execute("DELETE FROM conv_taint WHERE chat_id = -1", [])?;
+        self.c().execute("DELETE FROM settings WHERE key LIKE 'private:%:-1'", [])?;
         Ok(())
     }
 
@@ -315,6 +316,7 @@ impl Db {
                     params![format!("fresh:{bot}:{chat}"), last.to_string()],
                 )?;
                 c.execute("DELETE FROM sessions WHERE bot_id=?1 AND chat_id=?2", [bot, chat])? + c.execute("DELETE FROM conv_taint WHERE bot_id=?1 AND chat_id=?2", [bot, chat])?
+                    + c.execute("DELETE FROM settings WHERE key = ?1", [crate::tools::private_key(bot, chat)])?
             }
         };
         Ok(())

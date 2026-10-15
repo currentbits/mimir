@@ -64,6 +64,14 @@ const allow = p.locator('.approval').getByRole('button', { name: /Allow|Approve|
 await allow.click().catch(e => errs.push('allow: ' + e.message))
 check('bot made after approving', await until(async () => (await p.locator('.rail-item', { hasText: 'Scout' }).count()) > 0, 20000))
 
+// Deny with a reason: the bot is told why, in your words
+await say('FORGET 999')
+check('a card to deny appears', await until(async () => (await p.locator('.approval').count()) > 0))
+await p.locator('.approval').getByRole('button', { name: 'Deny…' }).click()
+await p.locator('.approval input[aria-label="Why not"]').fill('keep that one')
+await p.locator('.approval').getByRole('button', { name: 'Deny', exact: true }).click()
+check('the bot is told why', await until(async () => (await main()).includes('Denied: keep that one')))
+
 // Routines: create by chat, pause, resume, run now, edit, delete
 await say('set a ROUTINE')
 await until(async () => (await main()).includes('DONE routine_create'))

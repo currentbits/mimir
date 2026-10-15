@@ -74,7 +74,9 @@ const TG: &str = "telegram_bot_token";
 const SLACK_BOT: &str = "slack_bot_token";
 const SLACK_APP: &str = "slack_app_token";
 const DISCORD: &str = "discord_bot_token";
-const CHANNEL_SECRETS: [&str; 4] = [TG, SLACK_BOT, SLACK_APP, DISCORD];
+const SIGNAL: &str = "signal_number";
+const SIGNAL_API: &str = "signal_api";
+const CHANNEL_SECRETS: [&str; 6] = [TG, SLACK_BOT, SLACK_APP, DISCORD, SIGNAL, SIGNAL_API];
 /// Chat id of the built-in chat in the app (no messaging app needed).
 pub const LOCAL_CHAT: i64 = 0;
 
@@ -94,7 +96,7 @@ fn key(bot: i64, name: &str) -> String {
 /// A bot's channel tokens from the process's secret store, for code outside a Host (`mimir doctor`).
 pub(crate) fn channels_of(bot: i64) -> runtime::Channels {
     let s = |n| secret_get(&key(bot, n));
-    runtime::Channels { telegram: s(TG), slack: s(SLACK_BOT).zip(s(SLACK_APP)), discord: s(DISCORD) }
+    runtime::Channels { telegram: s(TG), slack: s(SLACK_BOT).zip(s(SLACK_APP)), discord: s(DISCORD), signal: s(SIGNAL).map(|n| (s(SIGNAL_API).unwrap_or_default(), n)) }
 }
 
 struct Live {
@@ -123,6 +125,7 @@ struct BotView {
     has_telegram_token: bool,
     has_slack: bool,
     has_discord: bool,
+    has_signal: bool,
 }
 
 /// Write-only channel secrets: None = keep, "" = remove, else replace.
@@ -133,6 +136,8 @@ struct Secrets {
     slack_bot_token: Option<String>,
     slack_app_token: Option<String>,
     discord_token: Option<String>,
+    signal_number: Option<String>,
+    signal_api: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -247,7 +252,7 @@ impl Host {
 
     fn channels(&self, bot: i64) -> runtime::Channels {
         let s = |n| self.secrets.get(&key(bot, n));
-        runtime::Channels { telegram: s(TG), slack: s(SLACK_BOT).zip(s(SLACK_APP)), discord: s(DISCORD) }
+        runtime::Channels { telegram: s(TG), slack: s(SLACK_BOT).zip(s(SLACK_APP)), discord: s(DISCORD), signal: s(SIGNAL).map(|n| (s(SIGNAL_API).unwrap_or_default(), n)) }
     }
 
     fn provider(&self, bot: i64) -> Result<Provider> {
@@ -384,14 +389,14 @@ impl Host {
                 .into_iter()
                 .map(|b| {
                     let ch = self.channels(b.id);
-                    BotView { has_telegram_token: ch.telegram.is_some(), has_slack: ch.slack.is_some(), has_discord: ch.discord.is_some(), bot: b }
+                    BotView { has_telegram_token: ch.telegram.is_some(), has_slack: ch.slack.is_some(), has_discord: ch.discord.is_some(), has_signal: ch.signal.is_some(), bot: b }
                 })
                 .collect::<Vec<_>>()),
             "save_bot" => {
                 // The UI sends back the bot as `bots` listed it: the channel flags are that list's, not the bot's.
                 let mut bot = a.get("bot").cloned().unwrap_or_default();
                 if let Some(o) = bot.as_object_mut() {
-                    for k in ["has_telegram_token", "has_slack", "has_discord"] {
+                    for k in ["has_telegram_token", "has_slack", "has_discord", "has_signal"] {
                         o.remove(k);
                     }
                 }
@@ -405,7 +410,7 @@ impl Host {
                 }
                 let id = self.db.bot_save(&bot)?;
                 for (name, value) in
-                    [(TG, secrets.telegram_token), (SLACK_BOT, secrets.slack_bot_token), (SLACK_APP, secrets.slack_app_token), (DISCORD, secrets.discord_token)]
+                    [(TG, secrets.telegram_token), (SLACK_BOT, secrets.slack_bot_token), (SLACK_APP, secrets.slack_app_token), (DISCORD, secrets.discord_token), (SIGNAL, secrets.signal_number), (SIGNAL_API, secrets.signal_api)]
                 {
                     if let Some(v) = value {
                         self.secrets.set(&key(id, name), v.trim())?;
@@ -602,6 +607,8 @@ impl Host {
                 }
                 ok(self.db.fallback(bot)?.map(|(provider, model)| json!({"provider": provider, "model": model})))
             }
+            // The request-match check: off until false asks are measured (scripts/e2e-flows.py turns it on).
+            "set_ask_check" => ok(self.db.set_setting("ask_check", if arg(a, "on")? { "on" } else { "off" })?),
             "set_telegram_topics" => ok(self.db.set_setting(&format!("telegram_topics:{}", arg::<i64>(a, "bot_id")?), if arg(a, "on")? { "on" } else { "off" })?),
             // Has this conversation read untrusted content (so changes ask first)? And: start a fresh one.
             "conversation" => ok(json!({"tainted": self.db.conv_tainted(arg(a, "bot_id")?, arg(a, "chat_id")?)?})),
@@ -732,6 +739,23 @@ impl Host {
                 let bot = crate::tidy::memory_bot(&self.db).context("no bots")?;
                 ok(crate::imports::run(&self.db, &self.provider(bot)?, bot, arg(a, "chat_id")?, &arg::<String>(a, "source")?).await?)
             }
+            // A bot as one file (no secrets, memories or chats); reading one back shows what it would add, and only
+            // `import_bot` adds it: in the built-in chat, skills as proposals, routines paused.
+            "export_bot" => ok(crate::imports::export_bot(&self.db, arg(a, "id")?)?),
+            "import_bot_preview" => ok(crate::imports::preview(&self.db, &arg::<String>(a, "text")?, arg::<Option<i64>>(a, "duplicate_of")?)?),
+            "import_bot" => {
+                let (id, done) = crate::imports::import_bot(&self.db, &arg::<String>(a, "text")?, LOCAL_CHAT, arg::<Option<bool>>(a, "rules")?.unwrap_or(false), arg::<Option<i64>>(a, "duplicate_of")?)?;
+                // An AI account this Mimir can't use: the one your first bot uses instead.
+                let mut bot = self.db.bot(id)?;
+                if Provider::for_bot(&bot, self.home.clone()).is_err()
+                    && let Some(b) = self.db.bots()?.into_iter().find(|b| b.id != id)
+                {
+                    (bot.provider, bot.model, bot.base_url) = (b.provider, b.model, b.base_url);
+                    self.db.bot_save(&bot)?;
+                }
+                self.restart(id);
+                ok(json!({"id": id, "skills": done.skills, "routines": done.routines}))
+            }
             // Add a memory, or correct one (`supersedes`); history is kept either way.
             "remember" => ok(self.db.store_by(
                 &scope(a)?,
@@ -773,17 +797,34 @@ impl Host {
             // ---- external tools & saved logins ----
             // Configured servers with their tool counts. Env and headers show names only; values stay in the secret store.
             "tool_servers" => {
+                let sensitive = tools::sensitive_list(&self.db);
                 let servers: Vec<Value> = ext::servers(&self.db)
                     .into_iter()
                     .map(|s| {
                         let keys = |m: std::collections::HashMap<String, String>| m.into_keys().collect::<std::collections::BTreeSet<_>>();
-                        json!({"name": s.name, "preset": s.preset, "command": s.command, "args": s.args, "url": s.url, "env": keys(s.env), "headers": keys(s.headers), "tools": ext::cached_tools(&self.db, &s.name).len(), "signed_in": ext::signed_in(&s.name), "unconfirmed": ext::claimed_tools(&self.db, &s.name).iter().filter(|t| t.read_only).count() - ext::cached_tools(&self.db, &s.name).iter().filter(|t| t.read_only).count()})
+                        json!({"name": s.name, "preset": s.preset, "command": s.command, "args": s.args, "url": s.url, "env": keys(s.env), "headers": keys(s.headers), "tools": ext::cached_tools(&self.db, &s.name).len(), "signed_in": ext::signed_in(&s.name), "sensitive": sensitive.contains(&s.name), "suggest_sensitive": tools::looks_sensitive(&s.name), "unconfirmed": ext::claimed_tools(&self.db, &s.name).iter().filter(|t| t.read_only).count() - ext::cached_tools(&self.db, &s.name).iter().filter(|t| t.read_only).count()})
                     })
                     .collect();
                 ok(json!({"servers": servers, "tools": ext::all_tools(&self.db).len()}))
             }
             // Add or replace one server: {name, command, args, env} or {name, url, headers}. Starts it once; returns its tool count.
             "tool_server_save" => ok(ext::save_server(&self.db, arg(a, "server")?).await?),
+            // Sensitive sources: once a run has read one, everything that goes out asks. Only you set them.
+            "sensitive" => ok(tools::sensitive_list(&self.db)),
+            "set_sensitive" => {
+                let (name, on): (String, bool) = (arg(a, "name")?, arg(a, "on")?);
+                let known = ext::servers(&self.db).iter().any(|s| s.name == name)
+                    || tools::all_specs(&self.db).iter().any(|(n, ..)| *n == name)
+                    || name.strip_prefix("chat:").is_some_and(|c| c.parse::<i64>().is_ok());
+                if !known {
+                    bail!("no tool server, tool or memory called {name}");
+                }
+                let mut list: Vec<String> = tools::sensitive_list(&self.db).into_iter().filter(|s| *s != name).collect();
+                if on {
+                    list.push(name);
+                }
+                ok(self.db.set_setting("sensitive", &serde_json::to_string(&list)?)?)
+            }
             "tool_server_delete" => ok(ext::delete_server(&self.db, &arg::<String>(a, "name")?)?),
             // One server's tools with the server's read-only claims, which count once confirmed (`tool_server_read_only`).
             "tool_server_tools" => {
@@ -931,7 +972,45 @@ impl Host {
                 ok(true)
             }
             "vault" => ok(ext::vault(&self.db)),
-            "vault_save" => ok(ext::vault_save(&self.db, arg(a, "entry")?, arg::<Option<String>>(a, "value")?.as_deref())?),
+            "vault_save" => ok(ext::vault_save(&self.db, arg(a, "entry")?, arg::<Option<String>>(a, "value")?.as_deref(), arg::<Option<String>>(a, "totp").unwrap_or(None).as_deref())?),
+            // The masked form a bot's sign-in card links to. What you type goes from here into the page on the
+            // computer's screen (only while it's on the card's site) and into the secret store as that bot's login
+            // for the site: never into a chat, the database or a prompt. The card is used once, and runs out with it.
+            // The newest sign-in card waiting, for the form: its site, the page's full address and its warnings.
+            "signin_card" => match self.db.approvals_pending()?.into_iter().rfind(|a| a.kind == "signin") {
+                Some(ap) => {
+                    let mut card = self.db.signin_card(ap.id)?;
+                    card["id"] = json!(ap.id);
+                    card["bot_id"] = json!(ap.bot_id);
+                    card["site"] = json!(ap.site);
+                    ok(card)
+                }
+                None => ok(Value::Null),
+            },
+            "signin_submit" => {
+                let text = |k: &str| arg::<Option<String>>(a, k).map(Option::unwrap_or_default);
+                let (user, password, code, key) = (text("user")?, text("password")?, text("code")?.trim().to_string(), text("totp")?.trim().to_string());
+                // A mistyped key is said before the card is used up.
+                let totp = (!key.is_empty()).then(|| crate::totp::parse(&key)).transpose()?;
+                if user.is_empty() && password.is_empty() && code.is_empty() && totp.is_none() {
+                    bail!("fill in your sign-in first");
+                }
+                let ap = self.db.approval_claim(arg(a, "id")?)?.context("this sign-in has been used or has run out; ask the bot again")?;
+                let site = ap.site.clone().unwrap_or_default();
+                let login = crate::computer::Login { user, password, code, totp };
+                let out = match tokio::time::timeout(std::time::Duration::from_secs(60), crate::computer::sign_in(&self.db.dir(), ap.bot_id, &login, std::slice::from_ref(&site))).await {
+                    Ok(r) => r,
+                    Err(_) => Err(anyhow::anyhow!("the page didn't answer in time")),
+                };
+                // Kept only once it worked, so a mistyped password isn't saved.
+                let kept = match &out {
+                    Ok(true) if !login.password.is_empty() => ext::vault_save_signin(&self.db, ap.bot_id, &site, &login.user, &login.password, Some(&key)).map(Some),
+                    _ => Ok(None),
+                };
+                self.db.approval_signed_in(ap.id, matches!(out, Ok(true)) && kept.is_ok())?;
+                let signed_in = out?;
+                ok(json!({"signed_in": signed_in, "saved": kept?}))
+            }
             "vault_delete" => ok(ext::vault_delete(&self.db, &arg::<String>(a, "name")?)?),
             // Which bots are working right now, on what (one entry per bot, its newest run), and the step a reply is
             // on: their avatars come alive in the sidebar.
@@ -1045,6 +1124,8 @@ impl Host {
                             urgent: String::new(),
                             ends: 0,
                             followup: false,
+                            goal_held: false,
+                            for_goal: false,
                         }
                     }
                 };
@@ -1126,6 +1207,17 @@ impl Host {
             "cards" => ok(self.db.cards(arg(a, "chat_id")?)?),
             "card_tick" => ok(self.db.card_tick(arg(a, "chat_id")?, arg(a, "id")?, arg(a, "line")?, &arg::<String>(a, "text")?)?),
             "card_delete" => ok(self.db.card_delete(arg(a, "chat_id")?, arg(a, "id")?)?),
+            // The chat's goal, and yours to pause, resume, mark done or remove: local, whatever the AI is doing. Pausing or
+            // removing it also cuts off tasks it handed to other bots.
+            "goal" => ok(self.db.goal(arg(a, "chat_id")?)?),
+            "goal_status" => {
+                crate::runtime::stop_handed(&self.db.goal_status(arg(a, "chat_id")?, &arg::<String>(a, "status")?, "")?);
+                ok(self.db.goal(arg(a, "chat_id")?)?)
+            }
+            "goal_delete" => {
+                crate::runtime::stop_handed(&self.db.goal_delete(arg(a, "chat_id")?)?);
+                ok(true)
+            }
             "set_delivery" => ok(self.db.routine_set_delivery(arg(a, "chat_id")?, arg(a, "id")?, &arg::<String>(a, "delivery")?)?),
             // How full standing memory is (the Memory tab's meter).
             "standing_memory" => {
@@ -1262,10 +1354,20 @@ impl Host {
             "tool_calls" => ok(self.db.tool_calls(arg(a, "run_id")?)?),
             "approvals" => ok(self.db.approvals_pending()?),
             // Approve once, deny, or approve and keep allowing (`always`: "tool" or "site"). Guarded and
-            // saved-login asks can't become rules: those protections must keep asking.
+            // saved-login asks can't become rules: those protections must keep asking. Approving can carry your edits
+            // to the card's text (`edits`: field → text), denying a `reason` the bot is told.
             "decide" => {
                 let always: Option<String> = arg(a, "always").unwrap_or(None);
                 let (id, approve): (i64, bool) = (arg(a, "id")?, arg(a, "approve")?);
+                let edits: Option<Value> = arg(a, "edits").unwrap_or(None);
+                let reason: Option<String> = arg(a, "reason").unwrap_or(None);
+                if approve && let Some(edits) = edits.filter(|e| !e.is_null()) {
+                    let Some(ap) = self.db.approval(id)?.filter(|ap| ap.status == "pending") else { return ok(false) };
+                    tools::edit_card(&self.db, &ap, &edits)?;
+                }
+                if !approve && let Some(r) = reason.as_deref().map(str::trim).filter(|r| !r.is_empty()) {
+                    self.db.approval_set_reason(id, &tools::truncate(r, 500))?;
+                }
                 // Before approving: the waiting tool may go on (and the run end) the moment it's approved.
                 if approve && always.as_deref() == Some("run") && !self.db.approval_allow_rest_of_run(id, None)? {
                     bail!("this one can only be approved once (it isn't a plain ask from a reply that's still going)");
@@ -1294,6 +1396,8 @@ impl Host {
                         json!({"key": key, "bot_id": bot, "routine_id": routine, "routine": prompt, "until": h.until, "why": h.why, "cap": h.waive.is_some()})
                     }).collect::<Vec<_>>(),
                     "suggestions": counts,
+                    // Goals waiting on the person: over their budget (go on?), or blocked on them.
+                    "goals": self.db.goals_waiting()?,
                     // The daily check found the database damaged: restore a backup.
                     "damage": self.db.setting(crate::backup::DAMAGE)?,
                     "unconfirmed": self.db.unconfirmed_counts()?.into_iter().map(|(chat, n)| json!({"chat_id": chat, "count": n})).collect::<Vec<_>>(),
@@ -1535,6 +1639,113 @@ mod tests {
         assert_eq!(lib.as_array().unwrap().iter().find(|k| k["slug"] == "summarize-link").unwrap()["added"], json!([0]));
         assert_eq!(host.call("skill_add", &json!({"chat_id": 0, "slug": "summarize-link", "bot_id": 0})).await.unwrap(), Value::Null);
         assert!(host.call("skill_add", &json!({"chat_id": 0, "slug": "nope", "bot_id": 0})).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn a_sign_in_is_never_typed_into_another_bots_browser() {
+        let home = Home::new("signin-bots");
+        let host = Host::new(Db::open(&home.0.join("mimir.db")).unwrap(), home.0.clone(), Arc::new(Mem(Default::default())), tokio::runtime::Handle::current(), "server");
+        let db = &host.db;
+        // Bot 3 waits for its card to be filled in; its hold on the computer runs out, and bot 4 takes the computer
+        // (its Chromium on the screen now).
+        db.set_setting("computer_lease", &json!({"who": "run:1", "name": "Bot 3", "until": crate::db::now() - 1}).to_string()).unwrap();
+        assert!(db.computer_lease("run:2", "Bot 4", 120).unwrap().is_none(), "bot 4 takes the computer");
+        std::fs::create_dir_all(home.0.join("computer")).unwrap();
+        std::fs::write(home.0.join("computer").join("browser"), format!("4 {}", std::process::id())).unwrap();
+        assert_ne!(crate::computer::screen_bot(&home.0), Some(3));
+        // The person sends the form: refused before anything reaches a page, the card is used up, nothing is kept.
+        let card = db.approval_create(3, 0, "computer_signin", "Sign in to github.com", 300, "signin", Some("github.com")).unwrap();
+        let err = host.call("signin_submit", &json!({"id": card, "user": "me@example.com", "password": "hunter2-gh"})).await.unwrap_err();
+        assert!(format!("{err:#}").contains("isn't on this bot's browser") && format!("{err:#}").contains("nothing was typed"), "{err:#}");
+        assert_eq!(db.approval_status(card).unwrap(), "denied", "the bot hears it failed");
+        assert!(ext::vault(db).is_empty(), "and no login is saved");
+        // The saved-login path refuses the same way.
+        let login = crate::computer::Login { user: "me".into(), password: "hunter2-gh".into(), ..Default::default() };
+        assert!(crate::computer::sign_in(&home.0, 3, &login, &["github.com".into()]).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn a_saved_login_that_stopped_working_gives_way_to_a_card() {
+        let home = Home::new("signin-stale");
+        let host = Host::new(Db::open(&home.0.join("mimir.db")).unwrap(), home.0.clone(), Arc::new(Mem(Default::default())), tokio::runtime::Handle::current(), "server");
+        let db = &host.db;
+        let url = "https://github.com/login";
+        ext::vault_save_signin(db, 3, "github.com", "me", "old-pass", None).unwrap();
+        let e = ext::signin_login(db, 3, url).unwrap();
+        assert_eq!(e.name, "GITHUB_COM_BOT3");
+        assert!(ext::signin_login(db, 4, url).is_none(), "another bot's isn't used");
+        // The site turned it down: the next computer_signin doesn't pick it again, so the person gets a card.
+        ext::login_failed_set(db, &e.name).unwrap();
+        assert!(ext::signin_login(db, 3, url).is_none());
+        // What they sign in with on the card replaces it (and an older one of this bot's for the site under another name).
+        let old = ext::VaultEntry { name: "GH_OLD".into(), domains: vec!["github.com".into()], bot: Some(3), totp: false };
+        ext::vault_save(db, old, Some("older-pass"), None).unwrap();
+        ext::vault_save_signin(db, 3, "github.com", "me", "new-pass", None).unwrap();
+        assert_eq!(ext::signin_login(db, 3, url).map(|e| e.name).as_deref(), Some("GITHUB_COM_BOT3"));
+        assert_eq!(secret_get("vault:GITHUB_COM_BOT3").as_deref(), Some("new-pass"));
+        assert_eq!(ext::vault(db).iter().map(|e| e.name.as_str()).collect::<Vec<_>>(), ["GITHUB_COM_BOT3"]);
+    }
+
+    #[tokio::test]
+    async fn a_bot_as_one_file() {
+        let home = Home::new("botfile");
+        let host = Host::new(Db::open(&home.0.join("mimir.db")).unwrap(), home.0.clone(), Arc::new(Mem(Default::default())), tokio::runtime::Handle::current(), "server");
+        // A bot with secrets of every kind: a messaging-app token, a tool server's key and token (an older setup, in
+        // the config itself), and a saved login one of its routines mentions.
+        let look = r##"{"color":"#336699","shape":"round"}"##;
+        let bot = json!({"id":0,"name":"Ops","persona":"You keep the servers up.","provider":"claude","model":"","base_url":"","tools":"web_fetch,email_send,routine_create,mytools__*","look":look});
+        let id = host.call("save_bot", &json!({"bot": bot, "secrets": {"slack_bot_token": "xoxb-SLACKSECRET"}})).await.unwrap().as_i64().unwrap();
+        let server = crate::ext::ServerConf {
+            name: "mytools".into(),
+            command: "npx".into(),
+            args: vec!["mytools".into(), "--token".into(), "ghp_abcdefghijklmnopqrstuvwxyz0123".into()],
+            env: [("API_KEY".to_string(), "LIVEKEYVALUE".to_string())].into(),
+            url: String::new(),
+            ..Default::default()
+        };
+        crate::ext::set_servers(&host.db, &[server]).unwrap();
+        crate::ext::vault_save(&host.db, crate::ext::VaultEntry { name: "SHOP_PASSWORD".into(), domains: vec!["shop.example".into()], bot: None, totp: false }, Some("hunter2-shop"), None).unwrap();
+        host.db.routine_create(id, 0, "0 9 * * 1", "Check the status page", false).unwrap();
+        host.db.routine_create(id, 0, "0 9 * * 2", "Log in with hunter2-shop and check orders", false).unwrap();
+        host.call("skill_add", &json!({"chat_id": 0, "slug": "summarize-link", "bot_id": id})).await.unwrap();
+        host.call("set_rule", &json!({"tool": "email_send", "action": "allow"})).await.unwrap();
+        host.call("set_rule", &json!({"tool": "web_fetch", "action": "ask"})).await.unwrap();
+
+        let file = host.call("export_bot", &json!({"id": id})).await.unwrap();
+        let text = file.to_string();
+        for s in ["SLACKSECRET", "LIVEKEYVALUE", "ghp_abc", "hunter2"] {
+            assert!(!text.contains(s), "{s} leaked: {text}");
+        }
+        assert_eq!(file["servers"][0]["env"]["API_KEY"], "", "the key's name stays, so you know what to fill in");
+        assert_eq!((file["skills"].as_array().unwrap().len(), file["routines"].as_array().unwrap().len()), (1, 1));
+        assert_eq!(file["rules"], json!({"email_send": "allow", "web_fetch": "ask"}));
+
+        // On a Mimir with the default rules: sending email without asking is looser (never used), asking before
+        // reading a page is stricter.
+        for t in ["email_send", "web_fetch"] {
+            host.call("set_rule", &json!({"tool": t, "action": "default"})).await.unwrap();
+        }
+        let p = host.call("import_bot_preview", &json!({"text": text})).await.unwrap();
+        assert_eq!(p["name"], "Ops (copy)");
+        assert_eq!(
+            p["rules"],
+            json!([{"tool": "email_send", "action": "allow", "yours": "ask", "looser": true}, {"tool": "web_fetch", "action": "ask", "yours": "allow", "looser": false}])
+        );
+        assert_eq!(p["servers"][0]["here"], true);
+        assert_eq!(host.db.bots().unwrap().len(), 2, "a preview adds nothing");
+
+        let done = host.call("import_bot", &json!({"text": text})).await.unwrap();
+        let copy = host.db.bot(done["id"].as_i64().unwrap()).unwrap();
+        assert_eq!((copy.name.as_str(), copy.persona.as_str(), copy.tools.as_str(), copy.look.as_str()), ("Ops (copy)", "You keep the servers up.", "web_fetch,email_send,routine_create,mytools__*", look));
+        let r: Vec<_> = host.db.routines(0).unwrap().into_iter().filter(|r| r.bot_id == copy.id).collect();
+        assert!(r.len() == 1 && r[0].paused && r[0].tainted && r[0].cron == "0 9 * * 1", "{r:?}");
+        assert!(host.db.skills("chat:0").unwrap().iter().any(|k| k.bot_id == copy.id && k.status == "proposed" && k.name == "Summarise a link"));
+        assert_eq!(host.db.rule("email_send").unwrap(), None, "its rules only when you say so");
+        host.call("import_bot", &json!({"text": text, "rules": true})).await.unwrap();
+        assert_eq!(host.db.rule("web_fetch").unwrap().as_deref(), Some("ask"), "a stricter rule is used");
+        assert_eq!(host.db.rule("email_send").unwrap(), None, "a looser one never is");
+        assert!(host.db.bots().unwrap().iter().any(|b| b.name == "Ops (copy 2)"));
+        assert!(host.call("import_bot_preview", &json!({"text": "{\"name\": \"x\"}"})).await.is_err(), "not a bot file");
     }
 
     #[tokio::test]
