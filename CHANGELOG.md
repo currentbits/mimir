@@ -2,6 +2,11 @@
 
 What changed for people using Mimir. The newest release is at the top; "Unreleased" is what the next one brings.
 
+## Unreleased
+
+- **Security:** the TLS library (rustls 0.23.46) is updated for four advisories published on October 14
+  (RUSTSEC-2026-0346 to 0349).
+
 ## 0.3.0
 
 ### Talking to your bots
