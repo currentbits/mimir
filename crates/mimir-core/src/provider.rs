@@ -139,6 +139,10 @@ impl Provider {
     /// One reply. A message the person sends while it's being written steers it: `claude -p` takes it in mid-run
     /// (see claude); the others can't, so the run stops and starts over from the same session with it added.
     pub async fn run(&self, ctx: &ToolCtx, system: &str, history: &[(String, String)], user: &str, session: Option<String>) -> Result<Reply> {
+        // Nothing reaches the model that the person couldn't see in it (a mail's tag characters, say): crate::visible.
+        let (system, user) = (crate::visible(system), crate::visible(user));
+        let history: Vec<(String, String)> = history.iter().map(|(r, t)| (r.clone(), crate::visible(t))).collect();
+        let (system, history, user) = (system.as_str(), history.as_slice(), user.as_str());
         let (b, c) = (ctx.bot_id, ctx.chat_id);
         let bell = if ctx.stream && !matches!(self, Provider::Claude { .. }) { crate::live::bell(b, c) } else { None };
         let Some(bell) = bell else { return self.run_once(ctx, system, history, user, session).await };

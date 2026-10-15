@@ -9,6 +9,12 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
   that didn't go through is tried again for a while. A routine's run shows *waiting to send* until it's sent.
 - **Malware check for tool servers:** a tool server that downloads its package (`npx`, `uvx`…) is looked up on
   OSV.dev's list of malicious packages first, and Mimir refuses to start it if it's there, saying which advisory.
+- **Tool servers stay on one version:** adding one that downloads its package (`npx -y pkg`, `uvx pkg`) pins it to
+  the newest release that's at least a week old, so a bad release published tomorrow doesn't reach you on the next
+  start. When a newer one has been out a week, the server shows **Update to x.y.z**.
+- **Hidden text doesn't reach your bots:** invisible characters that spell out words only a model reads (Unicode tag
+  characters, stray variation selectors) are taken out of pages, mail, files and tool results. A Word file's text
+  formatted to be invisible (white, 1 pt, hidden) is marked as hidden for the bot.
 - **Check everything:** `mimir doctor` (and Settings → Your data → *Check everything*) checks each bot's AI sign-in,
   its Telegram, Slack and Discord connection, your mailboxes, the bots' computer, free disk space, the database and its
   backups, one line each with what to do. Nothing is spent or sent.

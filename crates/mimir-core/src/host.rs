@@ -773,17 +773,19 @@ impl Host {
             // ---- external tools & saved logins ----
             // Configured servers with their tool counts. Env and headers show names only; values stay in the secret store.
             "tool_servers" => {
-                let servers: Vec<Value> = ext::servers(&self.db)
-                    .into_iter()
-                    .map(|s| {
-                        let keys = |m: std::collections::HashMap<String, String>| m.into_keys().collect::<std::collections::BTreeSet<_>>();
-                        json!({"name": s.name, "preset": s.preset, "command": s.command, "args": s.args, "url": s.url, "env": keys(s.env), "headers": keys(s.headers), "tools": ext::cached_tools(&self.db, &s.name).len(), "signed_in": ext::signed_in(&s.name)})
-                    })
-                    .collect();
+                // `update`: a newer settled release than the one its package is pinned to (or a pin, for one that isn't).
+                let mut servers: Vec<Value> = vec![];
+                for s in ext::servers(&self.db) {
+                    let keys = |m: std::collections::HashMap<String, String>| m.into_keys().collect::<std::collections::BTreeSet<_>>();
+                    let update = if s.preset.is_none() { ext::update_for(&self.db, &s).await } else { None };
+                    servers.push(json!({"name": s.name, "preset": s.preset, "command": s.command, "args": s.args, "url": s.url, "env": keys(s.env), "headers": keys(s.headers), "tools": ext::cached_tools(&self.db, &s.name).len(), "signed_in": ext::signed_in(&s.name), "update": update}));
+                }
                 ok(json!({"servers": servers, "tools": ext::all_tools(&self.db).len()}))
             }
-            // Add or replace one server: {name, command, args, env} or {name, url, headers}. Starts it once; returns its tool count.
+            // Add or replace one server: {name, command, args, env} or {name, url, headers}. Its package is pinned to a
+            // release (see ext::pin). Starts it once; returns its tool count.
             "tool_server_save" => ok(ext::save_server(&self.db, arg(a, "server")?).await?),
+            "tool_server_update" => ok(ext::update_server(&self.db, &arg::<String>(a, "name")?).await?),
             "tool_server_delete" => ok(ext::delete_server(&self.db, &arg::<String>(a, "name")?)?),
             // A remote server that wants a sign-in (MCP's OAuth): returns the address to open; then `_wait` (desktop) or
             // `_paste` (a server: the address the browser ended up on) finishes it and saves the server. Returns its tool count.
