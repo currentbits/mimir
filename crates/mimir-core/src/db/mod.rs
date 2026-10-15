@@ -1192,6 +1192,29 @@ mod tests {
     }
 
     #[test]
+    fn a_routine_sees_its_last_results() {
+        let d = db();
+        let r = d.routine_create(1, 8, "0 8 * * *", "brief me", false).unwrap();
+        let u = Usage::default();
+        for (i, (said, outside)) in [("Mon news", false), ("", false), ("Tue news", true), ("Wed news", false)].into_iter().enumerate() {
+            let run = d.run_start(1, 8, "routine", Some(r.id), "x").unwrap();
+            d.run_reply(run, said).unwrap();
+            if outside {
+                d.run_taint(run).unwrap();
+            }
+            d.run_finish(run, if i == 3 { Err("failed") } else { Ok(&u) }).unwrap();
+        }
+        // A rehearsal isn't one of its results.
+        let run = d.run_start(1, 8, "rehearsal", Some(r.id), "x").unwrap();
+        d.run_reply(run, "rehearsed").unwrap();
+        d.run_finish(run, Ok(&u)).unwrap();
+        // Newest first; not the empty one, the failed one or the rehearsal; the outside one says so.
+        let v: Vec<_> = d.routine_results(r.id, 3).unwrap().into_iter().map(|(_, s, t)| (s, t)).collect();
+        assert_eq!(v, vec![("Tue news".to_string(), true), ("Mon news".to_string(), false)]);
+        assert_eq!(d.routine_results(r.id, 1).unwrap().len(), 1);
+    }
+
+    #[test]
     fn urgent_rule_and_daily_cap() {
         let d = db();
         let r = d.routine_create(1, 8, "0 * * * *", "check my flight", true).unwrap();

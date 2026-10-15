@@ -21,6 +21,8 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
   in the reply and shown in the Routines tab, where you delete it to cancel. It counts like any routine.
 - **Routines that end:** "every morning until the 30th" or "for two weeks": an optional end, shown on the routine, after
   which it's gone.
+- **Routines remember their last results:** each run sees what the routine said its last three times, so a daily
+  briefing says what's new instead of repeating yesterday's news.
 
 ## 0.2.0
 

@@ -399,6 +399,16 @@ impl Db {
         Ok(self.c().query_row("SELECT count(*) FROM runs WHERE routine_id=?1 AND trigger='routine' AND status='ok' AND coalesce(reply, '') != ''", [routine], |r| r.get(0))?)
     }
 
+    /// A routine's last `n` results that said something, newest first: (when it ran, what it said, read outside content).
+    pub fn routine_results(&self, routine: i64, n: usize) -> Result<Vec<(i64, String, bool)>> {
+        let c = self.c();
+        let mut st = c.prepare(
+            "SELECT started_at, reply, tainted FROM runs WHERE routine_id=?1 AND trigger='routine' AND status='ok' AND coalesce(reply, '') != '' ORDER BY id DESC LIMIT ?2",
+        )?;
+        let v = st.query_map(params![routine, n as i64], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<Result<_, _>>()?;
+        Ok(v)
+    }
+
     pub fn routine(&self, id: i64) -> Result<Option<Routine>> {
         Ok(self.routines_where("id = ?1", [id])?.pop())
     }
