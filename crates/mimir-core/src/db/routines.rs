@@ -167,7 +167,7 @@ impl Db {
         Ok(())
     }
 
-    fn routines_where(&self, sql: &str, p: impl rusqlite::Params) -> Result<Vec<Routine>> {
+    pub(super) fn routines_where(&self, sql: &str, p: impl rusqlite::Params) -> Result<Vec<Routine>> {
         let c = self.c();
         let mut st = c.prepare(&format!("SELECT id, chat_id, cron, prompt, next_fire, bot_id, quiet, paused, delivery, tainted, once, watch, retries, urgent, ends, followup FROM routines WHERE {sql} ORDER BY id"))?;
         let v = st
@@ -205,7 +205,8 @@ impl Db {
         for r in self.routines_where("bot_id = ?1 AND ends > 0 AND ends + ?3 <= ?2", params![bot, t, MISSED_AFTER])? {
             self.routine_delete(r.chat_id, r.id)?;
         }
-        self.routines_where("bot_id = ?1 AND next_fire <= ?2 AND paused = 0", [bot, t])
+        // A paused or finished goal's routines wait with it.
+        self.routines_where("bot_id = ?1 AND next_fire <= ?2 AND paused = 0 AND (goal_id IS NULL OR goal_id IN (SELECT id FROM goals WHERE status IN ('active','blocked')))", [bot, t])
     }
 
     /// Edit, pause or resume. The next run is worked out from now, so resuming doesn't fire missed slots.

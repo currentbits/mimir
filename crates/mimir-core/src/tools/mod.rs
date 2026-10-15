@@ -1331,6 +1331,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_goal_owns_its_follow_ups_and_is_done_only_on_receipts() {
+        let p = std::env::temp_dir().join(format!("mimir-goal-tool-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let ctx = ToolCtx::new(Db::open(&p).unwrap(), 1, 9);
+        assert!(call(&ctx, "goal_update", &json!({"progress": "x"})).await.is_err(), "no goal yet");
+        call(&ctx, "goal_set", &json!({"goal": "Find a plumber who can come this week", "done_when": "a plumber is booked"})).await.unwrap();
+        let soon = (chrono::Local::now() + chrono::Duration::hours(2)).format("%Y-%m-%d %H:%M").to_string();
+        call(&ctx, "routine_create", &json!({"at": soon, "prompt": "Check whether the plumbers replied", "followup": true})).await.unwrap();
+        let g = ctx.db.goal(9).unwrap().unwrap();
+        assert_eq!(ctx.db.goal_of("routines", ctx.db.routines(9).unwrap()[0].id).unwrap().map(|g| g.id), Some(g.id), "booked while the goal is on: it's the goal's");
+        // Saying it's done isn't enough: booking a follow-up is more work, not a result.
+        let no = call(&ctx, "goal_update", &json!({"progress": "Asked three plumbers", "status": "done"})).await.unwrap_err().to_string();
+        assert!(no.contains("not marked done"), "{no}");
+        assert_eq!(ctx.db.goal(9).unwrap().unwrap().status, "active");
+        call(&ctx, "goal_update", &json!({"progress": "Waiting on two quotes", "status": "blocked", "why": "which quote to take"})).await.unwrap();
+        let g = ctx.db.goal(9).unwrap().unwrap();
+        assert!(g.status == "blocked" && g.why == "which quote to take" && g.progress == "Waiting on two quotes");
+        // With a receipt in the run log, it's done, and its follow-up goes.
+        ctx.db.tool_call_log(None, 9, "email_send", "Send an email to bob@plumbing.example: \"Tuesday works\"", "allow", true, "sent").unwrap();
+        let out = call(&ctx, "goal_update", &json!({"progress": "Bob comes Tuesday", "status": "done"})).await.unwrap();
+        assert!(out.contains("Sent an email to bob@plumbing.example"), "{out}");
+        let g = ctx.db.goal(9).unwrap().unwrap();
+        assert!(g.status == "done" && g.progress.contains("✓"), "{g:?}");
+        assert!(ctx.db.routines(9).unwrap().is_empty(), "its follow-up is removed");
+        assert!(!usable(&ToolCtx::new(ctx.db.clone(), 1, crate::INCOGNITO_CHAT), "goal_set"), "incognito keeps nothing");
+    }
+
+    #[tokio::test]
     async fn routines_can_be_tuned() {
         let p = std::env::temp_dir().join(format!("mimir-tune-tool-{}.db", std::process::id()));
         let _ = std::fs::remove_file(&p);

@@ -117,6 +117,12 @@ pub fn footer(calls: &[ToolCall], asked: &str, reply: &str, receipts: bool) -> S
     [out.join("\n"), notes.join("\n")].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join("\n\n")
 }
 
+/// What the run log shows was done (a sent email, a calendar entry), for a goal to be marked done on: booking a
+/// follow-up or a routine is more work, not a result.
+pub fn backing(calls: &[ToolCall]) -> Vec<String> {
+    calls.iter().filter(|c| done(c) && c.tool != "routine_create").filter_map(receipt).collect()
+}
+
 /// Every call a run made, and those of the runs it handed tasks to (what another bot did counts for the reply).
 pub fn calls_of(db: &Db, run: i64) -> anyhow::Result<Vec<ToolCall>> {
     let mut calls = db.tool_calls(run)?;

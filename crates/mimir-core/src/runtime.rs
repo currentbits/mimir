@@ -247,6 +247,19 @@ pub(crate) struct Core {
 pub(crate) static TURNS: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<(i64, i64), tokio::task::AbortHandle>>> =
     std::sync::LazyLock::new(Default::default);
 
+/// Tasks handed to another bot that are running, by delegation id: pausing or removing their goal cuts them off.
+static HANDED: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<i64, tokio::task::AbortHandle>>> = std::sync::LazyLock::new(Default::default);
+
+/// Cut off these handed-over tasks (their goal was paused or removed). Their result is never told.
+pub fn stop_handed(ids: &[i64]) {
+    let mut h = HANDED.lock().unwrap();
+    for id in ids {
+        if let Some(t) = h.remove(id) {
+            t.abort();
+        }
+    }
+}
+
 pub(crate) enum Command<'a> {
     Pair(&'a str),
     Start,
@@ -1424,6 +1437,16 @@ impl Core {
             }
             return Ok(());
         }
+        // Its goal went over its own budget: the goal pauses (its routines with it), and Needs you asks.
+        if let Some(g) = self.db.goal_of("routines", r.id)?
+            && self.db.goal_check_budget(&g)?
+        {
+            if let Some((c, ext)) = Self::chan_for(chans, r.chat_id, &self.db) {
+                let said = format!("⏸ Paused the goal \"{}\": {}. You can let it go on in Mimir's Needs you.", g.text, self.db.goal(g.chat_id)?.map(|g| g.why).unwrap_or_default());
+                self.say(&c, &ext, r.chat_id, None, &said, &[], &[], None).await;
+            }
+            return Ok(());
+        }
         // Timed off the calendar: the run is told which event it's for (the invite is someone else's words). An event
         // gone or moved since is skipped (the scheduler finds its new time), and so is one that's over by now.
         if let Ok(Some(t)) = crate::calendar::trigger(&r.cron) {
@@ -1608,6 +1631,12 @@ impl Core {
             if self.db.paused(d.to_bot, now)?.is_some() {
                 continue;
             }
+            // So does one for a goal that's paused, or that just went over its budget.
+            if let Some(g) = self.db.goal_of("delegations", d.id)?
+                && (!["active", "blocked"].contains(&g.status.as_str()) || self.db.goal_check_budget(&g)?)
+            {
+                continue;
+            }
             self.db.delegation_status(d.id, "running")?;
             let db = self.db.clone();
             tokio::spawn(async move {
@@ -1624,7 +1653,17 @@ impl Core {
                 let (ctx, task) = (asker.clone(), d.task.clone());
                 // In its own task: a crash in it fails this hand-off only, and says so.
                 let work = tokio::spawn(async move { crate::tools::delegate(&ctx, &ctx.db.bot(d.to_bot)?, &task).await });
-                let out = work.await.unwrap_or_else(|e| Err(anyhow::anyhow!("Mimir crashed during this task ({e})")));
+                HANDED.lock().unwrap().insert(d.id, work.abort_handle());
+                let out = work.await;
+                HANDED.lock().unwrap().remove(&d.id);
+                // Its goal was paused or removed: the helper's run ends there, and nothing is told.
+                if out.as_ref().is_err_and(|e| e.is_cancelled()) {
+                    if let Some(run) = d.run_id {
+                        let _ = db.run_stopped_under(run);
+                    }
+                    return;
+                }
+                let out = out.unwrap_or_else(|e| Err(anyhow::anyhow!("Mimir crashed during this task ({e})")));
                 let (reply, failed) = match out {
                     Ok(r) => (r, false),
                     Err(e) => (crate::friendly_error(&format!("{e:#}")), true),

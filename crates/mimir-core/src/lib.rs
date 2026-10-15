@@ -1010,6 +1010,21 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
         ""
     };
     let missing = not_connected(ctx);
+    // The chat's goal, while it's on: what the bot keeps working towards here, turn after turn.
+    let goal = match ctx.db.goal(ctx.chat_id)?.filter(|g| ["active", "blocked"].contains(&g.status.as_str()) && tools::specs_for(ctx).iter().any(|s| s.0 == "goal_update")) {
+        Some(g) => {
+            let flat = |s: &str| s.replace(['<', '>'], "");
+            format!(
+                "\n\n<goal status=\"{}\">\nThis chat's goal, set with the person: {}\nDone when: {}\nProgress so far: {}\n</goal>\nKeep working towards it when it \
+                 comes up, book follow-ups for what you're waiting on, and goal_update its progress as it moves.",
+                g.status,
+                flat(&g.text),
+                flat(&g.done_when),
+                if g.progress.is_empty() { "nothing yet".into() } else { flat(&g.progress) }
+            )
+        }
+        None => String::new(),
+    };
     let family = if ctx.db.chat_family(ctx.chat_id) {
         "\n\nThis is a family group: several people of the household talk to you here, and each message starts with who \
          wrote it (\"Sam: …\"). Answer that person."
@@ -1029,7 +1044,7 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
         String::new()
     };
     let system = format!(
-        "Your name is {}. {PERSONA}{role}{guest}{family}{}{team}{logins}{plans}{skills}{missing}\n\nCurrent local time: {}.\n{}{household}",
+        "Your name is {}. {PERSONA}{role}{guest}{family}{}{team}{logins}{plans}{skills}{goal}{missing}\n\nCurrent local time: {}.\n{}{household}",
         bot.name,
         if quiet { QUIET } else { "" },
         chrono::Local::now().format("%A %Y-%m-%d %H:%M %Z"),

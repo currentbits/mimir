@@ -14,6 +14,7 @@ mod approvals;
 mod bots;
 mod cards;
 mod chats;
+mod goals;
 mod meetings;
 mod memory;
 mod messages;
@@ -28,6 +29,7 @@ pub use approvals::*;
 pub use bots::*;
 pub use cards::*;
 pub use chats::*;
+pub use goals::*;
 pub use memory::*;
 pub use messages::*;
 pub use outbox::*;
@@ -51,7 +53,7 @@ PRAGMA secure_delete=ON;
 
 /// The schema version this build writes (`PRAGMA user_version`). A schema change bumps it and adds a step to
 /// `migrate`; each step runs once per database.
-const VERSION: i64 = 10;
+const VERSION: i64 = 11;
 
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS entries(
@@ -216,6 +218,9 @@ fn migrate(c: &Connection) -> Result<()> {
     }
     if v < 10 {
         migrate_v10(c)?;
+    }
+    if v < 11 {
+        migrate_v11(c)?;
     }
     c.execute(
         "INSERT INTO settings(key, value) VALUES ('schema_written_by', ?1) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -470,6 +475,22 @@ fn migrate_v10(c: &Connection) -> Result<()> {
            conv INTEGER NOT NULL, run_id INTEGER, task TEXT NOT NULL, unattended INTEGER NOT NULL DEFAULT 0, tainted INTEGER NOT NULL DEFAULT 0,
            status TEXT NOT NULL DEFAULT 'pending', reply TEXT, failed INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL)",
     )?;
+    Ok(())
+}
+
+/// Version 11: a chat's goal, and the routines, follow-ups and handed-over tasks that belong to it.
+fn migrate_v11(c: &Connection) -> Result<()> {
+    c.execute_batch(
+        "CREATE TABLE IF NOT EXISTS goals(id INTEGER PRIMARY KEY, bot_id INTEGER NOT NULL, chat_id INTEGER NOT NULL UNIQUE, text TEXT NOT NULL,
+           done_when TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','paused','blocked','done')),
+           progress TEXT NOT NULL DEFAULT '', why TEXT NOT NULL DEFAULT '', budget INTEGER NOT NULL DEFAULT 0, budget_from INTEGER NOT NULL DEFAULT 0,
+           created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
+    )?;
+    for table in ["routines", "delegations"] {
+        if !c.prepare(&format!("SELECT 1 FROM pragma_table_info('{table}') WHERE name='goal_id'"))?.exists([])? {
+            c.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN goal_id INTEGER"))?;
+        }
+    }
     Ok(())
 }
 
@@ -1501,5 +1522,61 @@ mod tests {
         assert_eq!(d.cards(5).unwrap().len(), 2);
         d.routine_set_delivery(5, r.id, "card").unwrap();
         assert!(d.card_delete(5, c.id).unwrap() && d.cards(5).unwrap().len() == 1);
+    }
+
+    #[test]
+    fn pausing_a_goal_holds_its_followups_and_deleting_removes_them() {
+        let d = db();
+        let g = d.goal_set(1, 5, "Find a plumber who can come this week", "a plumber is booked", 0).unwrap();
+        assert_eq!(g.status, "active");
+        assert!(d.goal_set(1, 5, "Another", "x", 0).is_err(), "one goal per chat");
+        // A follow-up booked while the goal is on is the goal's; one in another chat isn't.
+        let f = d.routine_once(1, 5, now() + 60, "Check whether the plumber replied", false).unwrap();
+        d.goal_claim_routine(f.id, 5).unwrap();
+        let other = d.routine_once(1, 6, now() + 60, "Unrelated", false).unwrap();
+        d.goal_claim_routine(other.id, 6).unwrap();
+        let later = now() + 120;
+        assert_eq!(d.due(1, later).unwrap().len(), 2);
+        // Paused: its follow-up doesn't run, though it's due; the other chat's still does.
+        d.goal_status(5, "paused", "").unwrap();
+        assert_eq!(d.due(1, later).unwrap().iter().map(|r| r.id).collect::<Vec<_>>(), vec![other.id]);
+        assert!(d.goal_progress(5, "x", None, "").is_err(), "a paused goal is the person's to resume");
+        d.goal_status(5, "active", "").unwrap();
+        assert_eq!(d.due(1, later).unwrap().len(), 2, "resumed, it runs again");
+        // A task handed over for the goal: pausing stops it mid-run (and reports it), deleting stops a waiting one.
+        let t1 = d.delegation_add(&Delegation { bot_id: 1, to_bot: 2, chat_id: 5, task: "call plumbers".into(), ..Default::default() }).unwrap();
+        d.goal_claim_delegation(t1, 5).unwrap();
+        d.delegation_status(t1, "running").unwrap();
+        assert_eq!(d.goal_status(5, "paused", "").unwrap(), vec![t1]);
+        d.delegation_done(t1, "found one", false, false).unwrap();
+        assert!(d.delegations(1, "done").unwrap().is_empty(), "a stopped task's result isn't told");
+        d.goal_status(5, "active", "").unwrap();
+        let t2 = d.delegation_add(&Delegation { bot_id: 1, to_bot: 2, chat_id: 5, task: "again".into(), ..Default::default() }).unwrap();
+        d.goal_claim_delegation(t2, 5).unwrap();
+        d.goal_delete(5).unwrap();
+        assert!(d.goal(5).unwrap().is_none());
+        assert!(d.routine(f.id).unwrap().is_none(), "its follow-up went with it");
+        assert!(d.routine(other.id).unwrap().is_some());
+        assert!(d.delegations(1, "pending").unwrap().is_empty(), "its waiting task too");
+    }
+
+    #[test]
+    fn a_goal_over_budget_pauses_and_asks() {
+        let d = db();
+        let g = d.goal_set(1, 5, "Get the insurance refund paid", "the refund is in the account", 1000).unwrap();
+        assert!(!d.goal_check_budget(&g).unwrap());
+        let r = d.run_start(1, 5, "routine", None, "x").unwrap();
+        d.c().execute("UPDATE runs SET tokens_in=1500 WHERE id=?1", [r]).unwrap();
+        let g = d.goal(5).unwrap().unwrap();
+        assert_eq!(g.spent, 1500);
+        assert!(d.goal_check_budget(&g).unwrap());
+        let g = d.goal(5).unwrap().unwrap();
+        assert!(g.status == "paused" && g.why.contains("budget"), "{g:?}");
+        assert_eq!(d.goals_waiting().unwrap().len(), 1, "Needs you asks");
+        // Going on starts the budget over.
+        d.goal_status(5, "active", "").unwrap();
+        let g = d.goal(5).unwrap().unwrap();
+        assert!(g.status == "active" && g.why.is_empty() && !d.goal_check_budget(&g).unwrap());
+        assert!(d.goals_waiting().unwrap().is_empty());
     }
 }

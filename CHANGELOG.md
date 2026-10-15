@@ -4,6 +4,14 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 
 ## Unreleased
 
+### Routines
+- **Goals:** ask a bot to see something through ("find a plumber who can come this week") and it keeps at it until
+  it's done, with a progress line pinned in the chat and in its header. The follow-ups and routines it books, and the
+  tasks it hands to other bots, belong to the goal: pause it and they all stop at once, even mid-task; remove it and
+  they're gone. A bot can only call a goal done when the run log shows it, and a goal can have a token budget of its own.
+  When the budget runs out, Needs you asks whether to go on. [More](docs/routines.md#goals)
+
+### Safety and upkeep
 - **Security:** the TLS library (rustls 0.23.46) is updated for four advisories published on October 14
   (RUSTSEC-2026-0346 to 0349).
 

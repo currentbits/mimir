@@ -1122,6 +1122,17 @@ impl Host {
             "cards" => ok(self.db.cards(arg(a, "chat_id")?)?),
             "card_tick" => ok(self.db.card_tick(arg(a, "chat_id")?, arg(a, "id")?, arg(a, "line")?, &arg::<String>(a, "text")?)?),
             "card_delete" => ok(self.db.card_delete(arg(a, "chat_id")?, arg(a, "id")?)?),
+            // The chat's goal, and yours to pause, resume, mark done or remove: local, whatever the AI is doing. Pausing or
+            // removing it also cuts off tasks it handed to other bots.
+            "goal" => ok(self.db.goal(arg(a, "chat_id")?)?),
+            "goal_status" => {
+                crate::runtime::stop_handed(&self.db.goal_status(arg(a, "chat_id")?, &arg::<String>(a, "status")?, "")?);
+                ok(self.db.goal(arg(a, "chat_id")?)?)
+            }
+            "goal_delete" => {
+                crate::runtime::stop_handed(&self.db.goal_delete(arg(a, "chat_id")?)?);
+                ok(true)
+            }
             "set_delivery" => ok(self.db.routine_set_delivery(arg(a, "chat_id")?, arg(a, "id")?, &arg::<String>(a, "delivery")?)?),
             // How full standing memory is (the Memory tab's meter).
             "standing_memory" => {
@@ -1290,6 +1301,8 @@ impl Host {
                         json!({"key": key, "bot_id": bot, "routine_id": routine, "routine": prompt, "until": h.until, "why": h.why, "cap": h.waive.is_some()})
                     }).collect::<Vec<_>>(),
                     "suggestions": counts,
+                    // Goals waiting on the person: over their budget (go on?), or blocked on them.
+                    "goals": self.db.goals_waiting()?,
                     // The daily check found the database damaged: restore a backup.
                     "damage": self.db.setting(crate::backup::DAMAGE)?,
                     "unconfirmed": self.db.unconfirmed_counts()?.into_iter().map(|(chat, n)| json!({"chat_id": chat, "count": n})).collect::<Vec<_>>(),

@@ -40,7 +40,10 @@ export type Model = { id: string; tools: boolean | null; name?: string }
 
 export type Hold = { key: string; bot_id: number; routine_id: number | null; routine?: string | null; until: number; why: string; cap: boolean }
 
-export type Inbox = { approvals: Approval[]; missed: Approval[]; failed: Run[]; holds?: Hold[]; suggestions: { chat_id: number; count: number }[]; unconfirmed?: { chat_id: number; count: number }[]; server_update?: { current: string; latest: string; how: string } | null; damage?: string | null }
+/** A chat's goal: one lasting objective its bot works on until it's done. */
+export type Goal = { id: number; bot_id: number; chat_id: number; text: string; done_when: string; status: 'active' | 'paused' | 'blocked' | 'done'; progress: string; why: string; budget: number; spent: number; updated_at: number }
+
+export type Inbox = { approvals: Approval[]; missed: Approval[]; failed: Run[]; holds?: Hold[]; goals?: Goal[]; suggestions: { chat_id: number; count: number }[]; unconfirmed?: { chat_id: number; count: number }[]; server_update?: { current: string; latest: string; how: string } | null; damage?: string | null }
 
 /** A pause: the bot, or null for all of them; until when (0: until you resume). */
 export type Pause = { bot_id: number | null; until: number }
