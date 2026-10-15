@@ -780,17 +780,34 @@ impl Host {
             // ---- external tools & saved logins ----
             // Configured servers with their tool counts. Env and headers show names only; values stay in the secret store.
             "tool_servers" => {
+                let sensitive = tools::sensitive_list(&self.db);
                 let servers: Vec<Value> = ext::servers(&self.db)
                     .into_iter()
                     .map(|s| {
                         let keys = |m: std::collections::HashMap<String, String>| m.into_keys().collect::<std::collections::BTreeSet<_>>();
-                        json!({"name": s.name, "preset": s.preset, "command": s.command, "args": s.args, "url": s.url, "env": keys(s.env), "headers": keys(s.headers), "tools": ext::cached_tools(&self.db, &s.name).len(), "signed_in": ext::signed_in(&s.name)})
+                        json!({"name": s.name, "preset": s.preset, "command": s.command, "args": s.args, "url": s.url, "env": keys(s.env), "headers": keys(s.headers), "tools": ext::cached_tools(&self.db, &s.name).len(), "signed_in": ext::signed_in(&s.name), "sensitive": sensitive.contains(&s.name), "suggest_sensitive": tools::looks_sensitive(&s.name)})
                     })
                     .collect();
                 ok(json!({"servers": servers, "tools": ext::all_tools(&self.db).len()}))
             }
             // Add or replace one server: {name, command, args, env} or {name, url, headers}. Starts it once; returns its tool count.
             "tool_server_save" => ok(ext::save_server(&self.db, arg(a, "server")?).await?),
+            // Sensitive sources: once a run has read one, everything that goes out asks. Only you set them.
+            "sensitive" => ok(tools::sensitive_list(&self.db)),
+            "set_sensitive" => {
+                let (name, on): (String, bool) = (arg(a, "name")?, arg(a, "on")?);
+                let known = ext::servers(&self.db).iter().any(|s| s.name == name)
+                    || tools::all_specs(&self.db).iter().any(|(n, ..)| *n == name)
+                    || name.strip_prefix("chat:").is_some_and(|c| c.parse::<i64>().is_ok());
+                if !known {
+                    bail!("no tool server, tool or memory called {name}");
+                }
+                let mut list: Vec<String> = tools::sensitive_list(&self.db).into_iter().filter(|s| *s != name).collect();
+                if on {
+                    list.push(name);
+                }
+                ok(self.db.set_setting("sensitive", &serde_json::to_string(&list)?)?)
+            }
             "tool_server_delete" => ok(ext::delete_server(&self.db, &arg::<String>(a, "name")?)?),
             // A remote server that wants a sign-in (MCP's OAuth): returns the address to open; then `_wait` (desktop) or
             // `_paste` (a server: the address the browser ended up on) finishes it and saves the server. Returns its tool count.
