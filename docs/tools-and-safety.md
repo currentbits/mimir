@@ -10,6 +10,7 @@ Bots act through **tools**. Every tool call is checked against your rules before
 | `chat_search` | Search earlier conversations with you (any of your bots) for what was said but not saved | allow |
 | `memory_forget` | Forget a memory | **ask** |
 | `card_read`, `card_write` | Read this chat's pinned cards, and write one whole (a shopping list, bills due): text, checklists, tables and links, never HTML; up to 20 a chat ([Pinned cards](bots-and-chats.md#pinned-cards)). Not in incognito. A card written after reading outside content counts as outside content for whoever reads it next | allow |
+| `goal_set`, `goal_update` | Set this chat's goal (one at a time) and keep its progress line; *done* only when the chat's run log shows something done since it was set ([Goals](routines.md#goals)). Come with `routine_create`. Not in incognito, nor in a task handed over by another bot | allow |
 | `routine_create`, `routine_list` | Schedule and list routines, recurring or once (a reminder) ([Routines](routines.md)) | allow |
 | `routine_update` | Change a routine's brief, schedule, quiet or watch (when you reply to its result with what to change); a bot allowed `routine_create` may use it | allow |
 | `routine_delete` | Delete a routine | **ask** |
@@ -79,6 +80,34 @@ standing instructions until you confirm it); replacing an existing memory still 
 ("no, use metric units") stays yours even after a web search in that conversation: a page can't put words in your
 messages. Files in a chat's workspace keep the same mark: one written after outside content (or changed outside
 Mimir) counts as outside content when a bot reads it.
+
+**Sensitive sources.** In **Settings → Sensitive sources** you can mark a tool server (your bank's, your health
+records'), just one of its tools, or a chat's memory as sensitive. Servers whose names look like banking or health are
+suggested there; nothing is marked for you. Once a reply or routine has read from a sensitive source (called one of its
+tools, found one of its memories, or had them in its standing memory), these ask first, even if their rule says
+allow:
+
+- `email_send` (it always asks; the card now also says why);
+- `web_fetch` and `web_search`, whatever the address or query, and `computer_open`, `computer_type`;
+- `ask_bot`: a task for another bot;
+- a message to someone else's chat: a reminder `for` them, `send_file` in a group or a guest's chat;
+- `memory_store` with `household`: the household's guests read those memories;
+- any tool server's tool that changes something, and its read-only tools that reach the internet (except the sensitive
+  server's own).
+
+The card starts with *"This run read from bank, which you marked sensitive."* These asks never offer "always", aren't
+covered by a plan or "all like this", and aren't in **Allow all**. Like outside content, it lasts for the rest of the
+conversation ("Start fresh" ends it) and goes along with a task handed to another bot. It only ever turns an allow into
+an ask.
+
+**Going round in circles.** When a reply or routine makes the same tool call again and again (same tool, same
+details on the card) instead of getting anywhere, the next repeat stops and asks first: *"The bot keeps repeating this
+step. Let it go on?"*. That's the 3rd time in a row for something that acts, or the 5th for something that only looks
+(reading, searching, a screenshot, scrolling, which often repeat for a reason while a page loads). A short cycle counts
+too: the same two or three calls, round and round, that many times. Allow lets it carry on (and asks again if it's
+still at it a few more rounds later); Deny stops the step and the bot is told to wrap up and tell you where it got
+stuck. A routine's ask waits in [Needs you](routines.md#needs-you). It works the same with every AI account, including
+Claude Code and Codex.
 
 ## Approve once for a whole job
 

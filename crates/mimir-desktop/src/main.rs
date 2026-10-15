@@ -383,6 +383,7 @@ fn tray_menu(app: &AppHandle, pending: &[mimir_core::db::Approval], header: &str
                 "login" => "Uses a saved login",
                 "send" => "Sends an email: review it in Mimir",
                 "bot" => "Makes a new bot: review it in Mimir",
+                "loop" => "Keeps repeating a step: review it in Mimir",
                 _ => "After reading something untrusted",
             };
             sub.append(&item(format!("info:{}", a.id), why, false)?)?;
