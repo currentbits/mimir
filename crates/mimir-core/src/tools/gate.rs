@@ -217,6 +217,44 @@ pub(super) fn off_brief(ctx: &ToolCtx, name: &str, args: &Value) -> bool {
     !crate::fits_ask(&brief, &target)
 }
 
+/// What the person marked sensitive (Settings → Sensitive sources): tool servers by name, single tools
+/// (`bank__balance`), memory scopes (`chat:7`). Never set by Mimir itself.
+pub fn sensitive_list(db: &Db) -> Vec<String> {
+    db.setting("sensitive").ok().flatten().and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default()
+}
+
+/// Whether this server, tool or memory scope is marked sensitive (a tool also through its server).
+pub(crate) fn is_sensitive(db: &Db, name: &str) -> bool {
+    let list = sensitive_list(db);
+    list.iter().any(|s| s == name || crate::ext::split(name).is_some_and(|(server, _)| server == s))
+}
+
+/// A server whose name looks like banking, money or health: suggested (never set) as sensitive.
+pub fn looks_sensitive(name: &str) -> bool {
+    const WORDS: [&str; 22] = [
+        "bank", "finance", "money", "broker", "invest", "trading", "stripe", "paypal", "plaid", "wise", "revolut", "monzo", "ynab", "tax", "health", "medical",
+        "doctor", "patient", "pharma", "fitbit", "oura", "clinic",
+    ];
+    let n = name.to_ascii_lowercase();
+    WORDS.iter().any(|w| n.contains(w))
+}
+
+/// After a run read a sensitive source, these are the ways data leaves: an email, a web request (fetch, search, the
+/// computer's browser), a hand-off to another bot, a message to another chat, and any tool server's write (or its
+/// read that reaches the internet, carrying what it's asked).
+pub(super) fn sends_out(ctx: &ToolCtx, name: &str, args: &Value) -> bool {
+    match name {
+        "email_send" | "web_fetch" | "web_search" | "ask_bot" | "computer_open" | "computer_type" => true,
+        "routine_create" => args["for"].as_str().is_some_and(|f| !f.trim().is_empty()),
+        "send_file" => ctx.db.chat_guest(ctx.chat_id) || !ctx.db.chat_private(ctx.chat_id),
+        n => crate::ext::find(&ctx.db, n).is_some_and(|t| {
+            // Reading the sensitive server again, or the browser looking at its page, sends nothing new out.
+            let server = crate::ext::split(n).map(|(s, _)| s).unwrap_or("");
+            !t.read_only || (t.open_world && server != crate::ext::BROWSER && !is_sensitive(&ctx.db, n))
+        }),
+    }
+}
+
 /// The setting that says a conversation read the person's private data (cleared with its taint).
 pub(crate) fn private_key(bot: i64, conv: i64) -> String {
     format!("private:{bot}:{conv}")

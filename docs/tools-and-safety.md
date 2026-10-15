@@ -81,6 +81,24 @@ standing instructions until you confirm it); replacing an existing memory still 
 messages. Files in a chat's workspace keep the same mark: one written after outside content (or changed outside
 Mimir) counts as outside content when a bot reads it.
 
+**Sensitive sources.** In **Settings → Sensitive sources** you can mark a tool server (your bank's, your health
+records'), just one of its tools, or a chat's memory as sensitive. Servers whose names look like banking or health are
+suggested there; nothing is marked for you. Once a reply or routine has read from a sensitive source (called one of its
+tools, found one of its memories, or had them in its standing memory), these ask first, even if their rule says
+allow:
+
+- `email_send` (it always asks; the card now also says why);
+- `web_fetch` and `web_search`, whatever the address or query, and `computer_open`, `computer_type`;
+- `ask_bot`: a task for another bot;
+- a message to someone else's chat: a reminder `for` them, `send_file` in a group or a guest's chat;
+- any tool server's tool that changes something, and its read-only tools that reach the internet (except the sensitive
+  server's own).
+
+The card starts with *"This run read from bank, which you marked sensitive."* These asks never offer "always", aren't
+covered by a plan or "all like this", and aren't in **Allow all**. Like outside content, it lasts for the rest of the
+conversation ("Start fresh" ends it) and goes along with a task handed to another bot. It only ever turns an allow into
+an ask.
+
 **Going round in circles.** When a reply or routine makes the same tool call again and again (same tool, same
 details on the card) instead of getting anywhere, the next repeat stops and asks first: *"The bot keeps repeating this
 step. Let it go on?"*. That's the 3rd time in a row for something that acts, or the 5th for something that only looks

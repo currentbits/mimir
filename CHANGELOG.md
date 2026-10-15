@@ -11,7 +11,12 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
   they're gone. A bot can only call a goal done when the run log shows it, and a goal can have a token budget of its own.
   When the budget runs out, Needs you asks whether to go on. [More](docs/routines.md#goals)
 
-### Safety and upkeep
+### Safety
+- **Sensitive sources:** mark a tool server (your bank's, your health records'), a single tool or a chat's memory as
+  sensitive in **Settings → Sensitive sources**. Once a reply or routine has read from one, everything that goes out
+  asks first, and the card says why ("This run read from bank"): an email, a web page or search, a task for another
+  bot, a message to someone else's chat, and any tool server's change. Servers whose names look like banking or
+  health are suggested, never marked for you.
 - **Security:** the TLS library (rustls 0.23.46) is updated for four advisories published on October 14
   (RUSTSEC-2026-0346 to 0349).
 

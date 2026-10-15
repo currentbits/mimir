@@ -93,10 +93,13 @@ The [Security model](security.md) in terms of where it lives. Keep these when ch
   - `is_tainted` also re-reads the run, so the tools server sees what the parent process marked.
   - What carries the mark: `routines.tainted`, `approvals.tainted` (restored by `run_parked`), `suggestions.tainted`,
     `digest_items.tainted`, and `Db::recent_outside` for replayed history (only after the `fresh:{bot}:{chat}` marker).
+  - Sensitive sources (`tools::sensitive_list`, the `sensitive` setting) ride on the private-data flag:
+    `ToolCtx::mark_sensitive` sets it with the source's name, kept in the same `private:{bot}:{conv}` and
+    `private-delegation:{id}` settings (`"1"` or the name) and passed to the tools server as `--sensitive <name>`.
   - A file's or forward's text is wrapped by `with_document` (its position math uses ASCII lowercasing).
 - **The gate.**
-  - `tools::call`: `precheck` (limits, before any card), then `gate`, then `leaks_out` (data-carrying reads), then the
-    approval.
+  - `tools::call`: `precheck` (limits, before any card), then `gate`, then `leaks_out` (data-carrying reads), then
+    `sends_out` after a sensitive source (kind `sensitive`, the card says which), then `off_brief`, then the approval.
   - `card_text` builds every card.
   - `site_of` / `ext::host_allowed` parse hosts with `url::Url` and refuse user info.
 - **Learning.**
