@@ -61,6 +61,9 @@ login is kept for. They warn you before you type when:
   `github-login.example` when you've signed in to `github.com`): *This isn't github.com, where you've signed in
   before.*
 
+- the address has letters from another alphabet in it (a Cyrillic "а" looks just like "a"): always, shown the way it
+  really is (`xn--pple-43d.com`): *This address uses letters from another alphabet, made to look like apple.com*.
+
 A page a bot reads can tell it to open a fake sign-in page; this is where you'd catch that.
 
 The site is the page's registrable domain: a sign-in on `accounts.google.com` is kept for `google.com` and works on its

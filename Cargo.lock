@@ -3190,6 +3190,7 @@ dependencies = [
  "cron",
  "futures-util",
  "getrandom 0.3.4",
+ "idna",
  "image",
  "lettre",
  "libloading 0.8.9",

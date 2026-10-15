@@ -854,7 +854,9 @@ async fn computer_signin(ctx: &ToolCtx) -> Result<String> {
     let steered = steered(ctx);
     let card = crate::ext::signin_warnings(&ctx.db, &url, &site, steered);
     let host = card["host"].as_str().unwrap_or(&site).to_string();
+    let like = card["lookalike"].as_str().map(|k| format!(", made to look like {k}")).unwrap_or_default();
     let check = match (steered, card["lookalike"].as_str()) {
+        _ if card["foreign"] == true => format!("\n\n⚠️ This address uses letters from another alphabet{like}: {host}"),
         (_, Some(k)) => format!("\n\n⚠️ This isn't {k}, where you've signed in before. Check the address: {host}"),
         (true, None) => format!("\n\n⚠️ I came to this site after reading a web page or a message. Check the address: {host}"),
         _ => String::new(),

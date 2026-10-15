@@ -823,6 +823,15 @@ mod tests {
         db.approval_claim(card).unwrap();
         db.approval_signed_in(card, true).unwrap();
         assert_eq!(crate::ext::signin_warnings(&db, "https://padelc1ub.nl/", "padelc1ub.nl", false)["lookalike"], "padelclub.nl", "signed in there before");
+        // Another alphabet: always warned, in punycode, naming what it's made to look like (a Cyrillic "і" here).
+        let url = url::Url::parse("https://login.gіthub.com/").unwrap();
+        let host = url.host_str().unwrap();
+        let w = crate::ext::signin_warnings(&db, url.as_str(), &crate::ext::site_of(url.as_str()).unwrap(), false);
+        assert_eq!((w["foreign"].as_bool(), w["host"].as_str(), w["lookalike"].as_str()), (Some(true), Some(host), Some("github.com")));
+        assert!(host.starts_with("login.xn--"));
+        let w = crate::ext::signin_warnings(&db, "https://xn--bcher-kva.de/", "xn--bcher-kva.de", false);
+        assert_eq!((w["foreign"].as_bool(), w["lookalike"].as_str()), (Some(true), None), "warned even when it looks like nothing known");
+        assert_eq!(crate::ext::signin_warnings(&db, "https://github.com/", "github.com", false)["foreign"], false);
     }
 
     #[test]

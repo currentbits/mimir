@@ -391,13 +391,18 @@ pub fn site_of(url: &str) -> Option<String> {
 
 /// What a sign-in card's form warns about: the page's full address next to the site the login is kept for; whether the
 /// bot came there after outside content or on someone else's words (`steered`); and, for a site with no saved login or
-/// earlier sign-in, one that has them which this one looks like (`lookalike`).
+/// earlier sign-in, one that has them which this one looks like (`lookalike`); and an address with letters from
+/// another alphabet (`foreign`: always, naming what it's made to look like when that's one of them).
 pub fn signin_warnings(db: &Db, url: &str, site: &str, steered: bool) -> Value {
     let mut known: Vec<String> = vault(db).iter().flat_map(|e| e.domains.iter()).filter_map(|d| site_of(&format!("https://{d}/"))).collect();
     known.extend(db.signin_sites().unwrap_or_default());
-    let lookalike = if known.iter().any(|k| k == site) { None } else { crate::lookalike::of(site, known.iter().map(String::as_str)) };
     let host = url::Url::parse(url).ok().and_then(|u| u.host_str().map(str::to_lowercase)).unwrap_or_default();
-    json!({"host": host, "site": site, "steered": steered, "lookalike": lookalike})
+    let foreign = crate::lookalike::foreign(&host);
+    let lookalike = match known.iter().any(|k| k == site) {
+        true => None,
+        false => crate::lookalike::skeleton_of(site, known.iter().map(String::as_str)).or_else(|| crate::lookalike::of(site, known.iter().map(String::as_str))),
+    };
+    json!({"host": host, "site": site, "steered": steered, "lookalike": lookalike, "foreign": foreign})
 }
 
 /// The authenticator code of a saved login right now, if it has a key.

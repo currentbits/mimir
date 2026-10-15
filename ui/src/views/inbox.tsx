@@ -132,7 +132,7 @@ export function Approvals({ list, chats, chatName, onDecided }: { list: Approval
   )
 }
 
-type SignInCard = { id: number; bot_id: number; site: string; host?: string; steered?: boolean; lookalike?: string | null }
+type SignInCard = { id: number; bot_id: number; site: string; host?: string; steered?: boolean; lookalike?: string | null; foreign?: boolean }
 
 /** The masked form a sign-in card links to (#signin): for the newest card waiting. Only that card's id goes back with
  *  what you type; the link itself carries nothing (no server, token or site), so a link someone sends you can't
@@ -166,7 +166,9 @@ export function SignInForm({ onClose }: { onClose: () => void }) {
           <div className="ask-actions"><button type="button" className="btn btn-primary" onClick={onClose}>OK</button></div>
         </> : <>
           <p><b>Sign in to {a.site}</b> for {botOf(a.bot_id).name}. Mimir types this into the page on the computer and keeps it for this bot on {a.site} only. The bot never sees it.</p>
-          {a.lookalike
+          {a.foreign
+            ? <p className="error" role="alert">This address uses letters from another alphabet{a.lookalike ? `, made to look like ${a.lookalike}` : ''}: <b className="mono">{host}</b></p>
+            : a.lookalike
             ? <p className="error" role="alert">This isn’t {a.lookalike}, where you’ve signed in before. Check the address before you type a password: <b className="mono">{host}</b></p>
             : a.steered && <p className="error" role="alert">{botOf(a.bot_id).name} came to this site after reading a web page or a message. Check the address before you type a password: <b className="mono">{host}</b></p>}
           <p className="hint">Page: <span className="mono selectable">{host}</span></p>

@@ -86,7 +86,9 @@ DevTools' `Input.insertText`, which types like a keyboard, because insertText is
 cost: those events aren't "trusted", and a rare site that only accepts real key presses reads as failed; take over
 there. The card and the form show the page's full address, and warn when the bot came there after outside content or
 on another bot's or a document's words, or when the site looks like one with a saved login or an earlier sign-in
-(a letter or two apart, the same name under another ending, or the name inside a hyphenated one: `lookalike.rs`). It keeps that login for that bot and that registrable domain
+(a letter or two apart, the same name under another ending, or the name inside a hyphenated one: `lookalike.rs`).
+An address with letters from another alphabet (any `xn--` label) is always warned about, shown in punycode, and named
+after a known site when its plain letters line up with one. It keeps that login for that bot and that registrable domain
 only. The card's link holds no server, token or site: the form is behind your Mimir sign-in, uses the card the server
 has waiting, works once and runs out after 10 minutes. A plain Approve can't complete a sign-in card; only the form can.
 
@@ -138,8 +140,8 @@ half is built into the app); a tampered download is refused. It never restarts o
   addresses one fetch at a time (each fetch is in the run log).
 - A sign-in card's form signs in to whatever the page on the computer's screen is when you send it, as long as it's on
   the card's site: a page of that site that looks like a sign-in but isn't one would get your login.
-- The look-alike warning compares letters: a name spelled with another alphabet's look-alike letters (shown as
-  `xn--…`) or a look-alike for a site you've never saved a login for isn't flagged. The full address is always shown.
+- The look-alike warning compares letters: a look-alike of a site you've never saved a login for or signed in to isn't
+  flagged (one in another alphabet always is, without a name). The full address is always shown.
 - "Signed in" is read from the sign-in fields going away; a site that keeps a password field on every page reads as
   failed (and the login isn't saved).
 - An email card shows exactly what's sent, but approving it is your call: after reading an email, check the recipient
