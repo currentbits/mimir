@@ -25,6 +25,11 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
   blob or download a program. Skills come in as proposals and routines come in paused; only its tool rules that are at
   least as strict as yours can be used, and its AI account uses your own settings.
   **Duplicate…** does both in one go. See [Bots and chats](docs/bots-and-chats.md#export-import-and-duplicate).
+- **Grok bots are more private:** Grok's own memory and `/goal` are always off for bots, and your Claude and Cursor
+  settings no longer load into them, so bots can't read each other's notes and incognito chats leave nothing behind
+  in Grok. A message that starts with `/` now reaches the bot instead of running as a Grok command. If a Grok update
+  ever offers a bot more tools than web search and Mimir's own, the message stops with an error instead of running.
+  The docs cover The X Subscription's plans and its shared weekly allowance.
 - **Security fixes from the fourth review:**
   - A routine can no longer change its own times or end date while it runs, or book itself again a minute later;
     from a routine, a one-off is at least 15 minutes away.
