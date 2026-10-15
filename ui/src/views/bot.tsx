@@ -88,11 +88,11 @@ type BotFilePreview = {
 const Flags = ({ flags }: { flags: string[] }) => flags.length ? <span className="hint warn"><Icon name="alert" size={13} />It {flags.join(', ')}.</span> : null
 
 /** What a bot file would add, before anything is: you read it, and Add bot adds it (skills as proposals, routines paused). */
-export function BotImport({ text, onClose, onAdded }: { text: string; onClose: () => void; onAdded: (id: number) => void }) {
-  const p = useLoad(() => invoke<BotFilePreview>('import_bot_preview', { text }), [text])
+export function BotImport({ text, duplicateOf, onClose, onAdded }: { text: string; duplicateOf?: number; onClose: () => void; onAdded: (id: number) => void }) {
+  const p = useLoad(() => invoke<BotFilePreview>('import_bot_preview', { text, duplicateOf }), [text])
   const [rules, setRules] = useState(false)
   const [err, setErr] = useState<string | null>(null)
-  const add = () => invoke<{ id: number }>('import_bot', { text, rules }).then(r => onAdded(r.id), e => setErr(String(e)))
+  const add = () => invoke<{ id: number }>('import_bot', { text, rules, duplicateOf }).then(r => onAdded(r.id), e => setErr(String(e)))
   const f = p.data
   return (
     <div className="ask-backdrop" onMouseDown={e => e.target === e.currentTarget && onClose()}>
@@ -113,8 +113,8 @@ export function BotImport({ text, onClose, onAdded }: { text: string; onClose: (
           {f.servers.length > 0 && <div><span className="field-label">Tool servers it uses</span>
             <ul>{f.servers.map(s => <li key={s.name}><b>{s.name}</b>: <code>{s.what}</code>{s.here ? '' : ' (not set up here: nothing from the file is run or added; set it up under Settings if you trust it)'}</li>)}</ul></div>}
           {f.rules.length > 0 && <div><span className="field-label">Its tool rules, different from yours</span>
-            <ul>{f.rules.map(r => <li key={r.tool}><code>{r.tool}</code>: {r.action} (yours: {r.yours}){r.looser && <span className="hint warn"><Icon name="alert" size={13} />Looser than yours.</span>}</li>)}</ul>
-            <label className="hint"><input type="checkbox" checked={rules} onChange={e => setRules(e.target.checked)} /> Use its rules too (they apply to all your bots)</label></div>}
+            <ul>{f.rules.map(r => <li key={r.tool}><code>{r.tool}</code>: {r.action} (yours: {r.yours}){r.looser && <span className="hint warn"><Icon name="alert" size={13} />Looser than yours, so not used. Change it under Settings → Permissions if you want it.</span>}</li>)}</ul>
+            {f.rules.some(r => !r.looser) && <label className="hint"><input type="checkbox" checked={rules} onChange={e => setRules(e.target.checked)} /> Use its stricter rules too (they apply to all your bots)</label>}</div>}
           {err && <span className="hint warn"><Icon name="alert" size={13} />{err}</span>}
         </>}
         <div className="ask-actions">

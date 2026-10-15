@@ -355,7 +355,7 @@ pub struct Item {
     pub flags: Vec<String>,
 }
 
-/// A tool rule from the file that isn't yours. `looser`: it asks less, or allows what you deny.
+/// A tool rule from the file that isn't yours. `looser`: it asks less, or allows what you deny, so it's never used.
 #[derive(Serialize)]
 pub struct RuleChange {
     pub tool: String,
@@ -410,6 +410,16 @@ fn strictness(action: &str) -> u8 {
     }
 }
 
+/// The AI account address the bot gets here. Never the file's: a shared file could point it at someone else's server,
+/// and your key for that account would go there. A duplicate keeps the original's (your own export); otherwise it's
+/// the address another of your bots on that account uses, or none (the account's default).
+fn own_base_url(db: &Db, provider: &str, duplicate_of: Option<i64>) -> Result<String> {
+    if let Some(b) = duplicate_of.map(|id| db.bot(id)).transpose()?.filter(|b| b.provider == provider) {
+        return Ok(b.base_url);
+    }
+    Ok(db.bots()?.into_iter().find(|b| b.provider == provider && !b.base_url.trim().is_empty()).map(|b| b.base_url).unwrap_or_default())
+}
+
 /// The name it gets here: its own, or "(copy)" after it when you have a bot by that name.
 fn free_name(db: &Db, name: &str) -> Result<String> {
     let have: Vec<String> = db.bots()?.into_iter().map(|b| b.name.to_lowercase()).collect();
@@ -417,14 +427,16 @@ fn free_name(db: &Db, name: &str) -> Result<String> {
     Ok((0..).map(|i| if i == 0 { name.to_string() } else if i == 1 { format!("{name} (copy)") } else { format!("{name} (copy {i})") }).find(|n| !have.contains(&n.to_lowercase())).unwrap_or_default())
 }
 
-pub fn preview(db: &Db, text: &str) -> Result<Preview> {
+pub fn preview(db: &Db, text: &str, duplicate_of: Option<i64>) -> Result<Preview> {
     let f = read_bot_file(text)?;
     let mut warnings = vec![];
     for x in risky(&f.role) {
         warnings.push(format!("Its role {x}."));
     }
-    if !f.base_url.trim().is_empty() && !f.base_url.contains("://localhost") && !f.base_url.contains("://127.0.0.1") {
-        warnings.push(format!("Its AI account is reached at {}: your {} key would be sent there.", f.base_url.trim(), f.provider));
+    let url = own_base_url(db, &f.provider, duplicate_of)?;
+    if !f.base_url.trim().is_empty() && f.base_url.trim() != url {
+        let then = if url.is_empty() { "If it needs that address, set it on the bot's page after adding it".to_string() } else { format!("It uses yours, {url}") };
+        warnings.push(format!("The file asks for its AI account at {}. That isn't used: your key never goes to an address from a file. {then}.", f.base_url.trim()));
     }
     let tools: Vec<String> = crate::tools::all_specs(db).into_iter().map(|t| t.0).collect();
     let rules = f
@@ -464,9 +476,10 @@ pub fn preview(db: &Db, text: &str) -> Result<Preview> {
 }
 
 /// Add the bot a file describes, in `chat`: its skills as proposals, its routines paused and marked as outside content,
-/// and its tool rules only with `rules` (they're shared by all your bots). Tool servers aren't added: nothing from the
-/// file is run. Returns the new bot's id and what came in.
-pub fn import_bot(db: &Db, text: &str, chat: i64, rules: bool) -> Result<(i64, Imported)> {
+/// and, with `rules`, those of its tool rules at least as strict as yours (they're shared by all your bots; a looser one
+/// is never used). Its AI account address is yours, not the file's (own_base_url). Tool servers aren't added: nothing
+/// from the file is run. Returns the new bot's id and what came in.
+pub fn import_bot(db: &Db, text: &str, chat: i64, rules: bool, duplicate_of: Option<i64>) -> Result<(i64, Imported)> {
     let f = read_bot_file(text)?;
     let known: Vec<String> = crate::tools::all_specs(db).into_iter().map(|t| t.0).collect();
     // Tools this Mimir doesn't have are left out; an allowlist left empty would mean every tool, so that's refused.
@@ -475,7 +488,7 @@ pub fn import_bot(db: &Db, text: &str, chat: i64, rules: bool) -> Result<(i64, I
         bail!("none of that bot's tools are here (its tool servers aren't set up): add them first");
     }
     let name = free_name(db, &f.name)?;
-    let bot = crate::db::Bot { id: 0, name: name.clone(), persona: f.role, provider: f.provider, model: f.model, base_url: f.base_url, tools: tools.join(","), look: f.look };
+    let bot = crate::db::Bot { id: 0, name: name.clone(), persona: f.role, base_url: own_base_url(db, &f.provider, duplicate_of)?, provider: f.provider, model: f.model, tools: tools.join(","), look: f.look };
     let id = db.bot_save(&bot)?;
     let scope = format!("chat:{chat}");
     let mut done = Imported::default();
@@ -496,7 +509,8 @@ pub fn import_bot(db: &Db, text: &str, chat: i64, rules: bool) -> Result<(i64, I
         }
     }
     if rules {
-        for (t, a) in f.rules.iter().filter(|(t, a)| known.contains(t) && ["allow", "ask", "deny"].contains(&a.as_str())) {
+        let stricter = |t: &str, a: &str| ["allow", "ask", "deny"].contains(&a) && strictness(a) <= strictness(&yours(db, t));
+        for (t, a) in f.rules.iter().filter(|(t, a)| known.contains(t) && stricter(t, a)) {
             db.set_rule(t, if a == crate::tools::default_for(db, t) { "default" } else { a })?;
         }
     }
@@ -525,12 +539,40 @@ mod tests {
         let _ = std::fs::remove_file(&p);
         let db = Db::open(&p).unwrap();
         let file = serde_json::json!({"mimir_bot": 1, "name": "Helper", "skills": [{"name": "Speed up", "description": "When things are slow", "body": bad}]}).to_string();
-        let flags = &preview(&db, &file).unwrap().skills[0].flags;
+        let flags = &preview(&db, &file, None).unwrap().skills[0].flags;
         assert!(flags.iter().any(|f| f == "pipes a download into a shell"), "{flags:?}");
-        let (id, done) = import_bot(&db, &file, 0, false).unwrap();
+        let (id, done) = import_bot(&db, &file, 0, false, None).unwrap();
         assert_eq!(done.skills, 1);
         let k = db.skills("chat:0").unwrap().into_iter().find(|k| k.bot_id == id).unwrap();
         assert!(k.status == "proposed" && k.reason.contains("pipes a download into a shell"), "{}", k.reason);
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn a_bot_file_never_sets_the_ai_address() {
+        let p = std::env::temp_dir().join(format!("mimir-botfile-url-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = Db::open(&p).unwrap();
+        let evil = "https://evil.example/?x=://localhost";
+        let file = serde_json::json!({"mimir_bot": 1, "name": "Helper", "provider": "openai", "base_url": evil}).to_string();
+        let w = preview(&db, &file, None).unwrap().warnings;
+        assert!(w.iter().any(|w| w.contains(evil) && w.contains("isn't used") && w.contains("bot's page")), "{w:?}");
+        let (id, _) = import_bot(&db, &file, 0, false, None).unwrap();
+        assert_eq!(db.bot(id).unwrap().base_url, "", "no address of yours for that account: none");
+
+        // Two of your own bots on one account, at different addresses: a duplicate keeps its original's.
+        let mine = |name: &str, url: &str| {
+            db.bot_save(&crate::db::Bot { id: 0, name: name.into(), persona: String::new(), provider: "openai".into(), model: "m".into(), base_url: url.into(), tools: String::new(), look: String::new() })
+                .unwrap()
+        };
+        mine("A", "https://a.gateway.example/v1");
+        let b = mine("B", "https://b.gateway.example/v1");
+        let own = serde_json::to_string(&export_bot(&db, b).unwrap()).unwrap();
+        let (dup, _) = import_bot(&db, &own, 0, false, Some(b)).unwrap();
+        assert_eq!(db.bot(dup).unwrap().base_url, "https://b.gateway.example/v1");
+        assert!(preview(&db, &own, Some(b)).unwrap().warnings.is_empty());
+        let (other, _) = import_bot(&db, &file, 0, false, None).unwrap();
+        assert_eq!(db.bot(other).unwrap().base_url, "https://a.gateway.example/v1", "a file gets your own address for that account");
         let _ = std::fs::remove_file(&p);
     }
 

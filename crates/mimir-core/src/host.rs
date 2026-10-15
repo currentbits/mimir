@@ -742,9 +742,9 @@ impl Host {
             // A bot as one file (no secrets, memories or chats); reading one back shows what it would add, and only
             // `import_bot` adds it: in the built-in chat, skills as proposals, routines paused.
             "export_bot" => ok(crate::imports::export_bot(&self.db, arg(a, "id")?)?),
-            "import_bot_preview" => ok(crate::imports::preview(&self.db, &arg::<String>(a, "text")?)?),
+            "import_bot_preview" => ok(crate::imports::preview(&self.db, &arg::<String>(a, "text")?, arg::<Option<i64>>(a, "duplicate_of")?)?),
             "import_bot" => {
-                let (id, done) = crate::imports::import_bot(&self.db, &arg::<String>(a, "text")?, LOCAL_CHAT, arg::<Option<bool>>(a, "rules")?.unwrap_or(false))?;
+                let (id, done) = crate::imports::import_bot(&self.db, &arg::<String>(a, "text")?, LOCAL_CHAT, arg::<Option<bool>>(a, "rules")?.unwrap_or(false), arg::<Option<i64>>(a, "duplicate_of")?)?;
                 // An AI account this Mimir can't use: the one your first bot uses instead.
                 let mut bot = self.db.bot(id)?;
                 if Provider::for_bot(&bot, self.home.clone()).is_err()
@@ -1573,6 +1573,7 @@ mod tests {
         host.db.routine_create(id, 0, "0 9 * * 2", "Log in with hunter2-shop and check orders", false).unwrap();
         host.call("skill_add", &json!({"chat_id": 0, "slug": "summarize-link", "bot_id": id})).await.unwrap();
         host.call("set_rule", &json!({"tool": "email_send", "action": "allow"})).await.unwrap();
+        host.call("set_rule", &json!({"tool": "web_fetch", "action": "ask"})).await.unwrap();
 
         let file = host.call("export_bot", &json!({"id": id})).await.unwrap();
         let text = file.to_string();
@@ -1581,13 +1582,19 @@ mod tests {
         }
         assert_eq!(file["servers"][0]["env"]["API_KEY"], "", "the key's name stays, so you know what to fill in");
         assert_eq!((file["skills"].as_array().unwrap().len(), file["routines"].as_array().unwrap().len()), (1, 1));
-        assert_eq!(file["rules"], json!({"email_send": "allow"}));
+        assert_eq!(file["rules"], json!({"email_send": "allow", "web_fetch": "ask"}));
 
-        // On a Mimir with the default rules: sending email without asking is flagged as looser.
-        host.call("set_rule", &json!({"tool": "email_send", "action": "default"})).await.unwrap();
+        // On a Mimir with the default rules: sending email without asking is looser (never used), asking before
+        // reading a page is stricter.
+        for t in ["email_send", "web_fetch"] {
+            host.call("set_rule", &json!({"tool": t, "action": "default"})).await.unwrap();
+        }
         let p = host.call("import_bot_preview", &json!({"text": text})).await.unwrap();
         assert_eq!(p["name"], "Ops (copy)");
-        assert_eq!(p["rules"], json!([{"tool": "email_send", "action": "allow", "yours": "ask", "looser": true}]));
+        assert_eq!(
+            p["rules"],
+            json!([{"tool": "email_send", "action": "allow", "yours": "ask", "looser": true}, {"tool": "web_fetch", "action": "ask", "yours": "allow", "looser": false}])
+        );
         assert_eq!(p["servers"][0]["here"], true);
         assert_eq!(host.db.bots().unwrap().len(), 2, "a preview adds nothing");
 
@@ -1599,7 +1606,8 @@ mod tests {
         assert!(host.db.skills("chat:0").unwrap().iter().any(|k| k.bot_id == copy.id && k.status == "proposed" && k.name == "Summarise a link"));
         assert_eq!(host.db.rule("email_send").unwrap(), None, "its rules only when you say so");
         host.call("import_bot", &json!({"text": text, "rules": true})).await.unwrap();
-        assert_eq!(host.db.rule("email_send").unwrap().as_deref(), Some("allow"));
+        assert_eq!(host.db.rule("web_fetch").unwrap().as_deref(), Some("ask"), "a stricter rule is used");
+        assert_eq!(host.db.rule("email_send").unwrap(), None, "a looser one never is");
         assert!(host.db.bots().unwrap().iter().any(|b| b.name == "Ops (copy 2)"));
         assert!(host.call("import_bot_preview", &json!({"text": "{\"name\": \"x\"}"})).await.is_err(), "not a bot file");
     }
