@@ -17,6 +17,12 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
   Telegram, Slack, Discord and Signal, **Edit in Mimir** opens the card in the web app (on a server with an https
   address). **Deny…** takes an optional "Why?", and in a messaging app a reply to the card does the same: the bot
   reads your reason and changes course instead of just stopping.
+- **Export, import and duplicate a bot:** right-click a bot to save it as one file (its role, look, skills, routines,
+  tool rules and the tool servers it uses), without tokens, keys, saved logins, memories or chats. **From a file…** on
+  the new-bot page shows everything in it first, and flags skill steps that pipe a download into a shell, hold a base64
+  blob or download a program. Skills come in as proposals and routines come in paused; only its tool rules that are at
+  least as strict as yours can be used, and its AI account uses your own settings.
+  **Duplicate…** does both in one go. See [Bots and chats](docs/bots-and-chats.md#export-import-and-duplicate).
 
 ## 0.3.0
 

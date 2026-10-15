@@ -1,12 +1,12 @@
 import { Component, type ReactNode, useMemo, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { inDesktop, invoke, localInvoke, probe, remoteServer, setWebToken, shortcut, webToken } from './api'
+import { inDesktop, invoke, localInvoke, probe, remoteServer, saveDownload, setWebToken, shortcut, webToken } from './api'
 import { moodOf, type Mood } from './face'
 import { ahead, setLooks } from './format'
 import { ask, AskHost, tell, Avatar, Icon, Segmented } from './ui'
 import { CHANNEL, useLoad, LOCAL, HOUSEHOLD, Bots, online, presenceOf } from './shared'
 import type { Tab, Status, Busy, Bot, Chat, Inbox, ComputerStatus, Pause } from './types'
 import { ActivityView } from './views/activity'
-import { BotPage } from './views/bot'
+import { BotImport, BotPage } from './views/bot'
 import { Paused, pausedText, ChatView, Menu, pauseChoices } from './views/chat'
 import { ComputerView } from './views/computer'
 import { inboxCount, Approvals, InboxView } from './views/inbox'
@@ -175,6 +175,8 @@ function Main() {
   const botChat = viaBot && view === 'chat' && chat.chat_id === LOCAL
   // A bot's right-click menu, or pause choices (for one bot, or all of them: id null).
   const [menu, setMenu] = useState<{ x: number; y: number; id: number | null; pick?: boolean } | null>(null)
+  // A bot file being read before it's added (from a file, or a bot's own for Duplicate).
+  const [importing, setImporting] = useState<{ text: string; duplicateOf?: number } | null>(null)
   const pauses = useLoad(() => invoke<Pause[]>('pause'), [], 5000)
   const allPause = pauses.data?.find(p => p.bot_id === null)
   const ownPause = (id: number) => pauses.data?.find(p => p.bot_id === id)
@@ -390,7 +392,7 @@ function Main() {
                 <BotPage key={`${botId}:${botList.some(b => b.id === botId)}`} bot={botList.find(b => b.id === botId)} status={statusOf(botId)} canDelete={botList.length > 1}
                   // Only a new bot's page moves (to the bot it made): a slow save mustn't pull you back from another bot.
                   onSaved={id => { bots.reload(); statuses.reload(); if (botId === 0) setBotId(id) }}
-                  onDeleted={() => { bots.reload(); if (chatBot === botId) { setChatBot(null); setViaBot(false) } setView('chat') }} onChat={() => talkTo(botId)} />
+                  onDeleted={() => { bots.reload(); if (chatBot === botId) { setChatBot(null); setViaBot(false) } setView('chat') }} onChat={() => talkTo(botId)} onImport={text => setImporting({ text })} />
               )}
             </div>
           </div>
@@ -412,9 +414,16 @@ function Main() {
           return <Menu key="bot" at={menu} name={name} onClose={() => setMenu(null)} items={[
             ['chat', `Chat with ${name}`, () => talkTo(id)],
             ['settings', 'Settings', () => openBot(id)],
+            ['copy', 'Duplicate…', () => { setMenu(null); invoke('export_bot', { id }).then(f => setImporting({ text: JSON.stringify(f), duplicateOf: id }), e => tell(String(e))) }],
+            ['archive', 'Export…', () => {
+              setMenu(null)
+              invoke('export_bot', { id }).then(f => saveDownload(`${name.replace(/[^\p{L}\p{N}]+/gu, '-')}.mimir-bot.json`, JSON.stringify(f, null, 2)))
+                .then(where => tell(`Saved to ${where}. It has no tokens, keys, memories or chats. Check the role and tool server settings for passwords before you share this file.`), e => tell(String(e)))
+            }],
             ownPause(id) ? ['play', `Resume ${name}`, () => setPause(id, false)] : ['pause', `Pause ${name}…`, () => setMenu({ ...menu, pick: true })],
           ]} />
         })())}
+      {importing && <BotImport text={importing.text} duplicateOf={importing.duplicateOf} onClose={() => setImporting(null)} onAdded={id => { setImporting(null); bots.reload(); statuses.reload(); openBot(id) }} />}
     </div>
     </Paused.Provider>
     </Bots.Provider>
