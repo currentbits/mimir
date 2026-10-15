@@ -16,6 +16,7 @@ everything (build with `--build-arg COMPUTER=` to leave it out).
 | `computer_screenshot` | Looks at the screen (read-only) | allow |
 | `computer_click`, `computer_type`, `computer_key`, `computer_scroll` | Mouse and keyboard | allow |
 | `computer_open` | Opens a website | **ask** (or "always on this site") |
+| `computer_signin` | Signs in to the site on screen: with its saved login, or a sign-in card for you (below) | allow; a saved login asks each time |
 | `computer_handoff` | Asks you to take over for a step only you should do (below) | allow |
 
 Each action returns a fresh screenshot. With the browser switched on (Settings → Browser), the browser tools drive the
@@ -39,10 +40,53 @@ computer while another bot has it waits up to 30 seconds, then says it's busy. T
 too. When you take over, the browser shows the profile of the bot that used it last (the one asking you, at a
 handoff).
 
+## Signing in from your phone
+
+At a sign-in page, a bot asks Mimir to sign in (`computer_signin`). It never types a password itself, and never sees one.
+
+- **A login it saved for this site before:** Mimir types it, after you OK it on a card (like every saved login), and
+  types the authenticator code too if the login has a key. If the site turns it down (the password changed), it isn't
+  tried again: next time you get a sign-in card, and what you sign in with there replaces it.
+- **Otherwise, a sign-in card:** where you talk to the bot (your messaging app, the chat in Mimir, and Needs you) you
+  get *I need you to sign in to github.com*, with a link to a small form in Mimir: user name or email, password, a code
+  if the site asks for one, and optionally the site's authenticator setup key. Never type them into the chat. Mimir
+  types what you enter into the page on the computer and presses Enter, step by step for a site that asks the email
+  first, then the password, then a code. Once it's signed in, Mimir keeps the login (and the key) for **that bot on
+  that site** only: under Settings → Browser → Saved logins, as e.g. `GITHUB_COM_BOT3`.
+
+**Check the address.** The card and the form show the page's full address (`login.github.com`) next to the site the
+login is kept for. They warn you before you type when:
+- the bot came to the site after reading a web page, an email or a message, or is doing a task another bot handed it:
+  *Padel Bot came to this site after reading a web page or a message. Check the address before you type a password*;
+- the site has no saved login and no earlier sign-in, but looks like one that does (`githuh.com`, `github.dev` or
+  `github-login.example` when you've signed in to `github.com`): *This isn't github.com, where you've signed in
+  before.*
+
+- the address has letters from another alphabet in it (a Cyrillic "а" looks just like "a"): always, shown the way it
+  really is (`xn--pple-43d.com`): *This address uses letters from another alphabet, made to look like apple.com*.
+
+A page a bot reads can tell it to open a fake sign-in page; this is where you'd catch that.
+
+The site is the page's registrable domain: a sign-in on `accounts.google.com` is kept for `google.com` and works on its
+subdomains, while one on `alice.github.io` stays on `alice.github.io` (anyone can have a `github.io` site). Mimir types
+only while the page on screen is on that site, checked by the same script that fills each field, and only into the
+page itself, not a frame embedded from elsewhere. It types each field once: when the password field comes back after a wrong password,
+it stops instead of trying again (which could lock the account). The bot hears only *signed in* or *failed*.
+
+The link is only `#signin` on the address you last opened the web app at: you sign in to Mimir as usual, and the form
+is for the newest card waiting. The card works once (the first form sent uses it up) and runs out after 10 minutes;
+**Can't now** turns it down. A routine doesn't send sign-in cards (nobody's watching it): it uses a saved login, or asks
+you to take over.
+
+**Authenticator codes.** Paste a site's setup key ("JBSW Y3DP …") or its `otpauth://totp/…` link (what the QR code
+holds) on the form, or on a saved login under Settings → Browser (the pencil). Mimir works out the 6-digit codes
+itself (RFC 6238) and types them only on that login's sites. With the browser tools, a bot types `NAME_CODE`
+(e.g. `GITHUB_COM_BOT3_CODE`) for the current code. The key is kept in the secret store, like the password.
+
 ## When a bot needs you there
 
-At a sign-in, a verification or 2FA code, a captcha or a payment, a bot doesn't type passwords or card numbers or try
-to solve the captcha: it asks you to take over (`computer_handoff`). You get a card where you talk to it (your
+At a sign-in that `computer_signin` can't do, a verification code sent to you, a captcha or a payment, a bot doesn't
+type passwords or card numbers or try to solve the captcha: it asks you to take over (`computer_handoff`). You get a card where you talk to it (your
 messaging app, the chat in Mimir, and Needs you) saying what's needed, with a link straight to the live screen:
 *Open the computer*. Take over, do the step, and press **Give back**; the bot sees you're done and carries on from
 there. **Done** on the card says the same, and **Can't now** stops it, so it tells you what's left. It waits up to
@@ -70,7 +114,8 @@ afterwards.
 
 - What's on the screen counts as **outside content**: after a bot has looked, anything that changes data asks you
   first ([Tools and safety](tools-and-safety.md#outside-content-taint)).
-- Opening a site asks (per-site "always" is available); saved logins ask every time. After outside content, jumping
+- Opening a site asks (per-site "always" is available); saved logins ask every time. A sign-in card's login is typed
+  by Mimir from its own form, only on the card's site, and never passes through a chat or the AI. After outside content, jumping
   to the address bar (keys or a click on the browser's bar) asks too, so a page can't steer the bot to another site.
 - With compose, the computer is a separate container: user `computer`, no `/data` mount, no published ports, all
   capabilities dropped. Mimir reaches it over the compose network only; the control channel and the DevTools port

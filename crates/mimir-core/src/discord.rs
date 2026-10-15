@@ -203,6 +203,9 @@ impl Discord {
             .into_iter()
             .flatten()
             .map(|(label, data)| {
+                if data.starts_with("https://") {
+                    return json!({"type": 2, "style": 5, "label": label, "url": data});
+                }
                 let style = if data.ends_with(":y") { 3 } else if data.ends_with(":n") { 4 } else { 2 };
                 json!({"type": 2, "style": style, "label": label, "custom_id": data})
             })
@@ -329,8 +332,13 @@ impl Discord {
         if !files.is_empty() {
             return core.incoming_files(me, ch, from, &t, &files, sent, |f| self.download(f.url.clone())).await;
         }
-        // A reply to one of the bot's messages: which one.
+        // A reply to one of the bot's messages: which one. To a card waiting for an answer: no, and why.
         let r = &d["referenced_message"];
+        if let Some(card) = r["id"].as_str().filter(|_| r["author"]["id"] == my_id)
+            && core.deny_by_reply(me, ch, from, card, &t)?
+        {
+            return Ok(());
+        }
         let t = match r["content"].as_str().filter(|q| r["author"]["id"] == my_id && !q.trim().is_empty()) {
             Some(quoted) => crate::with_reply(&t, quoted),
             None => t,
