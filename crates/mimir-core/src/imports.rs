@@ -350,6 +350,10 @@ pub fn read_bot_file(text: &str) -> Result<BotFile> {
     if f.name.trim().is_empty() {
         bail!("that bot file has no name");
     }
+    // The model goes to the AI's command line as an argument: from a file, a name, never something read as an option.
+    if f.model.starts_with('-') || f.model.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        bail!("that bot file's model isn't a model name");
+    }
     Ok(f)
 }
 
@@ -565,6 +569,11 @@ mod tests {
         assert!(w.iter().any(|w| w.contains(evil) && w.contains("isn't used") && w.contains("bot's page")), "{w:?}");
         let (id, _) = import_bot(&db, &file, 0, false, None).unwrap();
         assert_eq!(db.bot(id).unwrap().base_url, "", "no address of yours for that account: none");
+        // Nor an option for the AI's command line, dressed as a model.
+        for model in ["--dangerously-skip-permissions", "sonnet --yolo"] {
+            let f = serde_json::json!({"mimir_bot": 1, "name": "Helper", "provider": "claude", "model": model}).to_string();
+            assert!(preview(&db, &f, None).is_err() && import_bot(&db, &f, 0, false, None).is_err(), "{model}");
+        }
 
         // Two of your own bots on one account, at different addresses: a duplicate keeps its original's.
         let mine = |name: &str, url: &str| {
