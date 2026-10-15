@@ -51,7 +51,7 @@ PRAGMA secure_delete=ON;
 
 /// The schema version this build writes (`PRAGMA user_version`). A schema change bumps it and adds a step to
 /// `migrate`; each step runs once per database.
-const VERSION: i64 = 10;
+pub(crate) const VERSION: i64 = 10;
 
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS entries(
@@ -147,7 +147,7 @@ pub(crate) fn alike(a: &str, b: &str) -> bool {
     shared >= 2 && shared * 5 >= 3 * a.len().min(b.len())
 }
 
-fn user_version(c: &Connection) -> Result<i64> {
+pub(crate) fn user_version(c: &Connection) -> Result<i64> {
     Ok(c.query_row("PRAGMA user_version", [], |r| r.get(0))?)
 }
 
