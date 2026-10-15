@@ -6,7 +6,7 @@
 
 use crate::db::Usage;
 use crate::tools::{self, ToolCtx};
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Value, json};
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -505,19 +505,12 @@ async fn grok_turn(ctx: &ToolCtx, home: &std::path::Path, model: Option<&str>, s
     });
     let (bot, chat, stream) = (ctx.bot_id, ctx.chat_id, ctx.stream);
     let read = async {
-        let mut result = None;
+        let (mut result, mut checked) = (None, false);
         while let Some(line) = lines.next_line().await? {
             let Ok(v) = serde_json::from_str::<Value>(&line) else { continue };
+            grok_tools_checked(&mut checked, &v)?;
             match v["type"].as_str() {
                 Some("result") => result = Some(v),
-                // Fail closed: grok offers its whole toolset (shell, files) when it can't read --tools. Stop before the model runs.
-                Some("system") if v["subtype"] == "init" => {
-                    let extra: Vec<&str> =
-                        v["tools"].as_array().into_iter().flatten().filter_map(Value::as_str).filter(|t| !GROK_TOOLS.contains(t) && !t.starts_with("mcp__")).collect();
-                    if !extra.is_empty() {
-                        bail!("grok offered tools Mimir didn't allow ({}), so the message wasn't run", extra.join(", "));
-                    }
-                }
                 // The plan's usage windows (5-hour, weekly): shown with routines, and when a limit resets.
                 Some("rate_limit_event") => {
                     let _ = ctx.db.set_setting(WINDOWS, &json!({"at": crate::db::now(), "info": v["rate_limit_info"]}).to_string());
@@ -556,6 +549,27 @@ async fn grok_turn(ctx: &ToolCtx, home: &std::path::Path, model: Option<&str>, s
         bail!("grok error: {detail}");
     }
     Ok(Ok(Reply { text: v["result"].as_str().unwrap_or("").to_string(), session: sid, usage: claude_usage(&v) }))
+}
+
+/// Fail closed on grok's toolset, one stream line at a time: grok offers every tool it has (shell, files) when it
+/// can't read --tools, and says which it offers in its init line. Nothing the model does may come before an init
+/// that lists only ours; an init without a tool list means grok's output changed, and that stops the run too.
+fn grok_tools_checked(checked: &mut bool, v: &Value) -> Result<()> {
+    let changed = || anyhow!("grok's output has changed (no list of its tools), so the message wasn't run. Update Mimir, or use another AI account");
+    match v["type"].as_str() {
+        Some("system") if v["subtype"] == "init" => {
+            let tools = v["tools"].as_array().ok_or_else(changed)?;
+            let extra: Vec<&str> = tools.iter().map(|t| t.as_str().unwrap_or("?")).filter(|t| !GROK_TOOLS.contains(t) && !t.starts_with("mcp__")).collect();
+            if !extra.is_empty() {
+                bail!("grok offered tools Mimir didn't allow ({}), so the message wasn't run", extra.join(", "));
+            }
+            *checked = true;
+        }
+        Some("assistant" | "user" | "result") if !*checked => return Err(changed()),
+        Some("stream_event") if !*checked && v["event"]["type"].as_str().is_some_and(|t| t.starts_with("content_block")) => return Err(changed()),
+        _ => {}
+    }
+    Ok(())
 }
 
 /// Photos for a model that takes them inline, as (mime, base64): the original when it fits, else a smaller JPEG,
@@ -1299,6 +1313,36 @@ mod tests {
             }
         }
         let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn grok_runs_only_after_an_init_listing_our_tools() {
+        let run = |lines: &[serde_json::Value]| {
+            let mut checked = false;
+            lines.iter().try_for_each(|v| super::grok_tools_checked(&mut checked, v)).map_err(|e| e.to_string())
+        };
+        let init = |tools: serde_json::Value| serde_json::json!({"type": "system", "subtype": "init", "tools": tools});
+        let text = serde_json::json!({"type": "stream_event", "event": {"type": "content_block_delta"}});
+        let reply = serde_json::json!({"type": "assistant", "message": {"content": []}});
+        let result = serde_json::json!({"type": "result", "is_error": false});
+        // A good init, and a signed-out one (grok lists no tools, then reports the error).
+        assert!(run(&[init(serde_json::json!(["search_tool", "use_tool", "web_search"])), text.clone(), reply.clone(), result.clone()]).is_ok());
+        assert!(run(&[init(serde_json::json!([])), result.clone()]).is_ok());
+        // An extra tool.
+        let e = run(&[init(serde_json::json!(["web_search", "run_terminal_command"])), reply.clone()]).unwrap_err();
+        assert!(e.contains("run_terminal_command"), "{e}");
+        // No init: whatever the model does first stops the run.
+        for first in [&text, &reply, &result] {
+            assert!(run(&[serde_json::json!({"type": "rate_limit_event"}), first.clone()]).unwrap_err().contains("output has changed"));
+        }
+        // An init without a tool list, or with something else in its place.
+        for tools in [serde_json::Value::Null, serde_json::json!("web_search"), serde_json::json!({"web_search": true})] {
+            let mut v = init(tools);
+            if v["tools"].is_null() {
+                v.as_object_mut().unwrap().remove("tools");
+            }
+            assert!(run(&[v, result.clone()]).unwrap_err().contains("output has changed"));
+        }
     }
 
     #[test]
