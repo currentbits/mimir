@@ -20,8 +20,19 @@ pub(crate) struct Slack {
     http: reqwest::Client,
     bot_token: String,
     app_token: String,
-    /// Channel → the thread of the last @-mention there, and when. Replies go into it, not the channel.
-    threads: Arc<Mutex<HashMap<String, (String, Instant)>>>,
+    /// Channel → the thread of the last @-mention there. Replies go into it, not the channel.
+    threads: Arc<Mutex<HashMap<String, Thread>>>,
+    /// A draft streaming with Slack's own streaming (by its ts) → the text streamed into it so far.
+    streams: Arc<Mutex<HashMap<String, String>>>,
+}
+
+#[derive(Clone)]
+struct Thread {
+    ts: String,
+    at: Instant,
+    /// Who mentioned the bot (the paired person), and their workspace: a stream in a channel names its reader.
+    user: String,
+    team: String,
 }
 
 /// How long a mention's thread stays the place to answer (later posts, e.g. routines, go to the channel).
@@ -52,6 +63,7 @@ impl Slack {
             bot_token: bot_token.trim().into(),
             app_token: app_token.trim().into(),
             threads: Default::default(),
+            streams: Default::default(),
         })
     }
 
@@ -88,15 +100,19 @@ impl Slack {
         }
     }
 
+    /// The thread of a recent @-mention in `channel`, if any.
+    fn thread(&self, channel: &str) -> Option<Thread> {
+        self.threads.lock().unwrap().get(channel).filter(|t| t.at.elapsed() < THREAD_FOR).cloned()
+    }
+
     /// A new message in `channel`: in the thread of a recent @-mention there, if any.
     fn post(&self, channel: &str, mut body: Value) -> Value {
         body["channel"] = json!(channel);
         // No link previews (Slack fetches them itself: a link a misled bot wrote could carry data out unclicked).
         body["unfurl_links"] = json!(false);
         body["unfurl_media"] = json!(false);
-        let threads = self.threads.lock().unwrap();
-        if let Some((ts, _)) = threads.get(channel).filter(|(_, at)| at.elapsed() < THREAD_FOR) {
-            body["thread_ts"] = json!(ts);
+        if let Some(t) = self.thread(channel) {
+            body["thread_ts"] = json!(t.ts);
         }
         body
     }
@@ -119,6 +135,15 @@ impl Slack {
 
     /// Final reply in Slack mrkdwn, with buttons under its last part; with a streamed draft, the draft becomes its first part.
     pub(crate) async fn finish(&self, channel: &str, draft: Option<&str>, text: &str, rows: &[Row]) -> Result<()> {
+        // A streamed draft: the stream ends, then the message becomes the reply like any draft.
+        let streamed = draft.and_then(|d| d.strip_prefix("stream:"));
+        if let Some(ts) = streamed {
+            self.streams.lock().unwrap().remove(ts);
+            if let Err(e) = self.api("chat.stopStream", &self.bot_token, json!({"channel": channel, "ts": ts})).await {
+                eprintln!("slack stream {channel}: {e:#}");
+            }
+        }
+        let draft = streamed.or(draft);
         let mrkdwn = crate::fmt::slack(text);
         let chars: Vec<char> = mrkdwn.chars().collect();
         // With buttons the text goes in a section block, which holds 3000 characters.
@@ -137,9 +162,17 @@ impl Slack {
             }
             match draft.filter(|_| i == 0) {
                 Some(ts) => {
-                    body["channel"] = json!(channel);
-                    body["ts"] = json!(ts);
-                    self.api("chat.update", &self.bot_token, body).await?
+                    let mut edit = body.clone();
+                    edit["channel"] = json!(channel);
+                    edit["ts"] = json!(ts);
+                    match self.api("chat.update", &self.bot_token, edit).await {
+                        // A streamed message Slack won't let us edit: the reply as a new message, rather than lost.
+                        Err(e) if streamed.is_some() => {
+                            eprintln!("slack stream {channel}: {e:#}");
+                            self.api("chat.postMessage", &self.bot_token, self.post(channel, body)).await?
+                        }
+                        r => r?,
+                    }
                 }
                 None => self.api("chat.postMessage", &self.bot_token, self.post(channel, body)).await?,
             };
@@ -148,12 +181,56 @@ impl Slack {
     }
 
     pub(crate) async fn draft_post(&self, channel: &str, text: &str) -> Option<String> {
+        // In a mention's thread, Slack's own streaming: appends instead of chat.update edits of the whole text, which run
+        // into rate limits. Slack turns unfurling off in streamed messages. (A DM's reply isn't in a thread: edits.)
+        if let Some(t) = self.thread(channel) {
+            let text = streamed(text);
+            let body = json!({"channel": channel, "thread_ts": t.ts, "markdown_text": crate::fmt::esc(text), "recipient_user_id": t.user, "recipient_team_id": t.team});
+            match self.api("chat.startStream", &self.bot_token, body).await.map(|v| v["ts"].as_str().map(String::from)) {
+                Ok(Some(ts)) => {
+                    self.streams.lock().unwrap().insert(ts.clone(), text.into());
+                    return Some(format!("stream:{ts}"));
+                }
+                Ok(None) => {}
+                Err(e) => eprintln!("slack stream {channel}: {e:#}"),
+            }
+        }
         // Escaped like the final text, so a draft can't ping the channel (<!channel>, <!here>).
         self.api("chat.postMessage", &self.bot_token, self.post(channel, json!({"text": crate::fmt::esc(text)}))).await.ok()?["ts"].as_str().map(String::from)
     }
 
     pub(crate) async fn draft_edit(&self, channel: &str, ts: &str, text: &str) {
+        if let Some(ts) = ts.strip_prefix("stream:") {
+            // Only what's new since the last append; a draft that changed course rather than grew waits for the final reply.
+            let text = streamed(text);
+            let more = {
+                let mut streams = self.streams.lock().unwrap();
+                let Some(sent) = streams.get_mut(ts) else { return };
+                let Some(more) = text.strip_prefix(sent.as_str()).filter(|m| !m.is_empty()).map(String::from) else { return };
+                *sent = text.into();
+                more
+            };
+            let _ = self.api("chat.appendStream", &self.bot_token, json!({"channel": channel, "ts": ts, "markdown_text": crate::fmt::esc(&more)})).await;
+            return;
+        }
         let _ = self.api("chat.update", &self.bot_token, json!({"channel": channel, "ts": ts, "text": crate::fmt::esc(text), "blocks": []})).await;
+    }
+
+    /// Slack's own "is thinking…" under a mention's thread while a reply is written (none in a DM: no thread). Slack
+    /// clears it when the reply comes, or after two minutes, so it's set again until then.
+    pub(crate) fn typing(&self, channel: &str) -> Option<tokio::task::JoinHandle<()>> {
+        let t = self.thread(channel)?;
+        let (slack, channel) = (self.clone(), channel.to_string());
+        Some(tokio::spawn(async move {
+            loop {
+                let body = json!({"channel_id": channel, "thread_ts": t.ts, "status": crate::say::tr("is thinking…")});
+                if let Err(e) = slack.api("assistant.threads.setStatus", &slack.bot_token, body).await {
+                    eprintln!("slack status {channel}: {e:#}");
+                    return;
+                }
+                tokio::time::sleep(Duration::from_secs(100)).await;
+            }
+        }))
     }
 
     pub(crate) async fn card(&self, channel: &str, a: &Approval) -> Result<Option<String>> {
@@ -238,7 +315,8 @@ impl Slack {
         if ev["type"] == "app_mention" && core.is_owner(me, ch, ev["user"].as_str().unwrap_or("")) {
             // Answer in the thread: the one it was asked in, or a new one under the mention.
             let ts = ev["thread_ts"].as_str().or(ev["ts"].as_str()).unwrap_or("").to_string();
-            self.threads.lock().unwrap().insert(ch.to_string(), (ts, Instant::now()));
+            let (user, team) = (ev["user"].as_str().unwrap_or("").to_string(), ev["team"].as_str().unwrap_or("").to_string());
+            self.threads.lock().unwrap().insert(ch.to_string(), Thread { ts, at: Instant::now(), user, team });
         }
         let title = if ev["channel_type"] == "im" { format!("Slack DM {}", ev["user"].as_str().unwrap_or("")) } else { format!("Slack {ch}") };
         let sent = ev["ts"].as_str().and_then(|ts| ts.split('.').next()?.parse().ok());
@@ -267,11 +345,11 @@ impl Slack {
         }
         let (ch, thread) = (ev["channel"].as_str()?, ev["thread_ts"].as_str()?);
         let mut threads = self.threads.lock().unwrap();
-        let t = threads.get_mut(ch).filter(|(ts, at)| ts == thread && at.elapsed() < THREAD_FOR)?;
+        let t = threads.get_mut(ch).filter(|t| t.ts == thread && t.at.elapsed() < THREAD_FOR)?;
         if !core.is_owner(me, ch, ev["user"].as_str().unwrap_or("")) {
             return None;
         }
-        t.1 = Instant::now();
+        t.at = Instant::now();
         Some(ev["text"].as_str()?.replace(&format!("<@{my_user}>"), "").trim().to_string())
     }
 
@@ -378,6 +456,13 @@ impl Slack {
     }
 }
 
+/// A draft's text without the runtime's "▍" cursor (and "…" once it stops growing): a stream only appends, so what's
+/// streamed must be the reply's own words.
+fn streamed(draft: &str) -> &str {
+    let t = draft.strip_suffix('▍').unwrap_or(draft).trim_end();
+    t.strip_suffix('…').unwrap_or(t)
+}
+
 /// Slack's message ts ("1712345678.123456") as microseconds, to order messages.
 fn ts_key(ts: &str) -> Option<u128> {
     let (secs, micros) = ts.split_once('.')?;
@@ -459,10 +544,18 @@ mod tests {
     fn replies_go_in_the_mention_thread() {
         let s = Slack::new("xoxb-1", "xapp-1").unwrap();
         assert!(s.post("C1", json!({"text": "hi"}))["thread_ts"].is_null(), "no mention yet: top level");
-        s.threads.lock().unwrap().insert("C1".into(), ("171.5".into(), Instant::now()));
+        let mention = |at| Thread { ts: "171.5".into(), at, user: "U1".into(), team: "T1".into() };
+        s.threads.lock().unwrap().insert("C1".into(), mention(Instant::now()));
         assert_eq!(s.post("C1", json!({"text": "hi"}))["thread_ts"], "171.5");
         assert!(s.post("D9", json!({"text": "hi"}))["thread_ts"].is_null(), "other channels unaffected");
-        s.threads.lock().unwrap().insert("C1".into(), ("171.5".into(), Instant::now() - THREAD_FOR));
+        s.threads.lock().unwrap().insert("C1".into(), mention(Instant::now() - THREAD_FOR));
         assert!(s.post("C1", json!({"text": "routine"}))["thread_ts"].is_null(), "an old mention: back to the channel");
+    }
+
+    #[test]
+    fn a_stream_gets_the_words_not_the_cursor() {
+        assert_eq!(streamed("Hello wor ▍"), "Hello wor");
+        assert_eq!(streamed("Hello world…… ▍"), "Hello world…", "a long draft that stopped growing");
+        assert_eq!(streamed("done"), "done");
     }
 }

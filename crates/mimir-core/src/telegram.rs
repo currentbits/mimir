@@ -44,7 +44,7 @@ impl Tg {
         // "chat:topic" (a topic in a private chat, see `listen`): the chat, and the topic new messages go to.
         if let Some((chat, topic)) = body["chat_id"].as_str().and_then(|c| c.split_once(':')).map(|(c, t)| (c.to_string(), t.parse::<i64>().unwrap_or(0))) {
             body["chat_id"] = json!(chat);
-            if matches!(method, "sendMessage" | "sendMessageDraft" | "sendChatAction") {
+            if matches!(method, "sendMessage" | "sendRichMessage" | "sendMessageDraft" | "sendChatAction") {
                 body["message_thread_id"] = json!(topic);
             }
         }
@@ -67,12 +67,15 @@ impl Tg {
         Ok(())
     }
 
-    /// Markdown → Telegram HTML, split between blocks under the 4096-char cap. If Telegram
-    /// rejects the markup, that piece goes out as plain text instead of being lost.
-    /// Markdown → Telegram HTML, split between blocks under the 4096-char cap. If Telegram rejects the markup, that piece
-    /// goes out as plain text instead of being lost. Buttons go under the last part. With a streamed draft, the draft is replaced by the first part.
+    /// The final reply, buttons under its last part; with a streamed draft, the draft is replaced by the first part.
+    /// A rich message (Bot API 10.1: tables, headings, task lists, up to 32768 characters) if Telegram takes one, else
+    /// Telegram HTML split between blocks under the 4096-char cap; if Telegram rejects the markup, that piece goes out as
+    /// plain text instead of being lost.
     pub(crate) async fn finish(&self, chat: &str, draft: Option<&str>, text: &str, rows: &[Row]) -> Result<()> {
         let draft = draft.and_then(|d| d.parse::<i64>().ok());
+        if self.rich(chat, draft, text, rows).await? {
+            return Ok(());
+        }
         let parts = crate::fmt::telegram(text, 3800);
         let last = parts.len().saturating_sub(1);
         for (i, html) in parts.into_iter().enumerate() {
@@ -108,6 +111,39 @@ impl Tg {
             }
         }
         Ok(())
+    }
+
+    /// The reply as rich messages; false when the first is refused (an older or self-hosted Bot API, or a draft message
+    /// that can't become one), with nothing sent, so the HTML path takes over.
+    /// Rich messages have no link_preview_options: they carry no link previews, and `fmt::telegram_rich` never lets
+    /// Telegram fetch anything (no media blocks).
+    async fn rich(&self, chat: &str, draft: Option<i64>, text: &str, rows: &[Row]) -> Result<bool> {
+        let parts = crate::fmt::telegram_rich(text);
+        if parts.is_empty() {
+            return Ok(false);
+        }
+        let last = parts.len().saturating_sub(1);
+        for (i, rich) in parts.into_iter().enumerate() {
+            let mut msg = json!({"chat_id": chat, "rich_message": rich});
+            if i == last && !rows.is_empty() {
+                msg["reply_markup"] = keyboard(rows);
+            }
+            let method = match draft.filter(|_| i == 0) {
+                Some(mid) => {
+                    msg["message_id"] = json!(mid);
+                    "editMessageText"
+                }
+                None => "sendRichMessage",
+            };
+            match self.call(method, msg).await {
+                Err(e) if i == 0 => {
+                    eprintln!("telegram rich message refused, sending HTML: {e:#}");
+                    return Ok(false);
+                }
+                r => drop(r?),
+            }
+        }
+        Ok(true)
     }
 
     /// Streaming drafts are plain text (half-written Markdown can be unbalanced); `finish` formats.

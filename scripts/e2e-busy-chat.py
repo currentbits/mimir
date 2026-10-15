@@ -53,7 +53,7 @@ def q(sql, *p):
 
 
 def texts(since, chat=42):
-    return [c.get("text", "") for c in calls(since) if c["method"] in ("sendMessage", "editMessageText", "sendMessageDraft") and str(c.get("chat_id")) == str(chat)]
+    return [c.get("text", "") for c in calls(since) if c["method"] in ("sendMessage", "sendRichMessage", "editMessageText", "sendMessageDraft") and str(c.get("chat_id")) == str(chat)]
 
 
 try:

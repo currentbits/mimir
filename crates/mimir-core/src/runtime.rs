@@ -158,12 +158,12 @@ impl Chan {
         }
     }
 
-    /// "typing…" indicator until the handle is aborted (Slack bots have none).
+    /// "typing…" indicator until the handle is aborted (Slack only has one in a thread).
     fn typing(&self, ext: &str) -> Option<JoinHandle<()>> {
         match self {
             Chan::Telegram(c) => Some(c.typing(ext)),
             Chan::Discord(c) => Some(c.typing(ext)),
-            Chan::Slack(_) => None,
+            Chan::Slack(c) => c.typing(ext),
         }
     }
 
@@ -2206,7 +2206,8 @@ mod tests {
             while let Ok((mut s, _)) = l.accept().await {
                 let mut buf = vec![0u8; 65536];
                 let n = s.read(&mut buf).await.unwrap_or(0);
-                if String::from_utf8_lossy(&buf[..n]).contains("/sendMessage") {
+                let req = String::from_utf8_lossy(&buf[..n]);
+                if req.contains("/sendMessage") || req.contains("/sendRichMessage") {
                     count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 }
                 let body = r#"{"ok":true,"result":{"message_id":1}}"#;

