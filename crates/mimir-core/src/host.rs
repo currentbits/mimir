@@ -739,6 +739,23 @@ impl Host {
                 let bot = crate::tidy::memory_bot(&self.db).context("no bots")?;
                 ok(crate::imports::run(&self.db, &self.provider(bot)?, bot, arg(a, "chat_id")?, &arg::<String>(a, "source")?).await?)
             }
+            // A bot as one file (no secrets, memories or chats); reading one back shows what it would add, and only
+            // `import_bot` adds it: in the built-in chat, skills as proposals, routines paused.
+            "export_bot" => ok(crate::imports::export_bot(&self.db, arg(a, "id")?)?),
+            "import_bot_preview" => ok(crate::imports::preview(&self.db, &arg::<String>(a, "text")?)?),
+            "import_bot" => {
+                let (id, done) = crate::imports::import_bot(&self.db, &arg::<String>(a, "text")?, LOCAL_CHAT, arg::<Option<bool>>(a, "rules")?.unwrap_or(false))?;
+                // An AI account this Mimir can't use: the one your first bot uses instead.
+                let mut bot = self.db.bot(id)?;
+                if Provider::for_bot(&bot, self.home.clone()).is_err()
+                    && let Some(b) = self.db.bots()?.into_iter().find(|b| b.id != id)
+                {
+                    (bot.provider, bot.model, bot.base_url) = (b.provider, b.model, b.base_url);
+                    self.db.bot_save(&bot)?;
+                }
+                self.restart(id);
+                ok(json!({"id": id, "skills": done.skills, "routines": done.routines}))
+            }
             // Add a memory, or correct one (`supersedes`); history is kept either way.
             "remember" => ok(self.db.store_by(
                 &scope(a)?,
@@ -1531,6 +1548,60 @@ mod tests {
         assert_eq!(lib.as_array().unwrap().iter().find(|k| k["slug"] == "summarize-link").unwrap()["added"], json!([0]));
         assert_eq!(host.call("skill_add", &json!({"chat_id": 0, "slug": "summarize-link", "bot_id": 0})).await.unwrap(), Value::Null);
         assert!(host.call("skill_add", &json!({"chat_id": 0, "slug": "nope", "bot_id": 0})).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn a_bot_as_one_file() {
+        let home = Home::new("botfile");
+        let host = Host::new(Db::open(&home.0.join("mimir.db")).unwrap(), home.0.clone(), Arc::new(Mem(Default::default())), tokio::runtime::Handle::current(), "server");
+        // A bot with secrets of every kind: a messaging-app token, a tool server's key and token (an older setup, in
+        // the config itself), and a saved login one of its routines mentions.
+        let look = r##"{"color":"#336699","shape":"round"}"##;
+        let bot = json!({"id":0,"name":"Ops","persona":"You keep the servers up.","provider":"claude","model":"","base_url":"","tools":"web_fetch,email_send,routine_create,mytools__*","look":look});
+        let id = host.call("save_bot", &json!({"bot": bot, "secrets": {"slack_bot_token": "xoxb-SLACKSECRET"}})).await.unwrap().as_i64().unwrap();
+        let server = crate::ext::ServerConf {
+            name: "mytools".into(),
+            command: "npx".into(),
+            args: vec!["mytools".into(), "--token".into(), "ghp_abcdefghijklmnopqrstuvwxyz0123".into()],
+            env: [("API_KEY".to_string(), "LIVEKEYVALUE".to_string())].into(),
+            url: String::new(),
+            ..Default::default()
+        };
+        crate::ext::set_servers(&host.db, &[server]).unwrap();
+        crate::ext::vault_save(&host.db, crate::ext::VaultEntry { name: "SHOP_PASSWORD".into(), domains: vec!["shop.example".into()] }, Some("hunter2-shop")).unwrap();
+        host.db.routine_create(id, 0, "0 9 * * 1", "Check the status page", false).unwrap();
+        host.db.routine_create(id, 0, "0 9 * * 2", "Log in with hunter2-shop and check orders", false).unwrap();
+        host.call("skill_add", &json!({"chat_id": 0, "slug": "summarize-link", "bot_id": id})).await.unwrap();
+        host.call("set_rule", &json!({"tool": "email_send", "action": "allow"})).await.unwrap();
+
+        let file = host.call("export_bot", &json!({"id": id})).await.unwrap();
+        let text = file.to_string();
+        for s in ["SLACKSECRET", "LIVEKEYVALUE", "ghp_abc", "hunter2"] {
+            assert!(!text.contains(s), "{s} leaked: {text}");
+        }
+        assert_eq!(file["servers"][0]["env"]["API_KEY"], "", "the key's name stays, so you know what to fill in");
+        assert_eq!((file["skills"].as_array().unwrap().len(), file["routines"].as_array().unwrap().len()), (1, 1));
+        assert_eq!(file["rules"], json!({"email_send": "allow"}));
+
+        // On a Mimir with the default rules: sending email without asking is flagged as looser.
+        host.call("set_rule", &json!({"tool": "email_send", "action": "default"})).await.unwrap();
+        let p = host.call("import_bot_preview", &json!({"text": text})).await.unwrap();
+        assert_eq!(p["name"], "Ops (copy)");
+        assert_eq!(p["rules"], json!([{"tool": "email_send", "action": "allow", "yours": "ask", "looser": true}]));
+        assert_eq!(p["servers"][0]["here"], true);
+        assert_eq!(host.db.bots().unwrap().len(), 2, "a preview adds nothing");
+
+        let done = host.call("import_bot", &json!({"text": text})).await.unwrap();
+        let copy = host.db.bot(done["id"].as_i64().unwrap()).unwrap();
+        assert_eq!((copy.name.as_str(), copy.persona.as_str(), copy.tools.as_str(), copy.look.as_str()), ("Ops (copy)", "You keep the servers up.", "web_fetch,email_send,routine_create,mytools__*", look));
+        let r: Vec<_> = host.db.routines(0).unwrap().into_iter().filter(|r| r.bot_id == copy.id).collect();
+        assert!(r.len() == 1 && r[0].paused && r[0].tainted && r[0].cron == "0 9 * * 1", "{r:?}");
+        assert!(host.db.skills("chat:0").unwrap().iter().any(|k| k.bot_id == copy.id && k.status == "proposed" && k.name == "Summarise a link"));
+        assert_eq!(host.db.rule("email_send").unwrap(), None, "its rules only when you say so");
+        host.call("import_bot", &json!({"text": text, "rules": true})).await.unwrap();
+        assert_eq!(host.db.rule("email_send").unwrap().as_deref(), Some("allow"));
+        assert!(host.db.bots().unwrap().iter().any(|b| b.name == "Ops (copy 2)"));
+        assert!(host.call("import_bot_preview", &json!({"text": "{\"name\": \"x\"}"})).await.is_err(), "not a bot file");
     }
 
     #[tokio::test]

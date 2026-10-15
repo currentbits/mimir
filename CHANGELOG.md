@@ -6,6 +6,12 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 
 - **Security:** the TLS library (rustls 0.23.46) is updated for four advisories published on October 14
   (RUSTSEC-2026-0346 to 0349).
+- **Export, import and duplicate a bot:** right-click a bot to save it as one file (its role, look, skills, routines,
+  tool rules and the tool servers it uses), without tokens, keys, saved logins, memories or chats. **From a file…** on
+  the new-bot page shows everything in it first, and flags skill steps that pipe a download into a shell, hold a base64
+  blob or download a program. Skills come in as proposals and routines come in paused; only its tool rules that are at
+  least as strict as yours can be used, and its AI account uses your own settings.
+  **Duplicate…** does both in one go. See [Bots and chats](docs/bots-and-chats.md#export-import-and-duplicate).
 
 ## 0.3.0
 
