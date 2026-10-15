@@ -1,12 +1,12 @@
 //! Model providers. `Claude` / `Codex` / `Grok` drive the user's own logged-in CLI
-//! (`claude -p`, `codex exec` = ChatGPT subscription, `grok -p` = SuperGrok / X Premium+); we never touch their
+//! (`claude -p`, `codex exec` = ChatGPT subscription, `grok -p` = a Grok plan); we never touch their
 //! credentials. `OpenAi` speaks /chat/completions: the `openai` account (OpenAI or any
 //! compatible endpoint), `openrouter`, and `local` (Ollama / LM Studio on this machine). `ChatGpt` is your ChatGPT
 //! plan signed in from Mimir ("Sign in with ChatGPT"), on the Responses API: see chatgpt.rs.
 
 use crate::db::Usage;
 use crate::tools::{self, ToolCtx};
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Value, json};
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -139,6 +139,10 @@ impl Provider {
     /// One reply. A message the person sends while it's being written steers it: `claude -p` takes it in mid-run
     /// (see claude); the others can't, so the run stops and starts over from the same session with it added.
     pub async fn run(&self, ctx: &ToolCtx, system: &str, history: &[(String, String)], user: &str, session: Option<String>) -> Result<Reply> {
+        // Nothing reaches the model that the person couldn't see in it (a mail's tag characters, say): crate::visible.
+        let (system, user) = (crate::visible(system), crate::visible(user));
+        let history: Vec<(String, String)> = history.iter().map(|(r, t)| (r.clone(), crate::visible(t))).collect();
+        let (system, history, user) = (system.as_str(), history.as_slice(), user.as_str());
         let (b, c) = (ctx.bot_id, ctx.chat_id);
         let bell = if ctx.stream && !matches!(self, Provider::Claude { .. }) { crate::live::bell(b, c) } else { None };
         let Some(bell) = bell else { return self.run_once(ctx, system, history, user, session).await };
@@ -362,21 +366,29 @@ fn grok_bin() -> String {
     std::env::var("MIMIR_GROK_BIN").unwrap_or_else(|_| "grok".into())
 }
 
-/// `grok` with Mimir's isolated HOME, no self-updates.
+/// `grok` with Mimir's isolated HOME, no self-updates, no `/goal` (an environment GROK_GOAL would beat the config).
 fn grok_cmd(home: &std::path::Path) -> tokio::process::Command {
     let mut cmd = tokio::process::Command::new(grok_bin());
     // USERPROFILE too: on Windows that's where a program finds its home folder.
-    cmd.env("HOME", grok_home(home)).env("USERPROFILE", grok_home(home)).env("GROK_DISABLE_AUTOUPDATER", "1").stdin(Stdio::null()).kill_on_drop(true);
+    cmd.env("HOME", grok_home(home)).env("USERPROFILE", grok_home(home)).env("GROK_DISABLE_AUTOUPDATER", "1").env("GROK_GOAL", "0").stdin(Stdio::null()).kill_on_drop(true);
     cmd
 }
 
-/// The grok config: our MCP server only. It's shared by every run, so the per-run arguments travel in
-/// MIMIR_MCP_ARGS (`mimir mcp --from-env` reads them); the server gets the person's real HOME back.
+/// Built-in grok tools a bot may use (MCP tools are reached through search_tool/use_tool). Only names grok knows:
+/// grok drops the whole list for one it doesn't (x_search included, as of 1.0.52) and offers every tool.
+const GROK_TOOLS: [&str; 3] = ["web_search", "search_tool", "use_tool"];
+
+/// The grok config: our MCP server, and grok's own extras pinned off, since every bot and incognito share this home:
+/// memory (bots would read each other's, and incognito would be kept), goals, and the Claude/Cursor/Codex imports.
+/// It's shared by every run, so the per-run arguments travel in MIMIR_MCP_ARGS (`mimir mcp --from-env` reads them);
+/// the server gets the person's real HOME back.
 fn grok_config(home: &std::path::Path) -> Result<()> {
     let q = |s: &str| serde_json::to_string(s).unwrap_or_default();
     let real_home = crate::user_home().map(|h| format!("HOME = {0}\nUSERPROFILE = {0}\n", q(&h.to_string_lossy()))).unwrap_or_default();
+    let off = "skills = false\nrules = false\nagents = false\nmcps = false\nhooks = false\nsessions = false\n";
     let toml = format!(
-        "[mcp_servers.mimir]\ncommand = {}\nargs = [\"mcp\", \"--from-env\"]\n\n[mcp_servers.mimir.env]\nMIMIR_HOME = {}\n{real_home}",
+        "[memory]\nenabled = false\n\n[goal]\nenabled = false\n\n[compat.claude]\n{off}\n[compat.cursor]\n{off}\n[compat.codex]\nsessions = false\n\n\
+         [mcp_servers.mimir]\ncommand = {}\nargs = [\"mcp\", \"--from-env\"]\n\n[mcp_servers.mimir.env]\nMIMIR_HOME = {}\n{real_home}",
         q(&std::env::current_exe()?.to_string_lossy()),
         q(&home.to_string_lossy()),
     );
@@ -392,9 +404,9 @@ fn grok_config(home: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
-/// `grok -p` (Grok Build) on the user's SuperGrok / X Premium+ login. Same stream format as `claude -p`.
+/// `grok -p` (Grok Build) on the user's Grok plan (The X Subscription, SuperGrok or X Premium+). Same stream format as `claude -p`.
 /// Locked down like Claude: only web search plus our MCP tools (grok reaches MCP through search_tool/use_tool);
-/// no shell, files, subagents, plan mode or grok's own scheduler.
+/// no shell, files, subagents, plan mode or grok's own scheduler. No X search either: see GROK_TOOLS.
 async fn grok(ctx: &ToolCtx, home: &std::path::Path, model: Option<&str>, system: &str, user: &str, session: Option<&str>) -> Result<Reply> {
     grok_config(home)?;
     // Photos go inline (grok has no file access here), shrunk to fit the command line: Linux caps one argument at
@@ -410,7 +422,10 @@ async fn grok(ctx: &ToolCtx, home: &std::path::Path, model: Option<&str>, system
             }
         }
     }
-    prompt.insert(0, json!({"type": "text", "text": format!("{user}{note}")}));
+    // grok runs a message starting with "/" as its own command (/compact, /goal…), even with --verbatim. A zero-width
+    // space in front isn't whitespace to grok, so the message reaches the model as written.
+    let zw = if user.trim_start().starts_with('/') { "\u{200B}" } else { "" };
+    prompt.insert(0, json!({"type": "text", "text": format!("{zw}{user}{note}")}));
     let out = grok_turn(ctx, home, model, system, &prompt, session).await;
     // Incognito leaves nothing behind, whether the turn worked, failed or timed out.
     if ctx.incognito() {
@@ -473,7 +488,7 @@ async fn grok_turn(ctx: &ToolCtx, home: &std::path::Path, model: Option<&str>, s
         _ => cmd.arg(format!("--prompt-json={}", Value::from(prompt.to_vec()))),
     };
     cmd.args(["--output-format", "streaming-messages-json", "--include-partial-messages"])
-        .args(["--permission-mode", "dontAsk", "--allow", "mcp__mimir", "--tools", "web_search,search_tool,use_tool", "--no-subagents", "--no-plan"])
+        .args(["--permission-mode", "dontAsk", "--allow", "mcp__mimir", "--tools", &GROK_TOOLS.join(","), "--no-subagents", "--no-plan"])
         .env("MIMIR_MCP_ARGS", serde_json::to_string(&ctx.mcp_args())?)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -494,9 +509,10 @@ async fn grok_turn(ctx: &ToolCtx, home: &std::path::Path, model: Option<&str>, s
     });
     let (bot, chat, stream) = (ctx.bot_id, ctx.chat_id, ctx.stream);
     let read = async {
-        let mut result = None;
+        let (mut result, mut checked) = (None, false);
         while let Some(line) = lines.next_line().await? {
             let Ok(v) = serde_json::from_str::<Value>(&line) else { continue };
+            grok_tools_checked(&mut checked, &v)?;
             match v["type"].as_str() {
                 Some("result") => result = Some(v),
                 // The plan's usage windows (5-hour, weekly): shown with routines, and when a limit resets.
@@ -537,6 +553,27 @@ async fn grok_turn(ctx: &ToolCtx, home: &std::path::Path, model: Option<&str>, s
         bail!("grok error: {detail}");
     }
     Ok(Ok(Reply { text: v["result"].as_str().unwrap_or("").to_string(), session: sid, usage: claude_usage(&v) }))
+}
+
+/// Fail closed on grok's toolset, one stream line at a time: grok offers every tool it has (shell, files) when it
+/// can't read --tools, and says which it offers in its init line. Nothing the model does may come before an init
+/// that lists only ours; an init without a tool list means grok's output changed, and that stops the run too.
+fn grok_tools_checked(checked: &mut bool, v: &Value) -> Result<()> {
+    let changed = || anyhow!("grok's output has changed (no list of its tools), so the message wasn't run. Update Mimir, or use another AI account");
+    match v["type"].as_str() {
+        Some("system") if v["subtype"] == "init" => {
+            let tools = v["tools"].as_array().ok_or_else(changed)?;
+            let extra: Vec<&str> = tools.iter().map(|t| t.as_str().unwrap_or("?")).filter(|t| !GROK_TOOLS.contains(t) && !t.starts_with("mcp__")).collect();
+            if !extra.is_empty() {
+                bail!("grok offered tools Mimir didn't allow ({}), so the message wasn't run", extra.join(", "));
+            }
+            *checked = true;
+        }
+        Some("assistant" | "user" | "result") if !*checked => return Err(changed()),
+        Some("stream_event") if !*checked && v["event"]["type"].as_str().is_some_and(|t| t.starts_with("content_block")) => return Err(changed()),
+        _ => {}
+    }
+    Ok(())
 }
 
 /// Photos for a model that takes them inline, as (mime, base64): the original when it fits, else a smaller JPEG,
@@ -731,10 +768,14 @@ impl Drop for Private {
     }
 }
 
-/// An assistant message (Claude's or grok's stream-json) that used the CLI's own web search.
+/// An assistant message (Claude's or grok's stream-json) that used the CLI's own web or X search. grok names its
+/// searches by their titles ("Web search:", "X search:") as well as by tool name.
 fn searched_web(v: &Value) -> bool {
     v["message"]["content"].as_array().into_iter().flatten().any(|c| {
-        matches!(c["type"].as_str(), Some("tool_use" | "server_tool_use")) && c["name"].as_str().is_some_and(|n| n.eq_ignore_ascii_case("websearch") || n == "web_search" || n == "WebFetch")
+        matches!(c["type"].as_str(), Some("tool_use" | "server_tool_use"))
+            && c["name"].as_str().is_some_and(|n| {
+                n.eq_ignore_ascii_case("websearch") || matches!(n, "web_search" | "WebFetch" | "x_search" | "Web search:" | "X search:")
+            })
     })
 }
 
@@ -964,7 +1005,9 @@ async fn codex(ctx: &ToolCtx, home: &PathBuf, model: Option<&str>, system: &str,
     for kv in [
         r#"sandbox_mode="read-only""#.to_string(),
         r#"approval_policy="never""#.to_string(),
-        r#"web_search="live""#.to_string(),
+        // Cached, not live: live search also opens any address (open_page) from OpenAI's servers, out of leaks_out's
+        // sight, so a URL could carry data out. Cached answers those with a cache miss; fresh pages go through web_fetch.
+        r#"web_search="cached""#.to_string(),
         // A JSON string is also a valid TOML string (Windows backslashes included).
         format!("model_instructions_file={}", serde_json::to_string(&instructions.0)?),
     ] {
@@ -976,6 +1019,7 @@ async fn codex(ctx: &ToolCtx, home: &PathBuf, model: Option<&str>, system: &str,
         // A JSON array of strings is also a valid TOML array.
         format!("mcp_servers.mimir.args={}", serde_json::to_string(&ctx.mcp_args())?),
         format!("mcp_servers.mimir.env={{MIMIR_HOME={home_s}}}"),
+        codex_env_vars(),
         format!("mcp_servers.mimir.tool_timeout_sec={}", TURN_TIMEOUT.as_secs()),
         // Mimir's own gate decides (allow / ask / deny, outside content): Codex hands every call through instead of
         // refusing ones it would otherwise want approved (with approval_policy=never it rejects them outright).
@@ -1021,6 +1065,12 @@ async fn codex(ctx: &ToolCtx, home: &PathBuf, model: Option<&str>, system: &str,
     let (stdout, ()) = tokio::time::timeout(TURN_TIMEOUT, async { tokio::join!(read, drain) }).await.context("codex timed out")?;
     child.wait().await?;
     parse_codex_jsonl(&stdout?)
+}
+
+/// Codex gives its tool servers only a short list of its own environment: the computer service's address and token are
+/// passed by name (never their values on the command line, where other accounts could read the token).
+fn codex_env_vars() -> String {
+    format!("mcp_servers.mimir.env_vars={}", serde_json::to_string(&crate::computer::ENV).unwrap_or_default())
 }
 
 fn parse_codex_jsonl(stdout: &str) -> Result<Reply> {
@@ -1261,6 +1311,63 @@ pub async fn transcribe(audio: Vec<u8>, filename: &str) -> Option<Result<String>
 mod tests {
 
     #[test]
+    fn the_grok_config_pins_grok_extras_off() {
+        let home = std::env::temp_dir().join(format!("mimir-grokconf-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        super::grok_config(&home).unwrap();
+        let toml = std::fs::read_to_string(super::grok_home(&home).join(".grok").join("config.toml")).unwrap();
+        for pin in ["[memory]\nenabled = false\n", "[goal]\nenabled = false\n", "[compat.codex]\nsessions = false\n", "[mcp_servers.mimir]\n"] {
+            assert!(toml.contains(pin), "{pin:?} missing from {toml}");
+        }
+        for vendor in ["claude", "cursor"] {
+            let section = toml.split(&format!("[compat.{vendor}]\n")).nth(1).unwrap().split("\n\n").next().unwrap();
+            for key in ["skills", "rules", "agents", "mcps", "hooks", "sessions"] {
+                assert!(section.contains(&format!("{key} = false")), "compat.{vendor}.{key} in {toml}");
+            }
+        }
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn grok_runs_only_after_an_init_listing_our_tools() {
+        let run = |lines: &[serde_json::Value]| {
+            let mut checked = false;
+            lines.iter().try_for_each(|v| super::grok_tools_checked(&mut checked, v)).map_err(|e| e.to_string())
+        };
+        let init = |tools: serde_json::Value| serde_json::json!({"type": "system", "subtype": "init", "tools": tools});
+        let text = serde_json::json!({"type": "stream_event", "event": {"type": "content_block_delta"}});
+        let reply = serde_json::json!({"type": "assistant", "message": {"content": []}});
+        let result = serde_json::json!({"type": "result", "is_error": false});
+        // A good init, and a signed-out one (grok lists no tools, then reports the error).
+        assert!(run(&[init(serde_json::json!(["search_tool", "use_tool", "web_search"])), text.clone(), reply.clone(), result.clone()]).is_ok());
+        assert!(run(&[init(serde_json::json!([])), result.clone()]).is_ok());
+        // An extra tool.
+        let e = run(&[init(serde_json::json!(["web_search", "run_terminal_command"])), reply.clone()]).unwrap_err();
+        assert!(e.contains("run_terminal_command"), "{e}");
+        // No init: whatever the model does first stops the run.
+        for first in [&text, &reply, &result] {
+            assert!(run(&[serde_json::json!({"type": "rate_limit_event"}), first.clone()]).unwrap_err().contains("output has changed"));
+        }
+        // An init without a tool list, or with something else in its place.
+        for tools in [serde_json::Value::Null, serde_json::json!("web_search"), serde_json::json!({"web_search": true})] {
+            let mut v = init(tools);
+            if v["tools"].is_null() {
+                v.as_object_mut().unwrap().remove("tools");
+            }
+            assert!(run(&[v, result.clone()]).unwrap_err().contains("output has changed"));
+        }
+    }
+
+    #[test]
+    fn x_search_counts_as_outside_content() {
+        let msg = |t: &str, n: &str| serde_json::json!({"message": {"content": [{"type": t, "name": n}]}});
+        assert!(super::searched_web(&msg("tool_use", "X search:")));
+        assert!(super::searched_web(&msg("server_tool_use", "x_search")));
+        assert!(super::searched_web(&msg("tool_use", "Web search:")));
+        assert!(!super::searched_web(&msg("tool_use", "use_tool")));
+    }
+
+    #[test]
     fn a_grok_folder_is_trusted_once() {
         let home = std::env::temp_dir().join(format!("mimir-trust-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&home);
@@ -1375,6 +1482,11 @@ mod tests {
         on_claude_event(42, 9, &json!({"type":"message_start"}));
         assert_eq!(crate::live::get(42, 9).as_deref(), Some(""), "a new message replaces the old text");
         crate::live::end(42, 9);
+    }
+
+    #[test]
+    fn codex_hands_the_computer_service_on() {
+        assert_eq!(codex_env_vars(), r#"mcp_servers.mimir.env_vars=["MIMIR_COMPUTER","MIMIR_COMPUTER_TOKEN"]"#);
     }
 
     #[test]

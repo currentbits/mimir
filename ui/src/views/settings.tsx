@@ -1,13 +1,13 @@
-import { Fragment, useEffect, useRef, useState } from 'react'
+import { Fragment, useContext, useEffect, useRef, useState } from 'react'
 import { inDesktop, insecureServer, invoke, saveDownload, localInvoke, probe, remoteServer, setWebToken, connectServer, shortcut, trayName } from '../api'
 import { ago, fullTime } from '../format'
 import { openLink } from '../markdown'
 import { ask, tell, Empty, Group, Icon, Row, Segmented, Switch } from '../ui'
 import { SignInChatGPT, SignInGrok, ConnectOpenRouter, SignInBrowser } from './accounts'
-import { useLoad, SECRETS_AT, LOCAL } from '../shared'
+import { useLoad, Bots, SECRETS_AT, LOCAL } from '../shared'
 import type { Bot, ComputerStatus, Chat, Account, ToolServer } from '../types'
 
-type VaultEntry = { name: string; domains: string[] }
+type VaultEntry = { name: string; domains: string[]; bot?: number; totp?: boolean }
 
 type Rule = { tool: string; description: string; action: 'allow' | 'ask' | 'deny'; default: string }
 
@@ -22,6 +22,7 @@ const SETTING_WORDS: Record<string, string> = {
   'Permissions': 'allow ask deny approve rules tools safety always',
   'Browser': 'playwright chromium saved logins passwords vault',
   'Tool servers': 'mcp plugins integrations connectors',
+  'Sensitive sources': 'bank banking health medical private finance money leak',
   'Your data': 'export backup download delete privacy doctor check health troubleshoot problem',
   'Chat API': 'openai token shortcuts siri home assistant integration v1 completions',
 }
@@ -103,6 +104,7 @@ export function SettingsView({ onComputer, find = '' }: { onComputer: () => void
       <ComputerSettings onChange={() => { onComputer(); toolsChanged() }} />
       <BrowserSettings onChange={toolsChanged} />
       <ToolServerSettings onChange={toolsChanged} />
+      <SensitiveSettings key={'s' + tools} />
       <Permissions key={tools} />
       <DataSettings />
       {(!inDesktop || remoteServer()) && <ChatApiSettings />}
@@ -668,25 +670,28 @@ function BrowserSettings({ onChange }: { onChange: () => void }) {
   const vault = useLoad(() => invoke<VaultEntry[]>('vault'), [], 60000)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
-  const [draft, setDraft] = useState({ name: '', value: '', domains: '' })
+  const botOf = useContext(Bots)
+  const [draft, setDraft] = useState({ name: '', value: '', domains: '', totp: '' })
+  const exists = (vault.data ?? []).some(v => v.name === draft.name.trim().toUpperCase())
   const on = !!servers.data?.servers.some(s => s.name === 'browser')
   const toggle = (v: boolean) => {
     setBusy(true); setErr(null)
     invoke('browser_enable', { enabled: v }).then(() => { servers.reload(); onChange() }, e => setErr(String(e))).finally(() => setBusy(false))
   }
   const save = () => invoke('vault_save', {
-    entry: { name: draft.name.trim().toUpperCase(), domains: draft.domains.split(/[,\s]+/).filter(Boolean) }, value: draft.value,
-  }).then(() => { setDraft({ name: '', value: '', domains: '' }); setErr(null); vault.reload() }, e => setErr(String(e)))
+    entry: { name: draft.name.trim().toUpperCase(), domains: draft.domains.split(/[,\s]+/).filter(Boolean) }, value: draft.value, totp: draft.totp,
+  }).then(() => { setDraft({ name: '', value: '', domains: '', totp: '' }); setErr(null); vault.reload() }, e => setErr(String(e)))
   return (
     <Group title="Browser" note="Opening a new page asks you first. Running page scripts is off. Needs Node.js; the first time downloads Chromium (~100 MB).">
       <Row icon={<Icon name="browser" size={15} />} title="Web browser" desc={busy ? (on ? 'Turning off…' : 'Setting up — downloading Chromium the first time…') : 'A real headless browser bots can use: open pages, click, fill in forms.'}>
         <Switch label="Web browser" checked={on} disabled={busy} onChange={toggle} />
       </Row>
-      {on && (
+      {(on || !!vault.data?.length) && (
         <>
-          <Row icon={<Icon name="shield" size={15} />} title="Saved logins" desc="Bots type these by name; the browser fills in the real value, which the AI never sees. Each works only on its sites, and you approve every use." />
+          <Row icon={<Icon name="shield" size={15} />} title="Saved logins" desc="Bots type these by name; the browser fills in the real value, which the AI never sees. Each works only on its sites, and you approve every use. With an authenticator key, Mimir types the current code too (NAME_CODE)." />
           {(vault.data ?? []).map(v => (
-            <Row key={v.name} title={<code>{v.name}</code>} desc={v.domains.join(', ')}>
+            <Row key={v.name} title={<code>{v.name}</code>} desc={v.domains.join(', ') + (v.bot ? ` · ${botOf(v.bot).name}'s, from signing in` : '') + (v.totp ? ' · authenticator codes' : '')}>
+              <button className="btn btn-sm btn-ghost icon-btn" aria-label={`Change ${v.name}`} title="Change, or add an authenticator key" onClick={() => setDraft({ name: v.name, value: '', domains: v.domains.join(', '), totp: '' })}><Icon name="pencil" size={14} /></button>
               <button className="btn btn-sm btn-ghost btn-danger icon-btn" aria-label={`Remove ${v.name}`} title="Remove" onClick={() => invoke('vault_delete', { name: v.name }).then(vault.reload, e => setErr(String(e)))}><Icon name="trash" size={14} /></button>
             </Row>
           ))}
@@ -695,7 +700,8 @@ function BrowserSettings({ onChange }: { onChange: () => void }) {
               <input className="input mono" aria-label="Login name" placeholder="GITHUB_PASSWORD" value={draft.name} onChange={e => setDraft({ ...draft, name: e.target.value })} />
               <input className="input" aria-label="Secret value" type="password" placeholder="Password or token" value={draft.value} onChange={e => setDraft({ ...draft, value: e.target.value })} autoComplete="new-password" />
               <input className="input" aria-label="Allowed sites" placeholder="github.com" value={draft.domains} onChange={e => setDraft({ ...draft, domains: e.target.value })} />
-              <button className="btn" disabled={!draft.name.trim() || !draft.value || !draft.domains.trim()}>Save</button>
+              <input className="input" aria-label="Authenticator setup key (optional)" type="password" placeholder="Authenticator key (optional)" value={draft.totp} onChange={e => setDraft({ ...draft, totp: e.target.value })} autoComplete="off" />
+              <button className="btn" disabled={!draft.name.trim() || !(draft.value || (exists && draft.totp)) || !draft.domains.trim()}>Save</button>
             </div></div>
           </form>
         </>
@@ -791,6 +797,11 @@ function ToolServerSettings({ onChange }: { onChange: () => void }) {
   const wantsSignIn = remote && !!server && !!err && /sign in/.test(err)
   const signIn = (conf: object, name: string, label = `Sign in to ${name}`) => <SignInBrowser<number> label={label} what={name}
     start={() => invoke('tool_server_sign_in', { server: conf })} wait="tool_server_sign_in_wait" paste="tool_server_sign_in_paste" onDone={ready(name)} />
+  // Moves its pinned package to the release named on the button (one at least a week old). Starts it once, like Save.
+  const update = async (s: ToolServer) => {
+    setBusy(true); setErr(null)
+    try { ready(s.name)(await invoke<number>('tool_server_update', { name: s.name })) } catch (e) { setErr(String(e)) } finally { setBusy(false) }
+  }
   const remove = (s: ToolServer) => ask(`Remove ${s.name}? Your bots lose its tools.`, 'Remove', true).then(ok => { if (ok) void invoke('tool_server_delete', { name: s.name }).then(() => { setMsg(null); list.reload(); onChange() }, e => setErr(String(e))) })
 
   return (
@@ -798,6 +809,7 @@ function ToolServerSettings({ onChange }: { onChange: () => void }) {
       {servers.map(s => (
         <Row key={s.name} icon={<Icon name="plug" size={15} />} title={s.name} desc={<>{s.tools} tool{s.tools === 1 ? '' : 's'} · <code>{s.url || [s.command, ...s.args].join(' ')}</code></>}>
           {s.signed_in && signIn({ name: s.name, url: s.url, headers: Object.fromEntries(s.headers.map(k => [k, ''])) }, s.name, 'Sign in again')}
+          {s.update && <button className="btn btn-sm" disabled={busy} title="A release at least a week old; Mimir doesn't take newer ones on its own" onClick={() => update(s)}>{busy ? 'Updating…' : `Update to ${s.update}`}</button>}
           <button className="btn btn-sm" onClick={() => open(s)}>Edit</button>
           <button className="btn btn-sm btn-ghost btn-danger icon-btn" aria-label={`Remove ${s.name}`} title="Remove" onClick={() => remove(s)}><Icon name="trash" size={14} /></button>
         </Row>
@@ -839,6 +851,44 @@ function ToolServerSettings({ onChange }: { onChange: () => void }) {
         </form>
       )}
       {err && !form && <div className="row-block"><p className="error" style={{ margin: 0 }}>{err}</p></div>}
+    </Group>
+  )
+}
+
+/** What you mark sensitive: once a run reads from one, everything that goes out asks. Suggested, never set, for banks and health. */
+function SensitiveSettings() {
+  const list = useLoad(() => invoke<string[]>('sensitive'), [], 60000)
+  const servers = useLoad(() => invoke<{ servers: ToolServer[] }>('tool_servers'), [], 60000)
+  const chats = useLoad(() => invoke<Chat[]>('chats'), [], 60000)
+  const rules = useLoad(() => invoke<Rule[]>('rules'), [], 60000)
+  const [err, setErr] = useState<string | null>(null)
+  const on = new Set(list.data ?? [])
+  const set = (name: string, v: boolean) => invoke('set_sensitive', { name, on: v }).then(() => { setErr(null); list.reload() }, e => setErr(String(e)))
+  const toggle = (name: string, label: string) => <Switch label={`${label} is sensitive`} checked={on.has(name)} onChange={v => set(name, v)} />
+  const srv = (servers.data?.servers ?? []).filter(s => s.name !== 'browser')
+  const scopes = (chats.data ?? []).filter(c => c.memories > 0)
+  const tools = (rules.data ?? []).map(r => r.tool).filter(t => t.includes('__') && !t.startsWith('browser__'))
+  if (!srv.length && !scopes.length) return null
+  return (
+    <Group title="Sensitive sources" note={err ?? 'Your bank, your health records. Once a reply or routine has read from one, everything that goes out asks first, saying why: an email, a web page or search, a task for another bot, a message to another chat, and any tool server’s change.'}>
+      {srv.map(s => (
+        <Row key={s.name} icon={<Icon name="plug" size={15} />} title={s.name}
+          desc={s.suggest_sensitive && !on.has(s.name) ? 'Looks like banking or health: mark it sensitive?' : `Tool server · ${s.tools} tool${s.tools === 1 ? '' : 's'}`}>{toggle(s.name, s.name)}</Row>
+      ))}
+      {scopes.map(c => (
+        <Row key={c.chat_id} icon={<Icon name="user" size={15} />} title={`${c.title}’s memory`} desc={`${c.memories} memor${c.memories === 1 ? 'y' : 'ies'}`}>{toggle(`chat:${c.chat_id}`, `${c.title}’s memory`)}</Row>
+      ))}
+      {[...on].filter(n => n.includes('__')).map(t => (
+        <Row key={t} icon={<Icon name="plug" size={15} />} title={toolLabel(t)} desc={`One tool of ${t.split('__')[0]}`}>{toggle(t, toolLabel(t))}</Row>
+      ))}
+      {tools.some(t => !on.has(t)) && (
+        <Row icon={<Icon name="plus" size={15} />} title="Just one tool" desc="When only some of a server’s tools read private things.">
+          <select className="select" style={{ width: 'auto' }} value="" aria-label="Mark one tool sensitive" onChange={e => e.target.value && set(e.target.value, true)}>
+            <option value="">Pick a tool</option>
+            {tools.filter(t => !on.has(t)).map(t => <option key={t} value={t}>{t.split('__')[0]}: {toolLabel(t)}</option>)}
+          </select>
+        </Row>
+      )}
     </Group>
   )
 }

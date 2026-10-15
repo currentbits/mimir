@@ -17,17 +17,19 @@ For contributors: how the pieces fit together.
 |---|---|
 | `db/` | SQLite (one file): memories with FTS5 search and versions, bots, chats, messages (FTS5 too, for `chat_search`), routines, runs, tool calls, approvals, rules, suggestions, skills (versions, uses, proposals by kind), meetings. `mod.rs` holds `Db`, opening and migrations; each area (`memory.rs`, `chats.rs`, `routines.rs`…) has its own `impl Db` block |
 | `host` | `Host::call(cmd, args)`: every command the UI sends; starts and stops each bot's runtime; the secret store |
-| `runtime` | Per-bot channel listeners (Telegram, Slack, Discord), the 30 s routine scheduler, approval cards, the daily digest |
-| `telegram`, `slack`, `discord` | The messaging apps (outbound connections, streaming replies) |
+| `runtime` | Per-bot channel listeners (Telegram, Slack, Discord, Signal), the 30 s routine scheduler, approval cards, the daily digest |
+| `telegram`, `slack`, `discord`, `signal` | The messaging apps (outbound connections, streaming replies) |
 | `provider` | AI accounts: starts `claude -p` / `codex exec` / `grok -p`, or calls an OpenAI-compatible API; streams replies |
 | `chatgpt` | Sign in with ChatGPT: OAuth (PKCE, dynamic registration), the plan's tokens, and replies on the Responses API |
 | `oauth` | OAuth sign-in with PKCE for tool servers and Outlook: the browser's return trip (or a pasted address), tokens in the secret store, refreshing |
 | `lib.rs` (`turn`) | One run: builds the instructions (role, standing memory, skills), calls the provider, records the run; `/skill` commands (`skill_command`) |
-| `tools` | Tool definitions, the allow / ask / deny gate, taint, plans, and the built-in tools' code |
+| `tools` | `mod.rs`: `ToolCtx`, `call` (every tool call), taint, shared helpers; `specs.rs`: tool definitions; `gate.rs`: the allow / ask / deny gate, plans, loops, parked calls; `builtin.rs`: the built-in tools' code |
 | `mcp` | The MCP server the CLIs start for each run (`<app> mcp --bot B --chat C --run R`, plus `--read-only` for quiet checks, `--no-tools`, `--depth` for hand-offs), exposing Mimir's tools |
-| `ext` | Tool servers (MCP clients over stdio and Streamable HTTP, MCP's OAuth sign-in for remote ones), the browser, saved logins |
+| `ext` | Tool servers (MCP clients over stdio and Streamable HTTP, MCP's OAuth sign-in for remote ones), the browser, saved logins (per bot and registrable domain, `site_of`) |
+| `totp` | Authenticator codes for saved logins (RFC 6238, from a base32 key or an `otpauth://` link) |
+| `lookalike` | Domains made to pass for ones you know (sign-in cards' warnings; meant for email recipients too) |
 | `tidy` | The daily memory tidy-up (on `tidy_model` if set): corrections, skills from good runs, fixes for skills that went wrong, weekly upkeep (retire / merge / move to background), the weekly review; teaching a skill from a source or a SKILL.md |
-| `computer` | The bots' computer (Xvfb, xdotool, scrot, Chromium), self-hosted Linux only; recording a showing for teach by showing (page details through Chromium's DevTools port) |
+| `computer` | The bots' computer (Xvfb, xdotool, scrot, Chromium), self-hosted Linux only; recording a showing for teach by showing (page details through Chromium's DevTools port); typing a sign-in into the page on screen (`sign_in`, from a sign-in card's form, `signin_submit` in `host`) |
 | `transcribe` | Speech to text (whisper.cpp built in, or `whisper-cli`, or an API), voice activity, speaker separation |
 | `calendar` | iCal links: parsing, recurrence (`rrule`), the meeting on now, events between dates (`calendar_list`) |
 | `email` | The mailbox list; IMAP (async-imap, mail-parser): search, read, drafts by APPEND, all EXAMINE/PEEK; SMTP sending (lettre); app passwords or Outlook's XOAUTH2; every operation within 60 s |
@@ -43,7 +45,8 @@ For contributors: how the pieces fit together.
    Mimir's tools; for APIs, tools are function definitions handled in-process.
 4. Each tool call goes through `tools::call`: the allow / ask / deny rule, taint (outside content read in this
    conversation), the bot's allowlist, then the tool itself. "Ask" creates an approval and waits for your answer from
-   any app.
+   any app. An email's card keeps its fields in `approvals.draft`; approved, `tools::with_draft` takes back only the
+   subject and body from it (never who it's to), and a no's `approvals.reason` goes back to the bot as the tool's error.
 5. The reply streams back to where you asked; the run and every tool call are recorded.
 
 ## Desktop and server
@@ -93,10 +96,13 @@ The [Security model](security.md) in terms of where it lives. Keep these when ch
   - `is_tainted` also re-reads the run, so the tools server sees what the parent process marked.
   - What carries the mark: `routines.tainted`, `approvals.tainted` (restored by `run_parked`), `suggestions.tainted`,
     `digest_items.tainted`, and `Db::recent_outside` for replayed history (only after the `fresh:{bot}:{chat}` marker).
+  - Sensitive sources (`tools::sensitive_list`, the `sensitive` setting) ride on the private-data flag:
+    `ToolCtx::mark_sensitive` sets it with the source's name, kept in the same `private:{bot}:{conv}` and
+    `private-delegation:{id}` settings (`"1"` or the name) and passed to the tools server as `--sensitive <name>`.
   - A file's or forward's text is wrapped by `with_document` (its position math uses ASCII lowercasing).
 - **The gate.**
-  - `tools::call`: `precheck` (limits, before any card), then `gate`, then `leaks_out` (data-carrying reads), then the
-    approval.
+  - `tools::call`: `precheck` (limits, before any card), then `gate`, then `leaks_out` (data-carrying reads), then
+    `sends_out` after a sensitive source (kind `sensitive`, the card says which), then `off_brief`, then the approval.
   - `card_text` builds every card.
   - `site_of` / `ext::host_allowed` parse hosts with `url::Url` and refuse user info.
 - **Learning.**
@@ -134,13 +140,14 @@ and the data folder in a dialog. Installs from before the rename to Mimir (`~/.b
 | `MIMIR_HOME` | Data folder (default `~/.mimir`) |
 | `MIMIR_PROVIDER`, `MIMIR_MODEL` | CLI bot: `claude` (default), `codex`, `grok`, `openrouter`, `xai`, `local`, `openai`; model override |
 | `OPENROUTER_API_KEY`, `XAI_API_KEY`, `OPENAI_API_KEY`, `OPENAI_BASE_URL` | Keys for the CLI bot; `OPENAI_BASE_URL` also points `local` elsewhere (LM Studio: `http://localhost:1234/v1`) |
-| `TELEGRAM_BOT_TOKEN`, `SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN`, `DISCORD_BOT_TOKEN` | Messaging apps for `mimir serve` |
+| `TELEGRAM_BOT_TOKEN`, `SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN`, `DISCORD_BOT_TOKEN`, `SIGNAL_NUMBER` (+ `MIMIR_SIGNAL_API`) | Messaging apps for `mimir serve` |
 | `MIMIR_BOT` | Which bot the CLI acts as (default 1) |
 | `MIMIR_ADMIN_TOKEN` | Server: a fixed admin token, at least 24 characters (else one is generated on first run) |
 | `MIMIR_UI_DIR` | Server: the web UI folder (default `ui/dist` or `/app/ui`) |
 | `MIMIR_COMPUTER`, `MIMIR_COMPUTER_TOKEN` | Server: the bots' computer as a separate service (`computer:7300`, `mimir computer`) and the control channel's secret (24+ characters, on both sides) |
 | `MIMIR_OSV_API` | OSV.dev base URL for the tool servers' malware check (a test fake) |
 | `MIMIR_TELEGRAM_API` | Telegram Bot API base URL (a self-hosted Bot API server, or the test mock) |
+| `MIMIR_SIGNAL_API` | signal-cli-rest-api's address when a bot's page doesn't set one (default `http://127.0.0.1:8081`, as 8080 is `mimir server`'s own) |
 | `MIMIR_CHATGPT_AUTH`, `MIMIR_CHATGPT_API` | Sign in with ChatGPT: the sign-in and API base URLs (for the test fake, `scripts/fake-ai.py`) |
 | `MIMIR_CLAUDE_BIN`, `MIMIR_CODEX_BIN`, `MIMIR_GROK_BIN`, `MIMIR_NPX` | Paths to the CLIs, if not on PATH |
 
@@ -197,6 +204,8 @@ Test hooks and opt-in tests:
   prints what was saved. With PulseAudio null sinks in a container, this tests the whole meeting pipeline on Linux.
 - `MIMIR_WHISPER_DEBUG=1`: prints voice-activity stretches and chunk timings.
 - `scripts/mock-telegram.py`: a fake Telegram Bot API; set `MIMIR_TELEGRAM_API` to it.
+- `scripts/mock-signal.py`: a fake signal-cli-rest-api; set `MIMIR_SIGNAL_API` to it. `scripts/e2e-signal.py <dir>`
+  runs a bot on it with `fake-ai.py` (pairing, numbered choices and cards, files both ways).
 - `scripts/fake-mail.py`: a fake IMAP (port 1143) and SMTP (port 1025) server, any login accepted, with a planted
   instruction in one message for outside-content tests. Point a bot's email at `127.0.0.1`.
 - `scripts/e2e-busy-chat.py <dir>`: a Telegram message to a busy bot gets an answer, not silence. Starts its own

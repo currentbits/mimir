@@ -6,7 +6,7 @@ is in a page.
 **Before you start**, have one of these ready:
 
 - a **Claude** plan (Pro or Max) or a **ChatGPT** plan (Plus or Pro), so bots run on it at no extra cost;
-- a **SuperGrok** or X Premium+ plan;
+- a **Grok** plan (The X Subscription Premium or higher, or an older SuperGrok or X Premium+ plan);
 - an **API key** (OpenRouter, OpenAI, xAI or any OpenAI-compatible service);
 - or **Ollama** or **LM Studio** on your computer, for a model that never leaves it.
 
