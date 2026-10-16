@@ -33,6 +33,10 @@ text is Mimir's own. They're plain text: no scripts, nothing downloaded.
 | **Decision memo** | Options, trade-offs and a recommendation, after a few questions | nothing |
 | **Document to actions** | Deadlines and obligations from a contract, letter or form | memory |
 | **Trip planner** | A plan by day, a booking checklist, reminders and calendar links | reading web pages |
+| **Hire a bot** | A new bot with one job, what it never does, a voice and when it works; it says its job back once made | [making bots](bots-and-chats.md#a-bot-that-makes-a-bot) |
+| **Bot role check** | Twelve checks on a bot's role (one job, job first, no "I can also help with"…), and a rewrite that passes | nothing |
+| **Team check** | Where your bots overlap or keep doing work outside their job, as proposals you pick from | earlier chats |
+| **Memory check** | What your bots remember about you, with what's wrong, stale or a secret proposed for fixing | memory |
 
 **Add a skill.** Nothing from the library is added on its own. Pick who gets it at the top (all bots in this chat, or
 one bot) and press **Add**: it becomes an accepted skill like any other, which you can change, share or remove. A card

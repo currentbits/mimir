@@ -15,6 +15,10 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 - **Each bot has its own sign-ins on the computer:** a site you sign in to for one bot (when it asks you to take over)
   is signed in for that bot only. **Sign out everywhere** on a bot's page clears its sign-ins. Sign-ins from before
   go to the first bot that uses the computer after the update.
+- **Skills for your bots:** four more in the skill library. *Hire a bot* makes a bot with one job, what it never does,
+  a voice and when it works, and has it say its job back; *Bot role check* checks a role and rewrites it; *Team check*
+  finds where your bots overlap or stray and proposes fixes you pick; *Memory check* proposes fixes for wrong, stale or
+  secret memories.
 
 ### Routines
 - **Follow-ups the bot books itself:** "I'll check back Friday whether they replied" becomes a one-off follow-up, said
