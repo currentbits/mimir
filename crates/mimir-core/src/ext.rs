@@ -1005,6 +1005,11 @@ pub async fn update_server(db: &Db, name: &str) -> Result<usize> {
     save_server(db, conf).await
 }
 
+/// For `mimir doctor`: tool servers that fetch a package without a fixed version (each start can run a new one).
+pub fn unpinned(db: &Db) -> Vec<String> {
+    servers(db).into_iter().filter(|s| s.preset.is_none() && package_of(&s.command, &s.args).is_some_and(|p| p.version.is_none())).map(|s| s.name).collect()
+}
+
 /// The malicious-package advisory (OSV `MAL-…`) in an OSV query answer, if any.
 fn malicious(answer: &Value) -> Option<String> {
     answer["vulns"].as_array()?.iter().find_map(|v| {
