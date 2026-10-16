@@ -1313,7 +1313,8 @@ impl Host {
                 if self.db.routine(id)?.is_none_or(|r| r.cron != cron.trim()) {
                     crate::events::ready(&self.db, chat, &cron)?;
                 }
-                ok(self.db.routine_update(chat, id, &cron, &arg::<String>(a, "prompt")?, arg(a, "quiet")?, arg(a, "paused")?, None)?)
+                // A new end comes with the schedule, so the two are checked together (0 clears it).
+                ok(self.db.routine_update(chat, id, &cron, &arg::<String>(a, "prompt")?, arg(a, "quiet")?, arg(a, "paused")?, arg(a, "ends")?)?)
             }
             "delete_routine" => ok(self.db.routine_delete(arg(a, "chat_id")?, arg(a, "id")?)?),
             // With bot_id: that bot's own conversation in the chat (a bot opened from the sidebar); without, everyone's.
