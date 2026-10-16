@@ -822,7 +822,8 @@ impl Host {
                 let known = ext::servers(&self.db).iter().any(|s| s.name == name)
                     || tools::all_specs(&self.db).iter().any(|(n, ..)| *n == name)
                     || name.strip_prefix("chat:").is_some_and(|c| c.parse::<i64>().is_ok());
-                if !known {
+                // Turning one off always works: its server may be gone (deleted before this was cleaned up with it).
+                if on && !known {
                     bail!("no tool server, tool or memory called {name}");
                 }
                 let mut list: Vec<String> = tools::sensitive_list(&self.db).into_iter().filter(|s| *s != name).collect();
@@ -1653,6 +1654,24 @@ mod tests {
         assert_eq!(lib.as_array().unwrap().iter().find(|k| k["slug"] == "summarize-link").unwrap()["added"], json!([0]));
         assert_eq!(host.call("skill_add", &json!({"chat_id": 0, "slug": "summarize-link", "bot_id": 0})).await.unwrap(), Value::Null);
         assert!(host.call("skill_add", &json!({"chat_id": 0, "slug": "nope", "bot_id": 0})).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn a_deleted_servers_sensitive_marks_go_with_it() {
+        let home = Home::new("sensitive-stale");
+        let host = Host::new(Db::open(&home.0.join("mimir.db")).unwrap(), home.0.clone(), Arc::new(Mem(Default::default())), tokio::runtime::Handle::current(), "server");
+        host.db.set_setting("mcp_servers", r#"[{"name":"bank","command":"/nonexistent/bank"},{"name":"notes","command":"/nonexistent/notes"}]"#).unwrap();
+        host.db.set_setting("mcp_tools:bank", r#"[{"name":"balance","read_only":true}]"#).unwrap();
+        for name in ["bank", "bank__balance", "notes"] {
+            host.call("set_sensitive", &json!({"name": name, "on": true})).await.unwrap();
+        }
+        host.call("tool_server_delete", &json!({"name": "bank"})).await.unwrap();
+        assert_eq!(tools::sensitive_list(&host.db), ["notes"], "the server and its tools, not the others");
+        // One left behind (deleted before this cleanup existed) can still be turned off, but nothing unknown turned on.
+        host.db.set_setting("sensitive", r#"["gone","notes"]"#).unwrap();
+        host.call("set_sensitive", &json!({"name": "gone", "on": false})).await.unwrap();
+        assert_eq!(tools::sensitive_list(&host.db), ["notes"]);
+        assert!(host.call("set_sensitive", &json!({"name": "gone", "on": true})).await.is_err());
     }
 
     #[tokio::test]

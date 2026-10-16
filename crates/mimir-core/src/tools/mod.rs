@@ -132,16 +132,41 @@ impl ToolCtx {
     pub fn pre_private(&self) {
         self.private.store(true, Ordering::Relaxed);
     }
-    /// Start as having read private data, from what was kept of it: "1", or the sensitive source's name.
+    /// Start as having read a sensitive source (named as the card will say it), and so private data.
+    pub fn pre_sensitive(&self, source: &str) {
+        self.pre_private();
+        self.sensitive.lock().unwrap().get_or_insert_with(|| source.to_string());
+    }
+    /// Start as having read private data, from what was kept of it: `{"private":true,"sensitive":"bank"}`, or (kept
+    /// before that) "1" or the bare source name.
     pub fn restore_private(&self, kept: &str) {
         self.pre_private();
-        if kept != "1" {
-            self.sensitive.lock().unwrap().get_or_insert_with(|| kept.to_string());
+        let source = match serde_json::from_str::<Value>(kept) {
+            Ok(v) if v.is_object() => v["sensitive"].as_str().map(String::from),
+            _ => (kept != "1").then(|| kept.to_string()),
+        };
+        if let Some(s) = source {
+            self.pre_sensitive(&s);
         }
     }
-    /// What's kept of it: the sensitive source's name, or "1".
+    /// What's kept of it, for `restore_private`: never mistaken for a source's name (a tool server may be called "1").
     pub(crate) fn private_value(&self) -> String {
-        self.sensitive().unwrap_or_else(|| "1".into())
+        json!({"private": true, "sensitive": self.sensitive()}).to_string()
+    }
+    /// A routine this run made or rewrote after reading a sensitive source: its prompt may hold what it read, so every
+    /// run of it counts as having read it too (like `routine_taint` for outside content). Never cleared by a later edit.
+    pub(crate) fn mark_routine(&self, id: i64) -> Result<()> {
+        if self.sensitive().is_some() {
+            self.db.set_setting(&routine_private_key(id), &self.private_value())?;
+        }
+        Ok(())
+    }
+    /// A routine's run starts as having read what the run that made it read (`mark_routine`).
+    pub fn restore_routine(&self, id: i64) -> Result<()> {
+        if let Some(kept) = self.db.setting(&routine_private_key(id))? {
+            self.restore_private(&kept);
+        }
+        Ok(())
     }
     pub fn saw_private(&self) -> bool {
         self.private.load(Ordering::Relaxed)
@@ -2029,6 +2054,59 @@ mod tests {
         db.set_rule("notes__append", "allow").unwrap(); // a write you let run without asking
         let said = before_and_after_sensitive(&db, 0, "notes__append", json!({"text": "balance: R 12 400"})).await;
         assert!(said.starts_with("rehearsal:") && said.contains("happen without asking"), "{said}");
+    }
+
+    #[tokio::test]
+    async fn a_routine_made_after_a_sensitive_read_asks_when_it_runs() {
+        let db = sensitive_db("routine");
+        // Made in this chat after reading the bank: no ask then (nothing went out yet)...
+        let ctx = ToolCtx::new(db.clone(), 1, 0);
+        ctx.mark_sensitive("bank");
+        let out = call(&ctx, "routine_create", &json!({"cron": "0 9 * * *", "prompt": "Search the web for a better rate than R 12 400 earns"})).await.unwrap();
+        let id = db.routines(0).unwrap().pop().unwrap_or_else(|| panic!("{out}")).id;
+        // ...but each run of it starts as having read the bank, so its web search asks, saying why.
+        let mut run = ToolCtx::new(db.clone(), 1, 0);
+        run.unattended = true;
+        run.restore_routine(id).unwrap();
+        assert_eq!(run.sensitive().as_deref(), Some("bank"));
+        assert!(call(&run, "web_search", &json!({"query": "savings rate R 12 400"})).await.unwrap().starts_with("Not done yet"));
+        let a = db.approvals_pending().unwrap().into_iter().find(|a| a.tool == "web_search").unwrap();
+        assert!(a.kind == "sensitive" && a.summary.starts_with("This run read from bank"), "{a:?}");
+        // Rewritten by a clean run, it stays marked; deleted, its mark goes with it.
+        call(&ToolCtx::new(db.clone(), 1, 0), "routine_update", &json!({"id": id, "prompt": "Search for savings rates"})).await.unwrap();
+        let again = ToolCtx::new(db.clone(), 1, 0);
+        again.restore_routine(id).unwrap();
+        assert!(again.sensitive().is_some(), "an edit never clears it");
+        db.routine_delete(0, id).unwrap();
+        assert_eq!(db.setting(&routine_private_key(id)).unwrap(), None);
+        // A routine made without a sensitive read starts clean.
+        let plain = db.routine_create(1, 0, "0 9 * * *", "Weather", false).unwrap();
+        let clean = ToolCtx::new(db.clone(), 1, 0);
+        clean.restore_routine(plain.id).unwrap();
+        assert!(!clean.saw_private() && clean.sensitive().is_none());
+    }
+
+    #[test]
+    fn a_source_called_1_stays_sensitive() {
+        let db = sensitive_db("one");
+        let ctx = ToolCtx::new(db.clone(), 1, 0);
+        ctx.mark_sensitive("1");
+        let kept = ToolCtx::new(db.clone(), 1, 0);
+        kept.restore_private(&ctx.private_value());
+        assert_eq!(kept.sensitive().as_deref(), Some("1"), "kept as {}", ctx.private_value());
+        assert_eq!(crate::mcp::ctx_from_args(db.clone(), &ctx.mcp_args()).unwrap().sensitive().as_deref(), Some("1"));
+        // Private data alone, and what older versions kept ("1", or the bare name), still read back.
+        let only = ToolCtx::new(db.clone(), 1, 0);
+        only.mark_private();
+        let back = |v: &str| {
+            let c = ToolCtx::new(db.clone(), 1, 0);
+            c.restore_private(v);
+            assert!(c.saw_private());
+            c.sensitive()
+        };
+        assert_eq!(back(&only.private_value()), None);
+        assert_eq!(back("1"), None);
+        assert_eq!(back("bank").as_deref(), Some("bank"));
     }
 
     #[tokio::test]

@@ -137,6 +137,12 @@ pub type DigestItem = (i64, i64, Option<i64>, String, bool);
 /// A new routine's id: past any the run log still names, so a deleted routine's results (in another chat, maybe)
 /// never read as a new one's. SQLite alone would hand the newest deleted id out again.
 /// ponytail: max(routine_id) scans the run log (no index); fine for how rarely routines are made.
+/// A new routine starts with nothing from a deleted one that had its id (one that never ran gives its id out again):
+/// no sensitive mark, whichever way that one went (a one-off done, its bot deleted).
+fn fresh_id(c: &rusqlite::Connection, id: i64) -> Result<()> {
+    c.execute("DELETE FROM settings WHERE key=?1", [crate::tools::routine_private_key(id)])?;
+    Ok(())
+}
 const NEW_ID: &str = "(SELECT max(coalesce((SELECT max(id) FROM routines), 0), coalesce((SELECT max(routine_id) FROM runs), 0)) + 1)";
 
 impl Db {
@@ -153,6 +159,7 @@ impl Db {
             &format!("INSERT INTO routines(id, bot_id, chat_id, cron, prompt, next_fire, quiet) VALUES ({NEW_ID},?1,?2,?3,?4,?5,?6)"),
             params![bot, chat, cron.trim(), prompt.trim(), next, quiet],
         )?;
+        fresh_id(&c, c.last_insert_rowid())?;
         Ok(Routine { id: c.last_insert_rowid(), bot_id: bot, chat_id: chat, cron: cron.trim().into(), prompt: prompt.trim().into(), next_fire: next, quiet, paused: false, delivery: "now".into(), tainted: false, once: false, watch: String::new(), retries: 0, urgent: String::new(), ends: 0, followup: false, goal_held: false, for_goal: false })
     }
 
@@ -169,6 +176,7 @@ impl Db {
             &format!("INSERT INTO routines(id, bot_id, chat_id, cron, prompt, next_fire, quiet, once) VALUES ({NEW_ID},?1,?2,'',?3,?4,?5,1)"),
             params![bot, chat, prompt.trim(), at, quiet],
         )?;
+        fresh_id(&c, c.last_insert_rowid())?;
         Ok(Routine { id: c.last_insert_rowid(), bot_id: bot, chat_id: chat, cron: String::new(), prompt: prompt.trim().into(), next_fire: at, quiet, paused: false, delivery: "now".into(), tainted: false, once: true, watch: String::new(), retries: 0, urgent: String::new(), ends: 0, followup: false, goal_held: false, for_goal: false })
     }
 
@@ -419,7 +427,7 @@ impl Db {
         if r.once || ended {
             c.execute("DELETE FROM routines WHERE id=?1", [r.id])?;
             c.execute("DELETE FROM routine_events WHERE routine_id=?1", [r.id])?;
-            c.execute("DELETE FROM settings WHERE key=?1", [format!("webhook:{}", r.id)])?;
+            c.execute("DELETE FROM settings WHERE key IN (?1, ?2)", [format!("webhook:{}", r.id), crate::tools::routine_private_key(r.id)])?;
         } else {
             c.execute("UPDATE routines SET retries=0 WHERE id=?1", [r.id])?;
         }
@@ -700,7 +708,7 @@ impl Db {
     pub fn routine_delete(&self, chat: i64, id: i64) -> Result<bool> {
         let gone = self.c().execute("DELETE FROM routines WHERE id=?1 AND chat_id=?2", params![id, chat])? > 0;
         if gone {
-            self.c().execute("DELETE FROM settings WHERE key IN (?1, ?2, ?3)", [format!("hold:routine:{id}"), format!("webhook:{id}"), format!("webhook-seen:{id}")])?;
+            self.c().execute("DELETE FROM settings WHERE key IN (?1, ?2, ?3, ?4)", [format!("hold:routine:{id}"), format!("webhook:{id}"), format!("webhook-seen:{id}"), format!("routine-private:{id}")])?;
             self.c().execute("DELETE FROM routine_events WHERE routine_id=?1", [id])?;
         }
         Ok(gone)

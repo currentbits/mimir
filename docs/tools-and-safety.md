@@ -107,8 +107,8 @@ allow:
 
 The card starts with *"This run read from bank, which you marked sensitive."* These asks never offer "always", aren't
 covered by a plan or "all like this", and aren't in **Allow all**. Like outside content, it lasts for the rest of the
-conversation ("Start fresh" ends it) and goes along with a task handed to another bot. It only ever turns an allow into
-an ask.
+conversation ("Start fresh" ends it), goes along with a task handed to another bot, and sticks to a routine the run
+creates or rewrites (every run of it asks the same way). It only ever turns an allow into an ask.
 
 **Going round in circles.** When a reply or routine makes the same tool call again and again (same tool, same
 details on the card) instead of getting anywhere, the next repeat stops and asks first: *"The bot keeps repeating this

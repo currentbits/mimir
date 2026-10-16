@@ -198,7 +198,14 @@ pub fn delete_server(db: &Db, name: &str) -> Result<()> {
     crate::oauth::sign_out(&oauth_key(name))?;
     db.set_setting(&format!("mcp_read_only:{name}"), "[]")?;
     list.retain(|s| s.name != name);
-    set_servers(db, &list)
+    set_servers(db, &list)?;
+    // Its sensitive marks go with it: a new server given the same name later starts unmarked, and can be marked again.
+    let marks = crate::tools::sensitive_list(db);
+    let kept: Vec<_> = marks.iter().filter(|s| *s != name && split(s).is_none_or(|(server, _)| server != name)).collect();
+    if kept.len() < marks.len() {
+        db.set_setting("sensitive", &serde_json::to_string(&kept)?)?;
+    }
+    Ok(())
 }
 
 // ---------------- signing in to a remote server (MCP authorization, 2025-06-18) ----------------

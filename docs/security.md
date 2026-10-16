@@ -58,7 +58,8 @@ bot's instructions), everything that goes out asks, even if its rule says allow,
 - any tool server's change, and its reads that reach the internet (not the sensitive server's own).
 
 Like outside content, it never becomes "always", "all like this" or part of a plan, it sticks to the conversation until
-"Start fresh", and it carries over to tasks handed to other bots. It can only make things stricter.
+"Start fresh", and it carries over to tasks handed to other bots and to routines the run creates or rewrites. Deleting a
+tool server removes its marks. It can only make things stricter.
 
 **Some actions always ask.** Sending an email and making a bot ask every time, whatever the rules say, as their own
 kind of approval: never "always", never "all like this". An email is sent only if all of it fits on the card you

@@ -8,6 +8,11 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 - **Tool server pinning, tightened:** servers added before 0.4.0 are pinned the next time they start. A version range
   (`pkg@^2`, `pkg@1`) is left as you wrote it instead of jumping to the newest release, and **Update** never offers an
   older release than the one you're on. A package OSV.dev has never checked doesn't start while OSV.dev can't be reached.
+- **Sensitive sources, follow-ups:** a routine made or changed after reading a sensitive source asks the same way
+  every time it runs, and deleting a tool server clears its marks.
+- **Bot files, follow-ups:** routines keep their watched page, delivery, "right away when" rule and end date, **Show**
+  on a skill opens its full instructions before you add it, and addresses in the file never carry a password or a
+  `?key=`.
 
 ## 0.4.0
 

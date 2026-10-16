@@ -588,6 +588,18 @@ mod tests {
     }
 
     #[test]
+    fn a_reused_routine_id_starts_without_the_old_sensitive_mark() {
+        let d = db();
+        // Made after a sensitive read, then gone before it ever ran (its bot deleted): its id is given out again.
+        let r = d.routine_create(1, 9, "0 9 * * *", "check the bank", false).unwrap();
+        d.set_setting(&crate::tools::routine_private_key(r.id), "bank").unwrap();
+        d.c().execute("DELETE FROM routines WHERE id=?1", [r.id]).unwrap();
+        let next = d.routine_once(1, 9, now() + 600, "water the plants", false).unwrap();
+        assert_eq!(next.id, r.id);
+        assert_eq!(d.setting(&crate::tools::routine_private_key(next.id)).unwrap(), None);
+    }
+
+    #[test]
     fn schema_version_ladder() {
         let dir = std::env::temp_dir().join(format!("mimir-ladder-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);

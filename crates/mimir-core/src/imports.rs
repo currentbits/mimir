@@ -117,7 +117,7 @@ fn bring_in(db: &Db, bot: i64, chat: i64, label: &str, home: &Path, found: &Foun
             continue;
         }
         match propose_routine(db, bot, chat, &j.cron, &prompt, false) {
-            Ok(()) => routines += 1,
+            Ok(_) => routines += 1,
             Err(e) => eprintln!("import: skipped job {}: {e:#}", j.name),
         }
     }
@@ -126,10 +126,11 @@ fn bring_in(db: &Db, bot: i64, chat: i64, label: &str, home: &Path, found: &Foun
 
 /// A routine from outside: paused until the person resumes it, and someone else's words, so every run counts as having
 /// read outside content.
-fn propose_routine(db: &Db, bot: i64, chat: i64, cron: &str, prompt: &str, quiet: bool) -> Result<()> {
+fn propose_routine(db: &Db, bot: i64, chat: i64, cron: &str, prompt: &str, quiet: bool) -> Result<i64> {
     let r = db.routine_create(bot, chat, cron, prompt, quiet)?;
     db.routine_update(chat, r.id, &r.cron, &r.prompt, quiet, true, None)?;
-    db.routine_taint(r.id)
+    db.routine_taint(r.id)?;
+    Ok(r.id)
 }
 
 /// `~/.hermes/memories/USER.md` rather than the full path.
@@ -306,6 +307,29 @@ pub struct FileRoutine {
     pub prompt: String,
     #[serde(default)]
     pub quiet: bool,
+    /// A quiet check's page address or "mail" (files from before these four have none of them).
+    #[serde(default)]
+    pub watch: String,
+    /// now | digest | log | card ("" = now).
+    #[serde(default)]
+    pub delivery: String,
+    /// The rule for coming through right away.
+    #[serde(default)]
+    pub urgent: String,
+    /// When it stops (unix seconds; 0 = never).
+    #[serde(default)]
+    pub ends: i64,
+}
+
+/// A URL without what could be a credential: the `user:password@` and the query (where a key would sit). One that
+/// doesn't parse goes whole.
+fn bare_url(u: &str) -> String {
+    let Ok(mut p) = url::Url::parse(u.trim()) else { return String::new() };
+    let _ = p.set_username("");
+    let _ = p.set_password(None);
+    p.set_query(None);
+    p.set_fragment(None);
+    p.to_string()
 }
 
 /// A bot as a file. Skills and routine prompts that look like they hold a key or a saved login are left out.
@@ -321,7 +345,12 @@ pub fn export_bot(db: &Db, id: i64) -> Result<BotFile> {
             skills.push(FileSkill { name: k.name, description: k.description, body: k.body });
         }
     }
-    let routines = db.routines_of(id)?.into_iter().filter(|r| !secret(&r.prompt)).map(|r| FileRoutine { cron: r.cron, prompt: r.prompt, quiet: r.quiet }).collect();
+    let routines = db
+        .routines_of(id)?
+        .into_iter()
+        .filter(|r| !secret(&r.prompt) && !secret(&r.urgent))
+        .map(|r| FileRoutine { cron: r.cron, prompt: r.prompt, quiet: r.quiet, watch: if r.watch == "mail" { r.watch } else if r.watch.is_empty() { String::new() } else { bare_url(&r.watch) }, delivery: r.delivery, urgent: r.urgent, ends: r.ends })
+        .collect();
     let rules = crate::tools::all_specs(db).into_iter().filter(|(t, ..)| b.allows(t)).filter_map(|(t, ..)| Some((t.clone(), db.rule(&t).ok()??))).collect();
     let uses = |s: &str| b.allows(&format!("{s}__*")) || crate::ext::cached_tools(db, s).iter().any(|t| b.allows(&format!("{s}__{}", t.name)));
     let servers = crate::ext::servers(db)
@@ -332,11 +361,14 @@ pub fn export_bot(db: &Db, id: i64) -> Result<BotFile> {
             s.headers.values_mut().for_each(String::clear);
             s.args.iter_mut().filter(|a| secret(a)).for_each(String::clear);
             // ponytail: a URL's query goes whole (it's where a key would sit); keep harmless ones if someone needs them
-            s.url.truncate(s.url.find('?').unwrap_or(s.url.len()));
+            if !s.url.is_empty() {
+                s.url = bare_url(&s.url);
+            }
             s
         })
         .collect();
-    Ok(BotFile { mimir_bot: BOT_FILE, name: b.name, look: b.look, role: b.persona, provider: b.provider, model: b.model, base_url: b.base_url, tools: b.tools, rules, skills, routines, servers })
+    let base_url = if b.base_url.trim().is_empty() { String::new() } else { bare_url(&b.base_url) };
+    Ok(BotFile { mimir_bot: BOT_FILE, name: b.name, look: b.look, role: b.persona, provider: b.provider, model: b.model, base_url, tools: b.tools, rules, skills, routines, servers })
 }
 
 pub fn read_bot_file(text: &str) -> Result<BotFile> {
@@ -362,7 +394,30 @@ pub fn read_bot_file(text: &str) -> Result<BotFile> {
 pub struct Item {
     pub title: String,
     pub text: String,
+    /// A skill's instructions in full; a routine's settings beyond its schedule ("" for none).
+    pub body: String,
     pub flags: Vec<String>,
+}
+
+/// A routine's settings beyond its schedule and prompt, as the card says them.
+fn routine_settings(r: &FileRoutine) -> String {
+    let mut v = vec![];
+    if !r.watch.is_empty() {
+        v.push(format!("watches {}", r.watch));
+    }
+    match r.delivery.as_str() {
+        "digest" => v.push("in the daily digest".into()),
+        "log" => v.push("only in the run log".into()),
+        "card" => v.push("on a pinned card".into()),
+        _ => {}
+    }
+    if !r.urgent.is_empty() {
+        v.push(format!("comes through right away when: {}", r.urgent));
+    }
+    if r.ends > 0 {
+        v.push(format!("until {}", crate::tools::fmt_ts(r.ends)));
+    }
+    v.join(" · ")
 }
 
 /// A tool rule from the file that isn't yours. `looser`: it asks less, or allows what you deny, so it's never used.
@@ -472,8 +527,8 @@ pub fn preview(db: &Db, text: &str, duplicate_of: Option<i64>) -> Result<Preview
         .collect();
     Ok(Preview {
         name: free_name(db, &f.name)?,
-        skills: f.skills.iter().map(|k| Item { title: k.name.clone(), text: k.description.clone(), flags: flags(&format!("{}\n{}", k.description, k.body)) }).collect(),
-        routines: f.routines.iter().map(|r| Item { title: r.cron.clone(), text: r.prompt.clone(), flags: flags(&r.prompt) }).collect(),
+        skills: f.skills.iter().map(|k| Item { title: k.name.clone(), text: k.description.clone(), body: k.body.clone(), flags: flags(&format!("{}\n{}", k.description, k.body)) }).collect(),
+        routines: f.routines.iter().map(|r| Item { title: r.cron.clone(), text: r.prompt.clone(), body: routine_settings(r), flags: flags(&format!("{}\n{}", r.prompt, r.urgent)) }).collect(),
         look: f.look,
         role: f.role,
         provider: f.provider,
@@ -483,6 +538,17 @@ pub fn preview(db: &Db, text: &str, duplicate_of: Option<i64>) -> Result<Preview
         servers,
         warnings,
     })
+}
+
+fn routine_set_all(db: &Db, chat: i64, id: i64, r: &FileRoutine) -> Result<bool> {
+    if r.quiet && !r.watch.is_empty() {
+        db.routine_set_watch(chat, id, &r.watch)?;
+    }
+    if !r.delivery.is_empty() {
+        db.routine_set_delivery(chat, id, &r.delivery)?;
+    }
+    db.routine_set_urgent(chat, id, &r.urgent)?;
+    db.routine_set_ends(chat, id, r.ends)
 }
 
 /// Add the bot a file describes, in `chat`: its skills as proposals, its routines paused and marked as outside content,
@@ -513,8 +579,17 @@ pub fn import_bot(db: &Db, text: &str, chat: i64, rules: bool, duplicate_of: Opt
         if crate::tools::looks_secret(db, &r.prompt).is_some() {
             continue;
         }
-        match propose_routine(db, id, chat, &r.cron, &r.prompt, r.quiet) {
-            Ok(()) => done.routines += 1,
+        // Its settings too, so a page watcher stays one. Still paused and outside content: a watched page is too.
+        let added = propose_routine(db, id, chat, &r.cron, &r.prompt, r.quiet).and_then(|rid| {
+            let set = routine_set_all(db, chat, rid, r);
+            // One whose settings can't be had here (an end already past): none, rather than one that differs.
+            if set.is_err() {
+                db.routine_delete(chat, rid)?;
+            }
+            set
+        });
+        match added {
+            Ok(_) => done.routines += 1,
             Err(e) => eprintln!("import: skipped routine {}: {e:#}", r.cron),
         }
     }
@@ -556,6 +631,60 @@ mod tests {
         let k = db.skills("chat:0").unwrap().into_iter().find(|k| k.bot_id == id).unwrap();
         assert!(k.status == "proposed" && k.reason.contains("pipes a download into a shell"), "{}", k.reason);
         let _ = std::fs::remove_file(&p);
+    }
+
+    fn temp_db(tag: &str) -> Db {
+        let p = std::env::temp_dir().join(format!("mimir-botfile-{tag}-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        Db::open(&p).unwrap()
+    }
+
+    #[test]
+    fn an_exported_url_keeps_no_credentials() {
+        let db = temp_db("creds");
+        let bot = crate::db::Bot { id: 0, name: "Ops".into(), persona: String::new(), provider: "openai".into(), model: "m".into(), base_url: "https://u:p@h.example/v1?key=x".into(), tools: "mytools__*".into(), look: String::new() };
+        let id = db.bot_save(&bot).unwrap();
+        crate::ext::set_servers(&db, &[crate::ext::ServerConf { name: "mytools".into(), url: "https://u:p@h.example/mcp".into(), ..Default::default() }]).unwrap();
+        let f = export_bot(&db, id).unwrap();
+        assert_eq!(f.base_url, "https://h.example/v1");
+        assert_eq!(f.servers[0].url, "https://h.example/mcp");
+        let text = serde_json::to_string(&f).unwrap();
+        assert!(!text.contains("u:p") && !text.contains("key=x"), "{text}");
+    }
+
+    #[test]
+    fn a_routines_settings_come_back_with_it() {
+        let db = temp_db("routine");
+        let bot = crate::db::Bot { id: 0, name: "Watcher".into(), persona: String::new(), provider: "openai".into(), model: "m".into(), base_url: String::new(), tools: String::new(), look: String::new() };
+        let id = db.bot_save(&bot).unwrap();
+        let r = db.routine_create(id, 0, "0 9 * * *", "Tell me when the price drops", true).unwrap();
+        let ends = crate::db::now() + 30 * 86_400;
+        db.routine_set_watch(0, r.id, "https://shop.example/item?session=s3cret").unwrap();
+        db.routine_set_delivery(0, r.id, "digest").unwrap();
+        db.routine_set_urgent(0, r.id, "it's under R 500").unwrap();
+        db.routine_set_ends(0, r.id, ends).unwrap();
+        let text = serde_json::to_string(&export_bot(&db, id).unwrap()).unwrap();
+        assert!(!text.contains("s3cret"), "the watched page's query goes like any URL's: {text}");
+        let shown = &preview(&db, &text, None).unwrap().routines[0].body;
+        assert!(shown.contains("watches https://shop.example/item") && shown.contains("digest") && shown.contains("under R 500") && shown.contains("until"), "{shown}");
+        let (new, done) = import_bot(&db, &text, 0, false, None).unwrap();
+        assert_eq!(done.routines, 1);
+        let got = db.routines_of(new).unwrap().pop().unwrap();
+        assert_eq!((got.watch.as_str(), got.delivery.as_str(), got.urgent.as_str(), got.ends, got.quiet), ("https://shop.example/item", "digest", "it's under R 500", ends, true));
+        assert!(got.paused && got.tainted, "still a proposal, and the page it watches is outside content");
+        // A file from before these settings still comes in, as a plain routine.
+        let old = serde_json::json!({"mimir_bot": 1, "name": "Old", "routines": [{"cron": "0 9 * * *", "prompt": "Weather"}]}).to_string();
+        let (old, done) = import_bot(&db, &old, 0, false, None).unwrap();
+        let got = db.routines_of(old).unwrap().pop().unwrap();
+        assert!(done.routines == 1 && got.watch.is_empty() && got.delivery == "now" && got.ends == 0 && got.paused, "{got:?}");
+    }
+
+    #[test]
+    fn the_preview_shows_a_skills_body() {
+        let db = temp_db("skillbody");
+        let file = serde_json::json!({"mimir_bot": 1, "name": "Helper", "skills": [{"name": "Deploy", "description": "Ships it", "body": "Run ./deploy.sh then tell me"}]}).to_string();
+        let k = &preview(&db, &file, None).unwrap().skills[0];
+        assert_eq!((k.text.as_str(), k.body.as_str()), ("Ships it", "Run ./deploy.sh then tell me"));
     }
 
     #[test]

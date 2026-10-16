@@ -263,6 +263,11 @@ pub(crate) fn private_key(bot: i64, conv: i64) -> String {
     format!("private:{bot}:{conv}")
 }
 
+/// The setting that says a routine was made or rewritten after reading a sensitive source (removed with it).
+pub(crate) fn routine_private_key(id: i64) -> String {
+    format!("routine-private:{id}")
+}
+
 /// The setting that says a hand-off (or its helper) read the person's private data: for the helper running later, and
 /// the turn that reports back.
 pub(crate) fn delegation_private_key(id: i64) -> String {

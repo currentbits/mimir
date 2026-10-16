@@ -79,7 +79,7 @@ function Templates({ picked, pick }: { picked: string; pick: (id: string) => voi
   )
 }
 
-type Flagged = { title: string; text: string; flags: string[] }
+type Flagged = { title: string; text: string; body: string; flags: string[] }
 type BotFilePreview = {
   name: string; look: string; role: string; provider: string; model: string; tools: string; skills: Flagged[]; routines: Flagged[]
   rules: { tool: string; action: string; yours: string; looser: boolean }[]; servers: { name: string; what: string; here: boolean }[]; warnings: string[]
@@ -107,9 +107,10 @@ export function BotImport({ text, duplicateOf, onClose, onAdded }: { text: strin
           {f.warnings.map(w => <span key={w} className="hint warn"><Icon name="alert" size={13} />{w}</span>)}
           {f.role && <div><span className="field-label">Role</span><p className="selectable" style={{ whiteSpace: 'pre-wrap', maxHeight: 120, overflow: 'auto' }}>{f.role}</p></div>}
           {f.skills.length > 0 && <div><span className="field-label">Skills, as proposals to accept in Memory</span>
-            <ul>{f.skills.map((k, i) => <li key={i}><b>{k.title}</b>: {k.text}<Flags flags={k.flags} /></li>)}</ul></div>}
+            <ul>{f.skills.map((k, i) => <li key={i}><b>{k.title}</b>: {k.text}<Flags flags={k.flags} />
+              {k.body && <details className="inbox-raw"><summary>Show</summary><p className="selectable" style={{ whiteSpace: 'pre-wrap', maxHeight: 240, overflow: 'auto' }}>{k.body}</p></details>}</li>)}</ul></div>}
           {f.routines.length > 0 && <div><span className="field-label">Routines, paused until you resume them</span>
-            <ul>{f.routines.map((r, i) => <li key={i}><b>{schedule(r.title)}</b>: {r.text}<Flags flags={r.flags} /></li>)}</ul></div>}
+            <ul>{f.routines.map((r, i) => <li key={i}><b>{schedule(r.title)}</b>: {r.text}{r.body && <span className="hint">{r.body}</span>}<Flags flags={r.flags} /></li>)}</ul></div>}
           {f.servers.length > 0 && <div><span className="field-label">Tool servers it uses</span>
             <ul>{f.servers.map(s => <li key={s.name}><b>{s.name}</b>: <code>{s.what}</code>{s.here ? '' : ' (not set up here: nothing from the file is run or added; set it up under Settings if you trust it)'}</li>)}</ul></div>}
           {f.rules.length > 0 && <div><span className="field-label">Its tool rules, different from yours</span>
