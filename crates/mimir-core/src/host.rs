@@ -89,6 +89,10 @@ pub fn is_server() -> bool {
     MODE.get() == Some(&"server")
 }
 
+pub fn is_desktop() -> bool {
+    MODE.get() == Some(&"desktop")
+}
+
 fn key(bot: i64, name: &str) -> String {
     if bot == 1 && name == TG { name.into() } else { format!("{name}:{bot}") }
 }
@@ -803,7 +807,7 @@ impl Host {
                 for s in ext::servers(&self.db) {
                     let keys = |m: std::collections::HashMap<String, String>| m.into_keys().collect::<std::collections::BTreeSet<_>>();
                     let update = if s.preset.is_none() { ext::update_for(&self.db, &s).await } else { None };
-                    servers.push(json!({"name": s.name, "preset": s.preset, "command": s.command, "args": s.args, "url": s.url, "env": keys(s.env), "headers": keys(s.headers), "tools": ext::cached_tools(&self.db, &s.name).len(), "signed_in": ext::signed_in(&s.name), "sensitive": sensitive.contains(&s.name), "suggest_sensitive": tools::looks_sensitive(&s.name), "update": update}));
+                    servers.push(json!({"name": s.name, "preset": s.preset, "command": s.command, "args": s.args, "url": s.url, "env": keys(s.env), "headers": keys(s.headers), "tools": ext::cached_tools(&self.db, &s.name).len(), "signed_in": ext::signed_in(&s.name), "sensitive": sensitive.contains(&s.name), "suggest_sensitive": tools::looks_sensitive(&s.name), "update": update, "unconfirmed": ext::claimed_tools(&self.db, &s.name).iter().filter(|t| t.read_only).count() - ext::cached_tools(&self.db, &s.name).iter().filter(|t| t.read_only).count()}));
                 }
                 ok(json!({"servers": servers, "tools": ext::all_tools(&self.db).len()}))
             }
@@ -828,6 +832,17 @@ impl Host {
                 ok(self.db.set_setting("sensitive", &serde_json::to_string(&list)?)?)
             }
             "tool_server_delete" => ok(ext::delete_server(&self.db, &arg::<String>(a, "name")?)?),
+            // One server's tools with the server's read-only claims, which count once confirmed (`tool_server_read_only`).
+            "tool_server_tools" => {
+                let name: String = arg(a, "name")?;
+                let trusted = ext::cached_tools(&self.db, &name);
+                let tools: Vec<Value> = ext::claimed_tools(&self.db, &name)
+                    .into_iter()
+                    .map(|t| json!({"name": t.name, "description": t.description, "says_read_only": t.read_only, "read_only": trusted.iter().any(|o| o.name == t.name && o.read_only)}))
+                    .collect();
+                ok(tools)
+            }
+            "tool_server_read_only" => ok(ext::confirm_read_only(&self.db, &arg::<String>(a, "name")?, &arg::<Vec<String>>(a, "tools")?)?),
             // A remote server that wants a sign-in (MCP's OAuth): returns the address to open; then `_wait` (desktop) or
             // `_paste` (a server: the address the browser ended up on) finishes it and saves the server. Returns its tool count.
             "tool_server_sign_in" => {
@@ -1313,7 +1328,8 @@ impl Host {
                 if self.db.routine(id)?.is_none_or(|r| r.cron != cron.trim()) {
                     crate::events::ready(&self.db, chat, &cron)?;
                 }
-                ok(self.db.routine_update(chat, id, &cron, &arg::<String>(a, "prompt")?, arg(a, "quiet")?, arg(a, "paused")?, None)?)
+                // A new end comes with the schedule, so the two are checked together (0 clears it).
+                ok(self.db.routine_update(chat, id, &cron, &arg::<String>(a, "prompt")?, arg(a, "quiet")?, arg(a, "paused")?, arg(a, "ends")?)?)
             }
             "delete_routine" => ok(self.db.routine_delete(arg(a, "chat_id")?, arg(a, "id")?)?),
             // With bot_id: that bot's own conversation in the chat (a bot opened from the sidebar); without, everyone's.
@@ -1409,6 +1425,13 @@ impl Host {
                     "current": crate::server_update::CURRENT,
                     "latest": self.db.setting("update_latest")?,
                 }))
+            }
+            // The daily anonymous usage count (usage_stats.rs): on unless switched off; `sample` is exactly what's sent.
+            "usage_stats" => {
+                if let Some(on) = arg::<Option<bool>>(a, "on")? {
+                    self.db.set_setting("usage_stats", if on { "on" } else { "off" })?;
+                }
+                ok(json!({"on": crate::usage_stats::on(&self.db), "sample": crate::usage_stats::batch(&self.db)?["events"]}))
             }
             // Run now instead of waiting for a hold to end (the limit was raised, another plan…); a cap's, for the rest of today.
             "hold_clear" => {

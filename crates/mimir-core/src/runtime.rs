@@ -1142,8 +1142,9 @@ impl Core {
     pub(crate) async fn tap(self: &Arc<Self>, chan: &Chan, ext: &str, from: Sender<'_>, data: &str) -> Result<Option<String>> {
         let Some((token, n)) = data.strip_prefix("tp:").and_then(|r| r.split_once(':')).and_then(|(t, n)| Some((t, n.parse::<usize>().ok()?))) else { return Ok(None) };
         let Some(chat) = self.db.chat_lookup(chan.kind(), ext)? else { return Ok(Some(tr("This chat isn't paired any more.").into())) };
-        if self.sender_ok(chat, from)? != Some(true) {
-            anyhow::bail!("Only the person who paired me here can answer this.");
+        // Not family members: a tap pauses routines and answers as the person (the same rule as `decide`).
+        if self.sender_ok(chat, from)? != Some(true) || self.db.chat_owner(chat)? != from.id {
+            anyhow::bail!(tr("Only the person who paired me here can answer this."));
         }
         let key = format!("tap:{token}");
         // Another bot's or chat's buttons can't be used here, and a second tap (or a double tap) finds nothing left.
@@ -1870,6 +1871,7 @@ impl Core {
             {
                 eprintln!("update notice: {e:#}");
             }
+            crate::usage_stats::tick(&self.db).await;
             // Sleep-time memory tidy-up, run by one bot for everyone.
             if crate::tidy::memory_bot(&self.db) == Some(self.bot) {
                 let now = crate::db::now();

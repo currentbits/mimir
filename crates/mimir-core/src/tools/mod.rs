@@ -225,7 +225,13 @@ fn lines(v: &[Entry]) -> String {
 // ---------------- policy ----------------
 
 /// Policy gate + dispatch + run-log entry. Every agent tool call goes through here.
+/// Pages, mail, files, tool servers: nothing the model reads back keeps characters hidden from the person, an error
+/// included (a tool server's error text is its own words, and one can repeat what came in).
 pub async fn call(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
+    gated(ctx, name, args).await.map(|r| crate::visible(&r)).map_err(|e| anyhow::anyhow!(crate::visible(&format!("{e:#}"))))
+}
+
+async fn gated(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
     if !specs().iter().any(|(n, ..)| *n == name) && crate::ext::find(&ctx.db, name).is_none() {
         bail!("unknown tool {name}");
     }
@@ -542,6 +548,8 @@ mod tests {
         // A tool server's card shows where it goes, even after a long body.
         let card = describe_external("mail__send", &json!({"body": "x".repeat(600), "to": "someone@example.com"})).unwrap();
         assert!(card.starts_with("mail: Send (to: someone@example.com; body: "), "{card}");
+        let card = describe_external("mail__send", &json!({"body": "x".repeat(600), "messages": [{"text": "y".repeat(600), "to": "a@b.c"}]})).unwrap();
+        assert!(card.starts_with("mail: Send (messages: [{to: a@b.c; text: "), "nested in an array: {card}");
     }
 
     #[tokio::test]
@@ -1392,6 +1400,9 @@ mod tests {
         let past = (chrono::Local::now() - chrono::Duration::hours(1)).format("%Y-%m-%d %H:%M").to_string();
         assert!(call(&ctx, "routine_create", &json!({"at": past, "prompt": "Remind me to call mum"})).await.unwrap_err().to_string().contains("future"));
         assert!(call(&ctx, "routine_create", &json!({"prompt": "x"})).await.unwrap_err().to_string().contains("cron"));
+        // An error that repeats what came in reaches the model without hidden characters, like a result.
+        let bad = call(&ctx, "routine_create", &json!({"at": "soon\u{e0041}\u{e0042}", "prompt": "x"})).await.unwrap_err().to_string();
+        assert!(bad.contains("soon") && !bad.contains('\u{e0041}'), "{bad}");
         let soon = chrono::Local::now() + chrono::Duration::hours(2);
         let out = call(&ctx, "routine_create", &json!({"at": soon.format("%Y-%m-%d %H:%M").to_string(), "prompt": "Remind me to call mum"})).await.unwrap();
         assert!(out.starts_with("one-off #") && out.contains("runs once"), "{out}");
@@ -1918,6 +1929,7 @@ mod tests {
         let db = Db::open(&p).unwrap();
         db.set_setting("mcp_servers", r#"[{"name":"bank","command":"/nonexistent/mimir-test-bank"},{"name":"notes","command":"/nonexistent/mimir-test-notes"}]"#).unwrap();
         db.set_setting("mcp_tools:bank", r#"[{"name":"balance","read_only":true}]"#).unwrap();
+        crate::ext::confirm_read_only(&db, "bank", &["balance".into()]).unwrap();
         db.set_setting("mcp_tools:notes", r#"[{"name":"append","read_only":false}]"#).unwrap();
         db.set_setting("email_accounts", r#"[{"host":"127.0.0.1","port":1143,"user":"me@example.com","oauth":"outlook"}]"#).unwrap();
         db.set_setting("searxng_url", "http://127.0.0.1:9").unwrap(); // nothing listens: a search fails at once

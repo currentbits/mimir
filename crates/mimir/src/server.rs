@@ -198,6 +198,8 @@ pub async fn run(db: Db, home: PathBuf, listen: &str) -> Result<()> {
         let _ = std::fs::set_permissions(home.join("mimir.db"), std::fs::Permissions::from_mode(0o600));
     }
     let (token, fresh) = admin_token(&db)?;
+    // For `mimir doctor`: whether it answers beyond this machine.
+    db.set_setting("server_listen", listen)?;
     let host = Arc::new(Host::new(db.clone(), home, Arc::new(DbSecrets(db)), tokio::runtime::Handle::current(), "server"));
     host.restart_all();
 

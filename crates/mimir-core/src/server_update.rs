@@ -20,7 +20,7 @@ pub fn newer(a: &str, b: &str) -> bool {
 }
 
 /// Running from the Docker image (/.dockerenv), or from a build of the source.
-fn in_docker() -> bool {
+pub fn in_docker() -> bool {
     std::path::Path::new("/.dockerenv").exists()
 }
 

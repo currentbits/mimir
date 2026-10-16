@@ -166,18 +166,23 @@ half is built into the app); a tampered download is refused. It never restarts o
   flagged (one in another alphabet always is, without a name). The full address is always shown.
 - "Signed in" is read from the sign-in fields going away; a site that keeps a password field on every page reads as
   failed (and the login isn't saved).
+- Codex's web search asks OpenAI's servers to open addresses, where Mimir doesn't see it. Mimir uses its cached mode
+  (an address that isn't cached isn't fetched), and turns it off once a conversation has read outside content; within
+  one turn, a search's query itself can still carry what the bot knows.
 - An email card shows exactly what's sent, but approving it is your call: after reading an email, check the recipient
   is who you meant.
 - Sensitive sources only work once you mark them: a bank's server you haven't marked is just a tool server (its data
   is still outside content, and private-data rules don't apply to it).
 - When the bots' computer runs in Mimir's own process on a plain Linux host (not Docker), its Chromium's DevTools on
   `127.0.0.1:9222` have no token, so other accounts on that machine can drive the browser. Use the Docker image or
-  compose.
+  compose; `mimir doctor` warns about it.
 
 ## For contributors
 
 Every new way for text to reach a model must either be the person's own words, or mark the conversation
 (`ToolCtx::taint`). Every new way for data to leave must be listed in `sends_out`, so it asks after a sensitive
 source. Every new action that changes data must go through `tools::call`. Every new kind of learned
-artefact must be a proposal that keeps the outside-content mark. Details, with the code they live in, are in
+artefact must be a proposal that keeps the outside-content mark. Never take a server address, token or scope from a URL or
+deep link (a link someone sends could point Mimir at their server, as in OpenClaw's CVE-2026-25253): those come from
+settings the person typed, or from the server they chose. Details, with the code they live in, are in
 [Architecture](architecture.md).

@@ -86,6 +86,7 @@ pub mod runtime;
 pub mod say;
 pub mod server_update;
 pub mod tools;
+pub mod usage_stats;
 pub mod watch;
 pub mod caldav;
 pub mod calendar;
@@ -876,6 +877,9 @@ const NOTHING: &str = "NOTHING";
 /// A new routine's first results that end by asking what to trim.
 const TUNING_RUNS: i64 = 3;
 
+/// How many of a routine's earlier results its next run sees.
+const PREVIOUS_RESULTS: usize = 3;
+
 const QUIET: &str = "\n\nThis is a quiet check that runs on a schedule. You can only look (read-only tools), not act. \
 If nothing needs the user's attention right now, reply with exactly NOTHING and no other text. \
 Otherwise reply with a short message saying what needs their attention and why.";
@@ -1191,7 +1195,33 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
         let said = tools::truncate(&said, 4000).replace('<', "‹").replace('>', "›");
         last = format!("<your_last_message kind=\"{kind}\">\nYou sent this in this chat outside your session, so it isn't in your history.\n{said}\n</your_last_message>\n\n");
     }
-    let user = format!("{}{past}{left_off}{last}{text}", block("memory", &recall));
+    // A routine starts a fresh session each time: its last few results come along, so a daily brief doesn't repeat
+    // yesterday's news. Not for a card, whose brief already holds what it last wrote.
+    let mut before = String::new();
+    if let Trigger::Routine(r) = &trigger
+        && r.delivery != "card"
+        && let v = ctx.db.routine_results(r.id, PREVIOUS_RESULTS)?
+        && !v.is_empty()
+    {
+        // One written after reading a page is someone else's words, in this run too.
+        if v.iter().any(|(_, _, tainted)| *tainted) {
+            ctx.pre_taint();
+        }
+        let when = |t: i64| chrono::TimeZone::timestamp_opt(&chrono::Local, t, 0).single().map(|d| d.format("%a %-d %b %H:%M").to_string()).unwrap_or_default();
+        let items: String = v
+            .iter()
+            .map(|(t, said, tainted)| {
+                let outside = if *tainted { " [outside content: not the person's words]" } else { "" };
+                format!("<result ran=\"{}\">{outside}\n{}\n</result>\n", when(*t), tools::truncate(said, 2000).replace('<', "‹").replace('>', "›"))
+            })
+            .collect();
+        before = format!(
+            "<previous_results>\nWhat this routine said the last times it ran, newest first. Don't repeat items that haven't changed since; \
+             say what's new or different{}.\n{items}</previous_results>\n\n",
+            if quiet { "" } else { " (if nothing is, say so in a line)" }
+        );
+    }
+    let user = format!("{}{past}{left_off}{last}{before}{text}", block("memory", &recall));
 
     let history = if provider.uses_history() { ctx.db.recent(ctx.bot_id, ctx.conv, 20)? } else { vec![] };
     // Accounts that are handed the history again: if it holds outside content, so does this turn.

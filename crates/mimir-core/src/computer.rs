@@ -119,6 +119,12 @@ pub fn reach() -> Option<Result<()>> {
     Some(ask(&a, serde_json::json!({"op": "status"})).map(drop))
 }
 
+/// For `mimir doctor`: switched on and run in Mimir's own process outside a container, where Chromium's DevTools
+/// (127.0.0.1:9222, no token) are open to every account on this machine.
+pub fn devtools_shared(db: &crate::db::Db) -> bool {
+    enabled(db) && remote().is_none() && cfg!(target_os = "linux") && !crate::server_update::in_docker()
+}
+
 /// Is the screen up?
 pub fn running() -> bool {
     if let Some(a) = remote() {
@@ -321,7 +327,8 @@ pub fn screenshot_jpeg() -> Result<Vec<u8>> {
     if !running() {
         bail!("the computer isn't running (Settings → Computer)");
     }
-    let png = std::env::temp_dir().join(format!("mimir-screen-{}.png", crate::random_hex(6)?));
+    // In the data directory (owner-only), not /tmp: scrot writes it with default permissions.
+    let png = crate::data_dir()?.join(format!("mimir-screen-{}.png", crate::random_hex(6)?));
     let out = Command::new("scrot").args(["-o", "-z"]).arg(&png).env("DISPLAY", DISPLAY).stdin(Stdio::null()).output().context("scrot isn't installed")?;
     let img = image::open(&png);
     let _ = std::fs::remove_file(&png);
