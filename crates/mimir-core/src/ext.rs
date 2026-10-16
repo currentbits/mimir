@@ -104,6 +104,12 @@ pub struct VaultEntry {
     pub name: String,
     /// Sites it may be typed into (exact host or subdomain).
     pub domains: Vec<String>,
+    /// Only this bot's (a login saved from its sign-in card); none = every bot's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bot: Option<i64>,
+    /// Has an authenticator key: Mimir types the current code for NAME_CODE.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub totp: bool,
 }
 
 pub fn servers(db: &Db) -> Vec<ServerConf> {
@@ -118,8 +124,7 @@ fn validate(s: &ServerConf) -> Result<()> {
         bail!("server {} needs a command or a URL", s.name);
     }
     // Plain http only to this machine: header tokens would otherwise travel in the clear.
-    let local_http = ["http://localhost", "http://127.0.0.1", "http://[::1]"].iter().any(|p| s.url.starts_with(p));
-    if !(s.url.is_empty() || s.url.starts_with("https://") || local_http) {
+    if !(s.url.is_empty() || secure(&s.url)) {
         bail!("server {}'s URL must start with https:// (plain http only for localhost)", s.name);
     }
     Ok(())
@@ -159,10 +164,15 @@ pub async fn save_server(db: &Db, mut conf: ServerConf) -> Result<usize> {
         }
     }
     validate(&conf)?;
+    pin(&mut conf, false).await?;
     let n = refresh(db, &conf).await?;
     let mut list = servers(db);
     let mut old = list.iter().find(|s| s.name == conf.name).cloned().unwrap_or_default();
     let name = conf.name.clone();
+    // Another program (an update, or an edit to what runs) is another server: its read-only claims are reviewed again.
+    if (&old.command, &old.args, &old.url) != (&conf.command, &conf.args, &conf.url) {
+        db.set_setting(&format!("mcp_read_only:{name}"), "[]")?;
+    }
     for ((kind, new), (_, old)) in conf.secret_maps().into_iter().zip(old.secret_maps()) {
         for k in old.keys().filter(|k| !new.contains_key(*k)) {
             crate::host::secret_set(&secret_name(kind, &name, k), "")?;
@@ -186,6 +196,7 @@ pub fn delete_server(db: &Db, name: &str) -> Result<()> {
         }
     }
     crate::oauth::sign_out(&oauth_key(name))?;
+    db.set_setting(&format!("mcp_read_only:{name}"), "[]")?;
     list.retain(|s| s.name != name);
     set_servers(db, &list)
 }
@@ -204,9 +215,17 @@ pub fn signed_in(server: &str) -> bool {
 /// The server a sign-in in progress is for: saved once the sign-in is done.
 static SIGNING_IN: std::sync::Mutex<Option<ServerConf>> = std::sync::Mutex::new(None);
 
-/// https, or plain http to this computer only (a server of your own, a test).
+/// https, or plain http to this computer only (a server of your own, a test). Parsed, not prefix-matched, so
+/// `http://localhost.evil.com` and `http://localhost@evil.com` aren't this computer.
 fn secure(url: &str) -> bool {
-    url.starts_with("https://") || ["http://localhost", "http://127.0.0.1", "http://[::1]"].iter().any(|p| url.starts_with(p))
+    let Ok(u) = url::Url::parse(url) else { return false };
+    match (u.scheme(), u.host()) {
+        ("https", Some(_)) => true,
+        ("http", Some(url::Host::Domain(d))) => d == "localhost",
+        ("http", Some(url::Host::Ipv4(ip))) => ip.is_loopback(),
+        ("http", Some(url::Host::Ipv6(ip))) => ip.is_loopback(),
+        _ => false,
+    }
 }
 
 async fn get_json(http: &reqwest::Client, url: &str) -> Option<Value> {
@@ -234,7 +253,13 @@ pub async fn sign_in(conf: ServerConf, listen: bool) -> Result<String> {
     if conf.url.is_empty() {
         bail!("only a server with a URL signs in");
     }
-    let http = reqwest::Client::builder().timeout(Duration::from_secs(20)).build()?;
+    // Metadata comes from the server: its redirects can't bounce Mimir onto this computer or the local network,
+    // unless the server itself is there.
+    let mut http = reqwest::Client::builder().timeout(Duration::from_secs(20));
+    if !crate::tools::is_private_host(&conf.url) {
+        http = http.redirect(crate::tools::public_redirects());
+    }
+    let http = http.build()?;
     let server = url::Url::parse(&conf.url)?;
     // The server's 401 says where its metadata is; else the well-known places (path first, then the root).
     let probe = http
@@ -282,7 +307,7 @@ pub async fn sign_in(conf: ServerConf, listen: bool) -> Result<String> {
     let redirect = crate::oauth::redirect(listen, "127.0.0.1", "/callback").await?;
     let reg: Value = http
         .post(register)
-        .json(&json!({"client_name": "Mimir", "redirect_uris": [redirect.uri], "grant_types": ["authorization_code", "refresh_token"], "response_types": ["code"], "token_endpoint_auth_method": "none"}))
+        .json(&json!({"client_name": "Mimir", "application_type": "native", "redirect_uris": [redirect.uri], "grant_types": ["authorization_code", "refresh_token"], "response_types": ["code"], "token_endpoint_auth_method": "none"}))
         .send()
         .await?
         .error_for_status()
@@ -297,7 +322,8 @@ pub async fn sign_in(conf: ServerConf, listen: bool) -> Result<String> {
         bail!("{}'s sign-in metadata is for {resource}, not this server", conf.name);
     }
     let saved = crate::oauth::Saved { token_url: token, client_id, client_secret: reg["client_secret"].as_str().map(String::from), scope, resource: Some(resource), refresh: String::new() };
-    let url = crate::oauth::begin(&oauth_key(&conf.name), &conf.name, authorize, saved, redirect, &[])?;
+    let issuer = meta["issuer"].as_str().map(|i| (i.to_string(), meta["authorization_response_iss_parameter_supported"] == true));
+    let url = crate::oauth::begin(&oauth_key(&conf.name), &conf.name, authorize, saved, redirect, &[], issuer)?;
     *SIGNING_IN.lock().unwrap() = Some(conf);
     Ok(url)
 }
@@ -320,8 +346,31 @@ pub async fn signed_in_save(db: &Db) -> Result<usize> {
     save_server(db, conf).await
 }
 
+/// A server's tools. A tool is read-only (allowed without asking, even after outside content) only when the server
+/// says so and the person confirmed it: a server can call a write tool read-only. The browser is ours, so trusted.
 pub fn cached_tools(db: &Db, server: &str) -> Vec<ExtTool> {
+    let mut tools = claimed_tools(db, server);
+    if server != BROWSER {
+        let ok = read_only_confirmed(db, server);
+        tools.iter_mut().for_each(|t| t.read_only &= ok.contains(&t.name));
+    }
+    tools
+}
+
+/// The tools as the server describes them (`read_only` is its claim).
+pub fn claimed_tools(db: &Db, server: &str) -> Vec<ExtTool> {
     db.setting(&format!("mcp_tools:{server}")).ok().flatten().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+}
+
+fn read_only_confirmed(db: &Db, server: &str) -> Vec<String> {
+    db.setting(&format!("mcp_read_only:{server}")).ok().flatten().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+}
+
+/// The person confirmed these of the server's read-only claims (any others are dropped).
+pub fn confirm_read_only(db: &Db, server: &str, tools: &[String]) -> Result<()> {
+    let claimed = claimed_tools(db, server);
+    let ok: Vec<&String> = tools.iter().filter(|n| claimed.iter().any(|t| t.read_only && &t.name == *n)).collect();
+    db.set_setting(&format!("mcp_read_only:{server}"), &serde_json::to_string(&ok)?)
 }
 
 /// (full name, tool) for every cached external tool of every configured server.
@@ -356,7 +405,43 @@ pub fn vault(db: &Db) -> Vec<VaultEntry> {
     db.setting("vault").ok().flatten().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
 }
 
-pub fn vault_save(db: &Db, entry: VaultEntry, value: Option<&str>) -> Result<()> {
+/// The saved logins a bot may use: everyone's, and its own.
+pub fn vault_for(db: &Db, bot: i64) -> Vec<VaultEntry> {
+    vault(db).into_iter().filter(|e| e.bot.is_none_or(|b| b == bot)).collect()
+}
+
+/// The site a sign-in is kept for: the registrable domain of a page's address ("accounts.google.com" → google.com,
+/// while alice.github.io stays alice.github.io, since anyone can have a github.io site). None for an IP or a bare name.
+pub fn site_of(url: &str) -> Option<String> {
+    let u = url::Url::parse(url).ok()?;
+    let Some(url::Host::Domain(host)) = u.host() else { return None };
+    let host = host.trim_end_matches('.').to_lowercase();
+    psl::domain_str(&host).filter(|d| d.contains('.')).map(String::from)
+}
+
+/// What a sign-in card's form warns about: the page's full address next to the site the login is kept for; whether the
+/// bot came there after outside content or on someone else's words (`steered`); and, for a site with no saved login or
+/// earlier sign-in, one that has them which this one looks like (`lookalike`); and an address with letters from
+/// another alphabet (`foreign`: always, naming what it's made to look like when that's one of them).
+pub fn signin_warnings(db: &Db, url: &str, site: &str, steered: bool) -> Value {
+    let mut known: Vec<String> = vault(db).iter().flat_map(|e| e.domains.iter()).filter_map(|d| site_of(&format!("https://{d}/"))).collect();
+    known.extend(db.signin_sites().unwrap_or_default());
+    let host = url::Url::parse(url).ok().and_then(|u| u.host_str().map(str::to_lowercase)).unwrap_or_default();
+    let foreign = crate::lookalike::foreign(&host);
+    let lookalike = match known.iter().any(|k| k == site) {
+        true => None,
+        false => crate::lookalike::skeleton_of(site, known.iter().map(String::as_str)).or_else(|| crate::lookalike::of(site, known.iter().map(String::as_str))),
+    };
+    json!({"host": host, "site": site, "steered": steered, "lookalike": lookalike, "foreign": foreign})
+}
+
+/// The authenticator code of a saved login right now, if it has a key.
+pub(crate) fn vault_code(name: &str) -> Option<String> {
+    crate::host::secret_get(&format!("vault:{name}:totp")).and_then(|k| crate::totp::parse(&k).ok()).map(|t| t.now())
+}
+
+/// `totp`: an authenticator setup key or otpauth:// link to add (None or empty keeps what's there).
+pub fn vault_save(db: &Db, entry: VaultEntry, value: Option<&str>, totp: Option<&str>) -> Result<()> {
     let name = entry.name.trim().to_string();
     if name.len() < 3 || !name.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_') {
         bail!("use a name like GITHUB_PASSWORD (capitals, digits, underscores)");
@@ -366,22 +451,71 @@ pub fn vault_save(db: &Db, entry: VaultEntry, value: Option<&str>) -> Result<()>
         bail!("add at least one site this login may be used on");
     }
     let mut list = vault(db);
-    let exists = list.iter().any(|e| e.name == name);
+    let old = list.iter().find(|e| e.name == name).cloned();
+    let totp = totp.map(str::trim).filter(|t| !t.is_empty());
+    if let Some(t) = totp {
+        crate::totp::parse(t)?;
+    }
     if let Some(v) = value.filter(|v| !v.is_empty()) {
         crate::host::secret_set(&format!("vault:{name}"), v)?;
-    } else if !exists {
+    } else if old.is_none() {
         bail!("a new login needs its secret value");
     }
+    if let Some(t) = totp {
+        crate::host::secret_set(&format!("vault:{name}:totp"), t)?;
+    }
     list.retain(|e| e.name != name);
-    list.push(VaultEntry { name, domains });
+    // Changing a login in Settings keeps whose it is.
+    let (bot, had) = old.map_or((None, false), |o| (o.bot, o.totp));
+    list.push(VaultEntry { name, domains, bot: entry.bot.or(bot), totp: had || totp.is_some() });
     db.set_setting("vault", &serde_json::to_string(&list)?)
 }
 
 pub fn vault_delete(db: &Db, name: &str) -> Result<()> {
+    db.set_setting(&format!("login_failed:{name}"), "")?;
     let mut list = vault(db);
     list.retain(|e| e.name != name);
-    crate::host::secret_set(&format!("vault:{name}"), "")?;
+    for k in ["", ":user", ":totp"] {
+        crate::host::secret_set(&format!("vault:{name}{k}"), "")?;
+    }
     db.set_setting("vault", &serde_json::to_string(&list)?)
+}
+
+/// The login this bot saved for the page's site with a sign-in card, unless the site turned it down last time.
+pub fn signin_login(db: &Db, bot: i64, url: &str) -> Option<VaultEntry> {
+    vault_for(db, bot).into_iter().find(|e| e.bot == Some(bot) && host_allowed(url, &e.domains) && !login_failed(db, &e.name))
+}
+
+/// A saved login the site turned down (the password changed, say): not typed again until it's replaced.
+pub fn login_failed_set(db: &Db, name: &str) -> Result<()> {
+    db.set_setting(&format!("login_failed:{name}"), &crate::db::now().to_string())
+}
+
+pub fn login_failed(db: &Db, name: &str) -> bool {
+    db.setting(&format!("login_failed:{name}")).ok().flatten().is_some_and(|v| !v.is_empty())
+}
+
+/// What a sign-in card saves: the login for one bot on one site, under a name like GITHUB_COM_BOT3.
+pub fn vault_save_signin(db: &Db, bot: i64, site: &str, user: &str, password: &str, totp: Option<&str>) -> Result<String> {
+    let name = format!("{}_BOT{bot}", site.to_uppercase().replace(|c: char| !c.is_ascii_alphanumeric(), "_"));
+    // Replaces what this bot had for the site (a login that stopped working, kept under another name).
+    for old in vault(db).into_iter().filter(|e| e.bot == Some(bot) && e.name != name && e.domains == [site]) {
+        vault_delete(db, &old.name)?;
+    }
+    vault_save(db, VaultEntry { name: name.clone(), domains: vec![site.to_string()], bot: Some(bot), totp: false }, Some(password), totp)?;
+    crate::host::secret_set(&format!("vault:{name}:user"), user)?;
+    db.set_setting(&format!("login_failed:{name}"), "")?;
+    Ok(name)
+}
+
+/// Every NAME_CODE in the arguments, as the code it stands for.
+fn fill_codes(v: &Value, codes: &[(String, String)]) -> Value {
+    match v {
+        Value::String(s) => Value::String(codes.iter().fold(s.clone(), |s, (n, c)| s.replace(n.as_str(), c))),
+        Value::Array(a) => a.iter().map(|x| fill_codes(x, codes)).collect(),
+        Value::Object(o) => Value::Object(o.iter().map(|(k, x)| (k.clone(), fill_codes(x, codes))).collect()),
+        x => x.clone(),
+    }
 }
 
 /// Every string anywhere in the arguments.
@@ -645,15 +779,21 @@ impl Http {
 /// Start a stdio server. Returns the browser's secrets file too, to delete once it has started.
 fn spawn(conf: &ServerConf, db: &Db, bot: i64) -> Result<(Io, Option<std::path::PathBuf>)> {
     let dir = db.dir().join("browser");
+    let mut env = values_of(&conf.name, "env", &conf.env);
     let (command, args, secrets_file) = match conf.preset.as_deref() {
         Some("playwright") => {
             std::fs::create_dir_all(&dir)?;
-            let file = write_secrets_file(&dir, &vault_values(db))?;
+            let mine: Vec<String> = vault_for(db, bot).into_iter().map(|e| e.name).collect();
+            let file = write_secrets_file(&dir, &vault_values(db).into_iter().filter(|(n, _)| mine.contains(n)).collect::<Vec<_>>())?;
             let mut args: Vec<String> = vec!["-y".into(), PLAYWRIGHT.into()];
             if crate::computer::usable(db) {
                 // The bots' computer is on: drive the Chromium on its screen, so you can watch (and take over).
                 crate::computer::start(&db.dir(), (bot > 0).then_some(bot))?;
                 args.extend(["--cdp-endpoint".into(), crate::computer::cdp_endpoint()?]);
+                // A computer service wants its token on DevTools too: in the environment, not the command line `ps` shows.
+                if let Some(h) = crate::computer::cdp_auth()? {
+                    env.push(("PLAYWRIGHT_MCP_CDP_HEADERS".into(), format!("Authorization: {h}")));
+                }
             } else {
                 // Bundled Chromium (see install_browser), so Google Chrome needn't be installed.
                 args.extend(["--headless".into(), "--browser".into(), "chromium".into()]);
@@ -670,7 +810,7 @@ fn spawn(conf: &ServerConf, db: &Db, bot: i64) -> Result<(Io, Option<std::path::
     };
     let mut child = tokio::process::Command::new(&command)
         .args(&args)
-        .envs(values_of(&conf.name, "env", &conf.env))
+        .envs(env)
         .current_dir(db.dir())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -697,9 +837,26 @@ fn write_secrets_file(dir: &std::path::Path, values: &[(String, String)]) -> Res
     Ok(path)
 }
 
-/// The registry package a server's command fetches and runs (`npx -y pkg@1.2.3`, `uvx pkg`, `pipx run pkg`…):
-/// (OSV ecosystem, name, exact version if pinned). None for anything else (a local program, a path, a git URL).
-fn package_of(command: &str, args: &[String]) -> Option<(&'static str, String, Option<String>)> {
+/// The registry package a server's command fetches and runs (`npx -y pkg@1.2.3`, `uvx pkg`, `pipx run pkg`…).
+/// None for anything else (a local program, a path, a git URL).
+#[derive(Debug)]
+struct Pkg {
+    /// OSV's ecosystem: npm or PyPI.
+    eco: &'static str,
+    /// As the registry and OSV compare it (lowercase; PyPI's normalized).
+    name: String,
+    /// The exact version, if pinned (a tag like `latest` or a range isn't).
+    version: Option<String>,
+    /// Which arg names it, and the package as written there (after `--from=` when given inline).
+    at: usize,
+    spec: String,
+    /// The spec without its version, as written: None when it names a range (`pkg>=1`), which pinning leaves alone.
+    base: Option<String>,
+    /// Given as a flag's value (`--from pkg`, `--spec pkg`): a pip requirement there, so `pkg==1.2.3`.
+    flag: bool,
+}
+
+fn package_of(command: &str, args: &[String]) -> Option<Pkg> {
     let tool = std::path::Path::new(command).file_stem()?.to_str()?.to_ascii_lowercase();
     let a: Vec<&str> = args.iter().map(String::as_str).collect();
     // The runner, the args after it, and its flags that name the package or take a value.
@@ -711,39 +868,146 @@ fn package_of(command: &str, args: &[String]) -> Option<(&'static str, String, O
         ("pipx", ["run", r @ ..]) => ("PyPI", r, &["--spec"], &["--python", "--index-url", "--pip-args"]),
         _ => return None,
     };
-    let mut spec = None;
+    let skipped = a.len() - rest.len();
+    let mut found = None;
     let mut i = 0;
     while i < rest.len() {
         let (flag, inline) = rest[i].split_once('=').map_or((rest[i], None), |(f, v)| (f, Some(v)));
         if pkg_flags.contains(&flag) || value_flags.contains(&flag) {
+            let at = if inline.is_some() { i } else { i + 1 };
             let v = inline.or_else(|| rest.get(i + 1).copied());
             i += if inline.is_some() { 1 } else { 2 };
             if pkg_flags.contains(&flag) {
-                spec = v;
+                found = v.map(|v| (skipped + at, v, true));
                 break;
             }
         } else if flag.starts_with('-') {
             i += 1;
         } else {
-            spec = Some(rest[i]);
+            found = Some((skipped + i, rest[i], false));
             break;
         }
     }
-    let spec = spec?;
+    let (at, spec, flag) = found?;
     if spec.is_empty() || spec.starts_with(['.', '/', '~', '\\']) || spec.contains(':') || (eco == "PyPI" && spec.contains('/')) {
         return None;
     }
     let pinned = |v: &str| (v.starts_with(|c: char| c.is_ascii_digit()) && v.chars().all(|c| c.is_ascii_alphanumeric() || ".-+".contains(c))).then(|| v.to_string());
+    let pkg = |name: String, version, base: Option<&str>| Some(Pkg { eco, name, version, at, spec: spec.to_string(), base: base.map(Into::into), flag });
     if eco == "npm" {
         // A scoped name starts with @: the version's @ is the one after it.
         let at = spec[1..].find('@').map(|i| i + 1);
         let (name, version) = at.map_or((spec, None), |i| (&spec[..i], pinned(&spec[i + 1..])));
-        return Some((eco, name.to_lowercase(), version));
+        return pkg(name.to_lowercase(), version, Some(name));
     }
     let (name, version) = spec.split_once("==").or_else(|| spec.split_once('@')).map_or((spec, None), |(n, v)| (n, pinned(v.trim())));
     // Drop extras and any other specifier (`pkg[cli]>=1`); PyPI names compare normalized (PEP 503).
-    let name = name.split(['[', '<', '>', '=', '!', '~', ';', ' ']).next().unwrap_or(name);
-    Some((eco, name.to_lowercase().replace(['_', '.'], "-"), version))
+    let bare = name.split(['[', '<', '>', '=', '!', '~', ';', ' ']).next().unwrap_or(name);
+    let base = (!name.contains(['<', '>', '=', '!', '~', ';', ' '])).then_some(name);
+    pkg(bare.to_lowercase().replace(['_', '.'], "-"), version, base)
+}
+
+/// How old a release must be before Mimir picks it: a hijacked package's bad release is usually caught within days.
+const SETTLE: i64 = 7 * 24 * 3600;
+
+/// The release to pin: the registry's latest once it's a week old, else the newest stable one that is.
+fn settled(latest: &str, published: &[(String, i64)], now: i64) -> Option<String> {
+    let old = |t: i64| now - t >= SETTLE;
+    if published.iter().any(|(v, t)| v == latest && old(*t)) {
+        return Some(latest.into());
+    }
+    published.iter().filter(|(_, t)| old(*t)).max_by_key(|(_, t)| *t).map(|(v, _)| v.clone())
+}
+
+/// A package's stable releases with when each came out, and the one its registry calls latest.
+async fn releases(eco: &str, name: &str) -> Result<(String, Vec<(String, i64)>)> {
+    let http = reqwest::Client::builder().timeout(Duration::from_secs(20)).build()?;
+    let get = |url: String| async move { anyhow::Ok(http.get(url).header("Accept", "application/json").send().await?.error_for_status()?.json::<Value>().await?) };
+    let time = |s: &str| chrono::DateTime::parse_from_rfc3339(s).ok().map(|t| t.timestamp());
+    if eco == "npm" {
+        let base = std::env::var("MIMIR_NPM_REGISTRY").unwrap_or_else(|_| "https://registry.npmjs.org".into());
+        let doc = get(format!("{base}/{}", name.replace('/', "%2f"))).await?;
+        let latest = doc["dist-tags"]["latest"].as_str().context("no latest release")?.to_string();
+        // `time` also holds "created" and "modified"; a version with a `-` is a prerelease.
+        let published = doc["time"].as_object().into_iter().flatten().filter(|(v, _)| doc["versions"].get(v.as_str()).is_some() && !v.contains('-')).filter_map(|(v, t)| Some((v.clone(), time(t.as_str()?)?))).collect();
+        return Ok((latest, published));
+    }
+    let base = std::env::var("MIMIR_PYPI").unwrap_or_else(|_| "https://pypi.org".into());
+    let doc = get(format!("{base}/pypi/{name}/json")).await?;
+    let latest = doc["info"]["version"].as_str().context("no latest release")?.to_string();
+    // A release's time is its first file's; one with only yanked files (or none) doesn't count, nor a pre/dev release.
+    let published = doc["releases"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter(|(v, _)| v.chars().all(|c| c.is_ascii_digit() || c == '.'))
+        .filter_map(|(v, files)| Some((v.clone(), files.as_array()?.iter().filter(|f| f["yanked"] != true).filter_map(|f| time(f["upload_time_iso_8601"].as_str()?)).min()?)))
+        .collect();
+    Ok((latest, published))
+}
+
+async fn newest_settled(eco: &str, name: &str) -> Result<String> {
+    let (latest, published) = releases(eco, name).await?;
+    settled(&latest, &published, crate::db::now()).with_context(|| format!("every release of {name} is under a week old"))
+}
+
+/// `args` with the package pinned to `version`, or None when it names a range or the runner can't take a pin there.
+fn pinned_args(command: &str, args: &[String], p: &Pkg, version: &str) -> Option<Vec<String>> {
+    // uvx's own form is pkg@1.2.3; a pip requirement (--from, --spec) and npm say it as written below.
+    // ponytail: `pipx run pkg` stays unpinned (it takes a version only through --spec).
+    let sep = match (p.eco, p.flag) {
+        ("npm", _) => "@",
+        (_, true) => "==",
+        _ if std::path::Path::new(command).file_stem()?.eq_ignore_ascii_case("pipx") => return None,
+        _ => "@",
+    };
+    let mut args = args.to_vec();
+    let head = args[p.at].strip_suffix(p.spec.as_str())?.to_string();
+    args[p.at] = format!("{head}{}{sep}{version}", p.base.as_deref()?);
+    Some(args)
+}
+
+/// Pin the package a server's command fetches to the newest release at least a week old, so it doesn't change on
+/// its own between starts. `again`: even when it's pinned already (Update). A command naming a range stays as is.
+async fn pin(conf: &mut ServerConf, again: bool) -> Result<()> {
+    let Some(p) = package_of(&conf.command, &conf.args) else { return Ok(()) };
+    if (p.version.is_some() && !again) || p.base.is_none() {
+        return Ok(());
+    }
+    let v = newest_settled(p.eco, &p.name).await.with_context(|| format!("couldn't pick a release of {} to pin; name one yourself ({}@1.2.3) to add it anyway", p.name, p.name))?;
+    if let Some(args) = pinned_args(&conf.command, &conf.args, &p, &v) {
+        conf.args = args;
+    }
+    Ok(())
+}
+
+/// A newer release (a week old or more) than the one a server is pinned to, for its Update button. Asks the
+/// registry at most once a day per package; not reachable is "no update".
+pub async fn update_for(db: &Db, conf: &ServerConf) -> Option<String> {
+    let p = package_of(&conf.command, &conf.args).filter(|p| p.base.is_some())?;
+    let key = format!("pin_latest:{}:{}", p.eco, p.name);
+    let cached = db.setting(&key).ok().flatten().unwrap_or_default();
+    let newest = match cached.split_once(':') {
+        Some((t, v)) if t.parse::<i64>().is_ok_and(|t| crate::db::now() - t < OSV_FRESH) => v.to_string(),
+        _ => {
+            let v = newest_settled(p.eco, &p.name).await.unwrap_or_default();
+            let _ = db.set_setting(&key, &format!("{}:{v}", crate::db::now()));
+            v
+        }
+    };
+    (!newest.is_empty() && p.version.as_deref() != Some(newest.as_str())).then_some(newest)
+}
+
+/// Move a server to the release its Update button named (or newer, if one has settled since). Starts it once.
+pub async fn update_server(db: &Db, name: &str) -> Result<usize> {
+    let mut conf = servers(db).into_iter().find(|s| s.name == name && s.preset.is_none()).with_context(|| format!("no tool server {name}"))?;
+    pin(&mut conf, true).await?;
+    save_server(db, conf).await
+}
+
+/// For `mimir doctor`: tool servers that fetch a package without a fixed version (each start can run a new one).
+pub fn unpinned(db: &Db) -> Vec<String> {
+    servers(db).into_iter().filter(|s| s.preset.is_none() && package_of(&s.command, &s.args).is_some_and(|p| p.version.is_none())).map(|s| s.name).collect()
 }
 
 /// The malicious-package advisory (OSV `MAL-…`) in an OSV query answer, if any.
@@ -762,7 +1026,7 @@ const OSV_FRESH: i64 = 24 * 3600;
 /// settings; when OSV can't be reached the server starts anyway (logged).
 /// ponytail: an unpinned package is refused if any of its versions was ever flagged; pinning a clean one gets past that.
 async fn malware_check(db: &Db, osv: &str, server: &str, command: &str, args: &[String]) -> Result<()> {
-    let Some((eco, name, version)) = package_of(command, args) else { return Ok(()) };
+    let Some(Pkg { eco, name, version, .. }) = package_of(command, args) else { return Ok(()) };
     let shown = format!("{name}{}", version.as_deref().map(|v| format!("@{v}")).unwrap_or_default());
     let key = format!("osv:{eco}:{shown}");
     let cached = db.setting(&key)?.unwrap_or_default();
@@ -823,7 +1087,9 @@ pub async fn call(ctx: &ToolCtx, full: &str, args: &Value) -> Result<String> {
     let (server, tool) = split(full).context("not an external tool")?;
     let conf = servers(&ctx.db).into_iter().find(|s| s.name == server).with_context(|| format!("tool server {server} is not configured"))?;
 
-    let used = secrets_used(&vault(&ctx.db), args);
+    let used = secrets_used(&vault_for(&ctx.db, ctx.bot_id), args);
+    // Authenticator codes change every 30 seconds: worked out now, after the checks below, typed for NAME_CODE.
+    let mut codes = vec![];
     if !used.is_empty() {
         if server != BROWSER {
             bail!("saved logins can only be typed into the browser");
@@ -836,8 +1102,10 @@ pub async fn call(ctx: &ToolCtx, full: &str, args: &Value) -> Result<String> {
             }
         }
         let names: Vec<&str> = used.iter().map(|e| e.name.as_str()).collect();
-        crate::tools::wait_for_approval_with(ctx, full, &format!("Use saved login {} on {url}", names.join(", ")), "login", None).await?;
+        crate::tools::wait_for_approval_with(ctx, full, &Value::Null, &format!("Use saved login {} on {url}", names.join(", ")), "login", None).await?;
+        codes = used.iter().filter(|e| e.totp).filter_map(|e| vault_code(&e.name).map(|c| (format!("{}_CODE", e.name), c))).collect();
     }
+    let args = &fill_codes(args, &codes);
 
     if server == BROWSER && crate::computer::usable(&ctx.db) {
         // On the bots' computer: hold it like its own tools do, in this bot's browser profile.
@@ -857,7 +1125,7 @@ pub async fn call(ctx: &ToolCtx, full: &str, args: &Value) -> Result<String> {
     if let Some(url) = text.split("\n### Page").nth(1).and_then(|page| page.lines().find_map(|l| l.trim().trim_start_matches("- ").strip_prefix("Page URL: "))) {
         *ctx.page_url.lock().unwrap() = Some(url.trim().to_string());
     }
-    let text = redact(&text, &vault_values(&ctx.db));
+    let text = redact(&text, &[vault_values(&ctx.db), codes].concat());
     if res["isError"].as_bool() == Some(true) {
         bail!("{}", crate::tools::truncate(&text, 2000));
     }
@@ -877,8 +1145,35 @@ mod tests {
     }
 
     #[test]
+    fn signin_logins_stay_on_their_site_and_bot() {
+        assert_eq!(site_of("https://accounts.google.com/signin?x=1").as_deref(), Some("google.com"));
+        assert_eq!(site_of("https://www.bbc.co.uk/account").as_deref(), Some("bbc.co.uk"));
+        assert_eq!(site_of("https://alice.github.io/login").as_deref(), Some("alice.github.io"), "a github.io site is someone's own");
+        assert_eq!(site_of("http://192.168.1.10/login"), None);
+        assert_eq!(site_of("http://localhost:8080/"), None);
+        assert_eq!(site_of("about:blank"), None);
+        let site = |u: &str| vec![site_of(u).unwrap()];
+        assert!(host_allowed("https://mail.google.com/", &site("https://accounts.google.com/")));
+        assert!(!host_allowed("https://google.com.evil.example/", &site("https://accounts.google.com/")));
+        assert!(!host_allowed("https://bob.github.io/", &site("https://alice.github.io/")));
+
+        let p = std::env::temp_dir().join(format!("mimir-vault-bots-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = Db::open(&p).unwrap();
+        let e = |name: &str, bot| VaultEntry { name: name.into(), domains: vec!["github.com".into()], bot, totp: false };
+        db.set_setting("vault", &serde_json::to_string(&[e("SHARED", None), e("GITHUB_COM_BOT3", Some(3))]).unwrap()).unwrap();
+        let names = |bot| vault_for(&db, bot).into_iter().map(|e| e.name).collect::<Vec<_>>();
+        assert_eq!(names(3), ["SHARED", "GITHUB_COM_BOT3"]);
+        assert_eq!(names(4), ["SHARED"], "another bot doesn't get it");
+        assert!(secrets_used(&vault_for(&db, 4), &json!({"text": "GITHUB_COM_BOT3"})).is_empty(), "nor can it type it");
+        assert!(db.setting("vault").unwrap().unwrap().starts_with(r#"[{"name":"SHARED","domains":["github.com"]}"#), "older lists read and write the same");
+        let codes = [("GH_CODE".to_string(), "123456".to_string())];
+        assert_eq!(fill_codes(&json!({"fields": [{"value": "GH_CODE"}], "n": 1}), &codes), json!({"fields": [{"value": "123456"}], "n": 1}));
+    }
+
+    #[test]
     fn vault_rules() {
-        let v = vec![VaultEntry { name: "GH_PASS".into(), domains: vec!["github.com".into()] }];
+        let v = vec![VaultEntry { name: "GH_PASS".into(), domains: vec!["github.com".into()], bot: None, totp: false }];
         assert_eq!(secrets_used(&v, &json!({"ref":"e3","text":"GH_PASS"})).len(), 1);
         assert_eq!(secrets_used(&v, &json!({"fields":[{"value":"x GH_PASS y"}]})).len(), 1, "nested + substring");
         assert!(secrets_used(&v, &json!({"text":"hello"})).is_empty());
@@ -932,6 +1227,10 @@ mod tests {
         let root = url::Url::parse("https://auth.example.com").unwrap();
         assert_eq!(well_known(&root, "oauth-authorization-server"), "https://auth.example.com/.well-known/oauth-authorization-server");
         assert!(secure("https://a.example") && secure("http://127.0.0.1:9/x") && !secure("http://evil.example"));
+        assert!(secure("http://localhost:8000/mcp") && secure("http://[::1]/") && secure("http://127.8.0.1/") && secure("http://LOCALHOST/"));
+        for bad in ["http://localhost.evil.com/", "http://127.0.0.1.evil.com/", "http://localhost@evil.com/", "http://[::1].evil/", "ftp://localhost/", "localhost", "https://"] {
+            assert!(!secure(bad), "{bad}");
+        }
     }
 
     /// Against scripts/fake-mcp-oauth.py: the whole sign-in (metadata, registration, PKCE, token) then a tool list
@@ -969,7 +1268,7 @@ mod tests {
     fn package_of_commands() {
         let p = |line: &str| {
             let mut w = line.split(' ').map(String::from);
-            package_of(&w.next().unwrap(), &w.collect::<Vec<_>>()).map(|(e, n, v)| format!("{e} {n} {}", v.unwrap_or_default()))
+            package_of(&w.next().unwrap(), &w.collect::<Vec<_>>()).map(|p| format!("{} {} {}", p.eco, p.name, p.version.unwrap_or_default()))
         };
         assert_eq!(p("npx -y @modelcontextprotocol/server-filesystem ~/Notes").as_deref(), Some("npm @modelcontextprotocol/server-filesystem "));
         assert_eq!(p("/usr/local/bin/npx --yes @scope/pkg@1.2.3 --flag").as_deref(), Some("npm @scope/pkg 1.2.3"));
@@ -986,6 +1285,29 @@ mod tests {
         for none in ["node server.js", "npx ./local", "npx github:user/repo", "uvx git+https://x/y", "python -m pkg", "npm install x", "npx -y"] {
             assert_eq!(p(none), None, "{none}");
         }
+    }
+
+    #[test]
+    fn pinning() {
+        let pin = |line: &str, v: &str| {
+            let w: Vec<String> = line.split(' ').map(String::from).collect();
+            pinned_args(&w[0], &w[1..], &package_of(&w[0], &w[1..]).unwrap(), v).map(|a| a.join(" "))
+        };
+        assert_eq!(pin("npx -y @scope/pkg ~/Notes", "1.2.3").as_deref(), Some("-y @scope/pkg@1.2.3 ~/Notes"));
+        assert_eq!(pin("npx -y pkg@latest", "2.0.0").as_deref(), Some("-y pkg@2.0.0"));
+        assert_eq!(pin("npx --package=pkg@1.0.0 run", "1.1.0").as_deref(), Some("--package=pkg@1.1.0 run"), "an update replaces the pin");
+        assert_eq!(pin("uvx mcp-server-fetch", "0.6.2").as_deref(), Some("mcp-server-fetch@0.6.2"));
+        assert_eq!(pin("uvx --from Mcp_Server[cli] run", "1.0").as_deref(), Some("--from Mcp_Server[cli]==1.0 run"));
+        assert_eq!(pin("pipx run --spec=pkg tool", "1.0").as_deref(), Some("run --spec=pkg==1.0 tool"));
+        assert_eq!(pin("uv tool run pkg>=1", "1.0"), None, "a range is left alone");
+        assert_eq!(pin("pipx run pkg", "1.0"), None);
+
+        let day = 24 * 3600;
+        let rel = |v: &str, days: i64| (v.to_string(), 100 * day - days * day);
+        let now = 100 * day;
+        assert_eq!(settled("2.0.0", &[rel("1.0.0", 30), rel("2.0.0", 8)], now).as_deref(), Some("2.0.0"));
+        assert_eq!(settled("2.0.0", &[rel("1.0.0", 30), rel("1.1.0", 9), rel("2.0.0", 2)], now).as_deref(), Some("1.1.0"), "a release under a week old is skipped");
+        assert_eq!(settled("1.0.0", &[rel("1.0.0", 1)], now), None, "nothing settled yet");
     }
 
     #[test]
@@ -1035,5 +1357,19 @@ mod tests {
         assert_eq!(default_action("browser__browser_snapshot", true), "allow");
         assert_eq!(default_action("mail__send", false), "ask");
         assert_eq!(default_action("mail__list", true), "allow");
+    }
+
+    #[test]
+    fn read_only_counts_once_confirmed() {
+        let p = std::env::temp_dir().join(format!("mimir-ext-ro-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = Db::open(&p).unwrap();
+        let tool = |name: &str, read_only| ExtTool { name: name.into(), description: String::new(), input_schema: Value::Null, read_only, open_world: true };
+        db.set_setting("mcp_tools:mail", &serde_json::to_string(&[tool("list", true), tool("send", false)]).unwrap()).unwrap();
+        set_servers(&db, &[ServerConf { name: "mail".into(), command: "x".into(), ..Default::default() }]).unwrap();
+        assert!(!find(&db, "mail__list").unwrap().read_only, "the server's word alone");
+        confirm_read_only(&db, "mail", &["list".into(), "send".into()]).unwrap();
+        assert!(find(&db, "mail__list").unwrap().read_only);
+        assert!(!find(&db, "mail__send").unwrap().read_only, "only what the server claims can be confirmed");
     }
 }

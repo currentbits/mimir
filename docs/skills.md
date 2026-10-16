@@ -86,7 +86,8 @@ from what you did ([The bots' computer](computer.md#teach-by-showing)).
 **Skill files.** Skills use the same `SKILL.md` format as Hermes, Claude Code and other agents (agentskills.io). Paste one,
 or a link to one, into **Teach a skill** and it's imported as written (no AI involved), as a proposal like any other.
 To bring in all your own skills from Claude Code, Hermes or OpenClaw at once, use **Memory → Import → From …**
-([Memory](memory.md)).
+([Memory](memory.md)). An imported skill whose steps pipe a download into a shell (`curl … | sh`), hold a base64 blob
+or download a program says so on its card. Mimir never runs a skill's setup steps.
 **Copy as SKILL.md** on a skill gives you the file to share or use elsewhere.
 
 ## How skills improve

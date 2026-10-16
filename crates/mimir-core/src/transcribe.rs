@@ -56,10 +56,9 @@ pub async fn voice_note(db: &crate::db::Db, audio: Vec<u8>, name: &str) -> Optio
     Some(
         async {
             if !audio.starts_with(b"OggS") {
-                // Slack's clips (mp4, webm) and the rest: ffmpeg, if it's installed.
-                let ext = Path::new(name).extension().and_then(|e| e.to_str()).filter(|e| e.chars().all(char::is_alphanumeric)).unwrap_or("audio");
-                let file = std::env::temp_dir().join(format!("mimir-{}.{ext}", crate::random_hex(6)?));
-                std::fs::write(&file, &audio)?;
+                // Slack's clips (mp4, webm) and the rest: ffmpeg, if it's installed. It tells the format from the
+                // content; not the sender's file name, since `.m3u8` would make it a playlist that can read local files.
+                let file = temp_file("audio", &audio)?;
                 let text = transcribe_file(&home, &model, &file).await;
                 let _ = std::fs::remove_file(&file);
                 return text;
@@ -90,13 +89,24 @@ pub fn ogg_opus_16k(bytes: &[u8]) -> Result<Vec<f32>> {
     Ok(out)
 }
 
+/// A new file in the temp folder that only this account can read (on Linux it's shared): it holds what was said.
+fn temp_file(ext: &str, bytes: &[u8]) -> Result<PathBuf> {
+    use std::io::Write;
+    let path = std::env::temp_dir().join(format!("mimir-{}.{ext}", crate::random_hex(6)?));
+    let mut o = std::fs::OpenOptions::new();
+    o.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut o, 0o600);
+    o.open(&path)?.write_all(bytes)?;
+    Ok(path)
+}
+
 /// Transcribe 16 kHz mono samples (push-to-talk, a voice note). Empty text for silence.
 pub async fn transcribe_samples(home: &Path, model: &str, samples: &[f32]) -> Result<String> {
     if !has_speech(samples) {
         return Ok(String::new());
     }
-    let wav = std::env::temp_dir().join(format!("mimir-{}.wav", crate::random_hex(6)?));
-    std::fs::write(&wav, wav_bytes(samples))?;
+    let wav = temp_file("wav", &wav_bytes(samples))?;
     let text = transcribe_wav(home, model, &wav).await;
     let _ = std::fs::remove_file(&wav);
     text
@@ -464,7 +474,8 @@ pub async fn transcribe_segments(home: &Path, model: &str, wav: &Path) -> Result
 /// Transcribe an audio or video file of any format (ffmpeg turns it into 16 kHz mono WAV first).
 pub async fn transcribe_file(home: &Path, model: &str, file: &Path) -> Result<String> {
     let ffmpeg = which("ffmpeg").context("transcribing a file needs ffmpeg (brew install ffmpeg)")?;
-    let wav = std::env::temp_dir().join(format!("mimir-{}.wav", crate::random_hex(6)?));
+    // Made first, owner-only; ffmpeg writes over it (-y) and the permissions stay.
+    let wav = temp_file("wav", &[])?;
     let out = tokio::process::Command::new(ffmpeg)
         .args(["-y", "-loglevel", "error", "-i"])
         .arg(file)

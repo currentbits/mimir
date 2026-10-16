@@ -143,6 +143,7 @@ async fn hook(State(app): State<App>, Path(id): Path<i64>, headers: HeaderMap, b
     match mimir_core::events::webhook(&app.host.db, id, bearer(&headers), sig, &body) {
         Ok(()) => (StatusCode::ACCEPTED, Json(json!({"ok": true}))).into_response(),
         Err(mimir_core::events::Refused::Paused) => (StatusCode::CONFLICT, Json(json!({"error": "this routine is paused"}))).into_response(),
+        Err(mimir_core::events::Refused::Repeat) => (StatusCode::CONFLICT, Json(json!({"error": "this call was already received"}))).into_response(),
         Err(mimir_core::events::Refused::Secret) => (StatusCode::UNAUTHORIZED, Json(json!({"error": "wrong or missing secret"}))).into_response(),
     }
 }
@@ -197,6 +198,8 @@ pub async fn run(db: Db, home: PathBuf, listen: &str) -> Result<()> {
         let _ = std::fs::set_permissions(home.join("mimir.db"), std::fs::Permissions::from_mode(0o600));
     }
     let (token, fresh) = admin_token(&db)?;
+    // For `mimir doctor`: whether it answers beyond this machine.
+    db.set_setting("server_listen", listen)?;
     let host = Arc::new(Host::new(db.clone(), home, Arc::new(DbSecrets(db)), tokio::runtime::Handle::current(), "server"));
     host.restart_all();
 
@@ -226,7 +229,8 @@ pub async fn run(db: Db, home: PathBuf, listen: &str) -> Result<()> {
     let listener = tokio::net::TcpListener::bind(listen).await.with_context(|| format!("can't listen on {listen}"))?;
     eprintln!("mimir server on http://{listen}");
     if fresh {
-        eprintln!("admin token (shown once; `mimir admin-token` prints it again): {token}");
+        // Not the token itself: logs are kept and shipped where the token shouldn't go.
+        eprintln!("made an admin token: run `mimir admin-token` to see it");
     }
     axum::serve(listener, app).await?;
     Ok(())

@@ -66,6 +66,12 @@ pub struct Routine {
     /// A one-off the bot booked on its own ("I'll check back Friday"), not one the person asked for.
     #[serde(default)]
     pub followup: bool,
+    /// Its goal is paused (or done): it waits with it.
+    #[serde(default)]
+    pub goal_held: bool,
+    /// Booked for the chat's goal: it goes when the goal is done or removed.
+    #[serde(default)]
+    pub for_goal: bool,
 }
 
 /// Routines waiting: until a usage limit resets, or a daily cap's day is over. `why` finishes "Missed 3 runs, …: ".
@@ -128,6 +134,11 @@ pub const UNCHANGED: &str = "unchanged";
 pub type HoldRow = (String, i64, Option<i64>, Hold);
 pub type DigestItem = (i64, i64, Option<i64>, String, bool);
 
+/// A new routine's id: past any the run log still names, so a deleted routine's results (in another chat, maybe)
+/// never read as a new one's. SQLite alone would hand the newest deleted id out again.
+/// ponytail: max(routine_id) scans the run log (no index); fine for how rarely routines are made.
+const NEW_ID: &str = "(SELECT max(coalesce((SELECT max(id) FROM routines), 0), coalesce((SELECT max(routine_id) FROM runs), 0)) + 1)";
+
 impl Db {
     // ---------- routines ----------
 
@@ -139,10 +150,10 @@ impl Db {
         self.calendar_private(chat, cron)?;
         let c = self.c();
         c.execute(
-            "INSERT INTO routines(bot_id, chat_id, cron, prompt, next_fire, quiet) VALUES (?1,?2,?3,?4,?5,?6)",
+            &format!("INSERT INTO routines(id, bot_id, chat_id, cron, prompt, next_fire, quiet) VALUES ({NEW_ID},?1,?2,?3,?4,?5,?6)"),
             params![bot, chat, cron.trim(), prompt.trim(), next, quiet],
         )?;
-        Ok(Routine { id: c.last_insert_rowid(), bot_id: bot, chat_id: chat, cron: cron.trim().into(), prompt: prompt.trim().into(), next_fire: next, quiet, paused: false, delivery: "now".into(), tainted: false, once: false, watch: String::new(), retries: 0, urgent: String::new(), ends: 0, followup: false })
+        Ok(Routine { id: c.last_insert_rowid(), bot_id: bot, chat_id: chat, cron: cron.trim().into(), prompt: prompt.trim().into(), next_fire: next, quiet, paused: false, delivery: "now".into(), tainted: false, once: false, watch: String::new(), retries: 0, urgent: String::new(), ends: 0, followup: false, goal_held: false, for_goal: false })
     }
 
     /// A one-off at `at` (unix seconds): a reminder, or a task for later. It's deleted once it has run.
@@ -155,10 +166,10 @@ impl Db {
         }
         let c = self.c();
         c.execute(
-            "INSERT INTO routines(bot_id, chat_id, cron, prompt, next_fire, quiet, once) VALUES (?1,?2,'',?3,?4,?5,1)",
+            &format!("INSERT INTO routines(id, bot_id, chat_id, cron, prompt, next_fire, quiet, once) VALUES ({NEW_ID},?1,?2,'',?3,?4,?5,1)"),
             params![bot, chat, prompt.trim(), at, quiet],
         )?;
-        Ok(Routine { id: c.last_insert_rowid(), bot_id: bot, chat_id: chat, cron: String::new(), prompt: prompt.trim().into(), next_fire: at, quiet, paused: false, delivery: "now".into(), tainted: false, once: true, watch: String::new(), retries: 0, urgent: String::new(), ends: 0, followup: false })
+        Ok(Routine { id: c.last_insert_rowid(), bot_id: bot, chat_id: chat, cron: String::new(), prompt: prompt.trim().into(), next_fire: at, quiet, paused: false, delivery: "now".into(), tainted: false, once: true, watch: String::new(), retries: 0, urgent: String::new(), ends: 0, followup: false, goal_held: false, for_goal: false })
     }
 
     /// A routine a bot made after reading outside content: its prompt may carry someone else's words.
@@ -167,9 +178,10 @@ impl Db {
         Ok(())
     }
 
-    fn routines_where(&self, sql: &str, p: impl rusqlite::Params) -> Result<Vec<Routine>> {
+    pub(super) fn routines_where(&self, sql: &str, p: impl rusqlite::Params) -> Result<Vec<Routine>> {
         let c = self.c();
-        let mut st = c.prepare(&format!("SELECT id, chat_id, cron, prompt, next_fire, bot_id, quiet, paused, delivery, tainted, once, watch, retries, urgent, ends, followup FROM routines WHERE {sql} ORDER BY id"))?;
+        let mut st = c.prepare(&format!("SELECT id, chat_id, cron, prompt, next_fire, bot_id, quiet, paused, delivery, tainted, once, watch, retries, urgent, ends, followup,
+                goal_id IS NOT NULL AND goal_id NOT IN (SELECT id FROM goals WHERE status IN ('active','blocked')), goal_id IS NOT NULL FROM routines WHERE {sql} ORDER BY id"))?;
         let v = st
             .query_map(p, |r| {
                 Ok(Routine {
@@ -189,6 +201,8 @@ impl Db {
                     urgent: r.get(13)?,
                     ends: r.get(14)?,
                     followup: r.get(15)?,
+                    goal_held: r.get(16)?,
+                    for_goal: r.get(17)?,
                 })
             })?
             .collect::<Result<_, _>>()?;
@@ -199,34 +213,55 @@ impl Db {
         self.routines_where("chat_id = ?1", [chat])
     }
 
+    /// A bot's repeating routines, in every chat (one-offs are reminders, not part of what it does).
+    pub fn routines_of(&self, bot: i64) -> Result<Vec<Routine>> {
+        self.routines_where("bot_id = ?1 AND once = 0", [bot])
+    }
+
     /// A bot's routines that are due. Ones past their end (by more than a late run's grace) are removed first: they
-    /// don't run late after it.
+    /// don't run late after it. The grace is for a slot before the end; an event (mail, webhook) after it doesn't run.
     pub fn due(&self, bot: i64, t: i64) -> Result<Vec<Routine>> {
         for r in self.routines_where("bot_id = ?1 AND ends > 0 AND ends + ?3 <= ?2", params![bot, t, MISSED_AFTER])? {
             self.routine_delete(r.chat_id, r.id)?;
         }
-        self.routines_where("bot_id = ?1 AND next_fire <= ?2 AND paused = 0", [bot, t])
+        // A paused or finished goal's routines wait with it.
+        self.routines_where(
+            "bot_id = ?1 AND next_fire <= ?2 AND paused = 0 AND (ends = 0 OR next_fire <= ends) AND (goal_id IS NULL OR goal_id IN (SELECT id FROM goals WHERE status IN ('active','blocked')))",
+            [bot, t],
+        )
     }
 
     /// Edit, pause or resume. The next run is worked out from now, so resuming doesn't fire missed slots.
-    pub fn routine_update(&self, chat: i64, id: i64, cron: &str, prompt: &str, quiet: bool, paused: bool) -> Result<bool> {
+    /// `ends`: a new end (0 clears it), checked with the new schedule and written with it, so a change that's
+    /// refused leaves both as they were. `None` keeps the end.
+    #[allow(clippy::too_many_arguments)]
+    pub fn routine_update(&self, chat: i64, id: i64, cron: &str, prompt: &str, quiet: bool, paused: bool, ends: Option<i64>) -> Result<bool> {
         if prompt.trim().is_empty() {
             bail!("a routine needs a prompt");
         }
         // A one-off keeps its time (it has no schedule to work one out from).
         let once: bool = self.c().query_row("SELECT once FROM routines WHERE id=?1 AND chat_id=?2", [id, chat], |r| r.get(0)).optional()?.unwrap_or(false);
+        if once && ends.is_some_and(|e| e != 0) {
+            bail!("a one-off has no end: it runs once");
+        }
+        if ends.is_some_and(|e| e != 0 && e <= now()) {
+            bail!("that end has already passed");
+        }
         if once {
             return Ok(self.c().execute("UPDATE routines SET prompt=?3, quiet=?4, paused=?5 WHERE id=?1 AND chat_id=?2", params![id, chat, prompt.trim(), quiet, paused])? > 0);
         }
         let next = next_fire(cron, now())?;
         self.calendar_private(chat, cron)?;
-        let ends: i64 = self.c().query_row("SELECT ends FROM routines WHERE id=?1", [id], |r| r.get(0)).optional()?.unwrap_or(0);
+        let ends = match ends {
+            Some(e) => e,
+            None => self.c().query_row("SELECT ends FROM routines WHERE id=?1", [id], |r| r.get(0)).optional()?.unwrap_or(0),
+        };
         if !paused && ends > 0 && next < IDLE && next > ends {
-            bail!("on that schedule it wouldn't run again before it ends; change or clear its end first");
+            bail!("on that schedule it wouldn't run again before it ends; move or clear its end too");
         }
         Ok(self.c().execute(
-            "UPDATE routines SET cron=?3, prompt=?4, quiet=?5, paused=?6, next_fire=?7 WHERE id=?1 AND chat_id=?2",
-            params![id, chat, cron.trim(), prompt.trim(), quiet, paused, next],
+            "UPDATE routines SET cron=?3, prompt=?4, quiet=?5, paused=?6, next_fire=?7, ends=?8 WHERE id=?1 AND chat_id=?2",
+            params![id, chat, cron.trim(), prompt.trim(), quiet, paused, next, ends],
         )? > 0)
     }
 
@@ -397,6 +432,18 @@ impl Db {
     /// How many times a routine has run and said something: its first few ask what to trim.
     pub fn routine_replies(&self, routine: i64) -> Result<i64> {
         Ok(self.c().query_row("SELECT count(*) FROM runs WHERE routine_id=?1 AND trigger='routine' AND status='ok' AND coalesce(reply, '') != ''", [routine], |r| r.get(0))?)
+    }
+
+    /// A routine's last `n` results that said something, newest first: (when it ran, what it said, read outside content).
+    pub fn routine_results(&self, routine: i64, n: usize) -> Result<Vec<(i64, String, bool)>> {
+        let c = self.c();
+        let mut st = c.prepare(
+            // Same bot and chat too: a database from before NEW_ID may have given a deleted routine's id out again.
+            "SELECT u.started_at, u.reply, u.tainted FROM runs u JOIN routines r ON r.id = u.routine_id AND r.bot_id = u.bot_id AND r.chat_id = u.chat_id
+             WHERE u.routine_id=?1 AND u.trigger='routine' AND u.status='ok' AND coalesce(u.reply, '') != '' ORDER BY u.id DESC LIMIT ?2",
+        )?;
+        let v = st.query_map(params![routine, n as i64], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<Result<_, _>>()?;
+        Ok(v)
     }
 
     pub fn routine(&self, id: i64) -> Result<Option<Routine>> {
@@ -653,7 +700,7 @@ impl Db {
     pub fn routine_delete(&self, chat: i64, id: i64) -> Result<bool> {
         let gone = self.c().execute("DELETE FROM routines WHERE id=?1 AND chat_id=?2", params![id, chat])? > 0;
         if gone {
-            self.c().execute("DELETE FROM settings WHERE key IN (?1, ?2)", [format!("hold:routine:{id}"), format!("webhook:{id}")])?;
+            self.c().execute("DELETE FROM settings WHERE key IN (?1, ?2, ?3)", [format!("hold:routine:{id}"), format!("webhook:{id}"), format!("webhook-seen:{id}")])?;
             self.c().execute("DELETE FROM routine_events WHERE routine_id=?1", [id])?;
         }
         Ok(gone)

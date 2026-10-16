@@ -39,7 +39,8 @@ impl Bot {
     /// Allowlist check; "browser__*" style entries match a whole tool server.
     pub fn allows(&self, tool: &str) -> bool {
         // A bot that may set routines may also change them.
-        if tool == "routine_update" {
+        // So may it keep a goal (its follow-ups are routines).
+        if tool == "routine_update" || tool.starts_with("goal_") {
             return self.allows("routine_create");
         }
         self.tools.trim().is_empty()
@@ -111,7 +112,7 @@ impl Db {
              DELETE FROM runs WHERE bot_id={id}; DELETE FROM messages WHERE bot_id={id};
              DELETE FROM signals WHERE bot_id={id}; DELETE FROM cases WHERE bot_id={id}; DELETE FROM digest_items WHERE bot_id={id}; DELETE FROM cards WHERE bot_id={id};
              DELETE FROM routines WHERE bot_id={id}; DELETE FROM sessions WHERE bot_id={id}; DELETE FROM conv_taint WHERE bot_id={id};
-             DELETE FROM settings WHERE key LIKE 'seen:{id}:%' OR key IN ('pause:{id}', 'fallback:{id}', 'fallback_spent:{id}');
+             DELETE FROM settings WHERE key LIKE 'seen:{id}:%' OR key LIKE 'private:{id}:%' OR key IN ('pause:{id}', 'fallback:{id}', 'fallback_spent:{id}');
              DELETE FROM bots WHERE id={id};"
         ))?;
         self.wipe_free_space();
@@ -164,6 +165,7 @@ impl Db {
             "DELETE FROM approvals WHERE chat_id=?1 AND status != 'pending'",
             "DELETE FROM sessions WHERE chat_id=?1",
             "DELETE FROM conv_taint WHERE chat_id=?1",
+            "DELETE FROM settings WHERE key LIKE 'private:%:' || ?1",
         ] {
             tx.execute(sql, [chat])?;
         }

@@ -164,9 +164,16 @@ static NL: &[(&str, &str)] = &[
     ("✅ Done, carrying on", "✅ Klaar, ik ga verder"),
     ("⌛ Nobody took over in time", "⌛ Niemand nam het op tijd over"),
     ("Not now", "Nu niet"),
+    ("🔑 I need you to sign in\n\n{summary}\n\nWaits {wait}.", "🔑 Je moet even inloggen\n\n{summary}\n\nWacht {wait}."),
+    ("✅ Signed in", "✅ Ingelogd"),
+    ("⌛ Nobody signed in in time", "⌛ Niemand logde op tijd in"),
+    ("❌ Not signed in", "❌ Niet ingelogd"),
     ("✅ Approved", "✅ Goedgekeurd"),
     ("⌛ No answer in time, so not done", "⌛ Geen antwoord op tijd, dus niet gedaan"),
     ("❌ Denied", "❌ Geweigerd"),
+    ("Why: {why}", "Waarom: {why}"),
+    ("Reply to this message to say no and why.", "Antwoord op dit bericht om te weigeren en te zeggen waarom."),
+    ("Edit in Mimir", "Bewerken in Mimir"),
     ("From now on this runs on {site} without asking (Settings → Permissions to change it).", "Voortaan gebeurt dit op {site} zonder te vragen (te wijzigen in Settings → Permissions)."),
     ("From now on this runs without asking (Settings → Permissions to change it).", "Voortaan gebeurt dit zonder te vragen (te wijzigen in Settings → Permissions)."),
     ("Only the person who paired me here can answer this.", "Alleen degene die mij hier heeft gekoppeld kan dit beantwoorden."),
@@ -178,6 +185,8 @@ static NL: &[(&str, &str)] = &[
     ("What my last reply used", "Wat mijn laatste antwoord gebruikte"),
     ("Start a fresh conversation (memories kept)", "Begin een nieuw gesprek (herinneringen blijven bewaard)"),
     ("Stop the reply I'm writing", "Stop het antwoord dat ik schrijf"),
+    // Slack's status line while a reply is written ("<bot> is thinking…").
+    ("is thinking…", "denkt na…"),
     // Errors.
     (
         "My Claude plan won't cover this: Anthropic is counting it as paid extra usage, and there's none left.",
@@ -203,6 +212,7 @@ static NL: &[(&str, &str)] = &[
     ("Try again; if it keeps happening, the details are in Mimir's Needs you list.", "Probeer het opnieuw; blijft het gebeuren, dan staan de details in Mimirs lijst Needs you."),
     ("Routines on this AI account wait", "Routines op dit AI-account wachten"),
     ("This bot's routines wait", "De routines van deze bot wachten"),
+    ("A task I handed to another bot is done: its answer is in the run log.", "Een taak die ik aan een andere bot gaf is klaar: het antwoord staat in het runlogboek."),
     ("⏸ I've hit my AI plan's usage limit. {who} until {at}, when the limit resets; this one runs again then.", "⏸ Ik zit aan de gebruikslimiet van mijn AI-abonnement. {who} tot {at}, als de limiet weer vrij is; deze draait dan opnieuw."),
     // Buttons under a question, a reminder or a routine's result, and what a tap says.
     ("Something else", "Iets anders"),
@@ -216,6 +226,8 @@ static NL: &[(&str, &str)] = &[
     ("You chose: {choice}", "Je koos: {choice}"),
     ("✍️ Type your answer: {question}", "✍️ Typ je antwoord: {question}"),
     ("Type your answer.", "Typ je antwoord."),
+    ("(Reply with a number.)", "(Antwoord met een nummer.)"),
+    ("(Reply with a number. If I've written since, reply to this message with it.)", "(Antwoord met een nummer. Heb ik intussen iets anders gestuurd, beantwoord dan dit bericht met het nummer.)"),
     ("✅ Done", "✅ Klaar"),
     ("⏰ I'll remind you again today at {at}.", "⏰ Ik herinner je er vandaag om {at} weer aan."),
     ("⏰ I'll remind you again tomorrow at {at}.", "⏰ Ik herinner je er morgen om {at} weer aan."),

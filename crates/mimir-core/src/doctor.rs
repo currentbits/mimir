@@ -1,5 +1,6 @@
 //! `mimir doctor`: is everything Mimir needs working? The database, its backups, disk space, the bots' computer, each
-//! bot's AI account and channels, and the mailboxes. Nothing here spends tokens or sends a message.
+//! bot's AI account and channels, the mailboxes, and what leaves it open to others. Nothing here spends tokens or sends a
+//! message.
 use serde::Serialize;
 use std::path::Path;
 use std::time::Duration;
@@ -50,6 +51,10 @@ pub async fn run(home: &Path) -> Vec<Check> {
     let path = home.join("mimir.db");
     let p = path.clone();
     let mut out = vec![tokio::task::spawn_blocking(move || database(&p)).await.unwrap_or_else(|e| bad(State::Fail, "Database", e.to_string()))];
+    // A check only looks: no database is made, and an older one isn't upgraded under a server that may still use it.
+    if out[0].state != State::Ok {
+        return out;
+    }
     let Ok(db) = Db::open(&path) else { return out };
     // The server's secrets (in the database). The app's own store is already installed, and kept.
     crate::host::install_secrets(std::sync::Arc::new(crate::host::DbSecrets(db.clone())));
@@ -78,7 +83,68 @@ pub async fn run(home: &Path) -> Vec<Check> {
             Err(e) => bad(State::Fail, format!("Email {}: {e:#}", a.user), "Check the address, password (an app password for Gmail or iCloud) and server in Settings → Email."),
         });
     }
+    out.extend(security(&db).await);
     out
+}
+
+/// What leaves this Mimir open to others: plain HTTP beyond this network, every tool allowed, tool servers that can
+/// change under you, an old version, and the computer's DevTools on a shared machine.
+async fn security(db: &Db) -> Vec<Check> {
+    let setting = |k: &str| db.setting(k).ok().flatten();
+    let mut out: Vec<Check> = exposure(setting("server_listen").as_deref(), crate::server_update::in_docker(), setting("public_url").as_deref()).into_iter().collect();
+    let specs = crate::tools::all_specs(db);
+    let allowed = |t: &str| db.rule(t).ok().flatten().unwrap_or_else(|| crate::tools::default_for(db, t).into()) == "allow";
+    if !specs.is_empty() && specs.iter().all(|(t, ..)| allowed(t)) {
+        out.push(bad(State::Warn, "Permissions are at “Allow all”: bots run every tool without asking", "Settings → Permissions → Back to defaults (deleting and opening sites ask again)."));
+    }
+    let loose = crate::ext::unpinned(db);
+    if !loose.is_empty() {
+        out.push(bad(State::Warn, format!("Tool servers without a fixed version: {}", loose.join(", ")), "Each start can fetch a new release. Its Update button in Settings → Tool servers pins one, or add the version yourself (like `pkg@1.2.3`)."));
+    }
+    out.push(match crate::server_update::latest(db).await {
+        Some(v) if crate::host::is_desktop() => bad(State::Warn, format!("Mimir {v} is out (this is {})", crate::server_update::CURRENT), "Settings → Updates installs it."),
+        Some(v) => bad(State::Warn, format!("Mimir {v} is out (this server runs {})", crate::server_update::CURRENT), crate::server_update::how()),
+        None if setting("update_latest").is_none() => bad(State::Warn, "Couldn't look up the newest Mimir", "Releases: https://github.com/currentbits/mimir/releases"),
+        None => ok(format!("Mimir {} is the latest", crate::server_update::CURRENT)),
+    });
+    if crate::computer::devtools_shared(db) {
+        out.push(bad(State::Warn, "The bots' computer runs in Mimir's own process: its Chromium DevTools (127.0.0.1:9222) have no token, so any account on this machine can drive it", "Run it as its own service (docker compose), or keep other people's accounts off this machine."));
+    }
+    out
+}
+
+/// A host only this machine or its own network reaches: loopback, private and Tailscale (100.64/10) addresses, and
+/// local names.
+fn local_host(host: &str) -> bool {
+    let host = host.trim_start_matches('[').trim_end_matches(']').to_ascii_lowercase();
+    match host.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(ip)) => ip.is_loopback() || ip.is_private() || ip.is_link_local() || (ip.octets()[0] == 100 && ip.octets()[1] & 0xc0 == 64),
+        Ok(std::net::IpAddr::V6(ip)) => ip.is_loopback() || ip.segments()[0] & 0xfe00 == 0xfc00 || ip.segments()[0] & 0xffc0 == 0xfe80,
+        Err(_) => host == "localhost" || [".localhost", ".local", ".lan", ".home.arpa", ".internal", ".ts.net"].iter().any(|s| host.ends_with(s)),
+    }
+}
+
+/// Plain HTTP beyond this network: the web app opened at an http:// address elsewhere, or (outside Docker, where the
+/// published port decides) the server listening on more than this machine. None when there's no server to judge.
+fn exposure(listen: Option<&str>, in_docker: bool, public_url: Option<&str>) -> Option<Check> {
+    let fix = "Put HTTPS in front (the caddy service in docker-compose.yml), or reach it over an SSH tunnel or Tailscale.";
+    let public = public_url.and_then(|u| url::Url::parse(u).ok());
+    if let Some(u) = &public
+        && u.scheme() == "http"
+        && !u.host_str().is_some_and(local_host)
+    {
+        return Some(bad(State::Warn, format!("The web app is opened at {u} without HTTPS: the admin token and your chats cross the internet readable"), fix));
+    }
+    let https = public.as_ref().is_some_and(|u| u.scheme() == "https");
+    let ip = listen.and_then(|l| l.parse::<std::net::SocketAddr>().ok()).map(|a| a.ip());
+    if !in_docker && !https && ip.is_some_and(|ip| !ip.is_loopback()) {
+        return Some(bad(State::Warn, format!("The server answers on {} without HTTPS", listen.unwrap_or_default()), fix));
+    }
+    match (https, ip) {
+        (true, _) => Some(ok("The web app is reached over HTTPS")),
+        (false, Some(ip)) if ip.is_loopback() => Some(ok("The server only answers on this machine")),
+        _ => None,
+    }
 }
 
 /// The database file: written by this version or an older one, and sound (SQLite's full integrity check).
@@ -86,18 +152,20 @@ fn database(path: &Path) -> Check {
     if !path.exists() {
         return bad(State::Warn, "No database yet", "Mimir makes one the first time it starts.");
     }
-    let check = || -> anyhow::Result<Option<String>> {
+    let check = || -> anyhow::Result<Check> {
         let c = rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)?;
         c.busy_timeout(Duration::from_secs(5))?;
         crate::db::check_not_newer(&c)?;
+        if crate::db::user_version(&c)? < crate::db::VERSION {
+            return Ok(bad(State::Warn, "The database is from an older Mimir", "Mimir upgrades it the next time the app or `mimir server` starts; the other checks run after that."));
+        }
         let lines: Vec<String> = c.prepare("PRAGMA integrity_check(5)")?.query_map([], |r| r.get(0))?.collect::<Result<_, _>>()?;
-        Ok((lines != ["ok"]).then(|| lines.join("; ")))
+        Ok(match lines.as_slice() {
+            [one] if one == "ok" => ok("Database is sound"),
+            _ => bad(State::Fail, format!("The database reports damage: {}", lines.join("; ")), "Restore the latest backup: Settings → Your data → Restore a backup…"),
+        })
     };
-    match check() {
-        Ok(None) => ok("Database is sound"),
-        Ok(Some(damage)) => bad(State::Fail, format!("The database reports damage: {damage}"), "Restore the latest backup: Settings → Your data → Restore a backup…"),
-        Err(e) => bad(State::Fail, format!("Database: {e:#}"), "Update Mimir, or check the data folder can be read."),
-    }
+    check().unwrap_or_else(|e| bad(State::Fail, format!("Database: {e:#}"), "Update Mimir, or check the data folder can be read."))
 }
 
 /// A copy from the last two days (they're taken daily while the app or server runs).
@@ -159,6 +227,10 @@ async fn channels(bot: &str, ch: crate::runtime::Channels) -> Vec<Check> {
         let r = match crate::slack::Slack::new(&b, &a) { Ok(c) => within(c.check()).await, Err(e) => Err(e) };
         out.push(("Slack", r, "Check both tokens (xoxb-… and xapp-…) in the bot's settings."));
     }
+    if let Some((api, n)) = ch.signal {
+        let r = match crate::signal::Signal::new(&api, &n) { Ok(c) => within(c.check()).await, Err(e) => Err(e) };
+        out.push(("Signal", r, "Check that signal-cli-rest-api is running (MODE=json-rpc) and the bot's number is linked to it."));
+    }
     out.into_iter()
         .map(|(name, r, fix)| match r {
             Ok(me) => ok(format!("{bot}: {name} reaches {me}")),
@@ -202,6 +274,9 @@ mod tests {
         assert_eq!(database(&path).state, State::Warn, "none yet");
         let db = Db::open(&path).unwrap();
         assert_eq!(database(&path).state, State::Ok);
+        db.c().execute_batch("PRAGMA user_version = 1").unwrap();
+        assert!(database(&path).what.contains("older Mimir"));
+        db.c().execute_batch(&format!("PRAGMA user_version = {}", crate::db::VERSION)).unwrap();
         db.c().execute_batch("PRAGMA user_version = 9999").unwrap();
         let c = database(&path);
         assert!(c.state == State::Fail && c.what.contains("Update the app"), "{c}");
@@ -212,6 +287,21 @@ mod tests {
         assert_eq!(database(&bad_file).state, State::Fail);
         assert!(!passed(&[database(&bad_file), ok("x")]) && passed(&[ok("x"), disk(Some(1))]));
         let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn plain_http_beyond_this_network() {
+        let warn = |l, d, u| exposure(l, d, u).map(|c| c.state);
+        assert_eq!(warn(None, false, None), None, "no server");
+        assert_eq!(warn(Some("127.0.0.1:8080"), false, None), Some(State::Ok));
+        assert_eq!(warn(Some("0.0.0.0:8080"), false, None), Some(State::Warn));
+        assert_eq!(warn(Some("0.0.0.0:8080"), true, None), None, "Docker: the published port decides");
+        assert_eq!(warn(Some("0.0.0.0:8080"), false, Some("https://bots.example.com")), Some(State::Ok));
+        assert_eq!(warn(Some("0.0.0.0:8080"), true, Some("http://bots.example.com")), Some(State::Warn));
+        assert_eq!(warn(Some("0.0.0.0:8080"), true, Some("http://203.0.113.7:8080")), Some(State::Warn));
+        for home in ["http://192.168.1.5:8080", "http://100.101.102.103:8080", "http://box.tail1234.ts.net:8080", "http://[::1]:8080", "http://localhost:8080"] {
+            assert_eq!(warn(Some("0.0.0.0:8080"), true, Some(home)), None, "{home}");
+        }
     }
 
     #[test]
