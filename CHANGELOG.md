@@ -10,6 +10,8 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
   other bots belong to the goal: pause it and they all stop at once, even mid-task; remove it and
   they're gone. A bot can only call a goal done when the run log shows it, and a goal can have a token budget of its own.
   When the budget runs out, Needs you asks whether to go on. [More](docs/routines.md#goals)
+- **Routines remember their last results:** each run sees what the routine said its last three times, so a daily
+  briefing says what's new instead of repeating yesterday's news.
 
 ### Safety
 - **Sensitive sources:** mark a tool server (your bank's, your health records'), a single tool or a chat's memory as

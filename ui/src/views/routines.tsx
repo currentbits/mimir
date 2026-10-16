@@ -189,9 +189,8 @@ export function RoutinesView({ chatId, bots }: { chatId: number; bots: Bot[] }) 
   const urgent = (id: number, rule: string) => invoke('set_urgent', { chatId, id, rule })
   const ends = (id: number, day: string) => invoke('set_ends', { chatId, id, ends: endOf(day) })
   const update = (r: Routine, patch: { cron?: string; prompt?: string; quiet?: boolean; paused?: boolean; delivery?: Delivery; watch?: string; urgent?: string; until?: string }) =>
-    // The end first, so a new schedule is checked against the new end.
-    (patch.until !== undefined && patch.until !== dayOf(r.ends) ? ends(r.id, patch.until) : Promise.resolve(null))
-      .then(() => invoke('update_routine', { chatId, id: r.id, cron: r.cron, prompt: r.prompt, quiet: r.quiet, paused: r.paused, ...patch }))
+    // A new end goes with the schedule, so the two are checked together and a refused change keeps both.
+    invoke('update_routine', { chatId, id: r.id, cron: r.cron, prompt: r.prompt, quiet: r.quiet, paused: r.paused, ...patch, ends: patch.until !== undefined && patch.until !== dayOf(r.ends) ? endOf(patch.until) : null })
       .then(() => patch.watch !== undefined && patch.watch.trim() !== (r.watch ?? '') ? watch(r.id, patch.watch) : null)
       .then(() => patch.delivery && patch.delivery !== r.delivery ? deliver(r.id, patch.delivery) : null)
       .then(() => patch.urgent !== undefined && patch.urgent.trim() !== (r.urgent ?? '') ? urgent(r.id, patch.urgent) : null)
