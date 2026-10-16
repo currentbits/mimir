@@ -54,6 +54,7 @@ bot's instructions), everything that goes out asks, even if its rule says allow,
 - reading a web page or searching the web, and opening a page or typing on the bots' computer;
 - handing a task to another bot;
 - a message to someone else's chat (a reminder for them, a file in a group);
+- a memory saved for the household, which its guests read;
 - any tool server's change, and its reads that reach the internet (not the sensitive server's own).
 
 Like outside content, it never becomes "always", "all like this" or part of a plan, it sticks to the conversation until
@@ -70,12 +71,12 @@ in a group (where the reply goes to everyone) or incognito (where nothing may be
 
 **What's learned stays yours to accept.** Bots never change your memory's rules, your permissions, tool grants, saved
 logins, or your routines' schedules on their own. A bot may book a follow-up in the chat ("I'll check back Friday"):
-a one-off you see in its reply and in Routines, which asks first after outside content, is marked when made then, and
+a one-off it's told to mention in its reply, always shown in Routines, which asks first after outside content, is marked when made then, and
 counts toward the routine caps. A memory saved after reading outside content is marked *unconfirmed* and is kept
 out of the bots' standing instructions until you confirm it. That quarantine is why saving a new memory after outside
 content is the one change that doesn't ask; replacing an existing memory does, since it would take a confirmed one out
 of the instructions. The mark survives every path back in: a new version of the memory, a tidy-up suggestion drawn
-from such a conversation, or "Accept all" (which skips those suggestions). The one exception is a lesson that says
+from such a conversation, or "Accept all" (they come in unconfirmed). The one exception is a lesson that says
 what you wrote yourself (your messages only, never a file's or a forward's text): a page can't put words in your
 messages. Only your own words come back as past corrections or skill pitfalls. Files bots keep carry the same mark
 (written after outside content, or changed outside Mimir, counts as outside content), and the workspace can't be
@@ -91,7 +92,24 @@ left: no `..`, no links, size limits.
   that uses a saved login, or from a guest's chat (your rules are yours).
 
 **Saved logins never reach the model.** They are typed by name into the browser, only on the sites you listed (the
-site is read the way the browser reads it), and each use asks.
+site is read the way the browser reads it), and each use asks. Authenticator codes are worked out by Mimir from a key
+in the secret store and typed the same way. A sign-in card's login is typed in Mimir's own masked form and goes from
+there to the page and the secret store, never through a chat, the database or a prompt. Mimir types it over the
+computer's DevTools in an isolated world, so the page's scripts can't change what it reads. Each field is checked and
+filled by one script there: it reads `location.hostname`, refuses unless that's on the card's site, then focuses the
+field and sets its value (through the input's own value setter, with `input` and `change` events, which frameworks
+like React pick up). There's no gap between the check and the value for a navigation to land in. That was chosen over
+DevTools' `Input.insertText`, which types like a keyboard, because insertText is a second call after the check. The
+cost: those events aren't "trusted", and a rare site that only accepts real key presses reads as failed; take over
+there. The card and the form show the page's full address, and warn when the bot came there after outside content or
+on another bot's or a document's words, or when the site looks like one with a saved login or an earlier sign-in
+(a letter or two apart, the same name under another ending, or the name inside a hyphenated one: `lookalike.rs`).
+An address with letters from another alphabet (any `xn--` label) is always warned about, shown in punycode, and named
+after a known site when its plain letters line up with one. Mimir types only into the bot's own browser profile: the
+computer's record of whose Chromium is on screen is checked before the first field and before each later step, and
+the bot takes the computer again after waiting for an OK, so a bot that used the computer in the meantime never gets
+another bot's login (even on the same site). It keeps that login for that bot and that registrable domain only. The card's link holds no server, token or site: the form is behind your Mimir sign-in, uses the card the server
+has waiting, works once and runs out after 10 minutes. A plain Approve can't complete a sign-in card; only the form can.
 
 **Only you talk to your bot.** A chat is paired by one person with a one-time code, and only that person's messages
 and button presses count there. In a group, everyone else is ignored. Shared senders (an anonymous admin, a channel)
@@ -113,6 +131,7 @@ half is built into the app); a tampered download is refused. It never restarts o
 
 **Downloads and dependencies are pinned.**
 
+- Saved logins' sites are worked out with the public suffix list built into Mimir (the `psl` crate), updated with it.
 - Speech, voice and speaker models, and the speaker library Linux loads, are fixed versions checked against SHA-256.
 - The browser tool, the AI CLIs in the Docker image and the base images are fixed versions.
 - A tool server that downloads its package (`npx`, `uvx`…) is checked against OSV.dev's malicious-package list first
@@ -132,24 +151,37 @@ half is built into the app); a tampered download is refused. It never restarts o
 - A photo you send counts as your own message, so words inside it (a screenshot of a page, a photo of a letter) aren't
   marked as outside content. Forwarded photos, audio files and documents are.
 
+- Signal doesn't mark forwards, so a message or voice note you forward there counts as your own words.
+
 - A message with a photo goes to Grok on its command line (it has no file form for that), where other accounts on the
   same computer could read it.
 - After outside content, clicks in the browser on a site you set to "always" don't ask (typing your memories there
   does).
 - Heuristics have limits: after a web page (not your email or a meeting), a bot could still spell data into short web
   addresses one fetch at a time (each fetch is in the run log).
+- A sign-in card's form signs in to whatever the page on the computer's screen is when you send it, as long as it's on
+  the card's site: a page of that site that looks like a sign-in but isn't one would get your login.
+- The look-alike warning compares letters: a look-alike of a site you've never saved a login for or signed in to isn't
+  flagged (one in another alphabet always is, without a name). The full address is always shown.
+- "Signed in" is read from the sign-in fields going away; a site that keeps a password field on every page reads as
+  failed (and the login isn't saved).
+- Codex's web search asks OpenAI's servers to open addresses, where Mimir doesn't see it. Mimir uses its cached mode
+  (an address that isn't cached isn't fetched), and turns it off once a conversation has read outside content; within
+  one turn, a search's query itself can still carry what the bot knows.
 - An email card shows exactly what's sent, but approving it is your call: after reading an email, check the recipient
   is who you meant.
 - Sensitive sources only work once you mark them: a bank's server you haven't marked is just a tool server (its data
   is still outside content, and private-data rules don't apply to it).
 - When the bots' computer runs in Mimir's own process on a plain Linux host (not Docker), its Chromium's DevTools on
   `127.0.0.1:9222` have no token, so other accounts on that machine can drive the browser. Use the Docker image or
-  compose.
+  compose; `mimir doctor` warns about it.
 
 ## For contributors
 
 Every new way for text to reach a model must either be the person's own words, or mark the conversation
 (`ToolCtx::taint`). Every new way for data to leave must be listed in `sends_out`, so it asks after a sensitive
 source. Every new action that changes data must go through `tools::call`. Every new kind of learned
-artefact must be a proposal that keeps the outside-content mark. Details, with the code they live in, are in
+artefact must be a proposal that keeps the outside-content mark. Never take a server address, token or scope from a URL or
+deep link (a link someone sends could point Mimir at their server, as in OpenClaw's CVE-2026-25253): those come from
+settings the person typed, or from the server they chose. Details, with the code they live in, are in
 [Architecture](architecture.md).

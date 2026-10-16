@@ -89,6 +89,10 @@ pub fn is_server() -> bool {
     MODE.get() == Some(&"server")
 }
 
+pub fn is_desktop() -> bool {
+    MODE.get() == Some(&"desktop")
+}
+
 fn key(bot: i64, name: &str) -> String {
     if bot == 1 && name == TG { name.into() } else { format!("{name}:{bot}") }
 }
@@ -798,17 +802,19 @@ impl Host {
             // Configured servers with their tool counts. Env and headers show names only; values stay in the secret store.
             "tool_servers" => {
                 let sensitive = tools::sensitive_list(&self.db);
-                let servers: Vec<Value> = ext::servers(&self.db)
-                    .into_iter()
-                    .map(|s| {
-                        let keys = |m: std::collections::HashMap<String, String>| m.into_keys().collect::<std::collections::BTreeSet<_>>();
-                        json!({"name": s.name, "preset": s.preset, "command": s.command, "args": s.args, "url": s.url, "env": keys(s.env), "headers": keys(s.headers), "tools": ext::cached_tools(&self.db, &s.name).len(), "signed_in": ext::signed_in(&s.name), "sensitive": sensitive.contains(&s.name), "suggest_sensitive": tools::looks_sensitive(&s.name)})
-                    })
-                    .collect();
+                // `update`: a newer settled release than the one its package is pinned to (or a pin, for one that isn't).
+                let mut servers: Vec<Value> = vec![];
+                for s in ext::servers(&self.db) {
+                    let keys = |m: std::collections::HashMap<String, String>| m.into_keys().collect::<std::collections::BTreeSet<_>>();
+                    let update = if s.preset.is_none() { ext::update_for(&self.db, &s).await } else { None };
+                    servers.push(json!({"name": s.name, "preset": s.preset, "command": s.command, "args": s.args, "url": s.url, "env": keys(s.env), "headers": keys(s.headers), "tools": ext::cached_tools(&self.db, &s.name).len(), "signed_in": ext::signed_in(&s.name), "sensitive": sensitive.contains(&s.name), "suggest_sensitive": tools::looks_sensitive(&s.name), "update": update, "unconfirmed": ext::claimed_tools(&self.db, &s.name).iter().filter(|t| t.read_only).count() - ext::cached_tools(&self.db, &s.name).iter().filter(|t| t.read_only).count()}));
+                }
                 ok(json!({"servers": servers, "tools": ext::all_tools(&self.db).len()}))
             }
-            // Add or replace one server: {name, command, args, env} or {name, url, headers}. Starts it once; returns its tool count.
+            // Add or replace one server: {name, command, args, env} or {name, url, headers}. Its package is pinned to a
+            // release (see ext::pin). Starts it once; returns its tool count.
             "tool_server_save" => ok(ext::save_server(&self.db, arg(a, "server")?).await?),
+            "tool_server_update" => ok(ext::update_server(&self.db, &arg::<String>(a, "name")?).await?),
             // Sensitive sources: once a run has read one, everything that goes out asks. Only you set them.
             "sensitive" => ok(tools::sensitive_list(&self.db)),
             "set_sensitive" => {
@@ -827,6 +833,17 @@ impl Host {
                 ok(self.db.set_setting("sensitive", &serde_json::to_string(&list)?)?)
             }
             "tool_server_delete" => ok(ext::delete_server(&self.db, &arg::<String>(a, "name")?)?),
+            // One server's tools with the server's read-only claims, which count once confirmed (`tool_server_read_only`).
+            "tool_server_tools" => {
+                let name: String = arg(a, "name")?;
+                let trusted = ext::cached_tools(&self.db, &name);
+                let tools: Vec<Value> = ext::claimed_tools(&self.db, &name)
+                    .into_iter()
+                    .map(|t| json!({"name": t.name, "description": t.description, "says_read_only": t.read_only, "read_only": trusted.iter().any(|o| o.name == t.name && o.read_only)}))
+                    .collect();
+                ok(tools)
+            }
+            "tool_server_read_only" => ok(ext::confirm_read_only(&self.db, &arg::<String>(a, "name")?, &arg::<Vec<String>>(a, "tools")?)?),
             // A remote server that wants a sign-in (MCP's OAuth): returns the address to open; then `_wait` (desktop) or
             // `_paste` (a server: the address the browser ended up on) finishes it and saves the server. Returns its tool count.
             "tool_server_sign_in" => {
@@ -962,7 +979,45 @@ impl Host {
                 ok(true)
             }
             "vault" => ok(ext::vault(&self.db)),
-            "vault_save" => ok(ext::vault_save(&self.db, arg(a, "entry")?, arg::<Option<String>>(a, "value")?.as_deref())?),
+            "vault_save" => ok(ext::vault_save(&self.db, arg(a, "entry")?, arg::<Option<String>>(a, "value")?.as_deref(), arg::<Option<String>>(a, "totp").unwrap_or(None).as_deref())?),
+            // The masked form a bot's sign-in card links to. What you type goes from here into the page on the
+            // computer's screen (only while it's on the card's site) and into the secret store as that bot's login
+            // for the site: never into a chat, the database or a prompt. The card is used once, and runs out with it.
+            // The newest sign-in card waiting, for the form: its site, the page's full address and its warnings.
+            "signin_card" => match self.db.approvals_pending()?.into_iter().rfind(|a| a.kind == "signin") {
+                Some(ap) => {
+                    let mut card = self.db.signin_card(ap.id)?;
+                    card["id"] = json!(ap.id);
+                    card["bot_id"] = json!(ap.bot_id);
+                    card["site"] = json!(ap.site);
+                    ok(card)
+                }
+                None => ok(Value::Null),
+            },
+            "signin_submit" => {
+                let text = |k: &str| arg::<Option<String>>(a, k).map(Option::unwrap_or_default);
+                let (user, password, code, key) = (text("user")?, text("password")?, text("code")?.trim().to_string(), text("totp")?.trim().to_string());
+                // A mistyped key is said before the card is used up.
+                let totp = (!key.is_empty()).then(|| crate::totp::parse(&key)).transpose()?;
+                if user.is_empty() && password.is_empty() && code.is_empty() && totp.is_none() {
+                    bail!("fill in your sign-in first");
+                }
+                let ap = self.db.approval_claim(arg(a, "id")?)?.context("this sign-in has been used or has run out; ask the bot again")?;
+                let site = ap.site.clone().unwrap_or_default();
+                let login = crate::computer::Login { user, password, code, totp };
+                let out = match tokio::time::timeout(std::time::Duration::from_secs(60), crate::computer::sign_in(&self.db.dir(), ap.bot_id, &login, std::slice::from_ref(&site))).await {
+                    Ok(r) => r,
+                    Err(_) => Err(anyhow::anyhow!("the page didn't answer in time")),
+                };
+                // Kept only once it worked, so a mistyped password isn't saved.
+                let kept = match &out {
+                    Ok(true) if !login.password.is_empty() => ext::vault_save_signin(&self.db, ap.bot_id, &site, &login.user, &login.password, Some(&key)).map(Some),
+                    _ => Ok(None),
+                };
+                self.db.approval_signed_in(ap.id, matches!(out, Ok(true)) && kept.is_ok())?;
+                let signed_in = out?;
+                ok(json!({"signed_in": signed_in, "saved": kept?}))
+            }
             "vault_delete" => ok(ext::vault_delete(&self.db, &arg::<String>(a, "name")?)?),
             // Which bots are working right now, on what (one entry per bot, its newest run), and the step a reply is
             // on: their avatars come alive in the sidebar.
@@ -1076,6 +1131,8 @@ impl Host {
                             urgent: String::new(),
                             ends: 0,
                             followup: false,
+                            goal_held: false,
+                            for_goal: false,
                         }
                     }
                 };
@@ -1157,6 +1214,17 @@ impl Host {
             "cards" => ok(self.db.cards(arg(a, "chat_id")?)?),
             "card_tick" => ok(self.db.card_tick(arg(a, "chat_id")?, arg(a, "id")?, arg(a, "line")?, &arg::<String>(a, "text")?)?),
             "card_delete" => ok(self.db.card_delete(arg(a, "chat_id")?, arg(a, "id")?)?),
+            // The chat's goal, and yours to pause, resume, mark done or remove: local, whatever the AI is doing. Pausing or
+            // removing it also cuts off tasks it handed to other bots.
+            "goal" => ok(self.db.goal(arg(a, "chat_id")?)?),
+            "goal_status" => {
+                crate::runtime::stop_handed(&self.db.goal_status(arg(a, "chat_id")?, &arg::<String>(a, "status")?, "")?);
+                ok(self.db.goal(arg(a, "chat_id")?)?)
+            }
+            "goal_delete" => {
+                crate::runtime::stop_handed(&self.db.goal_delete(arg(a, "chat_id")?)?);
+                ok(true)
+            }
             "set_delivery" => ok(self.db.routine_set_delivery(arg(a, "chat_id")?, arg(a, "id")?, &arg::<String>(a, "delivery")?)?),
             // How full standing memory is (the Memory tab's meter).
             "standing_memory" => {
@@ -1261,7 +1329,8 @@ impl Host {
                 if self.db.routine(id)?.is_none_or(|r| r.cron != cron.trim()) {
                     crate::events::ready(&self.db, chat, &cron)?;
                 }
-                ok(self.db.routine_update(chat, id, &cron, &arg::<String>(a, "prompt")?, arg(a, "quiet")?, arg(a, "paused")?)?)
+                // A new end comes with the schedule, so the two are checked together (0 clears it).
+                ok(self.db.routine_update(chat, id, &cron, &arg::<String>(a, "prompt")?, arg(a, "quiet")?, arg(a, "paused")?, arg(a, "ends")?)?)
             }
             "delete_routine" => ok(self.db.routine_delete(arg(a, "chat_id")?, arg(a, "id")?)?),
             // With bot_id: that bot's own conversation in the chat (a bot opened from the sidebar); without, everyone's.
@@ -1293,10 +1362,20 @@ impl Host {
             "tool_calls" => ok(self.db.tool_calls(arg(a, "run_id")?)?),
             "approvals" => ok(self.db.approvals_pending()?),
             // Approve once, deny, or approve and keep allowing (`always`: "tool" or "site"). Guarded and
-            // saved-login asks can't become rules: those protections must keep asking.
+            // saved-login asks can't become rules: those protections must keep asking. Approving can carry your edits
+            // to the card's text (`edits`: field → text), denying a `reason` the bot is told.
             "decide" => {
                 let always: Option<String> = arg(a, "always").unwrap_or(None);
                 let (id, approve): (i64, bool) = (arg(a, "id")?, arg(a, "approve")?);
+                let edits: Option<Value> = arg(a, "edits").unwrap_or(None);
+                let reason: Option<String> = arg(a, "reason").unwrap_or(None);
+                if approve && let Some(edits) = edits.filter(|e| !e.is_null()) {
+                    let Some(ap) = self.db.approval(id)?.filter(|ap| ap.status == "pending") else { return ok(false) };
+                    tools::edit_card(&self.db, &ap, &edits)?;
+                }
+                if !approve && let Some(r) = reason.as_deref().map(str::trim).filter(|r| !r.is_empty()) {
+                    self.db.approval_set_reason(id, &tools::truncate(r, 500))?;
+                }
                 // Before approving: the waiting tool may go on (and the run end) the moment it's approved.
                 if approve && always.as_deref() == Some("run") && !self.db.approval_allow_rest_of_run(id, None)? {
                     bail!("this one can only be approved once (it isn't a plain ask from a reply that's still going)");
@@ -1325,6 +1404,8 @@ impl Host {
                         json!({"key": key, "bot_id": bot, "routine_id": routine, "routine": prompt, "until": h.until, "why": h.why, "cap": h.waive.is_some()})
                     }).collect::<Vec<_>>(),
                     "suggestions": counts,
+                    // Goals waiting on the person: over their budget (go on?), or blocked on them.
+                    "goals": self.db.goals_waiting()?,
                     // The daily check found the database damaged: restore a backup.
                     "damage": self.db.setting(crate::backup::DAMAGE)?,
                     "unconfirmed": self.db.unconfirmed_counts()?.into_iter().map(|(chat, n)| json!({"chat_id": chat, "count": n})).collect::<Vec<_>>(),
@@ -1345,6 +1426,13 @@ impl Host {
                     "current": crate::server_update::CURRENT,
                     "latest": self.db.setting("update_latest")?,
                 }))
+            }
+            // The daily anonymous usage count (usage_stats.rs): on unless switched off; `sample` is exactly what's sent.
+            "usage_stats" => {
+                if let Some(on) = arg::<Option<bool>>(a, "on")? {
+                    self.db.set_setting("usage_stats", if on { "on" } else { "off" })?;
+                }
+                ok(json!({"on": crate::usage_stats::on(&self.db), "sample": crate::usage_stats::batch(&self.db)?["events"]}))
             }
             // Run now instead of waiting for a hold to end (the limit was raised, another plan…); a cap's, for the rest of today.
             "hold_clear" => {
@@ -1587,6 +1675,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_sign_in_is_never_typed_into_another_bots_browser() {
+        let home = Home::new("signin-bots");
+        let host = Host::new(Db::open(&home.0.join("mimir.db")).unwrap(), home.0.clone(), Arc::new(Mem(Default::default())), tokio::runtime::Handle::current(), "server");
+        let db = &host.db;
+        // Bot 3 waits for its card to be filled in; its hold on the computer runs out, and bot 4 takes the computer
+        // (its Chromium on the screen now).
+        db.set_setting("computer_lease", &json!({"who": "run:1", "name": "Bot 3", "until": crate::db::now() - 1}).to_string()).unwrap();
+        assert!(db.computer_lease("run:2", "Bot 4", 120).unwrap().is_none(), "bot 4 takes the computer");
+        std::fs::create_dir_all(home.0.join("computer")).unwrap();
+        std::fs::write(home.0.join("computer").join("browser"), format!("4 {}", std::process::id())).unwrap();
+        assert_ne!(crate::computer::screen_bot(&home.0), Some(3));
+        // The person sends the form: refused before anything reaches a page, the card is used up, nothing is kept.
+        let card = db.approval_create(3, 0, "computer_signin", "Sign in to github.com", 300, "signin", Some("github.com")).unwrap();
+        let err = host.call("signin_submit", &json!({"id": card, "user": "me@example.com", "password": "hunter2-gh"})).await.unwrap_err();
+        assert!(format!("{err:#}").contains("isn't on this bot's browser") && format!("{err:#}").contains("nothing was typed"), "{err:#}");
+        assert_eq!(db.approval_status(card).unwrap(), "denied", "the bot hears it failed");
+        assert!(ext::vault(db).is_empty(), "and no login is saved");
+        // The saved-login path refuses the same way.
+        let login = crate::computer::Login { user: "me".into(), password: "hunter2-gh".into(), ..Default::default() };
+        assert!(crate::computer::sign_in(&home.0, 3, &login, &["github.com".into()]).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn a_saved_login_that_stopped_working_gives_way_to_a_card() {
+        let home = Home::new("signin-stale");
+        let host = Host::new(Db::open(&home.0.join("mimir.db")).unwrap(), home.0.clone(), Arc::new(Mem(Default::default())), tokio::runtime::Handle::current(), "server");
+        let db = &host.db;
+        let url = "https://github.com/login";
+        ext::vault_save_signin(db, 3, "github.com", "me", "old-pass", None).unwrap();
+        let e = ext::signin_login(db, 3, url).unwrap();
+        assert_eq!(e.name, "GITHUB_COM_BOT3");
+        assert!(ext::signin_login(db, 4, url).is_none(), "another bot's isn't used");
+        // The site turned it down: the next computer_signin doesn't pick it again, so the person gets a card.
+        ext::login_failed_set(db, &e.name).unwrap();
+        assert!(ext::signin_login(db, 3, url).is_none());
+        // What they sign in with on the card replaces it (and an older one of this bot's for the site under another name).
+        let old = ext::VaultEntry { name: "GH_OLD".into(), domains: vec!["github.com".into()], bot: Some(3), totp: false };
+        ext::vault_save(db, old, Some("older-pass"), None).unwrap();
+        ext::vault_save_signin(db, 3, "github.com", "me", "new-pass", None).unwrap();
+        assert_eq!(ext::signin_login(db, 3, url).map(|e| e.name).as_deref(), Some("GITHUB_COM_BOT3"));
+        assert_eq!(secret_get("vault:GITHUB_COM_BOT3").as_deref(), Some("new-pass"));
+        assert_eq!(ext::vault(db).iter().map(|e| e.name.as_str()).collect::<Vec<_>>(), ["GITHUB_COM_BOT3"]);
+    }
+
+    #[tokio::test]
     async fn a_bot_as_one_file() {
         let home = Home::new("botfile");
         let host = Host::new(Db::open(&home.0.join("mimir.db")).unwrap(), home.0.clone(), Arc::new(Mem(Default::default())), tokio::runtime::Handle::current(), "server");
@@ -1604,7 +1737,7 @@ mod tests {
             ..Default::default()
         };
         crate::ext::set_servers(&host.db, &[server]).unwrap();
-        crate::ext::vault_save(&host.db, crate::ext::VaultEntry { name: "SHOP_PASSWORD".into(), domains: vec!["shop.example".into()] }, Some("hunter2-shop")).unwrap();
+        crate::ext::vault_save(&host.db, crate::ext::VaultEntry { name: "SHOP_PASSWORD".into(), domains: vec!["shop.example".into()], bot: None, totp: false }, Some("hunter2-shop"), None).unwrap();
         host.db.routine_create(id, 0, "0 9 * * 1", "Check the status page", false).unwrap();
         host.db.routine_create(id, 0, "0 9 * * 2", "Log in with hunter2-shop and check orders", false).unwrap();
         host.call("skill_add", &json!({"chat_id": 0, "slug": "summarize-link", "bot_id": id})).await.unwrap();

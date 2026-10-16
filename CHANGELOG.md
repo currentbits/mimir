@@ -2,7 +2,30 @@
 
 What changed for people using Mimir. The newest release is at the top; "Unreleased" is what the next one brings.
 
-## Unreleased
+## 0.4.0
+
+0.3.0 was never published on its own, so updating from 0.2.0 also brings
+[everything in 0.3.0](https://github.com/currentbits/mimir/blob/master/CHANGELOG.md#030) (Signal, replies that survive
+a restart and more).
+
+### Talking to your bots
+- **Telegram rich messages:** replies show real tables, headings and task lists, and a long one fits in one message
+  (up to 32,768 characters). An older Bot API server gets the formatting it had before.
+- **Slack streams natively:** in a thread you mentioned the bot in, a reply streams in with Slack's own streaming
+  (no edit rate limits) under an "is thinking…" status.
+- **Skills for your bots:** four more in the skill library. *Hire a bot* makes a bot with one job, what it never does,
+  a voice and when it works, and has it say its job back; *Bot role check* checks a role and rewrites it; *Team check*
+  finds where your bots overlap or stray and proposes fixes you pick; *Memory check* proposes fixes for wrong, stale or
+  secret memories.
+
+### Routines
+- **Goals:** ask a bot to see something through ("find a plumber who can come this week") and it keeps at it until
+  it's done, with a progress line pinned in the chat and in its header. The follow-ups it books and the tasks it hands to
+  other bots belong to the goal: pause it and they all stop at once, even mid-task; remove it and
+  they're gone. A bot can only call a goal done when the run log shows it, and a goal can have a token budget of its own.
+  When the budget runs out, Needs you asks whether to go on. [More](docs/routines.md#goals)
+- **Routines remember their last results:** each run sees what the routine said its last three times, so a daily
+  briefing says what's new instead of repeating yesterday's news.
 
 ### Safety
 - **Sensitive sources:** mark a tool server (your bank's, your health records'), a single tool or a chat's memory as
@@ -13,6 +36,11 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
   it runs, and deleting a tool server clears its marks.
 - **Security:** the TLS library (rustls 0.23.46) is updated for four advisories published on October 14
   (RUSTSEC-2026-0346 to 0349).
+- **Edit an email before it goes, and say why when you deny:** on an email's approval card in the app, **Edit** lets
+  you change the subject and text before you send it. What you approve is what goes; who it's to stays as shown. In
+  Telegram, Slack, Discord and Signal, **Edit in Mimir** opens the card in the web app (on a server with an https
+  address). **Deny…** takes an optional "Why?", and in a messaging app a reply to the card does the same: the bot
+  reads your reason and changes course instead of just stopping.
 - **Export, import and duplicate a bot:** right-click a bot to save it as one file (its role, look, skills, routines,
   tool rules and the tool servers it uses), without tokens, keys, saved logins, memories or chats. **From a file…** on
   the new-bot page shows everything in it first, and flags skill steps that pipe a download into a shell, hold a base64
@@ -21,6 +49,50 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
   Routines keep their watched page, delivery, "right away when" rule and end date, and **Show** on a skill opens its
   full instructions before you add it. Addresses in the file never carry a password or a `?key=`.
   **Duplicate…** does both in one go. See [Bots and chats](docs/bots-and-chats.md#export-import-and-duplicate).
+- **Grok bots are more private:** Grok's own memory and `/goal` are always off for bots, and your Claude and Cursor
+  settings no longer load into them, so bots can't read each other's notes and incognito chats leave nothing behind
+  in Grok. A message that starts with `/` now reaches the bot instead of running as a Grok command. If a Grok update
+  ever offers a bot more tools than web search and Mimir's own, the message stops with an error instead of running.
+  The docs cover The X Subscription's plans and its shared weekly allowance.
+- **Security fixes from the fourth review:**
+  - A routine can no longer change its own times or end date while it runs, or book itself again a minute later;
+    from a routine, a one-off is at least 15 minutes away.
+  - A follow-up stays in the chat it was booked in, and a reminder for someone else counts toward their chat's limit.
+  - With docker compose, Codex bots now use the separate computer service; before, they started a browser inside
+    Mimir's own container.
+  - After reading a sensitive source, saving a memory for the household asks too.
+  - A bot file can't pass an option to the AI's command line as its model.
+  - `mimir doctor` no longer creates a database, or upgrades an older one, while it checks.
+- **Anonymous usage stats:** once a day Mimir sends a count (a random id for this install, the version, the OS and each
+  bot's AI provider and model; never names, messages or keys) so we know how many people use it and on what.
+  Settings → Your data shows exactly what's sent and switches it off (`MIMIR_USAGE_STATS=off` on a server).
+- **Security checks in `mimir doctor`:** it warns when the web app is reached over plain HTTP from the internet,
+  Permissions are at "Allow all", a tool server's package has no fixed version, a newer Mimir is out, or the bots'
+  computer runs in Mimir's own process on a Linux host without Docker (its DevTools have no token there).
+- **Tool servers stay on one version:** adding one that downloads its package (`npx -y pkg`, `uvx pkg`) pins it to
+  the newest release that's at least a week old, so a bad release published tomorrow doesn't reach you on the next
+  start. When a newer one has been out a week, the server shows **Update to x.y.z**.
+- **Hidden text doesn't reach your bots:** invisible characters that spell out words only a model reads (Unicode tag
+  characters, stray variation selectors) are taken out of pages, mail, files and tool results. A Word file's text
+  formatted to be invisible (white, 1 pt, hidden) is marked as hidden for the bot.
+- **A tool server's "read-only" needs your OK:** a server saying a tool only reads is no longer enough to skip asking;
+  after you add a server, Settings → Tool servers asks you to confirm which of its tools really only read.
+- **More security fixes:**
+  - Signing in to a tool server checks the answer comes from the server you started with (RFC 9207).
+  - Codex's own web search answers from OpenAI's cache only, and is off after a bot has read outside content, so it
+    can't open an address that carries your data out.
+  - Email approval cards flag addresses with look-alike letters from another alphabet and show their real domain.
+  - Only the chat's owner can answer a bot's buttons, and screenshots are kept in Mimir's own folder instead of `/tmp`.
+
+### The bots' computer
+- **Sign in from your phone:** at a sign-in page, a bot sends you a card with a link to a small masked form in Mimir,
+  instead of asking you to take over the screen. Type your login there, never in the chat; Mimir types it into the
+  page and keeps it for that bot on that site only. The bot never sees it, only whether it worked. If the bot got to
+  that site after reading a web page or a message, the site looks like one you've signed in to before, or its
+  address uses letters from another alphabet, the form warns you and shows the full address. Taking over stays for
+  captchas and payments. [Details](docs/computer.md#signing-in-from-your-phone)
+- **Authenticator codes on saved logins:** paste a site's setup key or `otpauth://` link once, and Mimir types the
+  6-digit codes itself, only on that login's site.
 
 ## 0.3.0
 
@@ -35,6 +107,12 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
   get an answer straight away, and when the other bot is done its result comes back in the same chat.
 - **Loop breaker:** a bot that keeps making the same call (the 3rd time in a row, the 5th for just looking) stops and
   asks you whether to go on, instead of burning time and money. Routines ask in Needs you.
+- **Tool servers stay on one version:** adding one that downloads its package (`npx -y pkg`, `uvx pkg`) pins it to
+  the newest release that's at least a week old, so a bad release published tomorrow doesn't reach you on the next
+  start. When a newer one has been out a week, the server shows **Update to x.y.z**.
+- **Hidden text doesn't reach your bots:** invisible characters that spell out words only a model reads (Unicode tag
+  characters, stray variation selectors) are taken out of pages, mail, files and tool results. A Word file's text
+  formatted to be invisible (white, 1 pt, hidden) is marked as hidden for the bot.
 
 ### Routines
 - **Follow-ups the bot books itself:** "I'll check back Friday whether they replied" becomes a one-off follow-up, said
@@ -67,6 +145,9 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 - **Check everything:** `mimir doctor` (and Settings → Your data → *Check everything*) checks each bot's AI sign-in,
   its Telegram, Slack and Discord connection, your mailboxes, the bots' computer, free disk space, the database and its
   backups, one line each with what to do. Nothing is spent or sent.
+- **Security checks in `mimir doctor`:** it warns when the web app is reached over plain HTTP from the internet,
+  Permissions are at "Allow all", a tool server's package has no fixed version, a newer Mimir is out, or the bots'
+  computer runs in Mimir's own process on a Linux host without Docker (its DevTools have no token there).
 
 ## 0.2.0
 

@@ -17,8 +17,8 @@ pub(super) fn is_read_only(db: &Db, tool: &str) -> bool {
 /// What a bot may do in a guest's chat: their own memory, routines, files and skills, the web, and calendar links.
 /// Nothing of yours (email, calendar, meetings, saved logins and the browser, tool servers, the computer), and no new
 /// bots in your app.
-pub(super) const GUEST_TOOLS: [&str; 23] = [
-    "memory_store", "memory_search", "memory_forget", "chat_search", "routine_create", "routine_update", "routine_list", "routine_delete", "web_fetch", "web_search",
+pub(super) const GUEST_TOOLS: [&str; 25] = [
+    "memory_store", "memory_search", "memory_forget", "chat_search", "routine_create", "routine_update", "routine_list", "routine_delete", "goal_set", "goal_update", "web_fetch", "web_search",
     "file_list", "file_read", "file_write", "file_delete", "skill_view", "skill_save", "calendar_add", "plan_propose", "ask_bot", "ask_choice", "send_file", "card_read", "card_write",
 ];
 
@@ -30,6 +30,8 @@ pub(super) fn usable(ctx: &ToolCtx, tool: &str) -> bool {
         && (!tool.starts_with("computer_") || (crate::computer::usable(&ctx.db) && !ctx.incognito() && ctx.db.chat_private(ctx.chat_id)))
         && (!ctx.read_only || is_read_only(&ctx.db, tool))
         && (tool != "ask_bot" || ctx.depth == 0)
+        // A goal is the chat's: kept by the bot the person talks to, never incognito (nothing there lasts).
+        && (!tool.starts_with("goal_") || (ctx.depth == 0 && !ctx.incognito()))
         // A file goes with the reply to the person: not from a task handed over by another bot, nor incognito (it's kept
         // on disk to show in the chat).
         && (tool != "send_file" || (ctx.depth == 0 && !ctx.incognito()))
@@ -238,12 +240,15 @@ pub fn looks_sensitive(name: &str) -> bool {
 }
 
 /// After a run read a sensitive source, these are the ways data leaves: an email, a web request (fetch, search, the
-/// computer's browser), a hand-off to another bot, a message to another chat, and any tool server's write (or its
+/// computer's browser), a hand-off to another bot, a message to another chat, a memory the household's guests read,
+/// and any tool server's write (or its
 /// read that reaches the internet, carrying what it's asked).
 pub(super) fn sends_out(ctx: &ToolCtx, name: &str, args: &Value) -> bool {
     match name {
-        "email_send" | "web_fetch" | "web_search" | "ask_bot" | "computer_open" | "computer_type" => true,
+        // A sign-in types a login into a site, like typing does.
+        "email_send" | "web_fetch" | "web_search" | "ask_bot" | "computer_open" | "computer_type" | "computer_signin" => true,
         "routine_create" => args["for"].as_str().is_some_and(|f| !f.trim().is_empty()),
+        "memory_store" => args["household"].as_bool() == Some(true),
         "send_file" => ctx.db.chat_guest(ctx.chat_id) || !ctx.db.chat_private(ctx.chat_id),
         n => crate::ext::find(&ctx.db, n).is_some_and(|t| {
             // Reading the sensitive server again, or the browser looking at its page, sends nothing new out.
@@ -303,6 +308,18 @@ pub(super) fn describe(ctx: &ToolCtx, name: &str, args: &Value) -> String {
             args["cron"].as_str().map(|c| format!(" [{c}]")).unwrap_or_default(),
             args["prompt"].as_str().map(|p| format!(" {p}")).unwrap_or_default()
         ),
+        "goal_set" => format!("Set the goal: {} (done when {})", args["goal"].as_str().unwrap_or(""), args["done_when"].as_str().unwrap_or("")),
+        // Done takes its follow-ups with it: the card says how many.
+        "goal_update" if args["status"].as_str() == Some("done") => {
+            let n = ctx.db.goal_routines(ctx.chat_id).map(|v| v.len()).unwrap_or(0);
+            let gone = match n {
+                0 => String::new(),
+                1 => "; this removes 1 follow-up".into(),
+                n => format!("; this removes {n} follow-ups"),
+            };
+            format!("Mark the goal done{gone}: {}", args["progress"].as_str().unwrap_or(""))
+        }
+        "goal_update" => format!("Goal{}: {}", args["status"].as_str().map(|s| format!(" {s}")).unwrap_or_default(), args["progress"].as_str().unwrap_or("")),
         "routine_create" => {
             let to = args["for"].as_str().filter(|f| !f.trim().is_empty()).map(|f| format!(" in {f}'s own chat")).unwrap_or_default();
             match args["at"].as_str().filter(|a| !a.trim().is_empty()) {
@@ -329,24 +346,8 @@ pub(super) fn describe(ctx: &ToolCtx, name: &str, args: &Value) -> String {
             Some(p) => format!("Send the file {p} to this chat"),
             None => "Send a screenshot of the computer's screen to this chat".into(),
         },
-        // Who it's to first, then the whole text: what you approve is what goes.
-        "email_send" => format!(
-            "Send an email to {}{}{}: \"{}\" — {}",
-            args["to"].as_str().unwrap_or("?"),
-            args["cc"].as_str().filter(|c| !c.trim().is_empty()).map(|c| format!(" (cc {c})")).unwrap_or_default(),
-            args["account"].as_str().filter(|a| !a.trim().is_empty()).map(|a| format!(" from {a}")).unwrap_or_default(),
-            args["subject"].as_str().unwrap_or(""),
-            args["body"].as_str().unwrap_or("")
-        ),
-        // Who it's to first, never cut short (card_fields' rule): that's what matters on the card.
-        "email_draft" => format!(
-            "Draft an email to {}{}{}: \"{}\" — {}",
-            args["to"].as_str().unwrap_or("?"),
-            args["cc"].as_str().filter(|c| !c.trim().is_empty()).map(|c| format!(" (cc {c})")).unwrap_or_default(),
-            args["account"].as_str().filter(|a| !a.trim().is_empty()).map(|a| format!(" from {a}")).unwrap_or_default(),
-            args["subject"].as_str().unwrap_or(""),
-            truncate(args["body"].as_str().unwrap_or(""), 400)
-        ),
+        // Who it's to first, then the text (an email to send, all of it: what you approve is what goes).
+        "email_send" | "email_draft" => describe_email(name, args),
         "chat_search" => format!("Search earlier chats: {}", args["query"].as_str().unwrap_or("")),
         "meeting_search" => match args["query"].as_str() {
             Some(q) if !q.trim().is_empty() => format!("Search meetings: {q}"),
@@ -372,6 +373,7 @@ pub(super) fn describe(ctx: &ToolCtx, name: &str, args: &Value) -> String {
         "skill_save" => format!("Save as a skill: {}", args["title"].as_str().unwrap_or("")),
         "computer_screenshot" => "Look at the computer's screen".into(),
         "computer_handoff" => format!("Ask you to take over the computer: {}", args["reason"].as_str().unwrap_or("")),
+        "computer_signin" => "Sign in to the site on the computer".into(),
         "computer_click" => format!("Click the computer at {},{}", args["x"], args["y"]),
         "computer_type" => format!("Type on the computer: {}", args["text"].as_str().unwrap_or("")),
         "computer_key" => format!("Press {} on the computer", args["keys"].as_str().unwrap_or("")),
@@ -392,6 +394,34 @@ pub(super) fn describe(ctx: &ToolCtx, name: &str, args: &Value) -> String {
     }
 }
 
+/// An email on its card: who it's to first, never cut short (card_fields' rule), then the subject and text. An email to
+/// send shows all of it; a draft, the start.
+pub fn describe_email(name: &str, args: &Value) -> String {
+    let body = args["body"].as_str().unwrap_or("");
+    format!(
+        "{} an email to {}{}{}: \"{}\" — {}",
+        if name == "email_send" { "Send" } else { "Draft" },
+        crate::email::addresses_shown(args["to"].as_str().unwrap_or("?")),
+        args["cc"].as_str().filter(|c| !c.trim().is_empty()).map(|c| format!(" (cc {})", crate::email::addresses_shown(c))).unwrap_or_default(),
+        args["account"].as_str().filter(|a| !a.trim().is_empty()).map(|a| format!(" from {a}")).unwrap_or_default(),
+        args["subject"].as_str().unwrap_or(""),
+        if name == "email_send" { body.to_string() } else { truncate(body, 400) }
+    )
+}
+
+/// The checks on an email's text, before anyone is asked and again after you edit it: a one-line subject, and an email
+/// to send whole on the card.
+fn email_fits(name: &str, args: &Value) -> Result<()> {
+    crate::email::header_text(args["subject"].as_str().unwrap_or(""))?;
+    if name == "email_send" && describe_email(name, args).chars().count() > 1150 {
+        bail!("too long to show whole on the approval card: save it with email_draft for the user to send");
+    }
+    if args["body"].as_str().map_or(0, |b| b.chars().count()) > 20_000 {
+        bail!("an email body can be up to 20,000 characters");
+    }
+    Ok(())
+}
+
 /// An external tool call in words: "notes: Edit file (path: /x.md; edits: […])".
 pub(super) fn describe_external(name: &str, args: &Value) -> Option<String> {
     let (server, tool) = crate::ext::split(name)?;
@@ -408,14 +438,26 @@ pub(super) fn describe_external(name: &str, args: &Value) -> Option<String> {
 /// own, so a long body can't push the recipient off the card.
 fn card_fields(v: &Value) -> String {
     const WHERE: [&str; 13] = ["to", "recipient", "recipients", "email", "cc", "bcc", "url", "address", "channel", "path", "repo", "account", "chat_id"];
+    fn is_where(k: &str) -> bool {
+        WHERE.contains(&k.to_ascii_lowercase().as_str())
+    }
+    // Whether a destination is somewhere inside: such a field comes before the others.
+    fn has_where(v: &Value) -> bool {
+        match v {
+            Value::Object(m) => m.iter().any(|(k, v)| is_where(k) || has_where(v)),
+            Value::Array(a) => a.iter().any(has_where),
+            _ => false,
+        }
+    }
     let Some(m) = v.as_object() else { return String::new() };
     let mut fields: Vec<(&String, &Value)> = m.iter().collect();
-    fields.sort_by_key(|(k, _)| !WHERE.contains(&k.to_ascii_lowercase().as_str()));
+    fields.sort_by_key(|(k, v)| !is_where(k) && !has_where(v));
     fields
         .iter()
         .map(|(k, v)| {
             let shown = match v {
                 Value::Object(_) => format!("{{{}}}", card_fields(v)),
+                Value::Array(a) if has_where(v) => format!("[{}]", a.iter().map(|i| if i.is_object() { format!("{{{}}}", card_fields(i)) } else { truncate(&i.to_string(), 120) }).collect::<Vec<_>>().join(", ")),
                 Value::String(s) if WHERE.contains(&k.to_ascii_lowercase().as_str()) => truncate(s, 300),
                 Value::String(s) => truncate(s, 120),
                 other if WHERE.contains(&k.to_ascii_lowercase().as_str()) => truncate(&other.to_string(), 300),
@@ -474,7 +516,7 @@ pub(super) async fn propose_plan(ctx: &ToolCtx, args: &Value) -> Result<String> 
         uses.join(", "),
         steps.iter().enumerate().map(|(i, s)| format!("{}. {s}", i + 1)).collect::<Vec<_>>().join("\n")
     );
-    wait_for_approval_with(ctx, "plan_propose", &summary, "plan", None).await?;
+    wait_for_approval_with(ctx, "plan_propose", args, &summary, "plan", None).await?;
     // Add to what's already allowed in this reply ("all like this" earlier), don't replace it.
     let mut plan = plan_of(ctx);
     plan.extend(actions.into_iter().filter(|a| !plan_of(ctx).contains(a)));
@@ -509,6 +551,10 @@ pub(super) fn precheck(ctx: &ToolCtx, name: &str, args: &Value) -> Result<()> {
             if args["prompt"].as_str().is_some_and(|p| p.trim().is_empty()) {
                 bail!("a routine needs a prompt");
             }
+            // Bots never change a schedule on their own: in a routine's run (nobody there), its times and end stay.
+            if ctx.unattended && (args["cron"].is_string() || args["until"].is_string()) {
+                bail!("a routine can't change when it runs or ends on its own; say what you'd change in your report and the person can");
+            }
             if let Some(cron) = args["cron"].as_str()
                 && crate::db::min_gap_minutes(cron)? < 15
             {
@@ -525,12 +571,17 @@ pub(super) fn precheck(ctx: &ToolCtx, name: &str, args: &Value) -> Result<()> {
             }
         }
         "routine_create" => {
+            let mut chat = ctx.chat_id;
             if args["for"].as_str().is_some_and(|f| !f.trim().is_empty()) {
                 // Only you send things to other people's chats: a guest (or a family group) can't.
                 if ctx.db.chat_guest(ctx.chat_id) {
                     bail!("only the person who runs you can set reminders for others");
                 }
-                remind_target(ctx, args)?;
+                // A follow-up is the bot checking back in this chat, not a reminder for someone else.
+                if args["followup"].as_bool() == Some(true) {
+                    bail!("a follow-up is for this chat; to remind someone else, leave out followup");
+                }
+                chat = remind_target(ctx, args)?.map_or(chat, |t| t.0);
             }
             if len("prompt") > 1000 || len("cron") > 100 {
                 bail!("a routine's prompt can be up to 1000 characters: say what to do, briefly");
@@ -542,6 +593,10 @@ pub(super) fn precheck(ctx: &ToolCtx, name: &str, args: &Value) -> Result<()> {
                     let t = local_time(at)?;
                     if t <= crate::db::now() || t > crate::db::now() + 366 * 86400 {
                         bail!("'at' must be in the future, within a year");
+                    }
+                    // A run booking the next one-off would otherwise repeat every minute.
+                    if ctx.unattended && t < crate::db::now() + 15 * 60 {
+                        bail!("from a routine, a one-off runs at least 15 minutes from now");
                     }
                 }
                 None if crate::db::min_gap_minutes(s(args, "cron").map_err(|_| anyhow::anyhow!("give cron for a recurring routine, or at for a one-off"))?)? < 15 => {
@@ -567,7 +622,7 @@ pub(super) fn precheck(ctx: &ToolCtx, name: &str, args: &Value) -> Result<()> {
                     bail!("until must be in the future");
                 }
             }
-            if ctx.db.routines(ctx.chat_id)?.len() >= 25 {
+            if ctx.db.routines(chat)?.len() >= 25 {
                 bail!("this chat already has 25 routines; ask the person to remove some first");
             }
         }
@@ -584,10 +639,7 @@ pub(super) fn precheck(ctx: &ToolCtx, name: &str, args: &Value) -> Result<()> {
                 bail!("who is it to?");
             }
             crate::email::addresses(args["cc"].as_str().unwrap_or(""))?;
-            crate::email::header_text(args["subject"].as_str().unwrap_or(""))?;
-            if describe(ctx, name, args).chars().count() > 1150 {
-                bail!("too long to show whole on the approval card: save it with email_draft for the user to send");
-            }
+            email_fits(name, args)?;
             if ctx.db.sent_today(ctx.chat_id, "email_send")? >= 20 {
                 bail!("20 emails were sent from this chat in the last day; draft this one instead");
             }
@@ -609,10 +661,7 @@ pub(super) fn precheck(ctx: &ToolCtx, name: &str, args: &Value) -> Result<()> {
                 bail!("who is it to?");
             }
             crate::email::addresses(args["cc"].as_str().unwrap_or(""))?;
-            crate::email::header_text(args["subject"].as_str().unwrap_or(""))?;
-            if len("body") > 20_000 {
-                bail!("an email body can be up to 20,000 characters");
-            }
+            email_fits(name, args)?;
         }
         "ask_bot" if len("task") > 1000 => bail!("a task for another bot can be up to 1000 characters: say what you need, briefly"),
         "computer_type" if len("text") > 1000 => bail!("type at most 1000 characters at a time"),
@@ -649,25 +698,87 @@ fn describe_tool(name: &str) -> String {
     }
 }
 
+/// The fields of a call you may edit on its card before it goes: an email's subject and body. Never who it's to.
+pub fn editable(tool: &str) -> &'static [&'static str] {
+    match tool {
+        "email_send" | "email_draft" => &["subject", "body"],
+        _ => &[],
+    }
+}
+
+/// What a card you can edit holds, as it starts out (None for a tool without any): the editable fields, and who it's to
+/// and from, to show (never taken back from it).
+fn draft_of(name: &str, args: &Value) -> Option<Value> {
+    (!editable(name).is_empty()).then(|| ["to", "cc", "account", "subject", "body"].iter().map(|f| (f.to_string(), json!(args[*f].as_str().unwrap_or("")))).collect::<serde_json::Map<_, _>>().into())
+}
+
+/// The call with the card's edited text in it. Only the editable fields are taken, as text; everything else (who it's
+/// to above all) stays as the bot asked, even if the stored draft says otherwise. Edited, it's checked again as the bot's
+/// own call was.
+pub fn with_draft(ctx: &ToolCtx, name: &str, args: &Value, draft: Option<&Value>) -> Result<Value> {
+    let mut out = args.clone();
+    for f in editable(name) {
+        if let Some(v) = draft.and_then(|d| d[*f].as_str()) {
+            out[*f] = json!(v);
+        }
+    }
+    if out != *args {
+        precheck(ctx, name, &out).map_err(|e| anyhow::anyhow!("your edit couldn't go as it is ({e:#}); nothing was done"))?;
+    }
+    Ok(out)
+}
+
+/// Your edits to a pending card, checked and kept: only its editable fields, as text, and still fitting on the card. The
+/// card then says what will go.
+pub fn edit_card(db: &Db, a: &crate::db::Approval, edits: &Value) -> Result<()> {
+    let (Some(draft), Some(edits)) = (a.draft.as_ref(), edits.as_object()) else { bail!("this request can't be edited") };
+    let mut out = draft.clone();
+    for (k, v) in edits {
+        let Some(v) = v.as_str().filter(|_| editable(&a.tool).contains(&k.as_str())) else { bail!("only the text can be edited, not {k}") };
+        out[k] = json!(v);
+    }
+    email_fits(&a.tool, &out)?;
+    // Only the email's part of the card changes: a note before it (a sensitive source read) stays.
+    let (was, now) = (card_text(&describe_email(&a.tool, draft)), card_text(&describe_email(&a.tool, &out)));
+    let summary = if a.summary.contains(&was) { a.summary.replacen(&was, &now, 1) } else { now };
+    if !db.approval_edit(a.id, &out, &summary)? {
+        bail!("this request is no longer pending");
+    }
+    Ok(())
+}
+
 /// Block until the user approves, denies, or the request expires. Works across processes via SQLite.
 /// `kind` says why it asks (rule | guarded | login); `site` is the website, for a per-site "always".
-pub(crate) async fn wait_for_approval_with(ctx: &ToolCtx, name: &str, summary: &str, kind: &str, site: Option<&str>) -> Result<()> {
+/// Approved, it gives back the call's arguments with any text you edited on the card (`args` itself otherwise).
+pub(crate) async fn wait_for_approval_with(ctx: &ToolCtx, name: &str, args: &Value, summary: &str, kind: &str, site: Option<&str>) -> Result<Value> {
     let summary = card_text(summary);
     let kind = guest_kind(ctx, kind);
     let id = ctx.db.approval_create(ctx.via_bot.unwrap_or(ctx.bot_id), ctx.chat_id, name, &summary, APPROVAL_TTL_SECS, kind, site)?;
+    if let Some(d) = draft_of(name, args) {
+        ctx.db.approval_set_draft(id, &d)?;
+    }
     // Only clean asks can become "all like this": none after the conversation read outside content.
     if let Some(run) = ctx.run_id.filter(|_| kind == "rule" && !ctx.is_tainted()) {
         ctx.db.approval_set_run(id, run)?;
     }
     loop {
         match ctx.db.approval_status(id)?.as_str() {
-            "approved" => return Ok(()),
+            "approved" => {
+                let a = ctx.db.approval(id)?;
+                return with_draft(ctx, name, args, a.as_ref().and_then(|a| a.draft.as_ref()));
+            }
             "denied" => {
+                let reason = ctx.db.approval(id)?.and_then(|a| a.reason);
                 // Saying no is a strong hint for the tidy-up (an action that merely failed is not).
                 if !ctx.incognito() {
-                    ctx.db.signal_add(ctx.bot_id, ctx.chat_id, "denied", &summary)?;
+                    let said = reason.as_ref().map(|r| format!("{summary} (Denied: {r})"));
+                    ctx.db.signal_add(ctx.bot_id, ctx.chat_id, "denied", said.as_deref().unwrap_or(&summary))?;
                 }
-                bail!("the user denied this action ({summary}). Don't retry it; tell the user it was not done.")
+                match reason {
+                    // Their own words: the bot changes course instead of only giving up.
+                    Some(r) => bail!("the user denied this action ({summary}) and said why, in their own words: \"Denied: {r}\". Don't retry it as it was: do what they said instead, or ask them if it isn't clear."),
+                    None => bail!("the user denied this action ({summary}). Don't retry it; tell the user it was not done."),
+                }
             }
             "expired" => bail!("approval request timed out ({summary}); the action was not done."),
             _ => tokio::time::sleep(Duration::from_millis(500)).await,
@@ -718,6 +829,9 @@ pub(super) fn park(ctx: &ToolCtx, name: &str, args: &Value, summary: &str, why: 
     let summary = card_text(summary);
     let id = ctx.db.approval_create(ctx.via_bot.unwrap_or(ctx.bot_id), ctx.chat_id, name, &summary, PARKED_TTL_SECS, guest_kind(ctx, why), site)?;
     ctx.db.approval_park(id, &args.to_string(), ctx.is_tainted())?;
+    if let Some(d) = draft_of(name, args) {
+        ctx.db.approval_set_draft(id, &d)?;
+    }
     Ok(format!("Not done yet: this needs the user's OK, so it is waiting in their Mimir inbox and will run as soon as they approve ({summary}). Mention briefly that it's waiting."))
 }
 
@@ -748,7 +862,10 @@ pub async fn run_parked(db: Db, a: crate::db::Approval) {
     if tainted {
         ctx.pre_taint();
     }
-    let out = exec(&ctx, &a.tool, &args).await;
+    let out = match with_draft(&ctx, &a.tool, &args, a.draft.as_ref()) {
+        Ok(args) => exec(&ctx, &a.tool, &args).await,
+        Err(e) => Err(e),
+    };
     // A screenshot taken for a model that isn't there to look at it: not kept.
     if let Ok(r) = &out
         && let (Some(img), _) = crate::computer::tool_image(&a.tool, r, &db.dir())
@@ -794,4 +911,16 @@ pub fn after_decision(db: &Db, a: &crate::db::Approval) {
     if a.parked && a.status == "approved" {
         tokio::spawn(run_parked(db.clone(), a.clone()));
     }
+    // A routine's ask said no to with a reason: its run has moved on, so the reason goes into the chat's conversation,
+    // in the person's words, for the bot's next turn there (and to the tidy-up, like a live no).
+    if let Some(why) = a.reason.as_deref().filter(|_| a.parked && a.status == "denied") {
+        let said = denied_note(&a.summary, why);
+        let _ = db.log(a.bot_id, a.chat_id, "user", &said, None);
+        let _ = db.signal_add(a.bot_id, a.chat_id, "denied", &format!("{} (Denied: {why})", a.summary));
+    }
+}
+
+/// What a no with a reason to a routine's ask says in the chat: what it was about, then the person's words.
+pub fn denied_note(summary: &str, why: &str) -> String {
+    format!("About what a routine asked to do ({}): Denied: {why}", truncate(summary, 300))
 }

@@ -200,6 +200,24 @@ pub fn specs() -> Vec<(&'static str, &'static str, Value)> {
             json!({"type":"object","properties":{"until":{"type":"string","description":"YYYY-MM-DD (through that day) or YYYY-MM-DD HH:MM: when a repeating routine ends"},"followup":{"type":"boolean","description":"with at: a check-back you booked on your own, not one the person asked for"},"cron":{"type":"string"},"at":{"type":"string","description":"YYYY-MM-DD HH:MM, for a one-off instead of cron"},"prompt":{"type":"string"},"quiet":{"type":"boolean"},"watch":{"type":"string","description":"quiet checks only: a page or feed URL, or \"mail\""},"keep":{"type":"boolean","description":"mail:<rule> only: run for every match, not just the first"},"for":{"type":"string","description":"a household member's name, to send it to their chat instead of this one"}},"required":["prompt"]}),
         ),
         ("routine_list", "List this chat's routines.", json!({"type":"object","properties":{}})),
+        (
+            "goal_set",
+            "Set this chat's goal: one lasting objective you keep working on across turns until it's done (\"find a plumber \
+             who can come this week\", \"get the insurance refund paid\"), when the person asks you to see something through. \
+             goal in their words, done_when what has to be true for it to be done. While it's on, the follow-ups \
+             you book here and tasks you hand to other bots belong to it (routines the person asks for stay theirs): when you're waiting on something, book a \
+             follow-up (routine_create with at and followup=true) rather than letting it drop. budget: a token limit the \
+             person gave for it, if any. One goal per chat; the person sees it pinned and can pause or remove it.",
+            json!({"type":"object","properties":{"goal":{"type":"string"},"done_when":{"type":"string"},"budget":{"type":"integer","description":"tokens; only when the person set a limit"}},"required":["goal","done_when"]}),
+        ),
+        (
+            "goal_update",
+            "Update this chat's goal after working on it: progress is one line on where it stands now. status: active \
+             (still going), blocked (waiting on the person: say what for in why, and ask them in your reply), or done. \
+             done only when its done condition holds and this chat's run log shows it (an email sent, an event added): \
+             otherwise it's refused, and you say what's left instead.",
+            json!({"type":"object","properties":{"progress":{"type":"string"},"status":{"type":"string","enum":["active","blocked","done"]},"why":{"type":"string","description":"blocked: what you need from the person"}},"required":["progress"]}),
+        ),
         ("card_read", "Read this chat's pinned cards (a shopping list, bills due, a project's state): each one's title and what it says now, including items the person ticked.", json!({"type":"object","properties":{}})),
         (
             "card_write",
@@ -337,9 +355,16 @@ pub fn specs() -> Vec<(&'static str, &'static str, Value)> {
             json!({"type":"object","properties":{"url":{"type":"string"}},"required":["url"]}),
         ),
         (
+            "computer_signin",
+            "Sign in to the site on your computer's screen. Open its sign-in page first. Mimir types a login saved for \
+             this site, or sends the person a sign-in card and types what they enter (user name, password, a code); you \
+             never see it. Returns whether it signed in. Use this for sign-ins and 2FA codes; computer_handoff for the rest.",
+            json!({"type":"object","properties":{}}),
+        ),
+        (
             "computer_handoff",
-            "Ask the person to take over your computer for a step only they should do: signing in, a verification or 2FA \
-             code, a captcha, or paying. Never type passwords, codes or card numbers yourself, and don't try to solve a captcha. \
+            "Ask the person to take over your computer for a step only they should do: a sign-in computer_signin can't \
+             do, a verification code, a captcha, or paying. Never type passwords, codes or card numbers yourself, and don't try to solve a captcha. \
              Say in reason what's needed (\"sign in to Padel Club\", \"enter the code sent to your phone\"). Mimir sends them \
              a link to the live screen and waits up to 10 minutes until they give it back; then take a screenshot and carry on.",
             json!({"type":"object","properties":{"reason":{"type":"string"}},"required":["reason"]}),

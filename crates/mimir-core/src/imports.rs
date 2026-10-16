@@ -80,7 +80,7 @@ pub async fn run(db: &Db, provider: &Provider, bot: i64, chat: i64, source: &str
 /// the person goes first: their own instructions (CLAUDE.md, USER.md), then Claude Code memories typed `user` or
 /// `feedback`, then the rest (project notes), newest first within each.
 fn memory_text(home: &Path, files: &[PathBuf]) -> String {
-    let mut read: Vec<(&PathBuf, String)> = files.iter().filter_map(|p| Some((p, std::fs::read_to_string(p).ok()?))).filter(|(_, t)| !t.trim().is_empty()).collect();
+    let mut read: Vec<(&PathBuf, String)> = files.iter().filter_map(|p| Some((p, read(p)?))).filter(|(_, t)| !t.trim().is_empty()).collect();
     read.sort_by_key(|(p, t)| {
         if p.ends_with("CLAUDE.md") || p.ends_with("USER.md") {
             0
@@ -101,7 +101,7 @@ fn bring_in(db: &Db, bot: i64, chat: i64, label: &str, home: &Path, found: &Foun
     let scope = format!("chat:{chat}");
     let mut skills = 0;
     for p in &found.skills {
-        let Some((name, description, body)) = std::fs::read_to_string(p).ok().as_deref().and_then(crate::tidy::parse_skill_md) else { continue };
+        let Some((name, description, body)) = read(p).as_deref().and_then(crate::tidy::parse_skill_md) else { continue };
         // Already proposed, dismissed, too long or holding a secret: skipped, the rest still come in.
         match crate::tidy::skill_md_propose(db, &scope, bot, &format!("{label}, {}", shown(home, p)), &name, &description, &body) {
             Ok(Some(_)) => skills += 1,
@@ -128,7 +128,7 @@ fn bring_in(db: &Db, bot: i64, chat: i64, label: &str, home: &Path, found: &Foun
 /// read outside content.
 fn propose_routine(db: &Db, bot: i64, chat: i64, cron: &str, prompt: &str, quiet: bool) -> Result<i64> {
     let r = db.routine_create(bot, chat, cron, prompt, quiet)?;
-    db.routine_update(chat, r.id, &r.cron, &r.prompt, quiet, true)?;
+    db.routine_update(chat, r.id, &r.cron, &r.prompt, quiet, true, None)?;
     db.routine_taint(r.id)?;
     Ok(r.id)
 }
@@ -177,6 +177,12 @@ fn scan(home: &Path, source: &str) -> Found {
     f
 }
 
+/// Another agent's file, if it's a plain file of a sensible size: a huge one would hang the import before any cut.
+fn read(p: &Path) -> Option<String> {
+    std::fs::metadata(p).ok().filter(|m| m.is_file() && m.len() <= 1 << 20)?;
+    std::fs::read_to_string(p).ok()
+}
+
 fn children(dir: &Path) -> Vec<PathBuf> {
     std::fs::read_dir(dir).map(|d| d.flatten().map(|e| e.path()).collect()).unwrap_or_default()
 }
@@ -204,7 +210,7 @@ fn skill_files(dir: &Path, skip: &[String], depth: usize, out: &mut Vec<PathBuf>
 /// intervals are left out.
 // ponytail: a job's own time zone is ignored (the routine runs on this computer's clock); convert when someone needs it
 fn jobs(path: &Path) -> Vec<Job> {
-    let v: serde_json::Value = std::fs::read_to_string(path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+    let v: serde_json::Value = read(path).and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
     v["jobs"]
         .as_array()
         .into_iter()
@@ -375,6 +381,10 @@ pub fn read_bot_file(text: &str) -> Result<BotFile> {
     }
     if f.name.trim().is_empty() {
         bail!("that bot file has no name");
+    }
+    // The model goes to the AI's command line as an argument: from a file, a name, never something read as an option.
+    if f.model.starts_with('-') || f.model.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        bail!("that bot file's model isn't a model name");
     }
     Ok(f)
 }
@@ -688,6 +698,11 @@ mod tests {
         assert!(w.iter().any(|w| w.contains(evil) && w.contains("isn't used") && w.contains("bot's page")), "{w:?}");
         let (id, _) = import_bot(&db, &file, 0, false, None).unwrap();
         assert_eq!(db.bot(id).unwrap().base_url, "", "no address of yours for that account: none");
+        // Nor an option for the AI's command line, dressed as a model.
+        for model in ["--dangerously-skip-permissions", "sonnet --yolo"] {
+            let f = serde_json::json!({"mimir_bot": 1, "name": "Helper", "provider": "claude", "model": model}).to_string();
+            assert!(preview(&db, &f, None).is_err() && import_bot(&db, &f, 0, false, None).is_err(), "{model}");
+        }
 
         // Two of your own bots on one account, at different addresses: a duplicate keeps its original's.
         let mine = |name: &str, url: &str| {
@@ -745,6 +760,9 @@ mod tests {
         let text = memory_text(&home, &c.memory);
         assert!(text.starts_with("## ~/.claude/CLAUDE.md\nAlways answer in English"), "{text}");
         assert!(text.find("No emoji").unwrap() < text.find("cargo").unwrap(), "what's about the person before project notes");
+        // A file too big to be a memory is left out rather than read whole.
+        std::fs::write(home.join(".claude/projects/-x/memory/huge.md"), "x".repeat((1 << 20) + 1)).unwrap();
+        assert!(!memory_text(&home, &scan(&home, "claude_code").memory).contains("huge.md"));
         let _ = std::fs::remove_dir_all(&home);
     }
 }

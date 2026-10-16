@@ -10,6 +10,7 @@ Bots act through **tools**. Every tool call is checked against your rules before
 | `chat_search` | Search earlier conversations with you (any of your bots) for what was said but not saved | allow |
 | `memory_forget` | Forget a memory | **ask** |
 | `card_read`, `card_write` | Read this chat's pinned cards, and write one whole (a shopping list, bills due): text, checklists, tables and links, never HTML; up to 20 a chat ([Pinned cards](bots-and-chats.md#pinned-cards)). Not in incognito. A card written after reading outside content counts as outside content for whoever reads it next | allow |
+| `goal_set`, `goal_update` | Set this chat's goal (one at a time) and keep its progress line; *done* only when the chat's run log shows something done since it was set ([Goals](routines.md#goals)). Come with `routine_create`. Not in incognito, nor in a task handed over by another bot | allow |
 | `routine_create`, `routine_list` | Schedule and list routines, recurring or once (a reminder) ([Routines](routines.md)) | allow |
 | `routine_update` | Change a routine's brief, schedule, quiet or watch (when you reply to its result with what to change); a bot allowed `routine_create` may use it | allow |
 | `routine_delete` | Delete a routine | **ask** |
@@ -31,9 +32,9 @@ Bots act through **tools**. Every tool call is checked against your rules before
 | `skill_save` | Propose a skill from what the conversation did, when you ask; you press Save ([Skills](skills.md)) | allow |
 | `plan_propose` | Propose a plan you approve once (below) | allow |
 | `ask_choice` | Ask you one question with 2 to 4 answers to tap, plus "Something else". The buttons go under the reply, and your tap is your next message. Only in Telegram, Slack and Discord chats, never in routines or another bot's task. A tap is never an approval | allow |
-| `computer_*` | Use the bots' computer, self-hosted only ([The bots' computer](computer.md)) | allow; `computer_open` **asks** |
+| `computer_*` | Use the bots' computer, self-hosted only ([The bots' computer](computer.md)) | allow; `computer_open` **asks**, and `computer_signin` with a saved login |
 | `browser__*` | The headless browser, when switched on (below) | opening a page **asks** |
-| *tool servers* | Tools from MCP servers you added (below) | read-only allow, the rest **ask** |
+| *tool servers* | Tools from MCP servers you added (below) | read-only (as you confirmed) allow, the rest **ask** |
 
 Each bot has a tool allowlist on its page; tools outside it are hidden from that bot and refused.
 
@@ -44,7 +45,17 @@ to Telegram, Slack or Discord and shows a card in the app with **Allow once**, *
 for opening pages: "Always on this site") and **Deny**. Every "always" becomes a visible rule in Settings → Permissions.
 Once you've allowed the same thing twice, the card makes "always" the main button. No answer within 5 minutes means
 deny (routines park their asks for 24 hours instead; see [Needs you](routines.md#needs-you)). From the command line:
-`mimir approvals`, `mimir approve <id>`, `mimir deny <id>`.
+`mimir approvals`, `mimir approve <id>`, `mimir deny <id> [why]`.
+
+**Say why.** **Deny…** in the app takes an optional reason, and in Telegram, Slack, Discord or Signal a text reply to
+the card does the same (a number on Signal still picks a button). The bot is told *"Denied: <your reason>"* in your own
+words and carries on with that, instead of only saying it wasn't done. A routine's ask has moved on by the time you
+answer, so your reason goes into that chat's conversation for the bot's next turn there.
+
+**Edit before it goes.** An email's card (to send, or to draft after outside content) has **Edit** in the app: change
+the subject and text, then approve, and that's what goes. Who it's to, the cc and the account can't be changed on the
+card, and the edited email is checked again (one-line subject, whole on the card). In a messaging app the card has
+**Edit in Mimir**, a link to it in the web app, when Mimir runs as a server with an https address.
 
 ## Outside content (taint)
 
@@ -90,6 +101,7 @@ allow:
 - `web_fetch` and `web_search`, whatever the address or query, and `computer_open`, `computer_type`;
 - `ask_bot`: a task for another bot;
 - a message to someone else's chat: a reminder `for` them, `send_file` in a group or a guest's chat;
+- `memory_store` with `household`: the household's guests read those memories;
 - any tool server's tool that changes something, and its read-only tools that reach the internet (except the sensitive
   server's own).
 
@@ -137,6 +149,9 @@ checks the address in the link, not where the name leads.
 
 **Saved logins** are typed by name (e.g. `GITHUB_PASSWORD`): the browser fills in the value, the AI never sees it, it
 only works on the sites you listed for it, and you approve each use. Values are scrubbed from every result and log.
+A login can have an authenticator key too: a bot types `NAME_CODE` and Mimir fills in the current code, only on the
+login's sites. On the bots' computer, a bot can also ask you to sign in with a masked form in Mimir instead of the
+chat ([Signing in from your phone](computer.md#signing-in-from-your-phone)); that login is kept for that bot and site.
 
 ## Tool servers (MCP)
 
@@ -145,7 +160,8 @@ online at a URL. Paste its setup line (`npx -y @modelcontextprotocol/server-file
 (`https://mcp.deepwiki.com/mcp`), or the JSON from its instructions (`{"mcpServers": {…}}`). Mimir starts or connects
 to it once to list its tools, so a broken setup isn't saved. Tokens in its environment or headers go to the keychain
 (server: the private database), never the config. Its tools follow the same rules: tools the server marks read-only are
-allowed, the rest ask. Each bot can switch servers on or off. Remote servers use MCP's Streamable HTTP transport;
+allowed once you confirm them (Mimir lists the tools after adding the server, "read-only (the server says)"), the rest
+ask. Updating the server, or changing what runs, asks you to confirm again. Each bot can switch servers on or off. Remote servers use MCP's Streamable HTTP transport;
 servers that only offer the older SSE transport aren't supported.
 
 **Malware check.** Before starting a server whose command downloads a package (`npx`, `bunx`, `npm exec`, `pnpm dlx`,

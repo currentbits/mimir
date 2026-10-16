@@ -17,8 +17,8 @@ USAGE:
   mimir transcribe <file>   speech to text for a recording (whisper.cpp here, or your OpenAI-compatible key)
   mimir runs                recent runs with tokens, cost and tool calls
   mimir approvals           list actions waiting for your approval
-  mimir approve <id>        approve one (deny <id> to refuse)
-  mimir doctor              check AI logins, channels, the computer, disk, database and backups
+  mimir approve <id>        approve one (deny <id> [why] to refuse, saying why)
+  mimir doctor              check AI logins, channels, the computer, disk, database, backups and security
 
 ENV:
   TELEGRAM_BOT_TOKEN         from @BotFather (serve)
@@ -120,7 +120,11 @@ async fn main() -> Result<()> {
             Ok(())
         }
         Some(cmd @ ("approve" | "deny")) => {
-            let id: i64 = args.get(1).and_then(|s| s.parse().ok()).context("usage: mimir approve|deny <id>")?;
+            let id: i64 = args.get(1).and_then(|s| s.parse().ok()).context("usage: mimir approve <id>, or mimir deny <id> [why]")?;
+            let why = args.get(2..).unwrap_or_default().join(" ");
+            if cmd == "deny" && !why.trim().is_empty() {
+                db.approval_set_reason(id, why.trim())?;
+            }
             match db.approval_decide(id, cmd == "approve", None)? {
                 Some(a) => println!("{}: {}", a.status, a.summary),
                 None => println!("#{id} is not pending (already decided or expired)"),

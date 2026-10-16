@@ -592,6 +592,7 @@ pub(super) async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<Stri
             ctx.taint();
             "The person did it and gave the computer back. Take a screenshot to see where things are now, then carry on.".into()
         }
+        "computer_signin" => computer_signin(ctx).await?,
         n if n.starts_with("computer_") => {
             hold_computer(ctx).await?;
             // What's on the screen is outside content, like a web page.
@@ -671,11 +672,15 @@ pub(super) async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<Stri
             if followup {
                 ctx.db.routine_set_followup(r.id)?;
             }
+            if to.is_none() && followup {
+                ctx.db.goal_claim_routine(r.id, chat)?;
+            }
+            let for_goal = if ctx.db.routine(r.id)?.is_some_and(|r| r.for_goal) { " (for the goal)" } else { "" };
             if let Some((_, name)) = &to {
                 return Ok(format!("#{} set for {name}: it runs in their own chat, {}", r.id, if r.once { format!("once, {}", next_run(&r)) } else { format!("next {}", next_run(&r)) }));
             }
             if followup {
-                return Ok(format!("follow-up #{} booked; runs once, {}. Tell the person when you'll check back, and that they can cancel it.", r.id, next_run(&r)));
+                return Ok(format!("follow-up #{}{for_goal} booked; runs once, {}. Tell the person when you'll check back, and that they can cancel it.", r.id, next_run(&r)));
             }
             let until = args["until"].as_str().filter(|u| !r.once && !u.trim().is_empty()).map(|u| format!(", until {u}")).unwrap_or_default();
             format!("{} #{} created; {} {}{until}", if quiet { "quiet check" } else if r.once { "one-off" } else { "routine" }, r.id, if r.once { "runs once," } else { "next run" }, next_run(&r))
@@ -686,7 +691,7 @@ pub(super) async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<Stri
                 "no routines".into()
             } else {
                 v.iter()
-                    .map(|r| format!("#{} [{}]{}{}{}{} — {}", r.id, if r.followup { "follow-up" } else if r.once { "once" } else { &r.cron }, if r.ends > 0 { format!(" until {}", fmt_ts(r.ends)) } else { String::new() }, if r.quiet { " quiet" } else { "" }, if r.watch.is_empty() { String::new() } else { format!(" watching {}", r.watch) }, if r.paused || ctx.db.paused(r.bot_id, crate::db::now()).ok().flatten().is_some() { " paused".into() } else { format!(" next {}", next_run(r)) }, r.prompt))
+                    .map(|r| format!("#{}{} [{}]{}{}{}{} — {}", r.id, if r.for_goal { " (for the goal)" } else { "" }, if r.followup { "follow-up" } else if r.once { "once" } else { &r.cron }, if r.ends > 0 { format!(" until {}", fmt_ts(r.ends)) } else { String::new() }, if r.quiet { " quiet" } else { "" }, if r.watch.is_empty() { String::new() } else { format!(" watching {}", r.watch) }, if r.paused || ctx.db.paused(r.bot_id, crate::db::now()).ok().flatten().is_some() { " paused".into() } else if r.goal_held { " paused (goal)".into() } else { format!(" next {}", next_run(r)) }, r.prompt))
                     .collect::<Vec<_>>()
                     .join("\n")
             }
@@ -701,6 +706,34 @@ pub(super) async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<Stri
                 "no cards".into()
             } else {
                 v.iter().map(|k| format!("## {}\n({}, {})\n{}", k.title, if k.by_you { "last changed by the person" } else { "last written by a bot" }, fmt_ts(k.updated_at), k.body)).collect::<Vec<_>>().join("\n\n")
+            }
+        }
+        "goal_set" => {
+            let budget = args["budget"].as_i64().unwrap_or(0);
+            let g = ctx.db.goal_set(ctx.bot_id, ctx.chat_id, s(args, "goal")?, s(args, "done_when")?, budget, ctx.is_tainted())?;
+            format!("Goal set: {} (done when {}). The person sees it pinned in this chat. Keep at it: book follow-ups for what you're waiting on, and goal_update as it moves.", g.text, g.done_when)
+        }
+        "goal_update" => {
+            let progress = args["progress"].as_str().unwrap_or("");
+            match args["status"].as_str() {
+                Some("done") => {
+                    let g = ctx.db.goal(ctx.chat_id)?.context("this chat has no goal")?;
+                    if !["active", "blocked"].contains(&g.status.as_str()) {
+                        bail!("the goal is {}; only the person can change it now", g.status);
+                    }
+                    // The log is the truth: done only on something it shows was done since the goal was set.
+                    let backed = crate::receipts::backing(&ctx.db.tool_calls_since(ctx.chat_id, g.created_at)?);
+                    if backed.is_empty() {
+                        bail!("not marked done: this chat's run log shows nothing done towards it yet (no email sent, nothing added to the calendar). Say what's left, or set it blocked and ask the person; they can mark it done themselves");
+                    }
+                    ctx.db.goal_progress(ctx.chat_id, &truncate(format!("{} ✓ {}", progress.trim(), backed.join("; ")).trim(), 300), None, "", ctx.is_tainted())?;
+                    crate::runtime::stop_handed(&ctx.db.goal_status(ctx.chat_id, "done", "")?);
+                    format!("Goal done, on: {}. Its follow-ups and routines are removed. Tell the person.", backed.join("; "))
+                }
+                status => {
+                    let g = ctx.db.goal_progress(ctx.chat_id, progress, status, args["why"].as_str().unwrap_or(""), ctx.is_tainted())?;
+                    format!("Goal {}: {}", g.status, g.progress)
+                }
             }
         }
         "card_write" => {
@@ -718,14 +751,13 @@ pub(super) async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<Stri
             if r.once && args["cron"].is_string() {
                 bail!("a one-off has a time, not a schedule: delete it and create a new one");
             }
-            if let Some(u) = args["until"].as_str() {
-                if r.once && !u.trim().is_empty() {
-                    bail!("a one-off has no end: it runs once");
-                }
-                // The end first, so a new schedule is checked against the new end.
-                ctx.db.routine_set_ends(ctx.chat_id, id, if u.trim().is_empty() { 0 } else { until_time(u)? })?;
-            }
-            ctx.db.routine_update(ctx.chat_id, id, args["cron"].as_str().unwrap_or(&r.cron), prompt, quiet, r.paused)?;
+            // The end with the schedule: checked together, so a refused change leaves both as they were.
+            let ends = match args["until"].as_str().map(str::trim) {
+                Some("") => Some(0),
+                Some(u) => Some(until_time(u)?),
+                None => None,
+            };
+            ctx.db.routine_update(ctx.chat_id, id, args["cron"].as_str().unwrap_or(&r.cron), prompt, quiet, r.paused, ends)?;
             // Watching only makes sense for a quiet check: one that stops being quiet stops watching.
             let watch = if quiet { args["watch"].as_str().unwrap_or(&r.watch) } else { "" };
             ctx.db.routine_set_watch(ctx.chat_id, id, watch)?;
@@ -782,6 +814,7 @@ pub(super) async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<Stri
                     ..Default::default()
                 };
                 let id = ctx.db.delegation_add(&d)?;
+                ctx.db.goal_claim_delegation(id, ctx.chat_id)?;
                 // Read your email or a meeting: the helper's web addresses ask too, though it runs later.
                 if ctx.saw_private() {
                     ctx.db.set_setting(&delegation_private_key(id), &ctx.private_value())?;
@@ -822,6 +855,87 @@ pub(crate) async fn delegate(ctx: &ToolCtx, target: &crate::db::Bot, task: &str)
 /// One computer action, then a screenshot of what it led to.
 /// One user of the computer at a time: this run holds it while it works; another bot waits a little; the person
 /// taking over in the app always wins (bots wait until they give it back).
+/// The bot may have been sent to the page it's on by someone other than the person: the conversation read outside
+/// content, or the run is on words that aren't theirs (another bot's task, a document).
+pub(super) fn steered(ctx: &ToolCtx) -> bool {
+    ctx.is_tainted() || ctx.run_id.and_then(|r| ctx.db.brief(r).ok().flatten()).is_some_and(|b| !crate::own_words(&b))
+}
+
+/// Sign in to the page on the computer's screen without the AI seeing the login: a login this bot saved for the site
+/// is typed by Mimir (after an OK, like every saved login); otherwise the person gets a card with a link to a masked
+/// form in Mimir, and Mimir types what they enter there and keeps it as this bot's login for the site. The model only
+/// ever hears "signed in" or "failed".
+async fn computer_signin(ctx: &ToolCtx) -> Result<String> {
+    hold_computer(ctx).await?;
+    let (home, bot) = (ctx.db.dir(), ctx.bot_id);
+    tokio::task::spawn_blocking(move || crate::computer::start(&home, Some(bot))).await??;
+    let form = crate::computer::sign_in_form().await.context("couldn't read the page on the computer; take a screenshot and try again")?;
+    let url = form["url"].as_str().unwrap_or("").to_string();
+    if !(form["password"] == true || form["code"] == true || form["user"] == true) {
+        bail!("there's no sign-in form on the screen; open the site's sign-in page first (or use computer_handoff)");
+    }
+    let site = crate::ext::site_of(&url).context("this page has no website address to keep a login for; use computer_handoff")?;
+    // A saved login the site turned down last time isn't tried again: the person gets a card, and what they sign in
+    // with there replaces it.
+    let stale = crate::ext::vault_for(&ctx.db, ctx.bot_id).into_iter().find(|e| e.bot == Some(ctx.bot_id) && crate::ext::host_allowed(&url, &e.domains) && crate::ext::login_failed(&ctx.db, &e.name));
+    if let Some(e) = crate::ext::signin_login(&ctx.db, ctx.bot_id, &url) {
+        crate::tools::wait_for_approval_with(ctx, "computer_signin", &Value::Null, &format!("Use saved login {} on {url}", e.name), "login", None).await?;
+        // The OK can take longer than the computer's lease: take it again, and type only into this bot's own browser
+        // (sign_in checks), so another bot that used the computer meanwhile never gets this login.
+        hold_computer(ctx).await?;
+        let get = |k: &str| crate::host::secret_get(&format!("vault:{}{k}", e.name)).unwrap_or_default();
+        let login = crate::computer::Login { user: get(":user"), password: get(""), code: String::new(), totp: crate::totp::parse(&get(":totp")).ok() };
+        if crate::computer::sign_in(&ctx.db.dir(), ctx.bot_id, &login, &e.domains).await? {
+            return Ok(format!("Signed in to {site} with your saved login. Take a screenshot to see the page, then carry on."));
+        }
+        crate::ext::login_failed_set(&ctx.db, &e.name)?;
+        return Ok(format!("Signing in to {site} with the saved login failed (it may be out of date). Call computer_signin again: the person gets a sign-in card this time."));
+    }
+    if ctx.unattended {
+        bail!("there's no saved login for {site} yet, and nobody is watching this run to sign in; use computer_handoff");
+    }
+    // A card comes from the bot they talk to, but the login is this one's (its browser profile): not mixed up.
+    // ponytail: a delegated task asks to take over instead; keep the computer's bot on the card if that's wanted.
+    if ctx.via_bot.is_some_and(|v| v != ctx.bot_id) {
+        bail!("there's no saved login for {site} yet; in a task handed to you, ask the person to take over with computer_handoff");
+    }
+    let link = match ctx.db.setting("public_url")? {
+        Some(u) => format!("{}/#signin", u.trim_end_matches('/')),
+        None => "Open Mimir, Needs you".into(),
+    };
+    // Phishing: a bot steered by a page or a message can open a look-alike sign-in. The card says so, with the full
+    // address, before anyone types a password.
+    let steered = steered(ctx);
+    let card = crate::ext::signin_warnings(&ctx.db, &url, &site, steered);
+    let host = card["host"].as_str().unwrap_or(&site).to_string();
+    let like = card["lookalike"].as_str().map(|k| format!(", made to look like {k}")).unwrap_or_default();
+    let check = match (steered, card["lookalike"].as_str()) {
+        _ if card["foreign"] == true => format!("\n\n⚠️ This address uses letters from another alphabet{like}: {host}"),
+        (_, Some(k)) => format!("\n\n⚠️ This isn't {k}, where you've signed in before. Check the address: {host}"),
+        (true, None) => format!("\n\n⚠️ I came to this site after reading a web page or a message. Check the address: {host}"),
+        _ => String::new(),
+    };
+    let again = if stale.is_some() { "\n\nThe login saved for it didn't work last time; this one replaces it." } else { "" };
+    let summary = format!("Sign in to {site} ({host}){check}{again}\n\n{link}: type your login there, never in this chat. Mimir types it into the page and keeps it for this bot on {site}.");
+    let id = ctx.db.approval_create(ctx.bot_id, ctx.chat_id, "computer_signin", &summary, HANDOFF_SECS, "signin", Some(&site))?;
+    ctx.db.signin_card_set(id, &card)?;
+    // Filled in from the form (host.rs, signin_submit): approved = signed in. Held meanwhile, so no other bot's profile
+    // takes the screen; and a fill that never reports back still ends.
+    let who = ctx.run_id.map(|r| format!("run:{r}")).unwrap_or_else(|| format!("bot:{}", ctx.bot_id));
+    let until = crate::db::now() + HANDOFF_SECS + 120;
+    loop {
+        match ctx.db.approval_status(id)?.as_str() {
+            "approved" => return Ok(format!("Signed in to {site}. Take a screenshot to see the page, then carry on.")),
+            "denied" => bail!("the sign-in to {site} failed, or they couldn't do it now. Stop here and tell them; computer_handoff lets them do it on the screen."),
+            "expired" => bail!("nobody signed in to {site} in 10 minutes. Stop here and tell them what's needed."),
+            _ if crate::db::now() > until => bail!("the sign-in to {site} didn't finish"),
+            _ => {}
+        }
+        let _ = ctx.db.computer_lease(&who, "A bot signing in", 120)?;
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+}
+
 pub(crate) async fn hold_computer(ctx: &ToolCtx) -> Result<()> {
     let who = ctx.run_id.map(|r| format!("run:{r}")).unwrap_or_else(|| format!("bot:{}", ctx.bot_id));
     let name = ctx.db.bot(ctx.bot_id).map(|b| b.name).unwrap_or_else(|_| "A bot".into());
