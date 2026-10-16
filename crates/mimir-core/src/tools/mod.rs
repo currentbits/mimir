@@ -1470,6 +1470,14 @@ mod tests {
         assert!(ctx.db.due(1, crate::db::now()).unwrap().iter().all(|x| x.id != late.id));
         assert!(ctx.db.routine(late.id).unwrap().is_none());
         assert!(ctx.db.routine(f.id).unwrap().is_some(), "the follow-up isn't touched");
+        // Within the grace, a slot from before the end still runs; an event (webhook, mail) after the end doesn't.
+        let now = crate::db::now();
+        let slot = ctx.db.routine_create(1, 9, "0 8 * * *", "slot", false).unwrap();
+        ctx.db.c().execute("UPDATE routines SET ends=?2, next_fire=?3 WHERE id=?1", [slot.id, now - 60, now - 120]).unwrap();
+        let ev = ctx.db.routine_create(1, 9, "0 8 * * *", "event", false).unwrap();
+        ctx.db.c().execute("UPDATE routines SET ends=?2, next_fire=?3 WHERE id=?1", [ev.id, now - 60, now - 10]).unwrap();
+        let due: Vec<i64> = ctx.db.due(1, now).unwrap().iter().map(|x| x.id).collect();
+        assert!(due.contains(&slot.id) && !due.contains(&ev.id), "{due:?}");
     }
 
     #[tokio::test]
