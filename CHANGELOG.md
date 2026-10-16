@@ -104,6 +104,9 @@ a restart and more).
   get an answer straight away, and when the other bot is done its result comes back in the same chat.
 - **Loop breaker:** a bot that keeps making the same call (the 3rd time in a row, the 5th for just looking) stops and
   asks you whether to go on, instead of burning time and money. Routines ask in Needs you.
+- **Bring your memories over from another agent:** if Claude Code, Hermes or OpenClaw runs on the same computer,
+  **Memory → Import** reads its memories, skills and scheduled jobs in one click. Nothing comes in active: memories
+  are suggestions, skills are proposals and jobs become paused routines, and anything that looks like a secret is left out.
 
 ### Routines
 - **Follow-ups the bot books itself:** "I'll check back Friday whether they replied" becomes a one-off follow-up, said
