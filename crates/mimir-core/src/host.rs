@@ -1313,7 +1313,7 @@ impl Host {
                 if self.db.routine(id)?.is_none_or(|r| r.cron != cron.trim()) {
                     crate::events::ready(&self.db, chat, &cron)?;
                 }
-                // A new end (0 clears it) comes in the same call, so it's checked with the schedule.
+                // A new end comes with the schedule, so the two are checked together (0 clears it).
                 ok(self.db.routine_update(chat, id, &cron, &arg::<String>(a, "prompt")?, arg(a, "quiet")?, arg(a, "paused")?, arg(a, "ends")?)?)
             }
             "delete_routine" => ok(self.db.routine_delete(arg(a, "chat_id")?, arg(a, "id")?)?),
