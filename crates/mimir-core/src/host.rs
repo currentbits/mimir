@@ -807,7 +807,7 @@ impl Host {
                 for s in ext::servers(&self.db) {
                     let keys = |m: std::collections::HashMap<String, String>| m.into_keys().collect::<std::collections::BTreeSet<_>>();
                     let update = if s.preset.is_none() { ext::update_for(&self.db, &s).await } else { None };
-                    servers.push(json!({"name": s.name, "preset": s.preset, "command": s.command, "args": s.args, "url": s.url, "env": keys(s.env), "headers": keys(s.headers), "tools": ext::cached_tools(&self.db, &s.name).len(), "signed_in": ext::signed_in(&s.name), "sensitive": sensitive.contains(&s.name), "suggest_sensitive": tools::looks_sensitive(&s.name), "update": update}));
+                    servers.push(json!({"name": s.name, "preset": s.preset, "command": s.command, "args": s.args, "url": s.url, "env": keys(s.env), "headers": keys(s.headers), "tools": ext::cached_tools(&self.db, &s.name).len(), "signed_in": ext::signed_in(&s.name), "sensitive": sensitive.contains(&s.name), "suggest_sensitive": tools::looks_sensitive(&s.name), "update": update, "unconfirmed": ext::claimed_tools(&self.db, &s.name).iter().filter(|t| t.read_only).count() - ext::cached_tools(&self.db, &s.name).iter().filter(|t| t.read_only).count()}));
                 }
                 ok(json!({"servers": servers, "tools": ext::all_tools(&self.db).len()}))
             }
@@ -832,6 +832,17 @@ impl Host {
                 ok(self.db.set_setting("sensitive", &serde_json::to_string(&list)?)?)
             }
             "tool_server_delete" => ok(ext::delete_server(&self.db, &arg::<String>(a, "name")?)?),
+            // One server's tools with the server's read-only claims, which count once confirmed (`tool_server_read_only`).
+            "tool_server_tools" => {
+                let name: String = arg(a, "name")?;
+                let trusted = ext::cached_tools(&self.db, &name);
+                let tools: Vec<Value> = ext::claimed_tools(&self.db, &name)
+                    .into_iter()
+                    .map(|t| json!({"name": t.name, "description": t.description, "says_read_only": t.read_only, "read_only": trusted.iter().any(|o| o.name == t.name && o.read_only)}))
+                    .collect();
+                ok(tools)
+            }
+            "tool_server_read_only" => ok(ext::confirm_read_only(&self.db, &arg::<String>(a, "name")?, &arg::<Vec<String>>(a, "tools")?)?),
             // A remote server that wants a sign-in (MCP's OAuth): returns the address to open; then `_wait` (desktop) or
             // `_paste` (a server: the address the browser ended up on) finishes it and saves the server. Returns its tool count.
             "tool_server_sign_in" => {
