@@ -169,6 +169,10 @@ pub async fn save_server(db: &Db, mut conf: ServerConf) -> Result<usize> {
     let mut list = servers(db);
     let mut old = list.iter().find(|s| s.name == conf.name).cloned().unwrap_or_default();
     let name = conf.name.clone();
+    // Another program (an update, or an edit to what runs) is another server: its read-only claims are reviewed again.
+    if (&old.command, &old.args, &old.url) != (&conf.command, &conf.args, &conf.url) {
+        db.set_setting(&format!("mcp_read_only:{name}"), "[]")?;
+    }
     for ((kind, new), (_, old)) in conf.secret_maps().into_iter().zip(old.secret_maps()) {
         for k in old.keys().filter(|k| !new.contains_key(*k)) {
             crate::host::secret_set(&secret_name(kind, &name, k), "")?;

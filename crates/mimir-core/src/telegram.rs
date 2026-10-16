@@ -151,15 +151,15 @@ impl Tg {
     }
 
     async fn draft(&self, chat: &str, id: u32, text: &str) -> bool {
-        // ponytail: a server without rich drafts gets two calls a tick; remember that it lacks them if that matters
-        let rich = json!({"chat_id": chat, "draft_id": id, "rich_message": {"html": crate::fmt::telegram_rich(text)}, "can_stop": true});
-        if self.call("sendRichMessageDraft", rich).await.is_ok() {
-            return true;
-        }
-        // Plain drafts can't turn link previews off (sendMessageDraft has no such option), so links in one aren't left
+        // Drafts can't turn link previews off (neither draft call has that option), so links in one aren't left
         // recognisable as links while it's written: an invisible word joiner inside "://" and after each dot inside a
         // word (Telegram links a bare "evil.com/x?d=…" too). The final message has previews off and its links whole.
         let text = unlinked(text);
+        // ponytail: a server without rich drafts gets two calls a tick; remember that it lacks them if that matters
+        let rich = json!({"chat_id": chat, "draft_id": id, "rich_message": {"html": crate::fmt::telegram_rich(&text)}, "can_stop": true});
+        if self.call("sendRichMessageDraft", rich).await.is_ok() {
+            return true;
+        }
         self.call("sendMessageDraft", json!({"chat_id": chat, "draft_id": id, "text": text, "can_stop": true})).await.is_ok()
     }
 
