@@ -104,12 +104,9 @@ a restart and more).
   get an answer straight away, and when the other bot is done its result comes back in the same chat.
 - **Loop breaker:** a bot that keeps making the same call (the 3rd time in a row, the 5th for just looking) stops and
   asks you whether to go on, instead of burning time and money. Routines ask in Needs you.
-- **Tool servers stay on one version:** adding one that downloads its package (`npx -y pkg`, `uvx pkg`) pins it to
-  the newest release that's at least a week old, so a bad release published tomorrow doesn't reach you on the next
-  start. When a newer one has been out a week, the server shows **Update to x.y.z**.
-- **Hidden text doesn't reach your bots:** invisible characters that spell out words only a model reads (Unicode tag
-  characters, stray variation selectors) are taken out of pages, mail, files and tool results. A Word file's text
-  formatted to be invisible (white, 1 pt, hidden) is marked as hidden for the bot.
+- **Bring your memories over from another agent:** if Claude Code, Hermes or OpenClaw runs on the same computer,
+  **Memory → Import** reads its memories, skills and scheduled jobs in one click. Nothing comes in active: memories
+  are suggestions, skills are proposals and jobs become paused routines, and anything that looks like a secret is left out.
 
 ### Routines
 - **Follow-ups the bot books itself:** "I'll check back Friday whether they replied" becomes a one-off follow-up, said
@@ -142,9 +139,6 @@ a restart and more).
 - **Check everything:** `mimir doctor` (and Settings → Your data → *Check everything*) checks each bot's AI sign-in,
   its Telegram, Slack and Discord connection, your mailboxes, the bots' computer, free disk space, the database and its
   backups, one line each with what to do. Nothing is spent or sent.
-- **Security checks in `mimir doctor`:** it warns when the web app is reached over plain HTTP from the internet,
-  Permissions are at "Allow all", a tool server's package has no fixed version, a newer Mimir is out, or the bots'
-  computer runs in Mimir's own process on a Linux host without Docker (its DevTools have no token there).
 
 ## 0.2.0
 
