@@ -1007,7 +1007,8 @@ async fn codex(ctx: &ToolCtx, home: &PathBuf, model: Option<&str>, system: &str,
         r#"approval_policy="never""#.to_string(),
         // Cached, not live: live search also opens any address (open_page) from OpenAI's servers, out of leaks_out's
         // sight, so a URL could carry data out. Cached answers those with a cache miss; fresh pages go through web_fetch.
-        r#"web_search="cached""#.to_string(),
+        // Off after outside content, which could be asking for exactly that.
+        format!("web_search={:?}", if ctx.is_tainted() { "disabled" } else { "cached" }),
         // A JSON string is also a valid TOML string (Windows backslashes included).
         format!("model_instructions_file={}", serde_json::to_string(&instructions.0)?),
     ] {

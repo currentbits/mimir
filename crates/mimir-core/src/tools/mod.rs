@@ -548,6 +548,8 @@ mod tests {
         // A tool server's card shows where it goes, even after a long body.
         let card = describe_external("mail__send", &json!({"body": "x".repeat(600), "to": "someone@example.com"})).unwrap();
         assert!(card.starts_with("mail: Send (to: someone@example.com; body: "), "{card}");
+        let card = describe_external("mail__send", &json!({"body": "x".repeat(600), "messages": [{"text": "y".repeat(600), "to": "a@b.c"}]})).unwrap();
+        assert!(card.starts_with("mail: Send (messages: [{to: a@b.c; text: "), "nested in an array: {card}");
     }
 
     #[tokio::test]
@@ -1927,6 +1929,7 @@ mod tests {
         let db = Db::open(&p).unwrap();
         db.set_setting("mcp_servers", r#"[{"name":"bank","command":"/nonexistent/mimir-test-bank"},{"name":"notes","command":"/nonexistent/mimir-test-notes"}]"#).unwrap();
         db.set_setting("mcp_tools:bank", r#"[{"name":"balance","read_only":true}]"#).unwrap();
+        crate::ext::confirm_read_only(&db, "bank", &["balance".into()]).unwrap();
         db.set_setting("mcp_tools:notes", r#"[{"name":"append","read_only":false}]"#).unwrap();
         db.set_setting("email_accounts", r#"[{"host":"127.0.0.1","port":1143,"user":"me@example.com","oauth":"outlook"}]"#).unwrap();
         db.set_setting("searxng_url", "http://127.0.0.1:9").unwrap(); // nothing listens: a search fails at once
