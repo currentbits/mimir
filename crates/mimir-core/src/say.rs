@@ -185,6 +185,8 @@ static NL: &[(&str, &str)] = &[
     ("What my last reply used", "Wat mijn laatste antwoord gebruikte"),
     ("Start a fresh conversation (memories kept)", "Begin een nieuw gesprek (herinneringen blijven bewaard)"),
     ("Stop the reply I'm writing", "Stop het antwoord dat ik schrijf"),
+    // Slack's status line while a reply is written ("<bot> is thinking…").
+    ("is thinking…", "denkt na…"),
     // Errors.
     (
         "My Claude plan won't cover this: Anthropic is counting it as paid extra usage, and there's none left.",

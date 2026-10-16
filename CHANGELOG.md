@@ -4,6 +4,12 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 
 ## Unreleased
 
+### Talking to your bots
+- **Telegram rich messages:** replies show real tables, headings and task lists, and a long one fits in one message
+  (up to 32,768 characters). An older Bot API server gets the formatting it had before.
+- **Slack streams natively:** in a thread you mentioned the bot in, a reply streams in with Slack's own streaming
+  (no edit rate limits) under an "is thinking…" status.
+
 ### Routines
 - **Goals:** ask a bot to see something through ("find a plumber who can come this week") and it keeps at it until
   it's done, with a progress line pinned in the chat and in its header. The follow-ups it books and the tasks it hands to

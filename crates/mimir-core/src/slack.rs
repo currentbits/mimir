@@ -222,7 +222,7 @@ impl Slack {
         let (slack, channel) = (self.clone(), channel.to_string());
         Some(tokio::spawn(async move {
             loop {
-                let body = json!({"channel_id": channel, "thread_ts": thread, "status": "is thinking…"});
+                let body = json!({"channel_id": channel, "thread_ts": thread, "status": crate::say::tr("is thinking…")});
                 if let Err(e) = slack.api("assistant.threads.setStatus", &slack.bot_token, body).await {
                     eprintln!("{e:#}");
                     return;
