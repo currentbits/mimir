@@ -2,6 +2,13 @@
 
 What changed for people using Mimir. The newest release is at the top; "Unreleased" is what the next one brings.
 
+## Unreleased
+
+### Safety
+- **Tool server pinning, tightened:** servers added before 0.4.0 are pinned the next time they start. A version range
+  (`pkg@^2`, `pkg@1`) is left as you wrote it instead of jumping to the newest release, and **Update** never offers an
+  older release than the one you're on. A package OSV.dev has never checked doesn't start while OSV.dev can't be reached.
+
 ## 0.4.0
 
 0.3.0 was never published on its own, so updating from 0.2.0 also brings

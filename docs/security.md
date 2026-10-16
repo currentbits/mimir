@@ -133,8 +133,10 @@ half is built into the app); a tampered download is refused. It never restarts o
 - Saved logins' sites are worked out with the public suffix list built into Mimir (the `psl` crate), updated with it.
 - Speech, voice and speaker models, and the speaker library Linux loads, are fixed versions checked against SHA-256.
 - The browser tool, the AI CLIs in the Docker image and the base images are fixed versions.
-- A tool server that downloads its package (`npx`, `uvx`…) is checked against OSV.dev's malicious-package list first
-  and doesn't start if it's listed ([details](tools-and-safety.md#tool-servers-mcp)).
+- A tool server that downloads its package (`npx`, `uvx`…) is pinned to a release at least a week old and moves on
+  only when you click Update. It's checked against OSV.dev's malicious-package list first and doesn't start if it's
+  listed, or if OSV.dev can't be reached and hasn't checked that version before
+  ([details](tools-and-safety.md#tool-servers-mcp)).
 - CI actions are pinned by commit, and CI runs with a read-only token.
 
 **Hostile input can't take the app down.**
