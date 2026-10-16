@@ -9,6 +9,10 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
   (up to 32,768 characters). An older Bot API server gets the formatting it had before.
 - **Slack streams natively:** in a thread you mentioned the bot in, a reply streams in with Slack's own streaming
   (no edit rate limits) under an "is thinking…" status.
+- **Skills for your bots:** four more in the skill library. *Hire a bot* makes a bot with one job, what it never does,
+  a voice and when it works, and has it say its job back; *Bot role check* checks a role and rewrites it; *Team check*
+  finds where your bots overlap or stray and proposes fixes you pick; *Memory check* proposes fixes for wrong, stale or
+  secret memories.
 
 ### Routines
 - **Goals:** ask a bot to see something through ("find a plumber who can come this week") and it keeps at it until
