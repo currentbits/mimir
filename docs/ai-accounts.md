@@ -28,9 +28,10 @@ set up Brave Search or your own SearXNG once in Settings → Web search, and eve
   other apps, and otherwise the search set up in Settings → Web search.
 - **Claude / Codex CLI**: install the CLI and sign in once in a terminal (`claude`, then `codex login`). The app shows
   whether it's installed and signed in. On a server, see [Self-hosting](self-hosting.md#your-ai-accounts-on-the-server).
-  Since April 2026 Anthropic has at times counted Claude-plan use outside its own apps as paid "extra usage". If a reply
-  fails because of that, the bot says so plainly; turn on extra usage in your Claude account, or use another account
-  (ChatGPT's login is supported for tools like this).
+  `claude -p` draws on your Claude plan's usage limits. Anthropic's planned move of this use to a separate monthly
+  credit (announced for June 15, 2026) was paused that day, and Anthropic says it will announce any new plan before it
+  takes effect. If a reply ever fails because your plan counts it as paid "extra usage", the bot says so plainly; turn
+  on extra usage in your Claude account, or use another account (ChatGPT's login is supported for tools like this).
 - **Grok**: Settings → AI keys → *Sign in to Grok* (a device code). Mimir keeps that login in its own Grok home
   (`~/.mimir/grok`), so your personal Grok plugins, hooks and tool servers never load into a bot, and neither do
   your Claude or Cursor settings. Grok's own memory and `/goal` stay off, so bots can't read each other's notes and

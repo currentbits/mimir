@@ -34,7 +34,7 @@ Bots act through **tools**. Every tool call is checked against your rules before
 | `ask_choice` | Ask you one question with 2 to 4 answers to tap, plus "Something else". The buttons go under the reply, and your tap is your next message. Only in Telegram, Slack and Discord chats, never in routines or another bot's task. A tap is never an approval | allow |
 | `computer_*` | Use the bots' computer, self-hosted only ([The bots' computer](computer.md)) | allow; `computer_open` **asks**, and `computer_signin` with a saved login |
 | `browser__*` | The headless browser, when switched on (below) | opening a page **asks** |
-| *tool servers* | Tools from MCP servers you added (below) | read-only allow, the rest **ask** |
+| *tool servers* | Tools from MCP servers you added (below) | read-only (as you confirmed) allow, the rest **ask** |
 
 Each bot has a tool allowlist on its page; tools outside it are hidden from that bot and refused.
 
@@ -160,7 +160,8 @@ online at a URL. Paste its setup line (`npx -y @modelcontextprotocol/server-file
 (`https://mcp.deepwiki.com/mcp`), or the JSON from its instructions (`{"mcpServers": {…}}`). Mimir starts or connects
 to it once to list its tools, so a broken setup isn't saved. Tokens in its environment or headers go to the keychain
 (server: the private database), never the config. Its tools follow the same rules: tools the server marks read-only are
-allowed, the rest ask. Each bot can switch servers on or off. Remote servers use MCP's Streamable HTTP transport;
+allowed once you confirm them (Mimir lists the tools after adding the server, "read-only (the server says)"), the rest
+ask. Updating the server, or changing what runs, asks you to confirm again. Each bot can switch servers on or off. Remote servers use MCP's Streamable HTTP transport;
 servers that only offer the older SSE transport aren't supported.
 
 **Malware check.** Before starting a server whose command downloads a package (`npx`, `bunx`, `npm exec`, `pnpm dlx`,

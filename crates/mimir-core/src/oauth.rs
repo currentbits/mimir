@@ -124,6 +124,8 @@ struct Flow {
     redirect: String,
     /// Shown on the page the browser lands on.
     what: String,
+    /// The authorization server's `issuer`, and whether it said it puts it on its answer (RFC 9207).
+    issuer: Option<(String, bool)>,
 }
 
 /// The sign-in in progress (one at a time; starting another replaces it).
@@ -132,8 +134,8 @@ static PENDING: Mutex<Option<JoinHandle<Result<Value>>>> = Mutex::new(None);
 static CANCEL: Mutex<Option<tokio::task::AbortHandle>> = Mutex::new(None);
 
 /// Begin a sign-in that will be kept under `key`; returns the address to open. `what` names it for the person
-/// ("Notion", "Outlook"). `extra` goes on the authorization address (prompt=…, login_hint=…).
-pub fn begin(key: &str, what: &str, authorize: &str, saved: Saved, redirect: Redirect, extra: &[(&str, &str)]) -> Result<String> {
+/// ("Notion", "Outlook"). `extra` goes on the authorization address (prompt=…, login_hint=…). `issuer`: see `Flow`.
+pub fn begin(key: &str, what: &str, authorize: &str, saved: Saved, redirect: Redirect, extra: &[(&str, &str)], issuer: Option<(String, bool)>) -> Result<String> {
     cancel();
     let verifier = crate::random_hex(32)?;
     let state = crate::random_hex(16)?;
@@ -159,7 +161,7 @@ pub fn begin(key: &str, what: &str, authorize: &str, saved: Saved, redirect: Red
             q.append_pair(k, v);
         }
     }
-    *FLOW.lock().unwrap() = Some(Flow { key: key.into(), saved, verifier, state, redirect: redirect.uri, what: what.into() });
+    *FLOW.lock().unwrap() = Some(Flow { key: key.into(), saved, verifier, state, redirect: redirect.uri, what: what.into(), issuer });
     if let Some(listener) = redirect.listener {
         let what = what.to_string();
         let task = tokio::spawn(async move { tokio::time::timeout(SIGN_IN_TIMEOUT, callback(listener)).await.with_context(|| format!("timed out waiting for {what}"))? });
@@ -241,6 +243,12 @@ async fn complete(pairs: &[(String, String)]) -> Result<Value> {
         // The state proves this answer belongs to the sign-in started here, not one someone else started.
         if f.as_ref().is_none_or(|f| get("state") != Some(f.state.as_str())) {
             bail!("that's not the address from this sign-in; start again and paste the newest one");
+        }
+        // The answer names the server that gave it: an answer from another one (a mix-up attack) is refused.
+        if let Some((issuer, always)) = &f.as_ref().unwrap().issuer
+            && (get("iss").is_some_and(|i| i != issuer) || (*always && get("iss").is_none()))
+        {
+            bail!("the sign-in answer came from a different server than the one asked; start again");
         }
         f.take().unwrap()
     };
@@ -408,7 +416,7 @@ mod tests {
         let r = redirect(true, "127.0.0.1", "/callback").await.unwrap();
         let back = r.uri.clone();
         let saved = Saved { token_url, client_id: "c1".into(), scope: Some("s".into()), ..Default::default() };
-        let url = url::Url::parse(&begin("oauth:test", "Test", "https://auth.example/authorize", saved, r, &[]).unwrap()).unwrap();
+        let url = url::Url::parse(&begin("oauth:test", "Test", "https://auth.example/authorize", saved, r, &[], None).unwrap()).unwrap();
         let q: HashMap<String, String> = url.query_pairs().into_owned().collect();
         assert_eq!((q["client_id"].as_str(), q["redirect_uri"].as_str(), q["code_challenge_method"].as_str(), q["scope"].as_str()), ("c1", back.as_str(), "S256", "s"));
         assert_eq!(reqwest::get(format!("{back}?x=1")).await.unwrap().status(), 404);
@@ -423,6 +431,23 @@ mod tests {
         assert_eq!(access_token("oauth:test", "Test").await.unwrap(), "a2", "cached");
         sign_out("oauth:test").unwrap();
         assert!(format!("{:#}", access_token("oauth:test", "Test").await.unwrap_err()).contains("sign in again"));
+    }
+
+    /// RFC 9207: an answer naming another issuer, or none when the server said it always does, is refused.
+    #[tokio::test]
+    async fn the_answer_comes_from_the_server_asked() {
+        let _one = SERIAL.lock().await;
+        secrets();
+        let token_url = token_server(vec![r#"{"access_token":"a1"}"#.into()]).await;
+        let r = redirect(false, "127.0.0.1", "/callback").await.unwrap();
+        let back = r.uri.clone();
+        let saved = Saved { token_url, client_id: "c1".into(), ..Default::default() };
+        let url = url::Url::parse(&begin("oauth:iss", "Test", "https://auth.example/authorize", saved, r, &[], Some(("https://auth.example".into(), true))).unwrap()).unwrap();
+        let state = url.query_pairs().find(|(k, _)| k == "state").unwrap().1.into_owned();
+        assert!(paste(&format!("{back}?code=c&state={state}&iss=https%3A%2F%2Fevil.example")).await.is_err(), "another issuer");
+        assert!(paste(&format!("{back}?code=c&state={state}")).await.is_err(), "promised but missing");
+        assert_eq!(paste(&format!("{back}?code=c&state={state}&iss=https%3A%2F%2Fauth.example")).await.unwrap()["access_token"], "a1");
+        sign_out("oauth:iss").unwrap();
     }
 
     /// A long secret goes in parts and comes back whole; a shorter one later leaves no parts behind.

@@ -785,7 +785,9 @@ function ToolServerSettings({ onChange }: { onChange: () => void }) {
     const rows = Object.fromEntries(form.env.filter(e => e.key.trim()).map(e => [e.key.trim(), e.value]))
     return { name: form.name.trim(), command: parsed.command, args: parsed.args, url: parsed.url, ...parsed.url ? { headers: rows } : { env: rows } }
   }
-  const ready = (name: string) => (n: number) => { setMsg(`${name} is ready with ${n} tool${n === 1 ? '' : 's'}.`); setErr(null); setForm(null); list.reload(); onChange() }
+  // Its tools are shown next, so the person confirms which really only read.
+  const [review, setReview] = useState<string | null>(null)
+  const ready = (name: string) => (n: number) => { setMsg(`${name} is ready with ${n} tool${n === 1 ? '' : 's'}.`); setErr(null); setForm(null); setReview(name); list.reload(); onChange() }
   const save = async () => {
     const server = conf()
     if (!server) return
@@ -805,15 +807,17 @@ function ToolServerSettings({ onChange }: { onChange: () => void }) {
   const remove = (s: ToolServer) => ask(`Remove ${s.name}? Your bots lose its tools.`, 'Remove', true).then(ok => { if (ok) void invoke('tool_server_delete', { name: s.name }).then(() => { setMsg(null); list.reload(); onChange() }, e => setErr(String(e))) })
 
   return (
-    <Group title="Tool servers" note={<>Give your bots more abilities with <a href="https://github.com/modelcontextprotocol/servers" onClick={openLink}>MCP servers</a> that run on {here} or online: your files, GitHub, a database. Reading is allowed; anything that changes things asks you first (see Permissions). Tokens are stored in {SECRETS_AT}.</>}>
+    <Group title="Tool servers" note={<>Give your bots more abilities with <a href="https://github.com/modelcontextprotocol/servers" onClick={openLink}>MCP servers</a> that run on {here} or online: your files, GitHub, a database. Tools you confirm only read are allowed; anything else asks you first (see Permissions). Tokens are stored in {SECRETS_AT}.</>}>
       {servers.map(s => (
         <Row key={s.name} icon={<Icon name="plug" size={15} />} title={s.name} desc={<>{s.tools} tool{s.tools === 1 ? '' : 's'} · <code>{s.url || [s.command, ...s.args].join(' ')}</code></>}>
           {s.signed_in && signIn({ name: s.name, url: s.url, headers: Object.fromEntries(s.headers.map(k => [k, ''])) }, s.name, 'Sign in again')}
+          {!!s.unconfirmed && review !== s.name && <button className="btn btn-sm" onClick={() => setReview(s.name)}>Review tools</button>}
           {s.update && <button className="btn btn-sm" disabled={busy} title="A release at least a week old; Mimir doesn't take newer ones on its own" onClick={() => update(s)}>{busy ? 'Updating…' : `Update to ${s.update}`}</button>}
           <button className="btn btn-sm" onClick={() => open(s)}>Edit</button>
           <button className="btn btn-sm btn-ghost btn-danger icon-btn" aria-label={`Remove ${s.name}`} title="Remove" onClick={() => remove(s)}><Icon name="trash" size={14} /></button>
         </Row>
       ))}
+      {review && <ReadOnlyReview key={review} server={review} onDone={() => { setReview(null); list.reload(); onChange() }} />}
       {!form && (
         <Row icon={<Icon name="plus" size={15} />} title={servers.length ? 'Add another tool server' : 'Add a tool server'} desc={msg ?? 'Paste the setup line or JSON config from the server’s instructions.'}>
           <button className="btn btn-sm" onClick={() => open()}>Add</button>
@@ -890,6 +894,35 @@ function SensitiveSettings() {
         </Row>
       )}
     </Group>
+  )
+}
+
+/** A server's tools, and which it says only read. Those run without asking, but only once you confirm them here:
+ *  a server could call a tool that changes things read-only. */
+function ReadOnlyReview({ server, onDone }: { server: string; onDone: () => void }) {
+  type Tool = { name: string; description: string; says_read_only: boolean; read_only: boolean }
+  const tools = useLoad(() => invoke<Tool[]>('tool_server_tools', { name: server }), [server])
+  const [on, setOn] = useState<string[] | null>(null)
+  const list = tools.data ?? []
+  const picked = on ?? list.filter(t => t.says_read_only).map(t => t.name)
+  const [err, setErr] = useState<string | null>(null)
+  const confirm = (names: string[]) => invoke('tool_server_read_only', { name: server, tools: names }).then(onDone, e => setErr(String(e)))
+  if (!list.length) return null
+  return (
+    <div className="row-block">
+      <p className="hint" style={{ margin: 0 }}>{server}’s tools. Those it says only read run without asking; turn off any that could change, send or delete something. The rest ask first.</p>
+      {list.map(t => (
+        <Row key={t.name} title={toolLabel(`${server}__${t.name}`)} desc={t.says_read_only ? `Read-only (the server says)${t.description ? ` · ${t.description}` : ''}` : t.description || undefined}>
+          {t.says_read_only && <Switch label={`${t.name} is read-only`} checked={picked.includes(t.name)} onChange={c => setOn(c ? [...picked, t.name] : picked.filter(n => n !== t.name))} />}
+        </Row>
+      ))}
+      <div className="actions">
+        <button type="button" className="btn btn-ghost" onClick={() => confirm([])}>None are read-only</button>
+        <span className="grow" />
+        <button type="button" className="btn btn-primary" onClick={() => confirm(picked)}>Confirm</button>
+      </div>
+      {err && <p className="error" style={{ margin: 0 }}>{err}</p>}
+    </div>
   )
 }
 
