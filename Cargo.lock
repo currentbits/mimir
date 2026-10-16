@@ -3198,6 +3198,7 @@ dependencies = [
  "mail-parser",
  "ogg",
  "opus-decoder",
+ "os_info",
  "pdf-extract",
  "psl",
  "quick-xml",

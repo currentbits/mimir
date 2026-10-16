@@ -23,7 +23,7 @@ const SETTING_WORDS: Record<string, string> = {
   'Browser': 'playwright chromium saved logins passwords vault',
   'Tool servers': 'mcp plugins integrations connectors',
   'Sensitive sources': 'bank banking health medical private finance money leak',
-  'Your data': 'export backup download delete privacy doctor check health troubleshoot problem',
+  'Your data': 'export backup download delete privacy doctor check health troubleshoot problem usage stats telemetry analytics',
   'Chat API': 'openai token shortcuts siri home assistant integration v1 completions',
 }
 
@@ -126,9 +126,25 @@ function DataSettings() {
         <button type="button" className="btn btn-sm" onClick={exportAll}>Export</button>
       </Row>
       <BackupRows />
+      <UsageStatsRow />
       <DoctorRow />
     </Group>
   )
+}
+
+/** The daily anonymous count to us (usage_stats.rs), with exactly what it sends. */
+function UsageStatsRow() {
+  const st = useLoad(() => invoke<{ on: boolean; sample: unknown[] }>('usage_stats', {}), [], 60000)
+  const [show, setShow] = useState(false)
+  const s = st.data
+  if (!s) return null
+  return <>
+    <Row icon={<Icon name="activity" size={15} />} title="Send anonymous usage stats"
+      desc={<>Once a day: a random id for this install, the version and OS, and each bot’s AI provider and model. Never names, messages, memories or keys. <button type="button" className="linkish" onClick={() => setShow(!show)}>{show ? 'Hide' : 'See what’s sent'}</button></>}>
+      <Switch label="Send anonymous usage stats" checked={s.on} onChange={on => invoke('usage_stats', { on }).then(st.reload, e => tell(String(e)))} />
+    </Row>
+    {show && <div className="row-block"><pre className="mono" style={{ margin: 0, whiteSpace: 'pre-wrap', fontSize: 12 }}>{JSON.stringify(s.sample, null, 1)}</pre></div>}
+  </>
 }
 
 type Backups = { dir: string; list: { name: string; size: number; taken_at: number }[] }

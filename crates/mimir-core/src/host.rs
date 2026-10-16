@@ -1426,6 +1426,13 @@ impl Host {
                     "latest": self.db.setting("update_latest")?,
                 }))
             }
+            // The daily anonymous usage count (usage_stats.rs): on unless switched off; `sample` is exactly what's sent.
+            "usage_stats" => {
+                if let Some(on) = arg::<Option<bool>>(a, "on")? {
+                    self.db.set_setting("usage_stats", if on { "on" } else { "off" })?;
+                }
+                ok(json!({"on": crate::usage_stats::on(&self.db), "sample": crate::usage_stats::batch(&self.db)?["events"]}))
+            }
             // Run now instead of waiting for a hold to end (the limit was raised, another plan…); a cap's, for the rest of today.
             "hold_clear" => {
                 let key: String = arg(a, "key")?;
