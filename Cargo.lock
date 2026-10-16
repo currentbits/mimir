@@ -3167,7 +3167,7 @@ dependencies = [
 
 [[package]]
 name = "mimir"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -3179,7 +3179,7 @@ dependencies = [
 
 [[package]]
 name = "mimir-core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "async-imap",
@@ -3198,6 +3198,7 @@ dependencies = [
  "mail-parser",
  "ogg",
  "opus-decoder",
+ "os_info",
  "pdf-extract",
  "psl",
  "quick-xml",
@@ -3222,7 +3223,7 @@ dependencies = [
 
 [[package]]
 name = "mimir-desktop"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "arboard",

@@ -53,8 +53,14 @@ to the services you connected.
   sees your address and the request, nothing else), and downloads an update from there. Switch it off in
   Settings → Updates.
 
-Nothing is sent anywhere else: the app has no analytics and no telemetry. (The website, heymimir.app, counts visits and
-download clicks with Meterbird; that's the site, not the app.)
+- **Usage stats**: once a day, a count goes to Meterbird, the analytics service we use, so we know how many people use
+  Mimir and on what: a random id made for this install, the Mimir version, the OS, its version and the processor type,
+  whether it's the app or a server, how many bots you have and each bot's AI provider and model. Never names,
+  messages, memories, files, keys or the addresses your bots use. Meterbird sees your IP address to look up a country
+  and doesn't keep it. Settings → Your data → *Send anonymous usage stats* shows exactly what's sent and switches it
+  off; on a server, `MIMIR_USAGE_STATS=off` does too.
+
+Nothing is sent anywhere else. (The website, heymimir.app, also counts visits and download clicks with Meterbird.)
 
 ## Keeping and deleting
 

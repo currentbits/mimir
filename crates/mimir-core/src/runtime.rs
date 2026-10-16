@@ -1871,6 +1871,7 @@ impl Core {
             {
                 eprintln!("update notice: {e:#}");
             }
+            crate::usage_stats::tick(&self.db).await;
             // Sleep-time memory tidy-up, run by one bot for everyone.
             if crate::tidy::memory_bot(&self.db) == Some(self.bot) {
                 let now = crate::db::now();

@@ -2,7 +2,11 @@
 
 What changed for people using Mimir. The newest release is at the top; "Unreleased" is what the next one brings.
 
-## Unreleased
+## 0.4.0
+
+0.3.0 was never published on its own, so updating from 0.2.0 also brings
+[everything in 0.3.0](https://github.com/currentbits/mimir/blob/master/CHANGELOG.md#030) (Signal, replies that survive
+a restart and more).
 
 ### Talking to your bots
 - **Telegram rich messages:** replies show real tables, headings and task lists, and a long one fits in one message
@@ -56,6 +60,26 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
   - After reading a sensitive source, saving a memory for the household asks too.
   - A bot file can't pass an option to the AI's command line as its model.
   - `mimir doctor` no longer creates a database, or upgrades an older one, while it checks.
+- **Anonymous usage stats:** once a day Mimir sends a count (a random id for this install, the version, the OS and each
+  bot's AI provider and model; never names, messages or keys) so we know how many people use it and on what.
+  Settings → Your data shows exactly what's sent and switches it off (`MIMIR_USAGE_STATS=off` on a server).
+- **Security checks in `mimir doctor`:** it warns when the web app is reached over plain HTTP from the internet,
+  Permissions are at "Allow all", a tool server's package has no fixed version, a newer Mimir is out, or the bots'
+  computer runs in Mimir's own process on a Linux host without Docker (its DevTools have no token there).
+- **Tool servers stay on one version:** adding one that downloads its package (`npx -y pkg`, `uvx pkg`) pins it to
+  the newest release that's at least a week old, so a bad release published tomorrow doesn't reach you on the next
+  start. When a newer one has been out a week, the server shows **Update to x.y.z**.
+- **Hidden text doesn't reach your bots:** invisible characters that spell out words only a model reads (Unicode tag
+  characters, stray variation selectors) are taken out of pages, mail, files and tool results. A Word file's text
+  formatted to be invisible (white, 1 pt, hidden) is marked as hidden for the bot.
+- **A tool server's "read-only" needs your OK:** a server saying a tool only reads is no longer enough to skip asking;
+  after you add a server, Settings → Tool servers asks you to confirm which of its tools really only read.
+- **More security fixes:**
+  - Signing in to a tool server checks the answer comes from the server you started with (RFC 9207).
+  - Codex's own web search answers from OpenAI's cache only, and is off after a bot has read outside content, so it
+    can't open an address that carries your data out.
+  - Email approval cards flag addresses with look-alike letters from another alphabet and show their real domain.
+  - Only the chat's owner can answer a bot's buttons, and screenshots are kept in Mimir's own folder instead of `/tmp`.
 
 ### The bots' computer
 - **Sign in from your phone:** at a sign-in page, a bot sends you a card with a link to a small masked form in Mimir,
