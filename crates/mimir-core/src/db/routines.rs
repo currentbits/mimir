@@ -74,7 +74,8 @@ pub struct Routine {
     pub for_goal: bool,
 }
 
-/// Routines waiting: until a usage limit resets, or a daily cap's day is over. `why` finishes "Missed 3 runs, …: ".
+/// Routines waiting: until a usage limit resets, or a daily cap's day is over, or (until IDLE) for the person to say
+/// run a one-off again. `why` finishes "Missed 3 runs, …: ".
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]
 pub struct Hold {
     pub until: i64,
@@ -420,7 +421,11 @@ impl Db {
 
     /// A routine's run is over and won't be tried again: a one-off is gone, and so is one whose next slot is past its
     /// end. When it worked, its earlier failures leave Needs you (it healed), and the count of tries starts over.
+    /// A one-off (a reminder) that failed isn't lost: it waits in Needs you until the person says run it again.
     pub fn routine_done(&self, r: &Routine, worked: bool) -> Result<()> {
+        if r.once && r.cron.is_empty() && !worked {
+            return self.hold_set(&format!("hold:routine:{}", r.id), &Hold { until: IDLE, why: "its run failed".into(), waive: None });
+        }
         let c = self.c();
         // routine_advance already moved it on; a calendar or event routine waiting (IDLE) goes when its end is past.
         let ended = c.query_row("SELECT ends > 0 AND next_fire > ends AND next_fire < ?2 FROM routines WHERE id=?1", [r.id, IDLE], |x| x.get(0)).optional()?.unwrap_or(false);
@@ -539,6 +544,12 @@ impl Db {
     pub fn hold_clear(&self, key: &str, go_on: bool) -> Result<()> {
         match self.hold(key)? {
             Some(mut h) if go_on => {
+                // A one-off waiting for the person (cut off, or failed): Run again runs it at the next pass.
+                if h.until >= IDLE
+                    && let Some(id) = key.strip_prefix("hold:routine:").and_then(|i| i.parse().ok())
+                {
+                    self.routine_run_soon(id)?;
+                }
                 if let Some(w) = &h.waive {
                     self.set_setting(w, &Local::now().format("%Y-%m-%d").to_string())?;
                 }
@@ -715,11 +726,12 @@ impl Db {
     }
 
     /// Advance before running so a crash mid-run can't fire the same slot twice. A one-off stays until its run is done
-    /// (routine_done), with an hour's grace: a crash mid-run tries it once more then.
+    /// (routine_done), parked at IDLE meanwhile: one Mimir stopped in the middle of waits for the person
+    /// (close_interrupted), as it may have done part of it already.
     pub fn routine_advance(&self, r: &Routine) -> Result<()> {
         // One that ends after its first event has no time to try again at: it waits for its events, like any other.
         if r.once && r.cron.is_empty() {
-            self.c().execute("UPDATE routines SET next_fire=?2 WHERE id=?1", params![r.id, now() + 3600])?;
+            self.c().execute("UPDATE routines SET next_fire=?2 WHERE id=?1", params![r.id, IDLE])?;
             return Ok(());
         }
         let next = next_fire(&r.cron, now().max(r.next_fire))?;

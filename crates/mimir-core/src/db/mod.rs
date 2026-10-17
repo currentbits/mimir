@@ -530,12 +530,23 @@ impl Db {
         Ok(Db(Arc::new(Mutex::new(c)), Arc::new(dir)))
     }
 
-    /// Closes out runs a crash left 'running' (older than the max turn length). Once at startup, not on every open.
+    /// Closes out runs a crash left 'running'. Once at startup, before the scheduler's first pass, not on every open.
     pub fn close_interrupted(&self) -> Result<()> {
-        self.c().execute(
-            "UPDATE runs SET status='error', error='interrupted', ended_at=started_at WHERE status='running' AND started_at < ?1",
-            [now() - 900],
-        )?;
+        self.c().execute("UPDATE runs SET status='error', error='interrupted', ended_at=started_at WHERE status='running'", [])?;
+        // A one-off still parked at IDLE (routine_advance) was cut off mid-run. It may have done part of it (sent an
+        // email), so it isn't run again on its own: it waits in Needs you for the person to say run it again.
+        let cut: Vec<i64> = {
+            let c = self.c();
+            let mut st = c.prepare("SELECT id FROM routines WHERE once=1 AND cron='' AND next_fire >= ?1")?;
+            st.query_map([IDLE], |r| r.get(0))?.collect::<Result<_, _>>()?
+        };
+        for id in cut {
+            let key = format!("hold:routine:{id}");
+            // One that failed already waits for the person, and says so.
+            if self.hold(&key)?.is_none() {
+                self.hold_set(&key, &Hold { until: IDLE, why: "it was interrupted, and may have done part of this already".into(), waive: None })?;
+            }
+        }
         // ponytail: a handed-over task Mimir stopped in the middle isn't run again (it may have sent half of something):
         // the bot that asked says it didn't finish. Assumes one Mimir per data folder, like the rest.
         self.c().execute(

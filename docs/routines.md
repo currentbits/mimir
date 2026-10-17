@@ -171,7 +171,12 @@ What happens next depends on why:
 - **Anything else**: it says so where the routine speaks, as before.
 
 A routine that keeps failing the same way is **one** item in Needs you ("4 times"), and once it works again its
-failures leave Needs you by themselves. A one-off (a reminder) that fails this way is kept and tried again, not lost.
+failures leave Needs you by themselves. A one-off (a reminder) that fails this way is kept, not lost: it waits in Needs
+you until you press **Run again**.
+
+If Mimir stops in the middle of a one-off (it was quit, crashed, or the computer lost power), the one-off isn't run
+again on its own, since it may have done part of it already (sent an email, say). Next time Mimir starts, it waits in
+Needs you as *interrupted*, with **Run again**.
 
 Activity shows where each result went: *sent to telegram*, *in the digest*, *on its card*, *only in the log*, *in the app*. When the
 messaging app didn't take it (tried twice), that's an item in Needs you, and the result is still in Activity.
