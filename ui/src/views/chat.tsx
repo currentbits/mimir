@@ -216,7 +216,7 @@ function RoutineCard({ id, chatId, onChange }: { id: number; chatId: number; onC
         <div className="rc-main">
           <div className="rt">{when(r)}{r.quiet && <span className="badge pending">Quiet</span>}{(r.paused || held !== undefined) && <span className="badge">Paused</span>}{r.delivery === 'digest' && <span className="badge">In digest</span>}{r.delivery === 'log' && <span className="badge">Log only</span>}{r.delivery === 'card' && <span className="badge">On a card</span>}</div>
           <div className="rp selectable">{r.prompt}</div>
-          <div className="rm">{r.paused ? 'Paused' : held !== undefined ? `${pausedText(held)} with its bot` : r.next_fire >= IDLE ? 'Runs when a matching event is on the calendar' : `Next run ${ahead(r.next_fire)}`} · change it any time in Routines</div>
+          <div className="rm">{r.paused ? 'Paused' : held !== undefined ? `${pausedText(held)} with its bot` : r.once && !r.cron && r.next_fire >= IDLE ? 'Running, or waits for you in Needs you' : r.next_fire >= IDLE ? 'Runs when a matching event is on the calendar' : `Next run ${ahead(r.next_fire)}`} · change it any time in Routines</div>
         </div>
       </div>
       <div className="rc-actions">

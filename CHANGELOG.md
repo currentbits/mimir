@@ -5,6 +5,9 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 ## Unreleased
 
 ### Safety
+- **A one-off cut off mid-run waits for you:** if Mimir stops in the middle of a one-off, it no longer runs it again by
+  itself an hour later (repeating what it already did, an email say). It waits in Needs you as interrupted, with
+  **Run again**. A one-off that fails for any other reason waits there too, instead of being deleted.
 - **Tool server pinning, tightened:** servers added before 0.4.0 are pinned the next time they start. A version range
   (`pkg@^2`, `pkg@1`) is left as you wrote it instead of jumping to the newest release, and **Update** never offers an
   older release than the one you're on. A package OSV.dev has never checked doesn't start while OSV.dev can't be reached.
