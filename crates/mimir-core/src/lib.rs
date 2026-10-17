@@ -859,6 +859,12 @@ pub(crate) fn not_connected(ctx: &ToolCtx) -> String {
             "your calendar: Settings → Calendar to add events, or the calendar link in Meetings to read it",
         ),
         (tools::search_service(db).is_none(), "web search: Settings → Web search"),
+        (
+            host::api_key("x").is_none(),
+            "X (Twitter) search, recent posts: Settings → Web search → X (Twitter). It takes their own X API bearer token; if they \
+             ask how: sign in at console.x.com, buy a few dollars of pay-per-use credits, create a Project and an App in it, then \
+             in the App's Keys and tokens generate the Bearer Token and paste it there (the other keys aren't needed)",
+        ),
         (!ext::servers(db).iter().any(|s| s.name == ext::BROWSER), "a web browser (pages that need clicks or a login): Settings → Browser"),
     ]
     .into_iter()
@@ -1368,9 +1374,10 @@ mod tests {
         let d = super::db::Db::open(&p).unwrap();
         let ctx = super::ToolCtx::new(d.clone(), 1, super::host::LOCAL_CHAT);
         let note = super::not_connected(&ctx);
-        assert!(note.contains("Settings → Email") && note.contains("Settings → Web search"), "{note}");
+        assert!(note.contains("Settings → Email") && note.contains("web search: Settings → Web search"), "{note}");
+        assert!(note.contains("Settings → Web search → X") && note.contains("console.x.com"), "X, with how to get a token: {note}");
         d.set_setting("searxng_url", "https://search.example").unwrap();
-        assert!(!super::not_connected(&ctx).contains("Web search"), "connected: not mentioned");
+        assert!(!super::not_connected(&ctx).contains("web search:"), "connected: not mentioned");
         let mut delegated = ctx.clone();
         delegated.depth = 1;
         assert_eq!(super::not_connected(&delegated), "", "not for another bot's task");

@@ -679,13 +679,20 @@ function WebSearchSettings() {
           onBlur={() => url !== null && invoke('search_settings', { searxngUrl: url }).then(() => { setUrl(null); return done() }, e => setErr(String(e)))} />
       </Row>
       <Row icon={<Icon name="search" size={15} />} title="X (Twitter)"
-        desc={s?.x ? 'A token is saved; bots can search posts from the last 7 days' : <>A bearer token from the <a href="https://console.x.com" onClick={openLink}>X developer console</a> (search needs paid API access). <a href="https://github.com/currentbits/mimir/blob/master/docs/connect.md#x-search" onClick={openLink}>How</a></>}>
+        desc={s?.x ? 'A token is saved; bots can search posts from the last 7 days' : 'Your own X API token, so bots can search recent posts'}>
         {s?.x ? <button className="btn btn-sm btn-ghost btn-danger" onClick={() => invoke('set_api_key', { kind: 'x', key: '' }).then(done, e => setErr(String(e)))}>Remove</button>
           : <form className="er" style={{ gap: 8 }} onSubmit={e => { e.preventDefault(); if (xKey.trim()) invoke('set_api_key', { kind: 'x', key: xKey.trim() }).then(() => { setXKey(''); return done() }, er => setErr(String(er))) }}>
               <input className="input" type="password" style={{ width: 200 }} placeholder="X bearer token" aria-label="X bearer token" value={xKey} onChange={e => setXKey(e.target.value)} autoComplete="off" />
               <button className="btn btn-sm" disabled={!xKey.trim()}>Save</button>
             </form>}
       </Row>
+      {s && !s.x && <p className="hint" style={{ margin: '4px 0 8px' }}>
+        To get one: 1. Sign in at <a href="https://console.x.com" onClick={openLink}>console.x.com</a> with your X account.
+        {' '}2. Buy a few dollars of credits (X charges per post read; a daily search is a few cents).
+        {' '}3. Create a Project, then an App inside it.
+        {' '}4. In the App's <b>Keys and tokens</b>, generate the <b>Bearer Token</b>, copy it (it's shown once) and paste it above.
+        {' '}You don't need the other keys. <a href="https://github.com/currentbits/mimir/blob/master/docs/connect.md#x-search" onClick={openLink}>Step by step</a>
+      </p>}
     </Group>
   )
 }
