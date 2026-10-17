@@ -4,6 +4,12 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 
 ## Unreleased
 
+### Talking to your bots
+- **WhatsApp:** a bot on a [server](docs/self-hosting.md) can be on WhatsApp, with a business number of its own,
+  through Meta's official Cloud API. Text, photos, voice notes and files both ways, typing, pairing, and approval cards
+  and questions as buttons. It can only write within 24 hours of your last message there: a routine's result after
+  that isn't delivered, and shows as not sent in its run. Setup is under [Connect](docs/connect.md#whatsapp).
+
 ### Memory
 - **Ongoing Claude and Grok chats see memory changes:** a resumed conversation kept the instructions from its first
   message, so a memory you added or forgot, a new role or skill, and the time of day never reached it (the built-in
@@ -25,6 +31,8 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
   `?key=`.
 - **Approval cards:** a tool server's list of recipients (`to: [a, b, …]`) comes first on the card and is shown in
   full, not cut off.
+- **Look-alike email recipients:** an address with a letter from another alphabet before the @ (`bоss@` with a
+  Cyrillic "о") is now flagged too, and the card says so plainly while you edit an email as well.
 - **The bots' computer outside Docker:** `mimir doctor`'s warning now also says that other accounts on the machine
   can type and click on its screen, not only use its browser's DevTools.
 

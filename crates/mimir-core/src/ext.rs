@@ -1305,7 +1305,8 @@ mod tests {
         }
     }
 
-    /// Against scripts/fake-mcp-oauth.py: the whole sign-in (metadata, registration, PKCE, token) then a tool list
+    /// Against scripts/fake-mcp-oauth.py: the whole sign-in (metadata, native-app registration, PKCE, `iss` on the
+    /// answer, token) then a tool list
     /// with the token, a refresh when it runs out, and a 401 retry. `python3 scripts/fake-mcp-oauth.py` then
     /// `cargo test -p mimir-core fake_mcp_oauth -- --ignored`.
     #[tokio::test]

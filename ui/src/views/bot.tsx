@@ -10,7 +10,8 @@ import type { Bot, Delivery, Routine, Status, ToolServer, ChannelStatus, Compute
 
 const parseLook = (s?: string): Look => { try { return s ? JSON.parse(s) : {} } catch { return {} } }
 
-type Secrets = { telegram_token: string | null; slack_bot_token: string | null; slack_app_token: string | null; discord_token: string | null; signal_number: string | null; signal_api: string | null }
+type Secrets = { telegram_token: string | null; slack_bot_token: string | null; slack_app_token: string | null; discord_token: string | null; signal_number: string | null; signal_api: string | null
+  whatsapp_number_id: string | null; whatsapp_token: string | null; whatsapp_app_secret: string | null }
 
 const PROVIDERS = [
   { id: 'claude', name: 'Claude', hint: 'Your Claude login (Claude Code)' },
@@ -33,9 +34,9 @@ const PROVIDER_NOTE: Record<string, React.ReactNode> = {
   openai: 'Uses the API key from Settings.',
 }
 
-export const BLANK: Bot = { id: 0, name: '', persona: '', provider: 'claude', model: '', base_url: '', tools: '', has_telegram_token: false, has_slack: false, has_discord: false, has_signal: false }
+export const BLANK: Bot = { id: 0, name: '', persona: '', provider: 'claude', model: '', base_url: '', tools: '', has_telegram_token: false, has_slack: false, has_discord: false, has_signal: false, has_whatsapp: false }
 
-const NO_SECRETS: Secrets = { telegram_token: null, slack_bot_token: null, slack_app_token: null, discord_token: null, signal_number: null, signal_api: null }
+const NO_SECRETS: Secrets = { telegram_token: null, slack_bot_token: null, slack_app_token: null, discord_token: null, signal_number: null, signal_api: null, whatsapp_number_id: null, whatsapp_token: null, whatsapp_app_secret: null }
 
 /** A routine a template starts with. Edit the prompt or switch it off before creating the bot. */
 type StarterRoutine = { cron: string; prompt: string; quiet?: boolean; delivery?: Delivery; on: boolean }
@@ -164,8 +165,8 @@ export function BotPage({ bot, status, canDelete, onSaved, onDeleted, onChat, on
     edit({ tools: ALL.every(t => next.includes(t)) ? '' : next.join(',') })
   }
   // Which channels are connected comes from the saved bot (it changes on save), not this form's copy.
-  const has = (k: 'has_telegram_token' | 'has_slack' | 'has_discord' | 'has_signal') => !!bot?.[k]
-  const form = (x: Bot) => JSON.stringify({ ...x, has_telegram_token: 0, has_slack: 0, has_discord: 0, has_signal: 0 })
+  const has = (k: 'has_telegram_token' | 'has_slack' | 'has_discord' | 'has_signal' | 'has_whatsapp') => !!bot?.[k]
+  const form = (x: Bot) => JSON.stringify({ ...x, has_telegram_token: 0, has_slack: 0, has_discord: 0, has_signal: 0, has_whatsapp: 0 })
   const dirty = form(b) !== form(bot ?? { ...BLANK, look: b.look }) || Object.values(sec).some(v => v !== null)
   const save = (secrets: Secrets) =>
     invoke<number>('save_bot', { bot: b, secrets })
@@ -251,7 +252,7 @@ export function BotPage({ bot, status, canDelete, onSaved, onDeleted, onChat, on
 
       {bot && <Fallback bot={bot} onErr={e => { setErr(e); setMsg(null) }} />}
 
-      <Group title="Messaging apps" note={`Each bot is its own Telegram, Slack, Discord or Signal bot. Tokens are stored in ${SECRETS_AT}.`}>
+      <Group title="Messaging apps" note={`Each bot is its own Telegram, Slack, Discord, Signal or WhatsApp bot. Tokens are stored in ${SECRETS_AT}.`}>
         <ChannelRow icon="telegram" title="Telegram" st={chan('telegram')} has={has('has_telegram_token')} onRemove={() => save({ ...NO_SECRETS, telegram_token: '' })}
           hint="Message @BotFather, send /newbot, and paste the token it gives you.">
           <input className="input" type="password" aria-label="Telegram bot token" placeholder="123456:ABC…" value={typed('telegram_token')} onChange={e => type('telegram_token', e.target.value)} autoComplete="off" />
@@ -274,6 +275,12 @@ export function BotPage({ bot, status, canDelete, onSaved, onDeleted, onChat, on
           hint="Run signal-cli-rest-api with MODE=json-rpc, link the bot's own Signal number to it (open /v1/qrcodelink?device_name=mimir on it and scan the code in Signal → Linked devices), then enter that number. Direct chats only.">
           <input className="input" aria-label="Signal number" placeholder="The bot's number (+31…)" value={typed('signal_number')} onChange={e => type('signal_number', e.target.value)} autoComplete="off" />
           <input className="input" aria-label="signal-cli-rest-api address" placeholder="signal-cli-rest-api address (default http://127.0.0.1:8081)" value={typed('signal_api')} onChange={e => type('signal_api', e.target.value)} autoComplete="off" />
+        </ChannelRow>
+        <ChannelRow icon="whatsapp" title="WhatsApp" st={chan('whatsapp')} has={has('has_whatsapp')} onRemove={() => save({ ...NO_SECRETS, whatsapp_number_id: '', whatsapp_token: '', whatsapp_app_secret: '' })}
+          hint="Needs Mimir as a server at an https address. In a Meta app with WhatsApp, give it a number of its own and a system user's access token; set the webhook to your address + /whatsapp, with the phone number id as the verify token, and subscribe to messages. It can only write within 24 hours of your last message there.">
+          <input className="input" aria-label="WhatsApp phone number id" placeholder="Phone number id (digits, from API Setup)" value={typed('whatsapp_number_id')} onChange={e => type('whatsapp_number_id', e.target.value)} autoComplete="off" />
+          <input className="input" type="password" aria-label="WhatsApp access token" placeholder="Access token" value={typed('whatsapp_token')} onChange={e => type('whatsapp_token', e.target.value)} autoComplete="off" />
+          <input className="input" type="password" aria-label="Meta app secret" placeholder="App secret (signs the webhook's calls)" value={typed('whatsapp_app_secret')} onChange={e => type('whatsapp_app_secret', e.target.value)} autoComplete="off" />
         </ChannelRow>
       </Group>
 

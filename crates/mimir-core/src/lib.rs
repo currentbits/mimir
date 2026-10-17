@@ -77,6 +77,7 @@ mod discord;
 mod signal;
 mod slack;
 mod telegram;
+pub mod whatsapp;
 pub mod tidy;
 pub mod totp;
 pub mod mcp;

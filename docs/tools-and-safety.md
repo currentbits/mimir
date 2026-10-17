@@ -47,7 +47,7 @@ Once you've allowed the same thing twice, the card makes "always" the main butto
 deny (routines park their asks for 24 hours instead; see [Needs you](routines.md#needs-you)). From the command line:
 `mimir approvals`, `mimir approve <id>`, `mimir deny <id> [why]`.
 
-**Say why.** **Deny…** in the app takes an optional reason, and in Telegram, Slack, Discord or Signal a text reply to
+**Say why.** **Deny…** in the app takes an optional reason, and in Telegram, Slack, Discord, Signal or WhatsApp a text reply to
 the card does the same (a number on Signal still picks a button). The bot is told *"Denied: <your reason>"* in your own
 words and carries on with that, instead of only saying it wasn't done. A routine's ask has moved on by the time you
 answer, so your reason goes into that chat's conversation for the bot's next turn there.

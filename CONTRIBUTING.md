@@ -53,6 +53,7 @@ python3 scripts/e2e-flows.py                    # bot flows, checked in the data
   `MIMIR_TELEGRAM_API=http://127.0.0.1:<port>` and any bot token.
 - `scripts/mock-signal.py <port> [log]`: a fake signal-cli-rest-api; start Mimir with
   `MIMIR_SIGNAL_API=http://127.0.0.1:<port> SIGNAL_NUMBER=+15550000`. `scripts/e2e-signal.py <dir>` runs a bot on it.
+- `scripts/e2e-whatsapp.py <dir>`: a bot on WhatsApp, against a fake Graph API it runs itself and `mimir server`.
 - `scripts/fake-mail.py [dir]`: a fake IMAP (127.0.0.1:1143) and SMTP (127.0.0.1:1025) server for the email tools.
 - `scripts/e2e-busy-chat.py <dir>`: Telegram + fake AI together, starting both itself.
 

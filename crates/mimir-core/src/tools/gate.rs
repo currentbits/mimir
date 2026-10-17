@@ -705,7 +705,14 @@ pub fn editable(tool: &str) -> &'static [&'static str] {
 /// What a card you can edit holds, as it starts out (None for a tool without any): the editable fields, and who it's to
 /// and from, to show (never taken back from it).
 fn draft_of(name: &str, args: &Value) -> Option<Value> {
-    (!editable(name).is_empty()).then(|| ["to", "cc", "account", "subject", "body"].iter().map(|f| (f.to_string(), json!(args[*f].as_str().unwrap_or("")))).collect::<serde_json::Map<_, _>>().into())
+    (!editable(name).is_empty()).then(|| {
+        let mut d: serde_json::Map<_, _> = ["to", "cc", "account", "subject", "body"].iter().map(|f| (f.to_string(), json!(args[*f].as_str().unwrap_or("")))).collect();
+        // What the edit view shows for who it's to: look-alikes flagged, as on the card.
+        for f in ["to", "cc"] {
+            d.insert(format!("{f}_shown"), json!(crate::email::addresses_shown(args[f].as_str().unwrap_or(""))));
+        }
+        d.into()
+    })
 }
 
 /// The call with the card's edited text in it. Only the editable fields are taken, as text; everything else (who it's
