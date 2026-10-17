@@ -231,6 +231,10 @@ async fn channels(bot: &str, ch: crate::runtime::Channels) -> Vec<Check> {
         let r = match crate::signal::Signal::new(&api, &n) { Ok(c) => within(c.check()).await, Err(e) => Err(e) };
         out.push(("Signal", r, "Check that signal-cli-rest-api is running (MODE=json-rpc) and the bot's number is linked to it."));
     }
+    if let Some((id, token, secret)) = ch.whatsapp {
+        let r = match crate::whatsapp::WhatsApp::new(&id, &token, &secret) { Ok(c) => within(c.check()).await, Err(e) => Err(e) };
+        out.push(("WhatsApp", r, "Check the phone number id and that the access token hasn't expired (a system user's token doesn't)."));
+    }
     out.into_iter()
         .map(|(name, r, fix)| match r {
             Ok(me) => ok(format!("{bot}: {name} reaches {me}")),

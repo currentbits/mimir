@@ -4,7 +4,7 @@ use super::*;
 pub struct Chat {
     pub chat_id: i64,
     pub title: String,
-    /// telegram | slack | discord | signal | local
+    /// telegram | slack | discord | signal | whatsapp | local
     pub channel: String,
     pub memories: i64,
     /// Paired by someone other than you (their own memory and routines; none of your email, calendar, meetings…).
@@ -137,7 +137,7 @@ impl Db {
     pub fn household_member(&self, name: &str, not: i64) -> Result<(i64, String)> {
         let want = name.trim().to_lowercase();
         let mut all: Vec<(i64, String)> = vec![];
-        for channel in ["telegram", "slack", "discord", "signal"] {
+        for channel in ["telegram", "slack", "discord", "signal", "whatsapp"] {
             all.extend(self.household_people(channel)?.into_iter().map(|(_, chat, title)| (chat, title)).filter(|(chat, _)| *chat != not));
         }
         let first = |t: &str| t.split_whitespace().next().unwrap_or("").to_lowercase();

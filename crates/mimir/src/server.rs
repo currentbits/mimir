@@ -4,7 +4,7 @@
 //! Put it behind a TLS proxy (Caddy/Traefik) for anything beyond localhost.
 
 use anyhow::{Context, Result};
-use axum::extract::{DefaultBodyLimit, Path, Request, State};
+use axum::extract::{DefaultBodyLimit, Path, Query, Request, State};
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
@@ -148,6 +148,21 @@ async fn hook(State(app): State<App>, Path(id): Path<i64>, headers: HeaderMap, b
     }
 }
 
+/// Meta's check when WhatsApp's webhook is set up (the verify token is the bot's phone number id).
+async fn whatsapp_verify(Query(q): Query<std::collections::HashMap<String, String>>) -> Response {
+    let get = |k: &str| q.get(k).map(String::as_str).unwrap_or("");
+    match mimir_core::whatsapp::verify(get("hub.mode"), get("hub.verify_token"), get("hub.challenge")) {
+        Some(c) => c.into_response(),
+        None => StatusCode::FORBIDDEN.into_response(),
+    }
+}
+
+/// WhatsApp's messages for the bots. No admin token: each call is signed with the Meta app's secret.
+async fn whatsapp(headers: HeaderMap, body: axum::body::Bytes) -> StatusCode {
+    let sig = headers.get("x-hub-signature-256").and_then(|v| v.to_str().ok());
+    if mimir_core::whatsapp::webhook(sig, &body) { StatusCode::OK } else { StatusCode::UNAUTHORIZED }
+}
+
 async fn api(State(app): State<App>, Path(cmd): Path<String>, body: axum::body::Bytes) -> Response {
     let args: Value = if body.is_empty() {
         json!({})
@@ -200,6 +215,7 @@ pub async fn run(db: Db, home: PathBuf, listen: &str) -> Result<()> {
     let (token, fresh) = admin_token(&db)?;
     // For `mimir doctor`: whether it answers beyond this machine.
     db.set_setting("server_listen", listen)?;
+    mimir_core::whatsapp::serve_webhook();
     let host = Arc::new(Host::new(db.clone(), home, Arc::new(DbSecrets(db)), tokio::runtime::Handle::current(), "server"));
     host.restart_all();
 
@@ -213,6 +229,7 @@ pub async fn run(db: Db, home: PathBuf, listen: &str) -> Result<()> {
         .route("/v1/chat/completions", post(chat_completions).route_layer(axum::middleware::from_fn_with_state(state.clone(), require_chat_token)))
         .route("/v1/models", get(models).route_layer(axum::middleware::from_fn_with_state(state.clone(), require_chat_token)))
         .route("/hook/{id}", post(hook).layer(DefaultBodyLimit::max(256 * 1024)))
+        .route("/whatsapp", get(whatsapp_verify).post(whatsapp).layer(DefaultBodyLimit::max(1024 * 1024)))
         .route("/healthz", get(|| async { "ok" }))
         // Token auth (no cookies), so any origin may call it: the desktop app in remote mode needs this.
         .layer(CorsLayer::new().allow_origin(Any).allow_methods([Method::GET, Method::POST]).allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]))

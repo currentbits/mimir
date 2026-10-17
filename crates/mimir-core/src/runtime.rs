@@ -1,10 +1,10 @@
-//! The always-on runtime for one bot: channel listeners (Telegram, Slack, Discord, Signal) + routine
+//! The always-on runtime for one bot: channel listeners (Telegram, Slack, Discord, Signal, WhatsApp) + routine
 //! scheduler + approval cards. Shared by the CLI (`mimir serve`) and the desktop app, which
 //! aborts/respawns it on settings change.
 
 use crate::db::{Approval, Db};
 use crate::say::{tr, trf};
-use crate::{Trigger, discord::Discord, provider::Provider, signal::Signal, slack::Slack, telegram::Tg, tools::ToolCtx, turn};
+use crate::{Trigger, discord::Discord, provider::Provider, signal::Signal, slack::Slack, telegram::Tg, tools::ToolCtx, turn, whatsapp::WhatsApp};
 use anyhow::Result;
 use serde::Serialize;
 use serde_json::json;
@@ -42,6 +42,8 @@ pub struct Channels {
     pub discord: Option<String>,
     /// (signal-cli-rest-api address, "" for the default; the bot's own number)
     pub signal: Option<(String, String)>,
+    /// (the bot's phone number id, access token, the Meta app's secret)
+    pub whatsapp: Option<(String, String, String)>,
 }
 
 /// A connected messaging channel. Enum dispatch keeps the adapters plain structs.
@@ -51,6 +53,7 @@ pub(crate) enum Chan {
     Slack(Slack),
     Discord(Discord),
     Signal(Signal),
+    WhatsApp(WhatsApp),
 }
 
 /// Telegram allows about one edit per second per chat, Discord five per five seconds: 1.5s suits all.
@@ -79,6 +82,7 @@ impl Chan {
             Chan::Slack(_) => "slack",
             Chan::Discord(_) => "discord",
             Chan::Signal(_) => "signal",
+            Chan::WhatsApp(_) => "whatsapp",
         }
     }
 
@@ -97,6 +101,7 @@ impl Chan {
             Chan::Slack(c) => c.finish(ext, draft, text, rows).await,
             Chan::Discord(c) => c.finish(ext, draft, text, rows).await,
             Chan::Signal(c) => c.finish(ext, draft, text, rows).await,
+            Chan::WhatsApp(c) => c.finish(ext, draft, text, rows).await,
         }
     }
 
@@ -110,6 +115,7 @@ impl Chan {
                     Chan::Slack(c) => c.upload(ext, &name, bytes).await,
                     Chan::Discord(c) => c.upload(ext, &name, bytes).await,
                     Chan::Signal(c) => c.upload(ext, &name, bytes).await,
+            Chan::WhatsApp(c) => c.upload(ext, &name, bytes).await,
                 },
                 Err(e) => Err(e.into()),
             };
@@ -159,6 +165,7 @@ impl Chan {
             Chan::Slack(c) => c.draft_post(ext, text).await,
             Chan::Discord(c) => c.draft_post(ext, text).await,
             Chan::Signal(c) => c.draft_post(ext, text).await,
+            Chan::WhatsApp(c) => c.draft_post(ext, text).await,
         }
     }
 
@@ -168,6 +175,7 @@ impl Chan {
             Chan::Slack(c) => c.draft_edit(ext, id, text).await,
             Chan::Discord(c) => c.draft_edit(ext, id, text).await,
             Chan::Signal(c) => c.draft_edit(ext, id, text).await,
+            Chan::WhatsApp(c) => c.draft_edit(ext, id, text).await,
         }
     }
 
@@ -177,6 +185,7 @@ impl Chan {
             Chan::Telegram(c) => Some(c.typing(ext)),
             Chan::Discord(c) => Some(c.typing(ext)),
             Chan::Signal(c) => Some(c.typing(ext)),
+            Chan::WhatsApp(c) => Some(c.typing(ext)),
             Chan::Slack(c) => c.typing(ext),
         }
     }
@@ -187,6 +196,7 @@ impl Chan {
             Chan::Slack(c) => c.card(ext, a).await,
             Chan::Discord(c) => c.card(ext, a).await,
             Chan::Signal(c) => c.card(ext, a).await,
+            Chan::WhatsApp(c) => c.card(ext, a).await,
         }
     }
 
@@ -196,6 +206,7 @@ impl Chan {
             Chan::Slack(c) => c.listen(self, core, slot).await,
             Chan::Discord(c) => c.listen(self, core, slot).await,
             Chan::Signal(c) => c.listen(self, core, slot).await,
+            Chan::WhatsApp(c) => c.listen(self, core, slot).await,
         }
     }
 }
@@ -516,7 +527,7 @@ pub fn quiet_now(db: &Db, now: chrono::DateTime<chrono::Local>) -> bool {
     if from <= to { (from..to).contains(&t) } else { t >= from || t < to }
 }
 
-/// A file attached to a Slack, Discord or Signal message, as the app describes it; `url` is "" when it can't be fetched.
+/// A file attached to a Slack, Discord, Signal or WhatsApp message, as the app describes it; `url` is "" when it can't be fetched.
 pub(crate) struct File {
     pub name: String,
     pub mime: String,
@@ -681,7 +692,7 @@ impl Core {
         }
     }
 
-    /// Files with a message (Slack, Discord, Signal): photos go to the bot's AI with the text, a voice clip is transcribed, a
+    /// Files with a message (Slack, Discord, Signal, WhatsApp): photos go to the bot's AI with the text, a voice clip is transcribed, a
     /// PDF or text file is read, anything else gets the honest "can't read this yet". Only the paired person's files
     /// are fetched; `get` downloads one from the app's own file host.
     #[allow(clippy::too_many_arguments)]
@@ -820,12 +831,18 @@ impl Core {
     /// The same, with photos (a forwarded photo, a forwarded voice note's words).
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn incoming_outside_with(self: &Arc<Self>, chan: &Chan, ext: &str, from: Sender<'_>, title: &str, text: &str, images: Vec<std::path::PathBuf>, sent: Option<i64>) -> Result<()> {
+        self.taint(chan, ext, from)?;
+        self.incoming_with(chan, ext, from, title, text, images, sent).await
+    }
+
+    /// The paired person's conversation has read outside content (a forwarded file, before `incoming_files`).
+    pub(crate) fn taint(&self, chan: &Chan, ext: &str, from: Sender<'_>) -> Result<()> {
         if let Some(chat) = self.db.chat_lookup(chan.kind(), ext)?
             && self.sender_ok(chat, from)? == Some(true)
         {
             self.db.conv_taint(self.bot, self.conv(chan, ext, chat)?)?;
         }
-        self.incoming_with(chan, ext, from, title, text, images, sent).await
+        Ok(())
     }
 
     /// Whether this person may talk to the bot in this paired chat: the person who paired it, and in a family group
@@ -2012,6 +2029,9 @@ pub async fn serve(db: Db, bot: i64, provider: Arc<Provider>, channels: Channels
     }
     if let Some((api, number)) = channels.signal {
         chans.push(Chan::Signal(Signal::new(&api, &number)?));
+    }
+    if let Some((id, token, secret)) = channels.whatsapp {
+        chans.push(Chan::WhatsApp(WhatsApp::new(&id, &token, &secret)?));
     }
     // Started again after a crash: what happened stays on show.
     let crashed = status.lock().unwrap_or_else(|e| e.into_inner()).error.take();
