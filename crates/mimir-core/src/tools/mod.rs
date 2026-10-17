@@ -355,7 +355,7 @@ async fn gated(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
     }
     let result = match &out {
         // A search's addresses, all of them: what a reply's links are checked against (receipts::footer).
-        Ok(r) if name == "web_search" => truncate(&r.lines().map(str::trim).filter(|l| l.starts_with("http")).collect::<Vec<_>>().join("\n"), 2000),
+        Ok(r) if matches!(name, "web_search" | "x_search") => truncate(&r.lines().map(str::trim).filter(|l| l.starts_with("http")).collect::<Vec<_>>().join("\n"), 2000),
         // A screenshot's file is for the model, not the run log.
         Ok(r) =>truncate(&crate::computer::split_image(r, &ctx.db.dir()).1, 400),
         Err(e) => truncate(&format!("{e:#}"), 400),
@@ -1713,6 +1713,16 @@ mod tests {
         assert!(b.allows("routine_update") && !b.allows("routine_delete"));
     }
 
+    #[test]
+    fn x_posts_name_their_authors() {
+        let body = json!({"data":[{"id":"1","author_id":"7","created_at":"2026-10-17T06:00:00.000Z","text":"Morning"},{"id":"2","author_id":"8","text":"?"}],"includes":{"users":[{"id":"7","username":"rustlang"}]}});
+        let posts = builtin::x_posts(&body, 10);
+        assert_eq!(posts[0], ("rustlang".into(), "https://x.com/rustlang/status/1".into(), "2026-10-17T06:00:00.000Z".into(), "Morning".into()));
+        assert_eq!(posts[1].1, "https://x.com/i/status/2", "an author X didn't include still gets a working link");
+        assert_eq!(builtin::x_posts(&body, 1).len(), 1);
+        assert!(builtin::x_posts(&json!({"meta":{"result_count":0}}), 10).is_empty());
+    }
+
     #[tokio::test]
     async fn web_search_through_searxng() {
         // A stand-in SearXNG: answers every request with two results.
@@ -1893,7 +1903,7 @@ mod tests {
         let mut ro = ctx.clone();
         ro.read_only = true;
         // (meeting tools appear once there's a meeting, the calendar once one is linked)
-        assert_eq!(specs_for(&ro).iter().map(|s| s.0.as_str()).collect::<Vec<_>>(), READ_ONLY.iter().filter(|t| !t.starts_with("meeting_") && !t.starts_with("email_") && !matches!(**t, "calendar_list" | "web_search")).copied().collect::<Vec<_>>());
+        assert_eq!(specs_for(&ro).iter().map(|s| s.0.as_str()).collect::<Vec<_>>(), READ_ONLY.iter().filter(|t| !t.starts_with("meeting_") && !t.starts_with("email_") && !matches!(**t, "calendar_list" | "web_search" | "x_search")).copied().collect::<Vec<_>>());
         assert!(call(&ro, "memory_store", &json!({"type":"knowledge","title":"x","body":"y"})).await.is_err());
         assert!(call(&ro, "routine_list", &json!({})).await.is_ok());
         assert!(ro.mcp_args().contains(&"--read-only".to_string()));

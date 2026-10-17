@@ -5,6 +5,9 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 ## Unreleased
 
 ### Talking to your bots
+- **X search:** bots can search recent X (Twitter) posts (`x_search`) with your own X API bearer token
+  (**Settings → Web search → X**). Good for a morning routine of fresh posts. See
+  [docs/connect.md](docs/connect.md#x-search) for getting a token.
 - **Telegram guest mode:** type `@yourbot` in any chat, even one it isn't in, and it replies there. Only to you, and
   as in a group: none of your email, calendar, meetings, computer or saved logins, and the message you replied to is
   outside content. A reminder it sets comes to your private chat.

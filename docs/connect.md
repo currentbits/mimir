@@ -167,6 +167,38 @@ Search (`web_search`) and then read the pages that matter (`web_fetch`). Results
 service sees your queries, so once a conversation has read outside content, a search that would carry one of your
 memories asks you first.
 
+## X search
+
+Lets every bot search recent posts on X (Twitter), e.g. a routine that pulls this morning's posts on a topic. It
+uses X's official API, so you need your own X developer account and token. There's no login or browser involved.
+
+### 1. Get a bearer token
+
+1. Sign in at [console.x.com](https://console.x.com) with your X account and accept the developer terms.
+2. **Buy credits**: X's API is pay-per-use. Reading posts costs a fraction of a cent each (plus a bit per author), so
+   a daily search for 10 posts is a few cents a day. Current rates are on the console's pricing page. A search without
+   credits fails with an error from X, which the bot passes on.
+3. **Create a Project**, then an **App** inside it.
+4. In the app's **Keys and tokens**, generate a **Bearer Token** and copy it. It's shown only once. You can make a
+   new one there at any time, which also cancels the old one.
+
+You don't need the API key/secret, the access token or OAuth settings. Searching only reads public posts.
+
+### 2. Add it in Mimir
+
+**Settings → Web search → X (Twitter)**: paste the token and **Save**. On a server you can instead set the
+`X_BEARER_TOKEN` environment variable.
+
+### What bots can then do
+
+Search posts from the **last 7 days**, newest first (`x_search`), with X's search operators:
+`from:rustlang`, `#rustlang`, `"exact phrase"`, `-is:retweet`, `lang:en`. Each result has the author, the time,
+the text and a link. For a morning digest, make a routine like "every day at 7: search X for `(rust OR tokio)
+-is:retweet lang:en` and give me the five most interesting posts with links".
+
+Posts are outside content. X sees your queries, so once a conversation has read outside content, a search that would
+carry one of your memories asks you first.
+
 ## Signal
 
 A bot can be on Signal next to Telegram, Slack and Discord (those are set up on the bot's page, see
