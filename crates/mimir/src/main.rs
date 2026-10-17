@@ -150,6 +150,8 @@ async fn serve(db: Db, home: PathBuf) -> Result<()> {
         slack: var("SLACK_BOT_TOKEN").zip(var("SLACK_APP_TOKEN")),
         discord: var("DISCORD_BOT_TOKEN"),
         signal: var("SIGNAL_NUMBER").map(|n| (String::new(), n)),
+        // ponytail: WhatsApp's messages come in on `mimir server`'s webhook, which `serve` doesn't run
+        whatsapp: None,
     };
     if channels.telegram.is_none() && channels.slack.is_none() && channels.discord.is_none() && channels.signal.is_none() {
         eprintln!("no channel configured (TELEGRAM_BOT_TOKEN / SLACK_BOT_TOKEN+SLACK_APP_TOKEN / DISCORD_BOT_TOKEN / SIGNAL_NUMBER); running routines only");
