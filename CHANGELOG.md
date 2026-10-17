@@ -13,6 +13,8 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 - **Bot files, follow-ups:** routines keep their watched page, delivery, "right away when" rule and end date, **Show**
   on a skill opens its full instructions before you add it, and addresses in the file never carry a password or a
   `?key=`.
+- **Approval cards:** a tool server's list of recipients (`to: [a, b, …]`) comes first on the card and is shown in
+  full, not cut off.
 
 ## 0.4.0
 
