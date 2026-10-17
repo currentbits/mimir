@@ -136,6 +136,12 @@ impl Provider {
         matches!(self, Provider::OpenAi { .. } | Provider::ChatGpt { .. })
     }
 
+    /// A resumed session keeps the instructions from its first turn and ignores new ones (tested on claude 2.1.283
+    /// and grok 1.0.60, #218; codex 0.159 reads model_instructions_file again on every run).
+    pub fn keeps_first_instructions(&self) -> bool {
+        matches!(self, Provider::Claude { .. } | Provider::Grok { .. })
+    }
+
     /// One reply. A message the person sends while it's being written steers it: `claude -p` takes it in mid-run
     /// (see claude); the others can't, so the run stops and starts over from the same session with it added.
     pub async fn run(&self, ctx: &ToolCtx, system: &str, history: &[(String, String)], user: &str, session: Option<String>) -> Result<Reply> {
@@ -311,7 +317,8 @@ async fn claude(ctx: &ToolCtx, home: &PathBuf, model: Option<&str>, system: &str
             match v["type"].as_str() {
                 Some("result") => {
                     let u = claude_usage(&v);
-                    (used.tokens_in, used.tokens_out, used.cache_read) = (used.tokens_in + u.tokens_in, used.tokens_out + u.tokens_out, used.cache_read + u.cache_read);
+                    (used.tokens_in, used.tokens_out, used.cache_read, used.cache_write) =
+                        (used.tokens_in + u.tokens_in, used.tokens_out + u.tokens_out, used.cache_read + u.cache_read, used.cache_write + u.cache_write);
                     (used.model, used.cost_usd) = (u.model.or(used.model), u.cost_usd);
                     result = Some((v, used.clone()));
                     asked = asked.saturating_sub(1);
@@ -804,6 +811,7 @@ fn claude_usage(v: &Value) -> Usage {
         tokens_out: n("output_tokens"),
         cost_usd: v["total_cost_usd"].as_f64(),
         cache_read: n("cache_read_input_tokens"),
+        cache_write: n("cache_creation_input_tokens"),
         estimated: false,
     }
 }
@@ -1165,6 +1173,7 @@ async fn openai(ctx: &ToolCtx, base: &str, key: &str, model: &str, system: &str,
         .collect();
     let http = reqwest::Client::builder().timeout(TURN_TIMEOUT).build()?;
     let url = format!("{}/chat/completions", base.trim_end_matches('/'));
+    let openrouter = base.contains("openrouter.ai");
 
     // ponytail: no price table; only OpenRouter runs get a cost (it reports one)
     let mut usage = Usage { model: Some(model.to_string()), ..Default::default() };
@@ -1172,13 +1181,22 @@ async fn openai(ctx: &ToolCtx, base: &str, key: &str, model: &str, system: &str,
     let rounds = if tools::specs_for(ctx).iter().any(|s| s.0 == "computer_screenshot") { 40 } else { MAX_TOOL_ROUNDS };
     for _ in 0..rounds {
         // Our own bookkeeping field stays out of the request (strict APIs reject unknown fields).
-        let sent: Vec<Value> = messages.iter().map(|m| { let mut m = m.clone(); if let Some(o) = m.as_object_mut() { o.remove("mimir_screenshot"); } m }).collect();
+        let mut sent: Vec<Value> = messages.iter().map(|m| { let mut m = m.clone(); if let Some(o) = m.as_object_mut() { o.remove("mimir_screenshot"); } m }).collect();
+        // Claude models on OpenRouter only cache what's marked: the system prompt, and the newest message so the next
+        // round or turn reads everything before it back from the cache. Only on OpenRouter: another endpoint serving
+        // an `anthropic/…` id may not know the field, and a strict one rejects the request.
+        if openrouter && model.starts_with("anthropic/") {
+            cache_mark(&mut sent[0]);
+            if let Some(m) = sent.iter_mut().rev().find(|m| m["role"] == "user" || m["role"] == "tool") {
+                cache_mark(m);
+            }
+        }
         let mut body = json!({"model":model,"messages":sent});
         // OpenAI rejects an empty tools array.
         if !tool_specs.is_empty() {
             body["tools"] = json!(tool_specs);
         }
-        if base.contains("openrouter.ai") {
+        if openrouter {
             body["usage"] = json!({"include": true});
         }
         if ctx.stream {
@@ -1235,6 +1253,7 @@ async fn openai(ctx: &ToolCtx, base: &str, key: &str, model: &str, system: &str,
         usage.tokens_in += v["usage"]["prompt_tokens"].as_i64().unwrap_or(0);
         usage.tokens_out += v["usage"]["completion_tokens"].as_i64().unwrap_or(0);
         usage.cache_read += v["usage"]["prompt_tokens_details"]["cached_tokens"].as_i64().unwrap_or(0);
+        usage.cache_write += v["usage"]["prompt_tokens_details"]["cache_write_tokens"].as_i64().unwrap_or(0);
         if let Some(c) = v["usage"]["cost"].as_f64() {
             usage.cost_usd = Some(usage.cost_usd.unwrap_or(0.0) + c);
         }
@@ -1273,6 +1292,16 @@ async fn openai(ctx: &ToolCtx, base: &str, key: &str, model: &str, system: &str,
         }
     }
     bail!("gave up after {rounds} tool rounds")
+}
+
+/// A cache breakpoint on a message's (last) text part, for Claude models via OpenRouter.
+fn cache_mark(m: &mut Value) {
+    if let Some(t) = m["content"].as_str() {
+        m["content"] = json!([{"type": "text", "text": t}]);
+    }
+    if let Some(p) = m["content"].as_array_mut().and_then(|v| v.iter_mut().rev().find(|p| p["type"] == "text")) {
+        p["cache_control"] = json!({"type": "ephemeral"});
+    }
 }
 
 /// Tell a CLI model where the attached images are (it opens them with its Read tool).
@@ -1501,6 +1530,10 @@ mod tests {
         assert_eq!((r.usage.tokens_in, r.usage.tokens_out), (5, 0));
         let c = claude_usage(&serde_json::json!({"total_cost_usd":0.02,"usage":{"input_tokens":2,"cache_read_input_tokens":10,"cache_creation_input_tokens":5,"output_tokens":4},"modelUsage":{"claude-sonnet-5":{}}}));
         assert_eq!((c.model.as_deref(), c.tokens_in, c.tokens_out, c.cost_usd), (Some("claude-sonnet-5"), 17, 4, Some(0.02)));
+        assert_eq!((c.cache_read, c.cache_write), (10, 5));
+        let mut m = serde_json::json!({"role": "user", "content": "hi"});
+        cache_mark(&mut m);
+        assert_eq!(m["content"], serde_json::json!([{"type": "text", "text": "hi", "cache_control": {"type": "ephemeral"}}]));
 
         let limited = r#"{"type":"thread.started","thread_id":"t2"}
 {"type":"error","message":"You've hit your usage limit."}
