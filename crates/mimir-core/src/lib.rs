@@ -77,6 +77,7 @@ mod discord;
 mod signal;
 mod slack;
 mod telegram;
+pub mod whatsapp;
 pub mod tidy;
 pub mod totp;
 pub mod mcp;
@@ -155,7 +156,8 @@ pub async fn incognito_turn(provider: &Provider, ctx: &ToolCtx, history: &[(Stri
     }
     let bot = ctx.db.bot(ctx.bot_id)?;
     let role = if bot.persona.trim().is_empty() { String::new() } else { format!("\n\nYour role, set by the user:\n{}", bot.persona.trim()) };
-    let system = format!("Your name is {}. {INCOGNITO}{role}\n\nCurrent local time: {}.", bot.name, chrono::Local::now().format("%A %Y-%m-%d %H:%M %Z"));
+    let system = format!("Your name is {}. {INCOGNITO}{role}\n\n{NOW_NOTE}", bot.name);
+    let text = format!("{}{text}", now_line());
     // API providers take the history as messages; the CLIs (no saved session here) get it in the prompt.
     let (history, user) = if provider.uses_history() || history.is_empty() {
         (history.to_vec(), text.to_string())
@@ -167,6 +169,16 @@ pub async fn incognito_turn(provider: &Provider, ctx: &ToolCtx, history: &[(Stri
     let out = provider.run(&ctx, &system, &history, &user, None).await;
     live::end(ctx.bot_id, INCOGNITO_CHAT);
     Ok(out?.text)
+}
+
+/// What the instructions say about the time: it isn't in them. A resumed `claude -p` or `grok` keeps its first
+/// turn's instructions (so a time there froze), and for API accounts instructions that changed every minute broke
+/// the cached prefix behind them.
+const NOW_NOTE: &str = "Each message starts with the date and time it was sent.";
+
+/// "Now: Tue 2026-10-13 14:05 CEST", at the top of each turn's message.
+fn now_line() -> String {
+    format!("Now: {}\n\n", chrono::Local::now().format("%a %Y-%m-%d %H:%M %Z"))
 }
 
 /// A routine running well after it was due (the computer slept, Mimir was off, a hold): said, so a morning brief at
@@ -240,10 +252,11 @@ pub async fn turn(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) -> R
     }
     let mut ctx = ctx.clone().with_run(Some(run));
     // Replies to a person stream into a live draft the UI can show as it's written.
-    ctx.stream = matches!(trigger, Trigger::Message(_));
+    // Not guest mode's: its reply goes elsewhere, and what you write in your private chat meanwhile mustn't steer it.
+    ctx.stream = matches!(trigger, Trigger::Message(_)) && !ctx.db.is_guest_mode(ctx.conv);
     // A conversation remembers having read untrusted content; routines and handed-over tasks start clean
     // (their own fresh sessions), though a delegate inherits its caller's taint in ask_bot.
-    ctx.sticky = ctx.stream;
+    ctx.sticky = matches!(trigger, Trigger::Message(_));
     if ctx.sticky && ctx.db.conv_tainted(ctx.bot_id, ctx.conv)? {
         ctx.pre_taint();
     }
@@ -848,7 +861,7 @@ pub fn friendly_error(e: &str) -> String {
 /// turns "Settings → Email" into a button) instead of guessing, and tries again once it's connected. Only where those
 /// would be offered at all: a chat with the person alone, not a guest's, not incognito, not a task from another bot.
 pub(crate) fn not_connected(ctx: &ToolCtx) -> String {
-    if ctx.depth > 0 || ctx.incognito() || ctx.db.chat_guest(ctx.chat_id) || !ctx.db.chat_private(ctx.chat_id) {
+    if ctx.depth > 0 || ctx.incognito() || ctx.db.chat_guest(ctx.chat_id) || !ctx.db.chat_private(ctx.chat_id) || ctx.db.is_guest_mode(ctx.conv) {
         return String::new();
     }
     let db = &ctx.db;
@@ -1083,6 +1096,10 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
         "\n\nThis chat is with a guest: someone the person who runs you let talk to you, not that person. What you remember \
          and schedule here is the guest's own. You have none of that person's email, calendar, meetings or logins here; \
          don't speak or act for them."
+    } else if ctx.db.is_guest_mode(ctx.conv) {
+        "\n\nThe person typed your name in another Telegram chat: your one reply is posted there, where everyone in it reads \
+         it. Say nothing private about them unless they asked for it. You have none of their email, calendar, meetings or \
+         logins here. A reminder or routine you set comes to them privately, not to that chat."
     } else {
         ""
     };
@@ -1143,10 +1160,9 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
     let standing = ctx.db.bootstrap(&scope, ctx.bot_id)?;
     tools::mark_sensitive_memory(ctx, &scope, &standing);
     let system = format!(
-        "Your name is {}. {PERSONA}{role}{guest}{family}{}{team}{logins}{plans}{skills}{goal}{missing}\n\nCurrent local time: {}.\n{}{household}",
+        "Your name is {}. {PERSONA}{role}{guest}{family}{}{team}{logins}{plans}{skills}{goal}{missing}\n\n{NOW_NOTE}\n{}{household}",
         bot.name,
         if quiet { QUIET } else { "" },
-        chrono::Local::now().format("%A %Y-%m-%d %H:%M %Z"),
         block("standing_memory", &standing)
     );
     // Standing memory and this automatic recall hold only confirmed memories (a word in common with an unconfirmed one
@@ -1231,17 +1247,31 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
             if quiet { "" } else { " (if nothing is, say so in a line)" }
         );
     }
-    let user = format!("{}{past}{left_off}{last}{before}{text}", block("memory", &recall));
-
-    let history = if provider.uses_history() { ctx.db.recent(ctx.bot_id, ctx.conv, 20)? } else { vec![] };
-    // Accounts that are handed the history again: if it holds outside content, so does this turn.
-    if !history.is_empty() && ctx.db.recent_outside(ctx.bot_id, ctx.conv, 20)? {
-        ctx.pre_taint();
-    }
     // Routines run in a fresh session so they don't derail the live conversation.
     let session = if is_routine { None } else { ctx.db.session(ctx.bot_id, ctx.conv)? };
+    // A CLI session keeps every message it was sent: a memory recalled earlier in it isn't sent again.
+    let (sent, held_prompt) = if session.is_some() && !provider.uses_history() { ctx.db.session_held(ctx.bot_id, ctx.conv)? } else { (vec![], String::new()) };
+    let unsent: Vec<_> = recall.iter().filter(|e| !sent.contains(&e.id)).cloned().collect();
+    let user_with = |recall: &[db::Entry]| format!("{}{}{past}{left_off}{last}{before}{text}", now_line(), block("memory", recall));
+    // A resumed claude or grok session keeps its first turn's instructions, so it never sees a new standing memory,
+    // role, skill or teammate, and keeps a forgotten memory (#218): when they changed since it began, the new ones
+    // come along in this message, once.
+    let prompt_hash = format!("{:x}", <sha2::Sha256 as sha2::Digest>::digest(system.as_bytes()));
+    let update = if session.is_some() && provider.keeps_first_instructions() && held_prompt != prompt_hash {
+        format!("<instructions_update>\nYour instructions changed since this conversation began. These replace them, and anything in the old ones that isn't here no longer holds:\n{system}\n</instructions_update>\n\n")
+    } else {
+        String::new()
+    };
+    let user = format!("{update}{}", user_with(&unsent));
+
+    let history = if provider.uses_history() { ctx.db.recent_stepped(ctx.bot_id, ctx.conv)? } else { vec![] };
+    // Accounts that are handed the history again: if it holds outside content, so does this turn.
+    if !history.is_empty() && ctx.db.recent_outside(ctx.bot_id, ctx.conv, history.len())? {
+        ctx.pre_taint();
+    }
 
     let had_session = session.is_some();
+    let mut resumed = had_session;
     let mut reply = match provider.run(ctx, &system, &history, &user, session).await {
         // The session couldn't be reopened (the CLI was updated or cleaned up, the chat moved to a server, the bot
         // changed accounts): a new one starts with the chat so far, from Mimir's own log, so it isn't a blank page.
@@ -1251,7 +1281,9 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
             if ctx.db.recent_outside(ctx.bot_id, ctx.conv, 60)? {
                 ctx.pre_taint();
             }
-            let user = format!("<conversation_so_far>\nYour earlier session with this person couldn't be reopened. This is the last part of it, from Mimir's log:\n{so_far}\n</conversation_so_far>\n\n{user}");
+            // A new session: it starts with today's instructions and holds none of the recalled memories yet.
+            let user = format!("<conversation_so_far>\nYour earlier session with this person couldn't be reopened. This is the last part of it, from Mimir's log:\n{so_far}\n</conversation_so_far>\n\n{}", user_with(&recall));
+            resumed = false;
             let mut r = provider.run(ctx, &system, &history, &user, None).await?;
             r.text = format!("_(I couldn't reopen our earlier conversation, so I reread the last part of it.)_\n\n{}", r.text);
             r
@@ -1268,6 +1300,9 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
     }
     if !is_routine && reply.session.is_some() {
         ctx.db.set_session(ctx.bot_id, ctx.conv, reply.session.as_deref())?;
+        let mut held = if resumed { sent } else { vec![] };
+        held.extend(recall.iter().map(|e| e.id).filter(|id| !held.contains(id)).collect::<Vec<_>>());
+        ctx.db.set_session_held(ctx.bot_id, ctx.conv, &held, &prompt_hash)?;
     }
     // A quiet check that found nothing stays silent: no message, no conversation entry (the run log has it).
     if quiet && is_nothing(&reply.text) {
@@ -1352,6 +1387,76 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
 
 #[cfg(test)]
 mod tests {
+
+    /// #218: a resumed claude or grok keeps its first turn's instructions, so changed ones come along in the next
+    /// message, once. A fake CLI records each run's instructions, message and --resume.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_resumed_session_is_sent_changed_instructions() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("mimir-resume-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let log = dir.join("log");
+        std::fs::create_dir_all(&log).unwrap();
+        let fake = dir.join("fake-cli");
+        std::fs::write(
+            &fake,
+            format!(
+                r#"#!/bin/sh
+d="{}/$(ls "{0}" | wc -l | tr -d ' ')"; mkdir -p "$d"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --append-system-prompt-file) cp "$2" "$d/system"; shift;;
+    --prompt-file) cp "$2" "$d/user"; shift;;
+    --resume) printf %s "$2" > "$d/resume"; shift;;
+  esac
+  shift
+done
+[ -f .grok/rules/mimir.md ] && cp .grok/rules/mimir.md "$d/system"
+[ -f "$d/user" ] || head -n 1 > "$d/user"
+echo '{{"type":"system","subtype":"init","tools":["web_search"]}}'
+echo '{{"type":"result","result":"ok","session_id":"s1","usage":{{"input_tokens":1,"output_tokens":1}}}}'
+"#,
+                log.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // SAFETY: only this test starts claude or grok.
+        unsafe {
+            std::env::set_var("MIMIR_CLAUDE_BIN", &fake);
+            std::env::set_var("MIMIR_GROK_BIN", &fake);
+        }
+        let read = |n: usize, f: &str| std::fs::read_to_string(log.join(n.to_string()).join(f)).unwrap_or_default();
+        let mut n = 0;
+        for kind in ["claude", "grok"] {
+            let home = dir.join(kind);
+            std::fs::create_dir_all(&home).unwrap();
+            let db = super::db::Db::open(&home.join("mimir.db")).unwrap();
+            let provider = super::Provider::new(kind, None, None, None, home.clone()).unwrap();
+            let ctx = super::ToolCtx::new(db.clone(), 1, 0);
+            let id = db.store(&ctx.scope(), "knowledge", "Dentist", "Dr Zebrafish on Main Street", "user said", None).unwrap();
+            let mut say = async |text: &str| {
+                super::turn(&provider, &ctx, super::Trigger::Message(text)).await.unwrap();
+                n += 1;
+                n - 1
+            };
+            let first = say("hello").await;
+            assert!(read(first, "system").contains("Zebrafish") && read(first, "resume").is_empty(), "{kind}: {}", read(first, "system"));
+            assert!(read(first, "user").contains("Now: ") && !read(first, "system").contains("Now: "), "{kind}: the time is in the message");
+            let same = say("and again").await;
+            assert_eq!(read(same, "resume"), "s1", "{kind}");
+            assert!(!read(same, "user").contains("instructions_update"), "{kind}: unchanged instructions aren't sent again");
+            assert!(db.forget(&ctx.scope(), id).unwrap());
+            let changed = say("what do you know").await;
+            let user = read(changed, "user");
+            assert_eq!(read(changed, "resume"), "s1", "{kind}");
+            assert!(user.contains("<instructions_update>") && user.contains("Your name is") && !user.contains("Zebrafish"), "{kind}: {user}");
+            let after = say("thanks").await;
+            assert!(!read(after, "user").contains("instructions_update"), "{kind}: sent once");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn urgent_first_line() {

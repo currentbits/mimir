@@ -48,7 +48,7 @@ Once you've allowed the same thing twice, the card makes "always" the main butto
 deny (routines park their asks for 24 hours instead; see [Needs you](routines.md#needs-you)). From the command line:
 `mimir approvals`, `mimir approve <id>`, `mimir deny <id> [why]`.
 
-**Say why.** **Deny…** in the app takes an optional reason, and in Telegram, Slack, Discord or Signal a text reply to
+**Say why.** **Deny…** in the app takes an optional reason, and in Telegram, Slack, Discord, Signal or WhatsApp a text reply to
 the card does the same (a number on Signal still picks a button). The bot is told *"Denied: <your reason>"* in your own
 words and carries on with that, instead of only saying it wasn't done. A routine's ask has moved on by the time you
 answer, so your reason goes into that chat's conversation for the bot's next turn there.
@@ -162,7 +162,8 @@ online at a URL. Paste its setup line (`npx -y @modelcontextprotocol/server-file
 to it once to list its tools, so a broken setup isn't saved. Tokens in its environment or headers go to the keychain
 (server: the private database), never the config. Its tools follow the same rules: tools the server marks read-only are
 allowed once you confirm them (Mimir lists the tools after adding the server, "read-only (the server says)"), the rest
-ask. Updating the server, or changing what runs, asks you to confirm again. Each bot can switch servers on or off. Remote servers use MCP's Streamable HTTP transport;
+ask. Updating the server, or changing what runs, asks you to confirm again; so does a tool whose description or inputs
+changed when the server is saved again. Each bot can switch servers on or off. Remote servers use MCP's Streamable HTTP transport;
 servers that only offer the older SSE transport aren't supported.
 
 **Malware check.** Before starting a server whose command downloads a package (`npx`, `bunx`, `npm exec`, `pnpm dlx`,

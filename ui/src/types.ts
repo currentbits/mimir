@@ -1,10 +1,10 @@
-export type ChannelStatus = { kind: 'telegram' | 'slack' | 'discord' | 'signal'; connected: boolean; handle: string | null; error: string | null }
+export type ChannelStatus = { kind: 'telegram' | 'slack' | 'discord' | 'signal' | 'whatsapp'; connected: boolean; handle: string | null; error: string | null }
 
 export type Status = { bot_id: number; provider: string; pair_code: string | null; channels: ChannelStatus[]; error: string | null }
 
 export type Bot = {
   id: number; name: string; persona: string; provider: string; model: string; base_url: string; tools: string
-  has_telegram_token: boolean; has_slack: boolean; has_discord: boolean; has_signal: boolean
+  has_telegram_token: boolean; has_slack: boolean; has_discord: boolean; has_signal: boolean; has_whatsapp: boolean
   /** Its creature, as you chose it (JSON of Look); empty = the one its id gives it. */
   look?: string
 }
@@ -27,7 +27,7 @@ export type Run = {
   id: number; bot_id: number; chat_id: number; reply?: string | null; parent_run?: number | null; trigger: 'message' | 'routine' | 'rehearsal' | 'tidy' | 'delegated' | 'reported' | 'import' | 'know_me' | 'check'; routine_id: number | null; provider: string; model: string | null
   status: 'running' | 'ok' | 'error' | 'missed' | 'unchanged'; error: string | null; started_at: number; ended_at: number | null
   tokens_in: number; tokens_out: number; cost_usd: number | null; tool_calls: number
-  delivered?: string | null; repeats?: number; cache_read?: number; estimated?: boolean
+  delivered?: string | null; repeats?: number; cache_read?: number; cache_write?: number; estimated?: boolean
 }
 
 export type Approval = { id: number; bot_id: number; chat_id: number; tool: string; summary: string; created_at: number; expires_at: number; kind?: 'rule' | 'guarded' | 'guest' | 'login' | 'plan' | 'bot' | 'send' | 'takeover' | 'signin' | 'remind' | 'unasked' | 'loop' | 'sensitive'; site?: string | null; parked?: boolean; allowed_before?: number

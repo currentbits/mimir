@@ -575,6 +575,13 @@ mod tests {
         assert!(card.starts_with("mail: Send (to: someone@example.com; body: "), "{card}");
         let card = describe_external("mail__send", &json!({"body": "x".repeat(600), "messages": [{"text": "y".repeat(600), "to": "a@b.c"}]})).unwrap();
         assert!(card.starts_with("mail: Send (messages: [{to: a@b.c; text: "), "nested in an array: {card}");
+        // A list of recipients is shown first and whole, however long, and so is one in a list of lists.
+        let to: Vec<String> = (0..30).map(|i| format!("person{i}@example.com")).collect();
+        let card = describe_external("mail__send", &json!({"body": "x".repeat(600), "to": to})).unwrap();
+        assert!(card.starts_with("mail: Send (to: [person0@example.com, person1@example.com, "), "{card}");
+        assert!(card.contains("person29@example.com]; body: "), "{card}");
+        let card = describe_external("mail__send", &json!({"body": "x", "batches": [[{"to": "a@b.c"}]]})).unwrap();
+        assert!(card.starts_with("mail: Send (batches: [[{to: a@b.c}]]; body: x"), "{card}");
     }
 
     #[tokio::test]

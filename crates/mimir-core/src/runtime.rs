@@ -1,10 +1,10 @@
-//! The always-on runtime for one bot: channel listeners (Telegram, Slack, Discord, Signal) + routine
+//! The always-on runtime for one bot: channel listeners (Telegram, Slack, Discord, Signal, WhatsApp) + routine
 //! scheduler + approval cards. Shared by the CLI (`mimir serve`) and the desktop app, which
 //! aborts/respawns it on settings change.
 
 use crate::db::{Approval, Db};
 use crate::say::{tr, trf};
-use crate::{Trigger, discord::Discord, provider::Provider, signal::Signal, slack::Slack, telegram::Tg, tools::ToolCtx, turn};
+use crate::{Trigger, discord::Discord, provider::Provider, signal::Signal, slack::Slack, telegram::Tg, tools::ToolCtx, turn, whatsapp::WhatsApp};
 use anyhow::Result;
 use serde::Serialize;
 use serde_json::json;
@@ -42,6 +42,8 @@ pub struct Channels {
     pub discord: Option<String>,
     /// (signal-cli-rest-api address, "" for the default; the bot's own number)
     pub signal: Option<(String, String)>,
+    /// (the bot's phone number id, access token, the Meta app's secret)
+    pub whatsapp: Option<(String, String, String)>,
 }
 
 /// A connected messaging channel. Enum dispatch keeps the adapters plain structs.
@@ -51,6 +53,7 @@ pub(crate) enum Chan {
     Slack(Slack),
     Discord(Discord),
     Signal(Signal),
+    WhatsApp(WhatsApp),
 }
 
 /// Telegram allows about one edit per second per chat, Discord five per five seconds: 1.5s suits all.
@@ -79,6 +82,7 @@ impl Chan {
             Chan::Slack(_) => "slack",
             Chan::Discord(_) => "discord",
             Chan::Signal(_) => "signal",
+            Chan::WhatsApp(_) => "whatsapp",
         }
     }
 
@@ -97,6 +101,7 @@ impl Chan {
             Chan::Slack(c) => c.finish(ext, draft, text, rows).await,
             Chan::Discord(c) => c.finish(ext, draft, text, rows).await,
             Chan::Signal(c) => c.finish(ext, draft, text, rows).await,
+            Chan::WhatsApp(c) => c.finish(ext, draft, text, rows).await,
         }
     }
 
@@ -110,6 +115,7 @@ impl Chan {
                     Chan::Slack(c) => c.upload(ext, &name, bytes).await,
                     Chan::Discord(c) => c.upload(ext, &name, bytes).await,
                     Chan::Signal(c) => c.upload(ext, &name, bytes).await,
+            Chan::WhatsApp(c) => c.upload(ext, &name, bytes).await,
                 },
                 Err(e) => Err(e.into()),
             };
@@ -159,6 +165,7 @@ impl Chan {
             Chan::Slack(c) => c.draft_post(ext, text).await,
             Chan::Discord(c) => c.draft_post(ext, text).await,
             Chan::Signal(c) => c.draft_post(ext, text).await,
+            Chan::WhatsApp(c) => c.draft_post(ext, text).await,
         }
     }
 
@@ -168,6 +175,7 @@ impl Chan {
             Chan::Slack(c) => c.draft_edit(ext, id, text).await,
             Chan::Discord(c) => c.draft_edit(ext, id, text).await,
             Chan::Signal(c) => c.draft_edit(ext, id, text).await,
+            Chan::WhatsApp(c) => c.draft_edit(ext, id, text).await,
         }
     }
 
@@ -177,6 +185,7 @@ impl Chan {
             Chan::Telegram(c) => Some(c.typing(ext)),
             Chan::Discord(c) => Some(c.typing(ext)),
             Chan::Signal(c) => Some(c.typing(ext)),
+            Chan::WhatsApp(c) => Some(c.typing(ext)),
             Chan::Slack(c) => c.typing(ext),
         }
     }
@@ -187,6 +196,7 @@ impl Chan {
             Chan::Slack(c) => c.card(ext, a).await,
             Chan::Discord(c) => c.card(ext, a).await,
             Chan::Signal(c) => c.card(ext, a).await,
+            Chan::WhatsApp(c) => c.card(ext, a).await,
         }
     }
 
@@ -196,6 +206,7 @@ impl Chan {
             Chan::Slack(c) => c.listen(self, core, slot).await,
             Chan::Discord(c) => c.listen(self, core, slot).await,
             Chan::Signal(c) => c.listen(self, core, slot).await,
+            Chan::WhatsApp(c) => c.listen(self, core, slot).await,
         }
     }
 }
@@ -516,7 +527,7 @@ pub fn quiet_now(db: &Db, now: chrono::DateTime<chrono::Local>) -> bool {
     if from <= to { (from..to).contains(&t) } else { t >= from || t < to }
 }
 
-/// A file attached to a Slack, Discord or Signal message, as the app describes it; `url` is "" when it can't be fetched.
+/// A file attached to a Slack, Discord, Signal or WhatsApp message, as the app describes it; `url` is "" when it can't be fetched.
 pub(crate) struct File {
     pub name: String,
     pub mime: String,
@@ -681,7 +692,7 @@ impl Core {
         }
     }
 
-    /// Files with a message (Slack, Discord, Signal): photos go to the bot's AI with the text, a voice clip is transcribed, a
+    /// Files with a message (Slack, Discord, Signal, WhatsApp): photos go to the bot's AI with the text, a voice clip is transcribed, a
     /// PDF or text file is read, anything else gets the honest "can't read this yet". Only the paired person's files
     /// are fetched; `get` downloads one from the app's own file host.
     #[allow(clippy::too_many_arguments)]
@@ -820,12 +831,18 @@ impl Core {
     /// The same, with photos (a forwarded photo, a forwarded voice note's words).
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn incoming_outside_with(self: &Arc<Self>, chan: &Chan, ext: &str, from: Sender<'_>, title: &str, text: &str, images: Vec<std::path::PathBuf>, sent: Option<i64>) -> Result<()> {
+        self.taint(chan, ext, from)?;
+        self.incoming_with(chan, ext, from, title, text, images, sent).await
+    }
+
+    /// The paired person's conversation has read outside content (a forwarded file, before `incoming_files`).
+    pub(crate) fn taint(&self, chan: &Chan, ext: &str, from: Sender<'_>) -> Result<()> {
         if let Some(chat) = self.db.chat_lookup(chan.kind(), ext)?
             && self.sender_ok(chat, from)? == Some(true)
         {
             self.db.conv_taint(self.bot, self.conv(chan, ext, chat)?)?;
         }
-        self.incoming_with(chan, ext, from, title, text, images, sent).await
+        Ok(())
     }
 
     /// Whether this person may talk to the bot in this paired chat: the person who paired it, and in a family group
@@ -1053,6 +1070,42 @@ impl Core {
             }
         }
         Ok(())
+    }
+
+    /// Telegram guest mode (someone typed @bot in a chat the bot isn't in): the private chat of the person who paired
+    /// it there, if that's who typed it. Nobody else gets an answer.
+    pub(crate) fn guest_mode_chat(&self, chan: &Chan, from: &str) -> Result<Option<i64>> {
+        // A Telegram private chat's id is its person's.
+        let Some(chat) = self.db.chat_lookup(chan.kind(), from).ok().flatten() else { return Ok(None) };
+        Ok((!from.is_empty() && self.db.chat_owner(chat)? == from && !self.db.chat_guest(chat) && self.db.chat_private(chat)).then_some(chat))
+    }
+
+    /// The reply to a guest mode message from `guest_mode_chat`'s person: thought out in their private chat, with its
+    /// memory and routines, in a conversation of its own started afresh, and posted where they typed it.
+    /// `referenced`: the message they pointed at (replied to), someone else's words, so outside content.
+    pub(crate) async fn guest_mode(&self, chat: i64, text: &str, referenced: Option<&str>) -> Result<String> {
+        if let Some(until) = self.db.paused(self.bot, crate::db::now())? {
+            return Ok(paused_note(until));
+        }
+        let _g = self.chat_lock(chat).lock_owned().await;
+        let conv = self.db.guest_mode_conv(chat)?;
+        if let Some(s) = self.db.session(self.bot, conv)? {
+            self.provider.forget_session(&s);
+        }
+        self.db.set_session(self.bot, conv, None)?;
+        let said = match referenced.filter(|r| !r.trim().is_empty()) {
+            Some(r) => {
+                self.db.conv_taint(self.bot, conv)?;
+                crate::with_document(text, "the message I pointed you to", r)
+            }
+            None => text.trim().to_string(),
+        };
+        let mut ctx = ToolCtx::new(self.db.clone(), self.bot, chat);
+        ctx.conv = conv;
+        Ok(match turn(&self.provider, &ctx, Trigger::Message(&said)).await {
+            Ok(t) => crate::files::split_sent(&t).0,
+            Err(e) => crate::friendly_error(&format!("{e:#}")),
+        })
     }
 
     /// Cut off the reply being written in this chat, if any (/stop, or a channel's own stop button).
@@ -1977,6 +2030,9 @@ pub async fn serve(db: Db, bot: i64, provider: Arc<Provider>, channels: Channels
     if let Some((api, number)) = channels.signal {
         chans.push(Chan::Signal(Signal::new(&api, &number)?));
     }
+    if let Some((id, token, secret)) = channels.whatsapp {
+        chans.push(Chan::WhatsApp(WhatsApp::new(&id, &token, &secret)?));
+    }
     // Started again after a crash: what happened stays on show.
     let crashed = status.lock().unwrap_or_else(|e| e.into_inner()).error.take();
     *status.lock().unwrap_or_else(|e| e.into_inner()) = Status {
@@ -2521,6 +2577,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn guest_mode_is_only_yours_and_keeps_your_private_things_out() {
+        let p = std::env::temp_dir().join(format!("mimir-guest-mode-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = Db::open(&p).unwrap();
+        let core = Core {
+            db: db.clone(),
+            bot: 1,
+            provider: Arc::new(Provider::new("claude", None, None, None, std::env::temp_dir()).unwrap()),
+            code: Default::default(),
+            status: Default::default(),
+            misses: Default::default(),
+            locks: Default::default(),
+            greeted: Default::default(),
+        };
+        let tg = Chan::Telegram(Tg::new("t").unwrap());
+        for (ext, owner) in [("42", "42"), ("-100", "-100"), ("77", "77"), ("5", "9")] {
+            let chat = db.pair_external("telegram", ext, ext).unwrap();
+            db.chat_set_owner(chat, owner).unwrap();
+        }
+        db.chat_set_guest(77, true).unwrap();
+        assert_eq!(core.guest_mode_chat(&tg, "42").unwrap(), Some(42), "you, from your private chat");
+        for who in ["77", "5", "9", "-100", "", "123"] {
+            assert_eq!(core.guest_mode_chat(&tg, who).unwrap(), None, "{who}: a guest, someone else's chat, a group, a stranger");
+        }
+        let conv = db.guest_mode_conv(42).unwrap();
+        assert!(db.is_guest_mode(conv) && !db.is_guest_mode(42) && !db.is_guest_mode(db.topic_conv(42, 1).unwrap()));
+        assert_eq!(db.guest_mode_conv(42).unwrap(), conv);
+        let mut ctx = ToolCtx::new(db.clone(), 1, 42);
+        let mine: Vec<String> = crate::tools::specs_for(&ctx).into_iter().map(|s| s.0).collect();
+        ctx.conv = conv;
+        let tools: Vec<String> = crate::tools::specs_for(&ctx).into_iter().map(|s| s.0).collect();
+        assert!(mine.contains(&"ask_choice".to_string()) && tools.len() < mine.len(), "{mine:?}");
+        assert!(tools.contains(&"routine_create".to_string()) && tools.contains(&"memory_search".to_string()));
+        for no in ["email_search", "email_send", "calendar_list", "meeting_search", "ask_choice", "send_file", "ask_bot", "bot_create"] {
+            assert!(!tools.iter().any(|t| t == no), "{no} in guest mode");
+        }
+        assert!(!tools.iter().any(|t| t.starts_with("computer_") || t.starts_with("browser__")));
+    }
+
+    #[tokio::test]
     async fn routine_asks_also_go_to_the_decisions_chat_and_close_everywhere() {
         let p = std::env::temp_dir().join(format!("mimir-decisions-{}.db", std::process::id()));
         let _ = std::fs::remove_file(&p);
@@ -2711,6 +2807,18 @@ mod tests {
         let rows = core.result_rows(&r, "x");
         assert_eq!(core.tap(&chan, "C2", me, &rows[0][0].1).await.unwrap().as_deref(), Some("Already done."));
         assert_eq!(core.tap(&chan, "C1", me, &rows[0][0].1).await.unwrap().as_deref(), Some("👍 Noted."), "still there for its own chat");
+
+        // In a family group the household can talk, but only the person who paired it can press the buttons (#135).
+        let sam = db.pair_external("discord", "D2", "Sam").unwrap();
+        db.chat_set_dm(sam, true).unwrap();
+        db.chat_set_owner(sam, "U2").unwrap();
+        db.chat_set_household(sam, true).unwrap();
+        db.chat_set_family(chat, true).unwrap();
+        let fam = Sender { id: "U2", dm: false };
+        assert_eq!(core.sender_ok(chat, fam).unwrap(), Some(true), "a family member may talk here");
+        let rows = core.result_rows(&once, "Call mum!");
+        assert!(core.tap(&chan, "C1", fam, &rows[0][0].1).await.is_err());
+        assert_eq!(core.tap(&chan, "C1", me, &rows[0][0].1).await.unwrap().as_deref(), Some("✅ Done"), "not used up");
     }
 
     #[test]

@@ -69,7 +69,7 @@ function ApprovalCard({ a, where, leaving, decide, inline }: {
       <div className="approval-main">
         <div className="ask">{b.name} {a.kind === 'takeover' ? 'needs you on the computer' : a.kind === 'signin' ? 'needs you to sign in' : 'needs your OK'} · {where}</div>
         {edits && d ? <div className="draft-edit">
-          <div className="what">To {d.to}{d.cc ? ` (cc ${d.cc})` : ''}{d.account ? `, from ${d.account}` : ''}</div>
+          <div className="what">To {d.to_shown ?? d.to}{d.cc ? ` (cc ${d.cc_shown ?? d.cc})` : ''}{d.account ? `, from ${d.account}` : ''}</div>
           <input className="input" aria-label="Subject" value={edits.subject ?? ''} onChange={e => setEdits({ ...edits, subject: e.target.value })} />
           <textarea className="textarea" aria-label="Text" rows={6} value={edits.body ?? ''} onChange={e => setEdits({ ...edits, body: e.target.value })} />
         </div> : <div className={'what selectable' + (a.kind === 'plan' ? ' plan' : '')}>{a.summary}</div>}
