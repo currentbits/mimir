@@ -16,7 +16,7 @@ const SETTING_WORDS: Record<string, string> = {
   'AI keys': 'api key token openai openrouter xai grok anthropic model provider chatgpt sign in plan',
   'Email': 'mail imap smtp gmail icloud fastmail inbox app password send draft',
   'Calendar': 'caldav icloud fastmail nextcloud events schedule',
-  'Web search': 'brave searxng google internet search engine',
+  'Web search': 'brave searxng google internet search engine x twitter tweets posts bearer token',
   'Daily digest': 'quiet hours notifications summary weekly review do not disturb',
   'Limits': 'cap budget tokens cost usage limit plan subscription quota five hour weekly cheaper model haiku',
   'Permissions': 'allow ask deny approve rules tools safety always',
@@ -656,8 +656,9 @@ function KnowMeSettings() {
 
 /** Web search for every bot (web_search): Brave Search's key, or your own SearXNG. Claude's own search works without. */
 function WebSearchSettings() {
-  const st = useLoad(() => invoke<{ brave: boolean; searxng_url: string }>('search_settings', {}), [])
+  const st = useLoad(() => invoke<{ brave: boolean; x: boolean; searxng_url: string }>('search_settings', {}), [])
   const [key, setKey] = useState('')
+  const [xKey, setXKey] = useState('')
   const [url, setUrl] = useState<string | null>(null)
   const [err, setErr] = useState<string | null>(null)
   const done = () => { setErr(null); return st.reload() }
@@ -677,6 +678,21 @@ function WebSearchSettings() {
           value={url ?? s?.searxng_url ?? ''} onChange={e => setUrl(e.target.value)}
           onBlur={() => url !== null && invoke('search_settings', { searxngUrl: url }).then(() => { setUrl(null); return done() }, e => setErr(String(e)))} />
       </Row>
+      <Row icon={<Icon name="search" size={15} />} title="X (Twitter)"
+        desc={s?.x ? 'A token is saved; bots can search posts from the last 7 days' : 'Your own X API token, so bots can search recent posts'}>
+        {s?.x ? <button className="btn btn-sm btn-ghost btn-danger" onClick={() => invoke('set_api_key', { kind: 'x', key: '' }).then(done, e => setErr(String(e)))}>Remove</button>
+          : <form className="er" style={{ gap: 8 }} onSubmit={e => { e.preventDefault(); if (xKey.trim()) invoke('set_api_key', { kind: 'x', key: xKey.trim() }).then(() => { setXKey(''); return done() }, er => setErr(String(er))) }}>
+              <input className="input" type="password" style={{ width: 200 }} placeholder="X bearer token" aria-label="X bearer token" value={xKey} onChange={e => setXKey(e.target.value)} autoComplete="off" />
+              <button className="btn btn-sm" disabled={!xKey.trim()}>Save</button>
+            </form>}
+      </Row>
+      {s && !s.x && <p className="hint" style={{ margin: '4px 0 8px' }}>
+        To get one: 1. Sign in at <a href="https://console.x.com" onClick={openLink}>console.x.com</a> with your X account.
+        {' '}2. Buy a few dollars of credits (X charges per post read; a daily search is a few cents).
+        {' '}3. Create a Project, then an App inside it.
+        {' '}4. In the App's <b>Keys and tokens</b>, generate the <b>Bearer Token</b>, copy it (it's shown once) and paste it above.
+        {' '}You don't need the other keys. <a href="https://github.com/currentbits/mimir/blob/master/docs/connect.md#x-search" onClick={openLink}>Step by step</a>
+      </p>}
     </Group>
   )
 }
@@ -1008,7 +1024,7 @@ export const TOOL_LABEL: Record<string, string> = {
   email_read: 'Read your email', email_search: 'Search your email', email_send: 'Send emails',
   file_delete: 'Delete files', file_list: 'List files', file_read: 'Read files', file_write: 'Write files',
   goal_set: 'Set goals', goal_update: 'Update goals', routine_update: 'Change routines', send_file: 'Send files',
-  skill_save: 'Save skills', web_search: 'Search the web',
+  skill_save: 'Save skills', web_search: 'Search the web', x_search: 'Search X',
 }
 
 /** "browser__browser_click" → "Click" (grouped under Browser) */

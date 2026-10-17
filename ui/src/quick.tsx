@@ -60,7 +60,8 @@ export function QuickAsk() {
 
   const send = () => {
     const t = text.trim()
-    if (!t || pending) return
+    // No bot yet (the list is still loading on a cold start): keep the text, there's nobody to send it to.
+    if (!t || pending || !botId) return
     setAsked(t); setText(''); setAnswer(null); setErr(null); setPending(true)
     invoke<string>('send_local', { botId, text: t }).then(setAnswer, e => setErr(String(e))).finally(() => setPending(false))
   }

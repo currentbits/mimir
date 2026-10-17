@@ -135,6 +135,18 @@ impl Db {
     }
 
     /// A bot's last `n` messages with a chat, oldest first (provider history).
+    /// The history an API account is handed: the last 10 to 19 messages, its start moving 10 at a time (not 2 every
+    /// turn), so the provider's cached prefix holds for five turns.
+    pub fn recent_stepped(&self, bot: i64, chat: i64) -> Result<Vec<(String, String)>> {
+        let n: i64 = self.c().query_row(
+            "SELECT count(*) FROM messages WHERE bot_id=?1 AND chat_id=?2
+               AND id > coalesce((SELECT CAST(value AS INTEGER) FROM settings WHERE key='fresh:' || ?1 || ':' || ?2), 0)",
+            [bot, chat],
+            |r| r.get(0),
+        )?;
+        self.recent(bot, chat, if n < 10 { n as usize } else { 10 + (n % 10) as usize })
+    }
+
     pub fn recent(&self, bot: i64, chat: i64, n: usize) -> Result<Vec<(String, String)>> {
         let c = self.c();
         let mut st = c.prepare(

@@ -118,7 +118,7 @@ async fn security(db: &Db) -> Vec<Check> {
         None => ok(format!("Mimir {} is the latest", crate::server_update::CURRENT)),
     });
     if crate::computer::devtools_shared(db) {
-        out.push(bad(State::Warn, "The bots' computer runs in Mimir's own process: its Chromium DevTools (127.0.0.1:9222) have no token, so any account on this machine can drive it", "Run it as its own service (docker compose), or keep other people's accounts off this machine."));
+        out.push(bad(State::Warn, "The bots' computer runs in Mimir's own process: its Chromium DevTools (127.0.0.1:9222) have no token and its screen (display :99) no password, so any account on this machine can drive it", "Run it as its own service (docker compose), or keep other people's accounts off this machine."));
     }
     out
 }
@@ -240,6 +240,10 @@ async fn channels(bot: &str, ch: crate::runtime::Channels) -> Vec<Check> {
     if let Some((api, n)) = ch.signal {
         let r = match crate::signal::Signal::new(&api, &n) { Ok(c) => within(c.check()).await, Err(e) => Err(e) };
         out.push(("Signal", r, "Check that signal-cli-rest-api is running (MODE=json-rpc) and the bot's number is linked to it."));
+    }
+    if let Some((id, token, secret)) = ch.whatsapp {
+        let r = match crate::whatsapp::WhatsApp::new(&id, &token, &secret) { Ok(c) => within(c.check()).await, Err(e) => Err(e) };
+        out.push(("WhatsApp", r, "Check the phone number id and that the access token hasn't expired (a system user's token doesn't)."));
     }
     out.into_iter()
         .map(|(name, r, fix)| match r {

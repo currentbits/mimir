@@ -23,6 +23,7 @@ Bots act through **tools**. Every tool call is checked against your rules before
 | `send_file` | Send a workspace file, or a screenshot of the bots' computer, to this chat with the reply ([Photos, voice notes and files](bots-and-chats.md#photos-voice-notes-and-files)). Not in incognito or for a bot working on another's task | allow in your own direct chat; **ask** in a group, channel or guest's chat |
 | `email_send` | Send an email as you, after you approve it: every email asks (until you press "Always" on one), with who it's to first and the whole text on the card; one too long for the card has to be a draft instead; at most 20 a day from a chat. Sent through your outgoing server (worked out from the incoming one, or set in Settings → Email), with a copy in your Sent folder | **asks, every time** |
 | `web_search` | Search the web through **Settings → Web search** (Brave Search with a free key, or your own SearXNG), for every AI account; offered once one is set up. Results are outside content; after outside content, a search that would carry one of your memories (or over 200 characters) asks | allow |
+| `x_search` | Search recent X (Twitter) posts (last 7 days) with your X API bearer token (**Settings → Web search → X**); offered once one is saved. Posts are outside content; asks like `web_search` | allow |
 | `meeting_search`, `meeting_read` | Look through your transcribed meetings ([Meetings](meetings.md)); offered once you have one | allow |
 | `calendar_create` | Add an event straight to your calendar (**Settings → Calendar**: iCloud, Fastmail, Nextcloud or any CalDAV, with an app password); offered once one is connected, in a chat with you only. The card shows when, what and where; "Always" works for it | **ask** |
 | `calendar_list` | Read your calendar between two dates (from the calendar link in Settings); offered once one is linked, in a chat with you only. Event titles are outside content | allow |
@@ -49,7 +50,7 @@ Once you've allowed the same thing twice, the card makes "always" the main butto
 deny (routines park their asks for 24 hours instead; see [Needs you](routines.md#needs-you)). From the command line:
 `mimir approvals`, `mimir approve <id>`, `mimir deny <id> [why]`.
 
-**Say why.** **Deny…** in the app takes an optional reason, and in Telegram, Slack, Discord or Signal a text reply to
+**Say why.** **Deny…** in the app takes an optional reason, and in Telegram, Slack, Discord, Signal or WhatsApp a text reply to
 the card does the same (a number on Signal still picks a button). The bot is told *"Denied: <your reason>"* in your own
 words and carries on with that, instead of only saying it wasn't done. A routine's ask has moved on by the time you
 answer, so your reason goes into that chat's conversation for the bot's next turn there.
@@ -106,7 +107,7 @@ tools, found one of its memories, or had them in its standing memory), these ask
 allow:
 
 - `email_send` (it always asks; the card now also says why);
-- `web_fetch` and `web_search`, whatever the address or query, and `computer_open`, `computer_type`;
+- `web_fetch`, `web_search` and `x_search`, whatever the address or query, and `computer_open`, `computer_type`;
 - `ask_bot`: a task for another bot;
 - a message to someone else's chat: a reminder `for` them, `send_file` in a group or a guest's chat;
 - `memory_store` with `household`: the household's guests read those memories;
@@ -171,7 +172,8 @@ online at a URL. Paste its setup line (`npx -y @modelcontextprotocol/server-file
 to it once to list its tools, so a broken setup isn't saved. Tokens in its environment or headers go to the keychain
 (server: the private database), never the config. Its tools follow the same rules: tools the server marks read-only are
 allowed once you confirm them (Mimir lists the tools after adding the server, "read-only (the server says)"), the rest
-ask. Updating the server, or changing what runs, asks you to confirm again. Each bot can switch servers on or off. Remote servers use MCP's Streamable HTTP transport;
+ask. Updating the server, or changing what runs, asks you to confirm again; so does a tool whose description or inputs
+changed when the server is saved again. Each bot can switch servers on or off. Remote servers use MCP's Streamable HTTP transport;
 servers that only offer the older SSE transport aren't supported.
 
 **Malware check.** Before starting a server whose command downloads a package (`npx`, `bunx`, `npm exec`, `pnpm dlx`,

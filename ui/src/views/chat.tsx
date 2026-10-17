@@ -33,6 +33,7 @@ function actionLine(a: Action): [string, string] | null {
     : a.tool === 'ask_bot' ? ['user', `Asked ${q(/^Ask (.*?):/)}`]
     : a.tool === 'web_fetch' ? ['globe', `Read ${q(/^Read https?:\/\/([^/\s]+)/) || 'a page'}`]
     : a.tool === 'web_search' ? ['search', `Searched · ${q(/^Search the web: (.*)$/)}`]
+    : a.tool === 'x_search' ? ['search', `Searched X · ${q(/^Search X: (.*)$/)}`]
     : a.tool === 'email_send' ? ['send', a.result?.startsWith('Not done yet') ? `Waiting for your OK · email to ${q(/^Send an email to (.*?): "/)}` : `Sent an email to ${q(/^Send an email to (.*?): "/)}`]
     : a.tool === 'calendar_create' ? ['clock', a.result?.startsWith('Not done yet') ? 'Waiting for your OK · calendar' : `Added · ${q(/^Add to .*?: (.*?".*?")/) || 'to your calendar'}`]
     : a.tool === 'skill_save' ? ['bolt', `Skill to save · ${q(/^Save as a skill: (.*)$/)}`]

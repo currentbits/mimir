@@ -4,7 +4,7 @@ use super::*;
 pub struct Chat {
     pub chat_id: i64,
     pub title: String,
-    /// telegram | slack | discord | signal | local
+    /// telegram | slack | discord | signal | whatsapp | local
     pub channel: String,
     pub memories: i64,
     /// Paired by someone other than you (their own memory and routines; none of your email, calendar, meetings…).
@@ -137,7 +137,7 @@ impl Db {
     pub fn household_member(&self, name: &str, not: i64) -> Result<(i64, String)> {
         let want = name.trim().to_lowercase();
         let mut all: Vec<(i64, String)> = vec![];
-        for channel in ["telegram", "slack", "discord", "signal"] {
+        for channel in ["telegram", "slack", "discord", "signal", "whatsapp"] {
             all.extend(self.household_people(channel)?.into_iter().map(|(_, chat, title)| (chat, title)).filter(|(chat, _)| *chat != not));
         }
         let first = |t: &str| t.split_whitespace().next().unwrap_or("").to_lowercase();
@@ -266,6 +266,17 @@ impl Db {
         Ok(c.query_row("SELECT CAST(value AS INTEGER) FROM settings WHERE key=?1", [key], |r| r.get(0))?)
     }
 
+    /// Telegram guest mode's conversation in your private chat (you typed @bot in some other chat): a topic no real one
+    /// can be (their ids are message ids), started afresh each time.
+    pub fn guest_mode_conv(&self, chat: i64) -> Result<i64> {
+        self.topic_conv(chat, -1)
+    }
+
+    /// Whether a conversation is guest mode's: its reply is posted where other people see it.
+    pub fn is_guest_mode(&self, conv: i64) -> bool {
+        self.c().prepare("SELECT 1 FROM settings WHERE key LIKE 'topic:%:-1' AND CAST(value AS INTEGER)=?1").and_then(|mut s| s.exists([conv])).unwrap_or(false)
+    }
+
     /// Where to send messages for a chat: (channel, external id). None for the local chat.
     pub fn chat_address(&self, chat: i64) -> Result<Option<(String, String)>> {
         if chat == 0 || chat == crate::INCOGNITO_CHAT {
@@ -298,6 +309,23 @@ impl Db {
 
     pub fn session(&self, bot: i64, chat: i64) -> Result<Option<String>> {
         Ok(self.c().query_row("SELECT session FROM sessions WHERE bot_id=?1 AND chat_id=?2", [bot, chat], |r| r.get(0)).optional()?)
+    }
+
+    /// What the chat's current session already holds: the memories sent in it, and a hash of its instructions.
+    pub fn session_held(&self, bot: i64, chat: i64) -> Result<(Vec<i64>, String)> {
+        let (s, p): (String, String) = self
+            .c()
+            .query_row("SELECT sent, prompt FROM sessions WHERE bot_id=?1 AND chat_id=?2", [bot, chat], |r| Ok((r.get(0)?, r.get(1)?)))
+            .optional()?
+            .unwrap_or_default();
+        Ok((s.split(',').filter_map(|s| s.parse().ok()).collect(), p))
+    }
+
+    /// The memories and instructions the chat's current session holds (call after set_session).
+    pub fn set_session_held(&self, bot: i64, chat: i64, ids: &[i64], prompt: &str) -> Result<()> {
+        let list = ids.iter().map(i64::to_string).collect::<Vec<_>>().join(",");
+        self.c().execute("UPDATE sessions SET sent=?3, prompt=?4 WHERE bot_id=?1 AND chat_id=?2", params![bot, chat, list, prompt])?;
+        Ok(())
     }
 
     pub fn set_session(&self, bot: i64, chat: i64, sid: Option<&str>) -> Result<()> {

@@ -17,14 +17,17 @@ pub(super) fn is_read_only(db: &Db, tool: &str) -> bool {
 /// What a bot may do in a guest's chat: their own memory, routines, files and skills, the web, and calendar links.
 /// Nothing of yours (email, calendar, meetings, saved logins and the browser, tool servers, the computer), and no new
 /// bots in your app.
-pub(super) const GUEST_TOOLS: [&str; 25] = [
-    "memory_store", "memory_search", "memory_forget", "chat_search", "routine_create", "routine_update", "routine_list", "routine_delete", "goal_set", "goal_update", "web_fetch", "web_search",
+pub(super) const GUEST_TOOLS: [&str; 26] = [
+    "memory_store", "memory_search", "memory_forget", "chat_search", "routine_create", "routine_update", "routine_list", "routine_delete", "goal_set", "goal_update", "web_fetch", "web_search", "x_search",
     "file_list", "file_read", "file_write", "file_delete", "skill_view", "skill_save", "calendar_add", "plan_propose", "ask_bot", "ask_choice", "send_file", "card_read", "card_write",
 ];
 
 pub(super) fn usable(ctx: &ToolCtx, tool: &str) -> bool {
     !ctx.tools_off
         && (GUEST_TOOLS.contains(&tool) || !ctx.db.chat_guest(ctx.chat_id))
+        // Telegram guest mode (@bot in someone else's chat): like a guest's chat, as others see the reply. One reply, so
+        // no buttons or files; no other bot, which wouldn't know where its answer goes.
+        && (!ctx.db.is_guest_mode(ctx.conv) || (GUEST_TOOLS.contains(&tool) && !["ask_choice", "send_file", "ask_bot"].contains(&tool)))
         // The computer only where it's switched on and can run (a self-hosted Linux server); never incognito
         // (its browser keeps history and cookies), and like email only in a chat with you alone.
         && (!tool.starts_with("computer_") || (crate::computer::usable(&ctx.db) && !ctx.incognito() && ctx.db.chat_private(ctx.chat_id)))
@@ -49,6 +52,8 @@ pub(super) fn usable(ctx: &ToolCtx, tool: &str) -> bool {
         && !(ctx.incognito() && tool.starts_with("file_"))
         // Web search once a search service is set up.
         && (tool != "web_search" || search_service(&ctx.db).is_some())
+        // X search once an X API token is saved.
+        && (tool != "x_search" || crate::host::api_key("x").is_some())
         // Your calendar, once one is linked, and like meetings only in a conversation with you alone.
         && (tool != "calendar_list" || (crate::host::secret_get(crate::calendar::SECRET).is_some() && ctx.db.chat_private(ctx.chat_id)))
         // Adding to it, once one is connected for that (CalDAV), likewise.
@@ -58,9 +63,9 @@ pub(super) fn usable(ctx: &ToolCtx, tool: &str) -> bool {
 }
 
 /// Tools that only read; they never need approval, even after untrusted content.
-pub const READ_ONLY: [&str; 15] = [
+pub const READ_ONLY: [&str; 16] = [
     "memory_search", "chat_search", "meeting_search", "meeting_read", "calendar_list", "calendar_add", "email_search", "email_read", "file_list", "file_read",
-    "routine_list", "card_read", "skill_view", "web_fetch", "web_search",
+    "routine_list", "card_read", "skill_view", "web_fetch", "web_search", "x_search",
 ];
 
 /// Built-in rule when the user hasn't set one: destructive actions ask, everything else is allowed.
@@ -122,7 +127,7 @@ pub(super) fn leaks_out(ctx: &ToolCtx, name: &str, args: &Value) -> bool {
         // After reading your email or a meeting, any address could carry a code or a name out: ask.
         "web_fetch" | "computer_open" | "browser__browser_navigate" => ctx.saw_private() || url_carries_data(args["url"].as_str().unwrap_or("")),
         // A query goes to the search service: one long enough to carry text, or holding a memory, could be your data.
-        "web_search" => {
+        "web_search" | "x_search" => {
             let q = args["query"].as_str().unwrap_or("");
             q.chars().count() > 200 || types_memory(ctx, q)
         }
@@ -250,7 +255,7 @@ pub fn looks_sensitive(name: &str) -> bool {
 pub(super) fn sends_out(ctx: &ToolCtx, name: &str, args: &Value) -> bool {
     match name {
         // A sign-in types a login into a site, like typing does.
-        "email_send" | "web_fetch" | "web_search" | "ask_bot" | "computer_open" | "computer_type" | "computer_signin" => true,
+        "email_send" | "web_fetch" | "web_search" | "x_search" | "ask_bot" | "computer_open" | "computer_type" | "computer_signin" => true,
         "routine_create" => args["for"].as_str().is_some_and(|f| !f.trim().is_empty()),
         "memory_store" => args["household"].as_bool() == Some(true),
         "send_file" => ctx.db.chat_guest(ctx.chat_id) || !ctx.db.chat_private(ctx.chat_id),
@@ -345,6 +350,7 @@ pub(super) fn describe(ctx: &ToolCtx, name: &str, args: &Value) -> String {
         "memory_search" => format!("Search memory: {}", args["query"].as_str().unwrap_or("")),
         "web_fetch" => format!("Read {}", args["url"].as_str().unwrap_or("")),
         "web_search" => format!("Search the web: {}", args["query"].as_str().unwrap_or("")),
+        "x_search" => format!("Search X: {}", args["query"].as_str().unwrap_or("")),
         "email_search" => format!("Look through your email{}", args["query"].as_str().or(args["from"].as_str()).map(|q| format!(": {q}")).unwrap_or_default()),
         "email_read" => format!("Read email #{}", args["id"]),
         "file_list" => "List the workspace's files".into(),
@@ -458,24 +464,20 @@ fn card_fields(v: &Value) -> String {
             _ => false,
         }
     }
+    // A value; `whole` under a destination key, so a list of recipients is cut per item, never as one string.
+    fn shown(v: &Value, whole: bool) -> String {
+        let cut = if whole { 300 } else { 120 };
+        match v {
+            Value::Object(_) => format!("{{{}}}", card_fields(v)),
+            Value::Array(a) if whole || has_where(v) => format!("[{}]", a.iter().map(|i| shown(i, whole)).collect::<Vec<_>>().join(", ")),
+            Value::String(s) => truncate(s, cut),
+            other => truncate(&other.to_string(), cut),
+        }
+    }
     let Some(m) = v.as_object() else { return String::new() };
     let mut fields: Vec<(&String, &Value)> = m.iter().collect();
     fields.sort_by_key(|(k, v)| !is_where(k) && !has_where(v));
-    fields
-        .iter()
-        .map(|(k, v)| {
-            let shown = match v {
-                Value::Object(_) => format!("{{{}}}", card_fields(v)),
-                Value::Array(a) if has_where(v) => format!("[{}]", a.iter().map(|i| if i.is_object() { format!("{{{}}}", card_fields(i)) } else { truncate(&i.to_string(), 120) }).collect::<Vec<_>>().join(", ")),
-                Value::String(s) if WHERE.contains(&k.to_ascii_lowercase().as_str()) => truncate(s, 300),
-                Value::String(s) => truncate(s, 120),
-                other if WHERE.contains(&k.to_ascii_lowercase().as_str()) => truncate(&other.to_string(), 300),
-                other => truncate(&other.to_string(), 120),
-            };
-            format!("{k}: {shown}")
-        })
-        .collect::<Vec<_>>()
-        .join("; ")
+    fields.iter().map(|(k, v)| format!("{k}: {}", shown(v, is_where(k)))).collect::<Vec<_>>().join("; ")
 }
 
 /// An approved plan's actions for this run: (tool, site). A site-less entry covers every call of that tool.
@@ -759,6 +761,7 @@ pub(crate) fn describe_tool(name: &str) -> String {
         "skill_view" => "read its skills",
         "web_fetch" => "read web pages",
         "web_search" => "search the web",
+        "x_search" => "search X",
             _ => return name.replace('_', " "),
         }
         .into(),
@@ -776,7 +779,14 @@ pub fn editable(tool: &str) -> &'static [&'static str] {
 /// What a card you can edit holds, as it starts out (None for a tool without any): the editable fields, and who it's to
 /// and from, to show (never taken back from it).
 fn draft_of(name: &str, args: &Value) -> Option<Value> {
-    (!editable(name).is_empty()).then(|| ["to", "cc", "account", "subject", "body"].iter().map(|f| (f.to_string(), json!(args[*f].as_str().unwrap_or("")))).collect::<serde_json::Map<_, _>>().into())
+    (!editable(name).is_empty()).then(|| {
+        let mut d: serde_json::Map<_, _> = ["to", "cc", "account", "subject", "body"].iter().map(|f| (f.to_string(), json!(args[*f].as_str().unwrap_or("")))).collect();
+        // What the edit view shows for who it's to: look-alikes flagged, as on the card.
+        for f in ["to", "cc"] {
+            d.insert(format!("{f}_shown"), json!(crate::email::addresses_shown(args[f].as_str().unwrap_or(""))));
+        }
+        d.into()
+    })
 }
 
 /// The call with the card's edited text in it. Only the editable fields are taken, as text; everything else (who it's

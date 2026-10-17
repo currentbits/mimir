@@ -131,6 +131,38 @@ async fn web_search(db: &Db, q: &str, n: usize) -> Result<Vec<(String, String, S
     Ok(body.pointer(list).and_then(Value::as_array).into_iter().flatten().take(n).map(|r| (s(&r["title"]), s(&r["url"]), s(&r[snippet]))).filter(|h| !h.1.is_empty()).collect())
 }
 
+/// Recent posts on X (the last 7 days) for a query, newest first: (author, link, date, text). Needs an X API bearer token.
+async fn x_search(q: &str, n: usize) -> Result<Vec<(String, String, String, String)>> {
+    let token = crate::host::api_key("x").context("no X API token set up (Settings → Web search → X)")?;
+    // ponytail: recent search only (7 days); full-archive search is a pricier X plan, add when someone asks
+    let url = url::Url::parse_with_params(
+        "https://api.x.com/2/tweets/search/recent",
+        &[("query", q), ("max_results", &n.max(10).to_string()), ("sort_order", "recency"), ("tweet.fields", "created_at,author_id"), ("expansions", "author_id"), ("user.fields", "username")],
+    )?;
+    let http = reqwest::Client::builder().timeout(Duration::from_secs(15)).build()?;
+    let r = http.get(url).bearer_auth(token).send().await?;
+    let status = r.status();
+    let body: Value = r.json().await.unwrap_or_default();
+    if !status.is_success() {
+        // X says why (no credits, wrong plan, a bad query) in `detail` or `errors[].message`.
+        let why = body["detail"].as_str().or(body["errors"][0]["message"].as_str()).or(body["title"].as_str()).unwrap_or("");
+        bail!("X said {status}: {}", truncate(why, 300));
+    }
+    Ok(x_posts(&body, n))
+}
+
+/// X's recent-search answer as (author, link, date, text); authors come from `includes.users`.
+pub(super) fn x_posts(body: &Value, n: usize) -> Vec<(String, String, String, String)> {
+    let s = |v: &Value| v.as_str().unwrap_or("").to_string();
+    let users = body["includes"]["users"].as_array().cloned().unwrap_or_default();
+    body["data"].as_array().into_iter().flatten().take(n).map(|t| {
+        let who = users.iter().find(|u| u["id"] == t["author_id"]).map(|u| s(&u["username"])).unwrap_or_default();
+        // x.com/i/status/<id> opens a post without knowing its author.
+        let link = format!("https://x.com/{}/status/{}", if who.is_empty() { "i" } else { &who }, s(&t["id"]));
+        (who, link, s(&t["created_at"]), s(&t["text"]))
+    }).collect()
+}
+
 /// The household member a routine is for (`for`): their direct chat and its title. None: this chat.
 pub(super) fn remind_target(ctx: &ToolCtx, args: &Value) -> Result<Option<(i64, String)>> {
     match args["for"].as_str().map(str::trim).filter(|f| !f.is_empty()) {
@@ -495,6 +527,21 @@ pub(super) async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<Stri
                 "No results.".into()
             } else {
                 hits.iter().enumerate().map(|(i, (t, u, d))| format!("{}. {t}\n   {u}\n   {}", i + 1, truncate(d, 300))).collect::<Vec<_>>().join("\n")
+            }
+        }
+        "x_search" => {
+            ctx.taint();
+            let q = s(args, "query")?.trim();
+            // X caps a recent-search query at 512 characters.
+            if q.is_empty() || q.chars().count() > 400 {
+                bail!("a search is 1 to 400 characters");
+            }
+            let n = args["count"].as_u64().unwrap_or(10).clamp(1, 25) as usize;
+            let posts = x_search(q, n).await?;
+            if posts.is_empty() {
+                "No posts in the last 7 days.".into()
+            } else {
+                posts.iter().enumerate().map(|(i, (who, u, at, text))| format!("{}. @{who} · {at}\n   {u}\n   {}", i + 1, truncate(&text.replace('\n', " "), 400))).collect::<Vec<_>>().join("\n")
             }
         }
         "calendar_add" => calendar_links(

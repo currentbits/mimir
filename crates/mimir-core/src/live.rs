@@ -167,6 +167,7 @@ pub fn step_label(tool: &str) -> String {
         "ask_choice" => "Asking you a question".into(),
         "bot_create" => "Creating a bot".into(),
         "WebSearch" | "web_search" => "Searching the web".into(),
+        "x_search" => "Searching X".into(),
         _ if t.starts_with("computer_") => "Using the computer".into(),
         _ => match t.split_once("__") {
             Some(("browser", _)) => "Using the browser".into(),

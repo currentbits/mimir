@@ -394,15 +394,16 @@ pub(crate) fn addresses(list: &str) -> Result<String> {
 }
 
 /// Addresses for an approval card: one with non-ASCII letters (a Cyrillic "а" looks like a Latin "a") is flagged,
-/// its domain in punycode, which shows the difference.
+/// its domain in punycode and each such letter before the @ as its code ({U+043E}), which shows the difference.
 pub(crate) fn addresses_shown(list: &str) -> String {
     let shown = |a: &str| {
         if a.is_ascii() {
             return a.to_string();
         }
         let (local, domain) = a.rsplit_once('@').unwrap_or(("", a));
+        let local: String = local.chars().map(|c| if c.is_ascii() { c.to_string() } else { format!("{{U+{:04X}}}", c as u32) }).collect();
         let puny = url::Url::parse(&format!("http://{domain}/")).ok().and_then(|u| u.host_str().map(str::to_string)).unwrap_or_else(|| domain.into());
-        format!("{a} [⚠️ non-Latin letters: {local}@{puny}]")
+        format!("{a} [⚠️ this address uses letters from another alphabet: {local}@{puny}]")
     };
     list.split(',').map(str::trim).filter(|a| !a.is_empty()).map(shown).collect::<Vec<_>>().join(", ")
 }
@@ -830,6 +831,7 @@ mod tests {
         }
         assert_eq!(super::addresses_shown("sam@x.com"), "sam@x.com");
         assert!(super::addresses_shown("sam@x.com, ceo@p\u{430}ypal.com").ends_with(": ceo@xn--pypal-4ve.com]"), "look-alike flagged");
+        assert!(super::addresses_shown("b\u{43e}ss@company.com").ends_with("another alphabet: b{U+043E}ss@company.com]"), "before the @ too");
         assert!(super::header_text("Re: invoice\r\nBcc: evil@z.com").is_err());
         assert_eq!(super::header_text("Factuur €1.250").unwrap(), "=?utf-8?B?RmFjdHV1ciDigqwxLjI1MA==?=");
         assert_eq!(super::smtp_guess("imap.gmail.com"), "smtp.gmail.com");

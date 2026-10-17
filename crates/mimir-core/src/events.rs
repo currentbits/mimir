@@ -228,16 +228,16 @@ pub fn webhook(db: &Db, id: i64, bearer: Option<&str>, signature: Option<&str>, 
 }
 
 /// Constant-time, so a secret can't be guessed byte by byte from response timing.
-fn same(a: &str, b: &str) -> bool {
+pub(crate) fn same(a: &str, b: &str) -> bool {
     a.len() == b.len() && a.bytes().zip(b.bytes()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
-fn hex(b: &[u8]) -> String {
+pub(crate) fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
 /// HMAC-SHA256 (RFC 2104), on the sha2 crate already here.
-fn hmac(key: &[u8], msg: &[u8]) -> [u8; 32] {
+pub(crate) fn hmac(key: &[u8], msg: &[u8]) -> [u8; 32] {
     use sha2::{Digest, Sha256};
     let mut k = [0u8; 64];
     if key.len() > 64 {

@@ -87,6 +87,9 @@ does the same with the bot's own file: an export, then an import on this compute
   for never, under **Settings → Limits**.
 - **Signal**, through signal-cli-rest-api and a number of the bot's own: direct chats, with approval cards and
   questions as numbered lists you answer with a number. Setup: [Connect](connect.md#signal).
+- **WhatsApp**, through Meta's Cloud API and a business number of the bot's own, on a server only (Meta calls Mimir's
+  webhook): direct chats, with buttons, and it can only write within 24 hours of your last message there. Setup:
+  [Connect](connect.md#whatsapp).
 
 ### What a reply did, from the log
 
@@ -172,6 +175,13 @@ content" state and its own `/new`, and replies land in the topic you wrote in. M
 shared by the whole chat, and routine results and approval cards arrive in the main thread. The app's chat view shows
 only the main thread. One reply is written at a time per chat, so `/stop` stops it whichever topic it's in. This is
 opt-in because Telegram is still changing the feature.
+
+**Telegram guest mode:** turn on Guest Mode for the bot in BotFather's settings, and you can type `@yourbot` in any
+chat, even one it isn't in ("@yourbot remind me about this" as a reply to a friend's message). It sees only that
+message and the one you replied to, and posts one reply there. It answers only you (the person who paired it in your
+private chat), and treats it like a group, since everyone there reads the reply: no email, calendar, meetings,
+computer or saved logins, and the message you replied to is outside content. Its memory and routines are your private
+chat's, so a reminder it sets comes to you there. Each mention starts a fresh conversation.
 
 Bots answer in the language you write in. What Mimir itself says in the chat apps (pairing, approval cards and their
 buttons, errors, the digest, the weekly "what I learned", the Telegram "/" menu) follows Settings → Language: English
