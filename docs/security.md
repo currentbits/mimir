@@ -177,7 +177,8 @@ half is built into the app); a tampered download is refused. It never restarts o
 - Sensitive sources only work once you mark them: a bank's server you haven't marked is just a tool server (its data
   is still outside content, and private-data rules don't apply to it).
 - When the bots' computer runs in Mimir's own process on a plain Linux host (not Docker), its Chromium's DevTools on
-  `127.0.0.1:9222` have no token, so other accounts on that machine can drive the browser. Use the Docker image or
+  `127.0.0.1:9222` have no token, so other accounts on that machine can drive the browser (and read its cookies). Its
+  screen (display `:99`) has no password either, so they can also type and click on it. Use the Docker image or
   compose; `mimir doctor` warns about it.
 
 ## For contributors
