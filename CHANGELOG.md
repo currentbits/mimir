@@ -23,9 +23,13 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
   older release than the one you're on. A package OSV.dev has never checked doesn't start while OSV.dev can't be reached.
 - **Sensitive sources, follow-ups:** a routine made or changed after reading a sensitive source asks the same way
   every time it runs, and deleting a tool server clears its marks.
+- **A changed tool asks again:** a tool you confirmed as read-only goes back to asking once its server describes it
+  differently (another description or other inputs), until you confirm it again.
 - **Bot files, follow-ups:** routines keep their watched page, delivery, "right away when" rule and end date, **Show**
   on a skill opens its full instructions before you add it, and addresses in the file never carry a password or a
   `?key=`.
+- **The bots' computer outside Docker:** `mimir doctor`'s warning now also says that other accounts on the machine
+  can type and click on its screen, not only use its browser's DevTools.
 
 ## 0.4.0
 

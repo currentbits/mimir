@@ -3,9 +3,10 @@
     python3 scripts/fake-mcp-oauth.py [port]     (default 8977)
 
 /mcp answers 401 with a resource_metadata hint until a valid bearer token comes. It serves protected-resource and
-authorization-server metadata, dynamic registration, an /authorize page that approves at once (redirects back with a
-code), and /token (PKCE S256 checked; tokens last 2 s; refresh tokens rotate). POST /revoke ends the current access
-token early, to test the retry. The MCP side has one tool, "echo".
+authorization-server metadata, dynamic registration (native apps only, as some services insist on for a localhost
+redirect), an /authorize page that approves at once (redirects back with a code and, RFC 9207, its issuer), and
+/token (PKCE S256 checked; tokens last 2 s; refresh tokens rotate). POST /revoke ends the current access token early,
+to test the retry. The MCP side has one tool, "echo".
 """
 import base64, hashlib, json, secrets, sys, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -35,13 +36,14 @@ class H(BaseHTTPRequestHandler):
             return self.send(200, {"resource": f"{BASE}/mcp", "authorization_servers": [BASE], "scopes_supported": ["read"]})
         if u.path == "/.well-known/oauth-authorization-server":
             return self.send(200, {"issuer": BASE, "authorization_endpoint": f"{BASE}/authorize", "token_endpoint": f"{BASE}/token",
-                                   "registration_endpoint": f"{BASE}/register", "code_challenge_methods_supported": ["S256"]})
+                                   "registration_endpoint": f"{BASE}/register", "code_challenge_methods_supported": ["S256"],
+                                   "authorization_response_iss_parameter_supported": True})
         if u.path == "/authorize":
             c = clients.get(q.get("client_id"))
             assert c and q["redirect_uri"] in c["redirect_uris"] and q["code_challenge_method"] == "S256", q
             assert q.get("resource") == f"{BASE}/mcp" and q.get("scope") == "read", q
             code = secrets.token_hex(8); codes[code] = q
-            return self.send(302, None, [("location", q["redirect_uri"] + "?" + urlencode({"code": code, "state": q["state"]}))])
+            return self.send(302, None, [("location", q["redirect_uri"] + "?" + urlencode({"code": code, "state": q["state"], "iss": BASE}))])
         self.send(404, {})
 
     def tokens(self):
@@ -52,7 +54,9 @@ class H(BaseHTTPRequestHandler):
     def do_POST(self):
         u = urlparse(self.path); raw = self.body()
         if u.path == "/register":
-            c = json.loads(raw); cid = secrets.token_hex(6); clients[cid] = c
+            c = json.loads(raw)
+            if c.get("application_type") != "native": return self.send(400, {"error": "invalid_redirect_uri"})
+            cid = secrets.token_hex(6); clients[cid] = c
             return self.send(201, {"client_id": cid, **c})
         if u.path == "/token":
             f = {k: v[0] for k, v in parse_qs(raw).items()}
