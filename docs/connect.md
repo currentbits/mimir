@@ -70,7 +70,7 @@ Only in a chat with you, never in a group or incognito:
 - **Draft**: "draft a reply to Sam saying yes". The draft (a reply stays in its thread) lands in your Drafts folder;
   you send it from your mail app.
 - **Send**: "reply to Sam that I'll pay Friday, and send it". **Every email asks you**, with who it's to first and the
-  whole text on the card; there's no "always" for sending. An email too long to read on the card can't be sent (the
+  whole text on the card, until you press "Always" on one. An email too long to read on the card can't be sent (the
   bot saves a draft instead), and a chat can send at most 20 a day. A copy lands in your Sent folder, like mail you
   send yourself (Gmail files one on its own; for iCloud and others, Mimir saves it).
 - The **Inbox triage** skill ([Skills](skills.md)) sorts your mail into "needs you", FYI and noise and offers short

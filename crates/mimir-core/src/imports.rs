@@ -469,6 +469,7 @@ fn yours(db: &Db, tool: &str) -> String {
 
 fn strictness(action: &str) -> u8 {
     match action {
+        "always" => 3,
         "allow" => 2,
         "ask" => 1,
         _ => 0,

@@ -1524,7 +1524,7 @@ impl Host {
                 .collect::<Result<Vec<_>>>()?),
             "set_rule" => {
                 let (tool, action): (String, String) = (arg(a, "tool")?, arg(a, "action")?);
-                if !["allow", "ask", "deny", "default"].contains(&action.as_str()) || !tools::all_specs(&self.db).iter().any(|(n, ..)| *n == tool) {
+                if !["always", "allow", "ask", "deny", "default"].contains(&action.as_str()) || !tools::all_specs(&self.db).iter().any(|(n, ..)| *n == tool) {
                     bail!("invalid rule {tool}={action}");
                 }
                 // Picking the built-in default stores no override, so future default changes apply.

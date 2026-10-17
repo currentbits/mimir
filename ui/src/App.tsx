@@ -108,18 +108,23 @@ function Main() {
   const [chatId, setChatId] = useState<number>(LOCAL)
   const [botId, setBotId] = useState<number>(1) // for the bot page; 0 = new bot
   const [incognito, setIncognito] = useState(false)
+  const [chatBot, setChatBot] = useState<number | null>(null)
+  const [viaBot, setViaBot] = useState(false)
   // Incognito ends when you go to another chat.
   useEffect(() => setIncognito(false), [chatId])
   // A link to the live computer (a bot asking you to take over) opens it: #computer. "Edit in Mimir" on a chat app's
-  // card opens Needs you, where the card is: #approval-<id>. A sign-in card's opens the sign-in form: #signin.
+  // card opens Needs you, where the card is: #approval-<id>. A sign-in card's opens the sign-in form: #signin. A task
+  // a bot did in its own chat for another bot links to that bot's chat: #bot-<id>.
   const linked = (): View | null => location.hash === '#computer' ? 'computer' : location.hash.startsWith('#approval-') ? 'inbox' : null
   const [view, setView] = useState<View>(() => linked() ?? 'chat')
   const [signIn, setSignIn] = useState(false)
   useEffect(() => {
     const go = () => {
       const v = linked()
+      const bot = /^#bot-(\d+)$/.exec(location.hash)
       if (v) setView(v)
       else if (location.hash === '#signin') setSignIn(true)
+      else if (bot) { setChatBot(Number(bot[1])); setChatId(LOCAL); setIncognito(false); setViaBot(true); setView('chat') }
       else return
       history.replaceState(null, '', location.pathname + location.search)
     }
@@ -177,8 +182,6 @@ function Main() {
   const openChat = (id: number, v: Tab) => { setChatId(id); setViaBot(false); setView(v) }
   // Clicking a bot opens a chat with it (on this computer); its settings are a right-click (or the gear by the
   // composer's bot picker) away.
-  const [chatBot, setChatBot] = useState<number | null>(null)
-  const [viaBot, setViaBot] = useState(false)
   const talkTo = (id: number) => { setChatBot(id); setChatId(LOCAL); setIncognito(false); setViaBot(true); setView('chat'); setMenu(null) }
   const botChat = viaBot && view === 'chat' && chat.chat_id === LOCAL
   // A bot's right-click menu, or pause choices (for one bot, or all of them: id null).
@@ -377,7 +380,7 @@ function Main() {
           )}
         </header>
 
-        {view !== 'inbox' && <Approvals list={approvals} chats={list} chatName={chatName} onDecided={inbox.reload} />}
+        {view !== 'inbox' && <Approvals list={approvals} chats={list} chatName={chatName} onDecided={inbox.reload} onOpen={() => setView('inbox')} />}
         {signIn && <SignInForm onClose={() => { setSignIn(false); inbox.reload() }} />}
 
         {view === 'chat' ? (

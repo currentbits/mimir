@@ -15,6 +15,16 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
   through Meta's official Cloud API. Text, photos, voice notes and files both ways, typing, pairing, and approval cards
   and questions as buttons. It can only write within 24 hours of your last message there: a routine's result after
   that isn't delivered, and shows as not sent in its run. Setup is under [Connect](docs/connect.md#whatsapp).
+- **Hand a task to a bot's own chat:** "Hatoba Marketer, write and show your marketing plan" now has that bot do it in
+  its own chat: the task and its whole answer stay in its history, files it writes go to its own folder, and the bot you
+  asked replies with a one-line confirmation and a link. Works from the app and your own private messaging chats.
+- **Approval cards say which bot acts:** a card from a bot working on another bot's task reads "Scout, on a task from
+  Researcher: …".
+- **Asks from routines show at the top** of the app, with a link to Needs you.
+- **Allow all covers every waiting card** (not signing in or taking over), with a confirmation listing each one.
+- **Always on every card:** sending an email, making a bot, a saved login, a plan, a repeating step, and asks after a web
+  page or a sensitive source now offer it too. On those it means *never ask*, not even after outside content: the app
+  confirms first for those guards, Settings → Permissions shows such tools as *Always*, and the health check lists them.
 
 ### Memory
 - **Ongoing Claude and Grok chats see memory changes:** a resumed conversation kept the instructions from its first

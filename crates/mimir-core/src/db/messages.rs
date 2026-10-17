@@ -92,10 +92,16 @@ impl Db {
     }
 
     /// Whether `bot`'s latest handed-over task in this chat read untrusted content.
-    pub fn delegated_tainted(&self, bot: i64, chat: i64) -> Result<bool> {
+    /// The helper's latest handed-over run in this chat; under `parent` (the asking run) when known, so two tasks for the
+    /// same helper (its own chat is shared by every asker) don't read each other's.
+    pub fn delegated_tainted(&self, bot: i64, chat: i64, parent: Option<i64>) -> Result<bool> {
         Ok(self
             .c()
-            .query_row("SELECT tainted FROM runs WHERE bot_id=?1 AND chat_id=?2 AND trigger='delegated' ORDER BY id DESC LIMIT 1", [bot, chat], |r| r.get::<_, bool>(0))
+            .query_row(
+                "SELECT tainted FROM runs WHERE bot_id=?1 AND chat_id=?2 AND trigger='delegated' AND (?3 IS NULL OR parent_run=?3) ORDER BY id DESC LIMIT 1",
+                params![bot, chat, parent],
+                |r| r.get::<_, bool>(0),
+            )
             .optional()?
             .unwrap_or(false))
     }
@@ -174,7 +180,7 @@ impl Db {
     }
 
     /// The bot's latest message with a chat, if it was sent outside the chat's CLI session: a routine's result
-    /// ("routine result"), or one from no run (digest, weekly review, a note after an approval: "message").
+    /// ("routine result"), a task done in its own chat for another bot, or one from no run (digest, weekly review, a note after an approval: "message").
     pub fn last_outside_session(&self, bot: i64, chat: i64) -> Result<Option<(&'static str, String)>> {
         let last: Option<(String, String, Option<String>)> = self
             .c()
@@ -191,6 +197,7 @@ impl Db {
             Some((role, text, trigger)) if role == "assistant" => match trigger.as_deref() {
                 None => Some(("message", text)),
                 Some("message") => None,
+                Some("delegated") => Some(("task another bot handed you", text)),
                 Some(_) => Some(("routine result", text)),
             },
             _ => None,

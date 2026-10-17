@@ -12,17 +12,17 @@ import type { Approval, Chat, Hold, Inbox, Run, Tab } from '../types'
 function approvalRisk(a: Approval): { icon: string; label: string; tone: string; always: boolean } {
   if (a.kind === 'signin') return { icon: 'key', label: 'Sign in in Mimir, never in a chat: Mimir types it into the page and keeps it for this bot on this site only. The bot never sees it.', tone: 'login', always: false }
   if (a.kind === 'takeover') return { icon: 'laptop', label: 'A step only you should do. Take over on the live screen, then press Give back; the bot carries on.', tone: 'login', always: false }
-  if (a.kind === 'login') return { icon: 'key', label: 'Types a saved login. Every use asks you.', tone: 'login', always: false }
-  if (a.kind === 'send' && a.tool === 'send_file') return { icon: 'send', label: 'Sends a file where others see it (a group, or a guest\'s chat). Every file there asks you.', tone: 'rule', always: false }
-  if (a.kind === 'send') return { icon: 'send', label: 'Sends an email as you, to the address shown first. Every email asks you.', tone: 'rule', always: false }
-  if (a.kind === 'remind') return { icon: 'user', label: 'Sends to someone else’s chat in your household. Asked the first time for each person.', tone: 'rule', always: false }
-  if (a.kind === 'bot') return { icon: 'user', label: 'Makes a new bot with this role, on the same AI account. Every new bot asks you.', tone: 'rule', always: false }
-  if (a.kind === 'plan') return { icon: 'check', label: 'One OK for the whole plan: these steps won\'t ask again during this reply.', tone: 'rule', always: false }
-  if (a.kind === 'unasked') return { icon: 'shield', label: 'Asking because this doesn’t look like what you asked for (who or what it acts on wasn’t in your message).', tone: 'guarded', always: false }
-  if (a.kind === 'loop') return { icon: 'retry', label: 'The bot keeps making this same call. Allow lets it carry on; Deny tells it to stop and say where it got stuck.', tone: 'rule', always: false }
-  if (a.kind === 'guest') return { icon: 'user', label: 'Asked in a guest\'s chat. An OK there is for this once; your rules stay yours.', tone: 'rule', always: false }
-  if (a.kind === 'sensitive') return { icon: 'shield', label: 'Asking because this run read from something you marked sensitive (named first). After that, everything that goes out asks.', tone: 'guarded', always: false }
-  if (a.kind === 'guarded') return { icon: 'shield', label: 'Asking because this conversation read outside content (a web page, a file, a tool’s result).', tone: 'guarded', always: false }
+  if (a.kind === 'login') return { icon: 'key', label: 'Types a saved login on this site. Each use asks you, until you choose Always.', tone: 'login', always: true }
+  if (a.kind === 'send' && a.tool === 'send_file') return { icon: 'send', label: 'Sends a file where others see it (a group, or a guest\'s chat). Each file there asks you, until you choose Always.', tone: 'rule', always: true }
+  if (a.kind === 'send') return { icon: 'send', label: 'Sends an email as you, to the address shown first. Each email asks you, until you choose Always.', tone: 'rule', always: true }
+  if (a.kind === 'remind') return { icon: 'user', label: 'Sends to someone else’s chat in your household. Asked the first time for each person.', tone: 'rule', always: true }
+  if (a.kind === 'bot') return { icon: 'user', label: 'Makes a new bot with this role, on the same AI account. Each new bot asks you, until you choose Always.', tone: 'rule', always: true }
+  if (a.kind === 'plan') return { icon: 'check', label: 'One OK for the whole plan: these steps won\'t ask again during this reply.', tone: 'rule', always: true }
+  if (a.kind === 'unasked') return { icon: 'shield', label: 'Asking because this doesn’t look like what you asked for (who or what it acts on wasn’t in your message).', tone: 'guarded', always: true }
+  if (a.kind === 'loop') return { icon: 'retry', label: 'The bot keeps making this same call. Allow lets it carry on; Deny tells it to stop and say where it got stuck.', tone: 'rule', always: true }
+  if (a.kind === 'guest') return { icon: 'user', label: 'Asked in a guest\'s chat. Allow is for this once; Always changes your rules in every chat.', tone: 'rule', always: true }
+  if (a.kind === 'sensitive') return { icon: 'shield', label: 'Asking because this run read from something you marked sensitive (named first). After that, everything that goes out asks.', tone: 'guarded', always: true }
+  if (a.kind === 'guarded') return { icon: 'shield', label: 'Asking because this conversation read outside content (a web page, a file, a tool’s result).', tone: 'guarded', always: true }
   const t = a.tool, server = t.includes('__') ? t.split('__')[0] : null
   const label =
     t === 'web_fetch' || t === 'browser__browser_navigate' ? `Opens ${a.site ?? 'a website'}`
@@ -44,6 +44,12 @@ export function useLeave() {
   return { leaving, leave }
 }
 
+/** The Always button's words: the whole tool, the tool on one site, or what a plan or a loop card stops asking. */
+const alwaysLabel = (a: Approval) => a.site ? `Always on ${a.site}` : a.kind === 'plan' ? 'Always approve plans' : `Always: ${toolLabel(a.tool).toLowerCase()}`
+
+/** Asks that stopped for more than the tool's rule: Always on them means never asking, not even after outside content. */
+const neverAsks = (a: Approval) => !!a.kind && a.kind !== 'rule' && a.kind !== 'guest'
+
 type Decide = (id: number, approve: boolean, always?: 'tool' | 'site' | 'run', more?: { edits?: Record<string, string>; reason?: string }) => void
 
 /** One approval: what it does, and Deny / Always / Allow once. Shared by the floating banner and the inbox. An email's
@@ -54,14 +60,19 @@ function ApprovalCard({ a, where, leaving, decide, inline }: {
   const botOf = useContext(Bots)
   const b = botOf(a.bot_id)
   const risk = approvalRisk(a)
-  // Allowed the same thing a few times already: offer to stop asking.
-  const learned = risk.always && (a.allowed_before ?? 0) >= 2
+  // Allowed the same plain thing a few times already: offer to stop asking (never a nudge to drop a guard).
+  const learned = risk.always && !neverAsks(a) && (a.allowed_before ?? 0) >= 2
   const [edits, setEdits] = useState<Record<string, string> | null>(null)
   const [why, setWhy] = useState<string | null>(null)
   const d = a.draft
   // Only what changed goes back; approving sends what's on the card.
   const changed = edits && d ? Object.fromEntries(Object.entries(edits).filter(([k, v]) => v !== d[k])) : {}
   const approve = (always?: 'tool' | 'site' | 'run') => decide(a.id, true, always, Object.keys(changed).length ? { edits: changed } : undefined)
+  // After outside content or a sensitive source, Always turns that guard off for the tool: said once, before it does.
+  const always = async () => {
+    if (['guarded', 'sensitive', 'unasked'].includes(a.kind ?? '') && !await ask(`${alwaysLabel(a)}? ${b.name} asked because ${a.kind === 'sensitive' ? 'it read from something you marked sensitive' : a.kind === 'unasked' ? 'this didn’t look like what you asked for' : 'it read a web page, file or message, which could be the one asking'}. From now on no bot asks before this, not even then. Change it in Settings → Permissions.`, 'Always allow', true)) return
+    approve(a.site ? 'site' : 'tool')
+  }
   const deny = () => decide(a.id, false, undefined, why?.trim() ? { reason: why.trim() } : undefined)
   return (
     <div className={'approval tone-' + risk.tone + (inline ? ' inline' : '') + (leaving ? ' leaving' : '')}>
@@ -93,10 +104,10 @@ function ApprovalCard({ a, where, leaving, decide, inline }: {
         <button className="btn" onClick={() => setWhy('')}>Deny…</button>
         {d && <button className="btn" onClick={() => setEdits(edits ? null : { subject: d.subject ?? '', body: d.body ?? '' })}>{edits ? 'Undo edits' : 'Edit'}</button>}
         {risk.always && (
-          <button className={'btn' + (learned ? ' btn-primary' : '')} onClick={() => approve(a.site ? 'site' : 'tool')}
-            title={a.site ? `Stop asking before this on ${a.site}. Change it in Settings → Permissions.` : `Stop asking before ${toolLabel(a.tool).toLowerCase()}. Change it in Settings → Permissions.`}>
+          <button className={'btn' + (learned ? ' btn-primary' : '')} onClick={() => void always()}
+            title={`${a.site ? `Stop asking before this on ${a.site}` : `Stop asking before ${toolLabel(a.tool).toLowerCase()}`}${neverAsks(a) ? ', not even after outside content' : ''}. Change it in Settings → Permissions.`}>
             {/* It allows the whole tool, not just this one call: say which. */}
-            {a.site ? `Always on ${a.site}` : `Always: ${toolLabel(a.tool).toLowerCase()}`}
+            {alwaysLabel(a)}
           </button>
         )}
         {a.kind === 'rule' && !a.parked && (
@@ -118,16 +129,18 @@ function useDecide(onDecided: () => unknown) {
   return { err, leaving, decide }
 }
 
-/** Asks you can answer all at once: plain ones (and plans). Sending an email, making a bot, a saved login and anything
- *  asked after outside content stay one by one: those are the ones to read. */
-const bulkable = (a: Approval) => !a.kind || a.kind === 'rule' || a.kind === 'plan'
+/** Asks you can answer all at once: every one but signing in and taking over, which need you to do something. */
+const bulkable = (a: Approval) => a.kind !== 'signin' && a.kind !== 'takeover'
 
 function DecideAll({ list, decide }: { list: Approval[]; decide: (id: number, approve: boolean) => unknown }) {
+  const botOf = useContext(Bots)
   const many = list.filter(bulkable)
   if (many.length < 2) return null
   const rest = list.length - many.length
   const go = async (approve: boolean) => {
-    if (!await ask(`${approve ? 'Allow' : 'Deny'} these ${many.length}?${rest ? ` The other ${rest} (an email to send, a new bot, a saved login, or asked after outside content) you answer one by one.` : ''}`, approve ? `Allow ${many.length}` : `Deny ${many.length}`, !approve)) return
+    // Each one is listed: what you allow is still read before it goes.
+    const each = many.map(a => `• ${botOf(a.bot_id).name}: ${a.summary.length > 140 ? `${a.summary.slice(0, 140)}…` : a.summary}`).join('\n')
+    if (!await ask(`${approve ? 'Allow' : 'Deny'} these ${many.length}?\n\n${each}${rest ? `\n\nThe other ${rest} (signing in, taking over the computer) need you to do it yourself.` : ''}`, approve ? `Allow ${many.length}` : `Deny ${many.length}`, !approve)) return
     for (const a of many) decide(a.id, approve)
   }
   return (
@@ -138,14 +151,18 @@ function DecideAll({ list, decide }: { list: Approval[]; decide: (id: number, ap
   )
 }
 
-/** Live asks float over the window. Parked ones (from routines) wait in the inbox instead. */
-export function Approvals({ list, chats, chatName, onDecided }: { list: Approval[]; chats: Chat[]; chatName: (c: Chat) => string; onDecided: () => void }) {
+/** Live asks float over the window. Parked ones (from routines) wait in the inbox, with a notice up here. */
+export function Approvals({ list, chats, chatName, onDecided, onOpen }: { list: Approval[]; chats: Chat[]; chatName: (c: Chat) => string; onDecided: () => void; onOpen: () => void }) {
   const { err, leaving, decide } = useDecide(onDecided)
   const live = list.filter(a => !a.parked)
-  if (!live.length) return null
+  const parked = list.length - live.length
+  if (!list.length) return null
   const where = (id: number) => { const c = chats.find(x => x.chat_id === id); return id === INCOGNITO ? 'Incognito chat' : c ? chatName(c) : `chat ${id}` }
   return (
     <section className="approvals" aria-live="polite" aria-label="Waiting for your approval">
+      {parked > 0 && <button type="button" className="approval-notice" onClick={onOpen}>
+        <Icon name="clock" size={13} />{parked === 1 ? 'A routine is' : `${parked} routine asks are`} waiting for your OK<b>Review</b>
+      </button>}
       <DecideAll list={live} decide={decide} />
       {live.map(a => <ApprovalCard key={a.id} a={a} where={where(a.chat_id)} leaving={leaving.has(a.id)} decide={decide} />)}
       {err && <p className="error">{err}</p>}

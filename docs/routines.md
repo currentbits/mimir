@@ -21,7 +21,7 @@ end (Mimir wasn't running, or it was paused), it's removed 15 minutes after the 
 
 **Reminders for someone else.** "Remind Sam at 6 to take the bins out" goes to Sam's own chat, if Sam is in your
 [household](bots-and-chats.md#the-household-and-family-groups) (matched by the name of their chat, first name is
-enough). The first time for each person you're asked (its own kind of approval, never "always"); after that it's set up
+enough). The first time for each person you're asked (its own kind of approval; "Always" there stops asking for anyone); after that it's set up
 straight away. It shows under Sam's chat's Routines. Guests can't set reminders for others. The bot that sets it is the
 one that sends it, so it has to be one Sam paired with.
 

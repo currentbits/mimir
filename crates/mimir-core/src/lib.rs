@@ -211,8 +211,8 @@ fn so_far(msgs: &[(String, String)], max: usize) -> String {
 pub enum Trigger<'a> {
     Message(&'a str),
     Routine(&'a db::Routine),
-    /// A task handed over by another bot via ask_bot.
-    Delegated { from: &'a str, task: &'a str },
+    /// A task handed over by another bot via ask_bot; `own`: done in this bot's own chat, and kept there.
+    Delegated { from: &'a str, task: &'a str, own: bool },
     /// What another bot found on a task this bot handed it with ask_bot's `later`, to tell the person.
     Reported { from: &'a str, task: &'a str, reply: &'a str, tainted: bool },
 }
@@ -954,9 +954,15 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
     let (text, is_routine, quiet) = match &trigger {
         Trigger::Message(t) => (t.to_string(), false, false),
         // Like a routine: fresh session, and not part of the user's conversation (the asking bot relays the answer).
-        Trigger::Delegated { from, task } => {
+        Trigger::Delegated { from, task, own: false } => {
             (format!("[Task from {from}, another of the user's bots. Reply with the result; {from} relays it to the user.] {task}"), true, false)
         }
+        // Lands in this bot's own chat like a routine's result: the person reads it here.
+        Trigger::Delegated { from, task, own: true } => (
+            format!("[Task from {from}, another of the user's bots, to do in your own chat: the person reads your reply here, so give the whole result; {from} gets a link to it.] {task}"),
+            true,
+            false,
+        ),
         // Like a routine's result: a fresh session, landing in the conversation. The task says what it was about.
         Trigger::Reported { from, task, reply, .. } => (
             format!("[Report from {from} on the task you handed it earlier: \"{task}\". The person hasn't seen this; tell them what came of it.]\n{reply}"),
@@ -1329,7 +1335,7 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
     }
     // What the reply says, against what the run did: receipts, sources and notes under it (the asking bot checks a
     // handed-over task's reply as its own; a rehearsal did nothing by design).
-    if !matches!(trigger, Trigger::Delegated { .. })
+    if !matches!(trigger, Trigger::Delegated { own: false, .. })
         && !ctx.rehearsal
         && let Some(run) = ctx.run_id
     {
@@ -1343,7 +1349,7 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
         reply.text.push_str(&files::sent_lines(&ctx.db, run));
     }
     match &trigger {
-        Trigger::Delegated { .. } => {}
+        Trigger::Delegated { own: false, .. } => {}
         // Routines in the digest or log-only lane don't land in the chat as they run.
         Trigger::Routine(r) if lane == "digest" => {
             ctx.db.digest_add(ctx.bot_id, ctx.chat_id, r.id, &reply.text, ctx.is_tainted())?;

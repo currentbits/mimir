@@ -235,6 +235,8 @@ const STARTERS = ['Remember that I prefer short answers.', 'What do you know abo
 
 /** "[Scheduled quiet check #3 "0 8 * * *"] Look at…" → its parts. */
 const SCHEDULED = /^\[Scheduled (routine|quiet check) #(\d+) "([^"]+)"[^\]]*\]\s*([\s\S]*)$/
+/** "[Task from Researcher, another of the user's bots, to do in your own chat: …] Write…" → who asked, and the task. */
+const HANDED = /^\[Task from (.+?), another of the user's bots[^\]]*\]\s*([\s\S]*)$/
 
 function CopyButton({ text }: { text: string }) {
   const [done, setDone] = useState(false)
@@ -551,6 +553,13 @@ export function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, 
       <div id={`m${m.id}`} className={'msg-trigger' + anim(m)} title={sched[4]}>
         <Icon name={sched[1] === 'quiet check' ? 'moon' : 'clock'} size={13} />
         <span>{sched[1] === 'quiet check' ? 'Quiet check' : 'Routine'} · {schedule(sched[3])} — {sched[4]}</span>
+      </div>
+    )
+    const handed = m.role === 'user' ? m.content.match(HANDED) : null
+    if (handed) return (
+      <div id={`m${m.id}`} className={'msg-trigger' + anim(m)} title={handed[2]}>
+        <Icon name="user" size={13} />
+        <span>Task from {handed[1]} — {handed[2]}</span>
       </div>
     )
     if (m.role === 'user') return <div id={`m${m.id}`} className={'msg-user' + anim(m)} title={fullTime(m.ts)}><Said text={m.content} /></div>

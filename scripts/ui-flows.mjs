@@ -60,7 +60,7 @@ check('delegation answer shows', await until(async () => (await main()).includes
 // An approval card in the app: MAKE BOT → Allow
 await say('MAKE BOT for prices')
 check('approval card appears', await until(async () => (await p.locator('.approval').count()) > 0))
-const allow = p.locator('.approval').getByRole('button', { name: /Allow|Approve|Make/i }).first()
+const allow = p.locator('.approval').getByRole('button', { name: 'Allow once', exact: true }).first()
 await allow.click().catch(e => errs.push('allow: ' + e.message))
 check('bot made after approving', await until(async () => (await p.locator('.rail-item', { hasText: 'Scout' }).count()) > 0, 20000))
 
