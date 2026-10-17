@@ -151,7 +151,9 @@ half is built into the app); a tampered download is refused. It never restarts o
 ## What's left
 
 - A photo you send counts as your own message, so words inside it (a screenshot of a page, a photo of a letter) aren't
-  marked as outside content. Forwarded photos, audio files and documents are.
+  marked as outside content. Forwarded photos, audio files and documents are. This is on purpose (#140): marking every
+  photo would make later changes in that chat ask, and marking only image files would still miss phone screenshots,
+  which Telegram sends as photos.
 
 - Signal doesn't mark forwards, so a message or voice note you forward there counts as your own words.
 
