@@ -175,7 +175,8 @@ half is built into the app); a tampered download is refused. It never restarts o
 - Sensitive sources only work once you mark them: a bank's server you haven't marked is just a tool server (its data
   is still outside content, and private-data rules don't apply to it).
 - When the bots' computer runs in Mimir's own process on a plain Linux host (not Docker), its Chromium's DevTools on
-  `127.0.0.1:9222` have no token, so other accounts on that machine can drive the browser. Use the Docker image or
+  `127.0.0.1:9222` have no token, so other accounts on that machine can drive the browser (and read its cookies). Its
+  screen (display `:99`) has no password either, so they can also type and click on it. Use the Docker image or
   compose; `mimir doctor` warns about it.
 
 ## For contributors
@@ -183,7 +184,8 @@ half is built into the app); a tampered download is refused. It never restarts o
 Every new way for text to reach a model must either be the person's own words, or mark the conversation
 (`ToolCtx::taint`). Every new way for data to leave must be listed in `sends_out`, so it asks after a sensitive
 source. Every new action that changes data must go through `tools::call`. Every new kind of learned
-artefact must be a proposal that keeps the outside-content mark. Never take a server address, token or scope from a URL or
-deep link (a link someone sends could point Mimir at their server, as in OpenClaw's CVE-2026-25253): those come from
-settings the person typed, or from the server they chose. Details, with the code they live in, are in
+artefact must be a proposal that keeps the outside-content mark. Never take a server address, token or scope from a URL,
+deep link or query string (a link someone sends could point Mimir at their server, as in OpenClaw's CVE-2026-25253): those come from
+settings the person typed, or from the server they chose. The server, not the client, decides what a token may do: never let a client
+declare its own scope or role (in OpenClaw's CVE-2026-22172, a WebSocket client did that and became admin). Details, with the code they live in, are in
 [Architecture](architecture.md).

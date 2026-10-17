@@ -4,17 +4,29 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 
 ## Unreleased
 
+### Memory
+- **Ongoing Claude and Grok chats see memory changes:** a resumed conversation kept the instructions from its first
+  message, so a memory you added or forgot, a new role or skill, and the time of day never reached it (the built-in
+  chat never starts over, so it stayed that way). Now the next message carries the changed instructions once, and
+  every message starts with the date and time.
+- **Fewer tokens per turn:** a Claude, Codex or Grok chat isn't sent a recalled memory it already has, Claude models
+  on OpenRouter use the prompt cache, and the run log shows cache writes next to cache reads.
+
 ### Safety
 - **Tool server pinning, tightened:** servers added before 0.4.0 are pinned the next time they start. A version range
   (`pkg@^2`, `pkg@1`) is left as you wrote it instead of jumping to the newest release, and **Update** never offers an
   older release than the one you're on. A package OSV.dev has never checked doesn't start while OSV.dev can't be reached.
 - **Sensitive sources, follow-ups:** a routine made or changed after reading a sensitive source asks the same way
   every time it runs, and deleting a tool server clears its marks.
+- **A changed tool asks again:** a tool you confirmed as read-only goes back to asking once its server describes it
+  differently (another description or other inputs), until you confirm it again.
 - **Bot files, follow-ups:** routines keep their watched page, delivery, "right away when" rule and end date, **Show**
   on a skill opens its full instructions before you add it, and addresses in the file never carry a password or a
   `?key=`.
 - **Approval cards:** a tool server's list of recipients (`to: [a, b, …]`) comes first on the card and is shown in
   full, not cut off.
+- **The bots' computer outside Docker:** `mimir doctor`'s warning now also says that other accounts on the machine
+  can type and click on its screen, not only use its browser's DevTools.
 
 ## 0.4.0
 

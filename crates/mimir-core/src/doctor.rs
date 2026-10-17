@@ -108,7 +108,7 @@ async fn security(db: &Db) -> Vec<Check> {
         None => ok(format!("Mimir {} is the latest", crate::server_update::CURRENT)),
     });
     if crate::computer::devtools_shared(db) {
-        out.push(bad(State::Warn, "The bots' computer runs in Mimir's own process: its Chromium DevTools (127.0.0.1:9222) have no token, so any account on this machine can drive it", "Run it as its own service (docker compose), or keep other people's accounts off this machine."));
+        out.push(bad(State::Warn, "The bots' computer runs in Mimir's own process: its Chromium DevTools (127.0.0.1:9222) have no token and its screen (display :99) no password, so any account on this machine can drive it", "Run it as its own service (docker compose), or keep other people's accounts off this machine."));
     }
     out
 }
