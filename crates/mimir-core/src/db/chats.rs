@@ -300,6 +300,23 @@ impl Db {
         Ok(self.c().query_row("SELECT session FROM sessions WHERE bot_id=?1 AND chat_id=?2", [bot, chat], |r| r.get(0)).optional()?)
     }
 
+    /// What the chat's current session already holds: the memories sent in it, and a hash of its instructions.
+    pub fn session_held(&self, bot: i64, chat: i64) -> Result<(Vec<i64>, String)> {
+        let (s, p): (String, String) = self
+            .c()
+            .query_row("SELECT sent, prompt FROM sessions WHERE bot_id=?1 AND chat_id=?2", [bot, chat], |r| Ok((r.get(0)?, r.get(1)?)))
+            .optional()?
+            .unwrap_or_default();
+        Ok((s.split(',').filter_map(|s| s.parse().ok()).collect(), p))
+    }
+
+    /// The memories and instructions the chat's current session holds (call after set_session).
+    pub fn set_session_held(&self, bot: i64, chat: i64, ids: &[i64], prompt: &str) -> Result<()> {
+        let list = ids.iter().map(i64::to_string).collect::<Vec<_>>().join(",");
+        self.c().execute("UPDATE sessions SET sent=?3, prompt=?4 WHERE bot_id=?1 AND chat_id=?2", params![bot, chat, list, prompt])?;
+        Ok(())
+    }
+
     pub fn set_session(&self, bot: i64, chat: i64, sid: Option<&str>) -> Result<()> {
         let c = self.c();
         match sid {

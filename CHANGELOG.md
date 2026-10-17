@@ -10,6 +10,14 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
   and questions as buttons. It can only write within 24 hours of your last message there: a routine's result after
   that isn't delivered, and shows as not sent in its run. Setup is under [Connect](docs/connect.md#whatsapp).
 
+### Memory
+- **Ongoing Claude and Grok chats see memory changes:** a resumed conversation kept the instructions from its first
+  message, so a memory you added or forgot, a new role or skill, and the time of day never reached it (the built-in
+  chat never starts over, so it stayed that way). Now the next message carries the changed instructions once, and
+  every message starts with the date and time.
+- **Fewer tokens per turn:** a Claude, Codex or Grok chat isn't sent a recalled memory it already has, Claude models
+  on OpenRouter use the prompt cache, and the run log shows cache writes next to cache reads.
+
 ### Safety
 - **Tool server pinning, tightened:** servers added before 0.4.0 are pinned the next time they start. A version range
   (`pkg@^2`, `pkg@1`) is left as you wrote it instead of jumping to the newest release, and **Update** never offers an
