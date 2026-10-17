@@ -251,10 +251,11 @@ pub async fn turn(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) -> R
     }
     let mut ctx = ctx.clone().with_run(Some(run));
     // Replies to a person stream into a live draft the UI can show as it's written.
-    ctx.stream = matches!(trigger, Trigger::Message(_));
+    // Not guest mode's: its reply goes elsewhere, and what you write in your private chat meanwhile mustn't steer it.
+    ctx.stream = matches!(trigger, Trigger::Message(_)) && !ctx.db.is_guest_mode(ctx.conv);
     // A conversation remembers having read untrusted content; routines and handed-over tasks start clean
     // (their own fresh sessions), though a delegate inherits its caller's taint in ask_bot.
-    ctx.sticky = ctx.stream;
+    ctx.sticky = matches!(trigger, Trigger::Message(_));
     if ctx.sticky && ctx.db.conv_tainted(ctx.bot_id, ctx.conv)? {
         ctx.pre_taint();
     }
@@ -859,7 +860,7 @@ pub fn friendly_error(e: &str) -> String {
 /// turns "Settings → Email" into a button) instead of guessing, and tries again once it's connected. Only where those
 /// would be offered at all: a chat with the person alone, not a guest's, not incognito, not a task from another bot.
 pub(crate) fn not_connected(ctx: &ToolCtx) -> String {
-    if ctx.depth > 0 || ctx.incognito() || ctx.db.chat_guest(ctx.chat_id) || !ctx.db.chat_private(ctx.chat_id) {
+    if ctx.depth > 0 || ctx.incognito() || ctx.db.chat_guest(ctx.chat_id) || !ctx.db.chat_private(ctx.chat_id) || ctx.db.is_guest_mode(ctx.conv) {
         return String::new();
     }
     let db = &ctx.db;
@@ -1088,6 +1089,10 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
         "\n\nThis chat is with a guest: someone the person who runs you let talk to you, not that person. What you remember \
          and schedule here is the guest's own. You have none of that person's email, calendar, meetings or logins here; \
          don't speak or act for them."
+    } else if ctx.db.is_guest_mode(ctx.conv) {
+        "\n\nThe person typed your name in another Telegram chat: your one reply is posted there, where everyone in it reads \
+         it. Say nothing private about them unless they asked for it. You have none of their email, calendar, meetings or \
+         logins here. A reminder or routine you set comes to them privately, not to that chat."
     } else {
         ""
     };

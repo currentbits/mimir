@@ -236,12 +236,14 @@ impl Tg {
                 now.retain(|_, v| *v != base);
                 menus = now;
             }
-            let updates = self.call("getUpdates", json!({"offset": offset, "timeout": 50, "allowed_updates": ["message", "callback_query", "stopped_message_generation"]})).await?;
+            let updates = self.call("getUpdates", json!({"offset": offset, "timeout": 50, "allowed_updates": ["message", "callback_query", "stopped_message_generation", "guest_message"]})).await?;
             for u in updates.as_array().into_iter().flatten() {
                 offset = offset.max(u["update_id"].as_i64().unwrap_or(0) + 1);
                 self.offset.store(offset, std::sync::atomic::Ordering::Relaxed);
                 let r = if u["callback_query"].is_object() {
                     self.on_button(me, &core, &u["callback_query"]).await
+                } else if u["guest_message"].is_object() {
+                    self.on_guest(me, &core, &u["guest_message"])
                 } else if let Some(chat) = u["stopped_message_generation"]["chat"]["id"].as_i64() {
                     // The stop button on a streaming draft: same as /stop.
                     let chat = chat.to_string();
@@ -330,6 +332,39 @@ impl Tg {
         core.incoming_media(me, chat).await
     }
 
+    /// Guest mode (Bot API 10.0): @bot typed in a chat it isn't in. It gets that message and the one it replies to, and
+    /// one reply: "…" at once (a long reply can't lose the query), edited into the answer once it's written.
+    fn on_guest(&self, me: &Chan, core: &Arc<Core>, m: &Value) -> Result<()> {
+        let from = m["from"]["id"].as_i64().map(|i| i.to_string()).unwrap_or_default();
+        let (Some(query), Some(chat)) = (m["guest_query_id"].as_str().map(str::to_string), core.guest_mode_chat(me, &from)?) else { return Ok(()) };
+        let text = m["text"].as_str().or(m["caption"].as_str()).unwrap_or("").to_string();
+        let referenced = quoted(m);
+        let (tg, core) = (self.clone(), core.clone());
+        tokio::spawn(async move {
+            let article = json!({"type": "article", "id": "1", "title": "…", "input_message_content": {"message_text": "…"}});
+            let sent = match tg.call("answerGuestQuery", json!({"guest_query_id": query, "result": article})).await {
+                Ok(s) => s["inline_message_id"].as_str().unwrap_or("").to_string(),
+                Err(e) => return eprintln!("telegram guest reply: {e:#}"),
+            };
+            let reply = core.guest_mode(chat, &text, referenced.as_deref()).await.unwrap_or_else(|e| crate::friendly_error(&format!("{e:#}")));
+            let reply = if reply.trim().is_empty() { "(no reply)".to_string() } else { reply };
+            // Rich, else Telegram HTML, else plain: one message, so a long reply is cut.
+            let html = crate::fmt::telegram(&reply, 3800).into_iter().next().unwrap_or_default();
+            let tries = [
+                json!({"inline_message_id": sent, "rich_message": {"html": crate::fmt::telegram_rich(&reply)}}),
+                json!({"inline_message_id": sent, "text": html, "parse_mode": "HTML"}),
+                json!({"inline_message_id": sent, "text": crate::tools::truncate(&crate::fmt::html_to_plain(&html), 4000)}),
+            ];
+            for t in tries {
+                match tg.call("editMessageText", t).await {
+                    Ok(_) => return,
+                    Err(e) => eprintln!("telegram guest reply: {e:#}"),
+                }
+            }
+        });
+        Ok(())
+    }
+
     async fn on_button(&self, me: &Chan, core: &Arc<Core>, q: &Value) -> Result<()> {
         // A button in a topic: its answer (a tapped choice, say) belongs to that topic's conversation.
         let chat = address(&q["message"], core.topics());
@@ -387,6 +422,12 @@ fn replied_to(m: &Value, me_id: Option<i64>) -> Option<String> {
     if me_id.is_none() || !r.is_object() || r["forum_topic_created"].is_object() || r["from"]["id"].as_i64() != me_id {
         return None;
     }
+    quoted(m)
+}
+
+/// The message this one replies to, anyone's: the part the person selected, else its whole text.
+fn quoted(m: &Value) -> Option<String> {
+    let r = &m["reply_to_message"];
     let rich = r["rich_message"]["blocks"].is_array().then(|| rich_plain(&r["rich_message"]["blocks"]));
     m["quote"]["text"].as_str().or(r["text"].as_str()).or(r["caption"].as_str()).or(rich.as_deref()).filter(|q| !q.trim().is_empty()).map(str::to_string)
 }

@@ -4,6 +4,11 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 
 ## Unreleased
 
+### Talking to your bots
+- **Telegram guest mode:** type `@yourbot` in any chat, even one it isn't in, and it replies there. Only to you, and
+  as in a group: none of your email, calendar, meetings, computer or saved logins, and the message you replied to is
+  outside content. A reminder it sets comes to your private chat.
+
 ### Memory
 - **Ongoing Claude and Grok chats see memory changes:** a resumed conversation kept the instructions from its first
   message, so a memory you added or forgot, a new role or skill, and the time of day never reached it (the built-in

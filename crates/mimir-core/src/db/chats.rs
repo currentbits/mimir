@@ -266,6 +266,17 @@ impl Db {
         Ok(c.query_row("SELECT CAST(value AS INTEGER) FROM settings WHERE key=?1", [key], |r| r.get(0))?)
     }
 
+    /// Telegram guest mode's conversation in your private chat (you typed @bot in some other chat): a topic no real one
+    /// can be (their ids are message ids), started afresh each time.
+    pub fn guest_mode_conv(&self, chat: i64) -> Result<i64> {
+        self.topic_conv(chat, -1)
+    }
+
+    /// Whether a conversation is guest mode's: its reply is posted where other people see it.
+    pub fn is_guest_mode(&self, conv: i64) -> bool {
+        self.c().prepare("SELECT 1 FROM settings WHERE key LIKE 'topic:%:-1' AND CAST(value AS INTEGER)=?1").and_then(|mut s| s.exists([conv])).unwrap_or(false)
+    }
+
     /// Where to send messages for a chat: (channel, external id). None for the local chat.
     pub fn chat_address(&self, chat: i64) -> Result<Option<(String, String)>> {
         if chat == 0 || chat == crate::INCOGNITO_CHAT {

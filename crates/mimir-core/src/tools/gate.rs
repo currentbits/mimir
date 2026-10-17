@@ -25,6 +25,9 @@ pub(super) const GUEST_TOOLS: [&str; 25] = [
 pub(super) fn usable(ctx: &ToolCtx, tool: &str) -> bool {
     !ctx.tools_off
         && (GUEST_TOOLS.contains(&tool) || !ctx.db.chat_guest(ctx.chat_id))
+        // Telegram guest mode (@bot in someone else's chat): like a guest's chat, as others see the reply. One reply, so
+        // no buttons or files; no other bot, which wouldn't know where its answer goes.
+        && (!ctx.db.is_guest_mode(ctx.conv) || (GUEST_TOOLS.contains(&tool) && !["ask_choice", "send_file", "ask_bot"].contains(&tool)))
         // The computer only where it's switched on and can run (a self-hosted Linux server); never incognito
         // (its browser keeps history and cookies), and like email only in a chat with you alone.
         && (!tool.starts_with("computer_") || (crate::computer::usable(&ctx.db) && !ctx.incognito() && ctx.db.chat_private(ctx.chat_id)))

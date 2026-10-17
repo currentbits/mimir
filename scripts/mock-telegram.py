@@ -3,7 +3,7 @@
 POST /bot<token>/<method> handles getMe, getUpdates (long-poll), sendMessage, editMessageText,
 sendChatAction, answerCallbackQuery, sendMessageDraft (private chats, non-zero draft_id; MOCK_NO_DRAFTS=1
 rejects it, like an older API), sendRichMessage, sendRichMessageDraft and editMessageText with rich_message
-(MOCK_NO_RICH=1 rejects them, like an API before 10.1), and multipart uploads (sendPhoto, sendDocument: logged with each part's name and size,
+(MOCK_NO_RICH=1 rejects them, like an API before 10.1), answerGuestQuery (an inline_message_id to edit), and multipart uploads (sendPhoto, sendDocument: logged with each part's name and size,
 and a file's name). Every call is appended to calls.jsonl.
 POST /control/push {update} queues an update for getUpdates. getFile + GET /file/bot<token>/<path> serve MOCK_FILE.
 """
@@ -58,6 +58,8 @@ class H(BaseHTTPRequestHandler):
             if os.environ.get("MOCK_NO_DRAFTS") or not data.get("draft_id") or int(data.get("chat_id", 0)) <= 0:
                 return self.reply({"ok": False, "description": "Bad Request: drafts are for private chats with a draft_id"})
             return self.reply({"ok": True, "result": True})
+        if method == "answerGuestQuery":
+            return self.reply({"ok": True, "result": {"inline_message_id": "guest-" + data.get("guest_query_id", "")}})
         if method == "getFile":
             return self.reply({"ok": True, "result": {"file_id": data.get("file_id"), "file_path": "photos/" + data.get("file_id", "x") + ".png"}})
         return self.reply({"ok": True, "result": True})
