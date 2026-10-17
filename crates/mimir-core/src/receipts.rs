@@ -91,6 +91,7 @@ pub fn footer(calls: &[ToolCall], asked: &str, reply: &str, receipts: bool) -> S
             let s = match c.tool.as_str() {
                 "web_fetch" => c.summary.strip_prefix("Read ").map(|u| norm(u).split('/').next().unwrap_or_default().to_string()),
                 "web_search" => c.summary.strip_prefix("Search the web: ").map(|q| format!("a search for \"{q}\"")),
+                "x_search" => c.summary.strip_prefix("Search X: ").map(|q| format!("an X search for \"{q}\"")),
                 _ => None,
             };
             if let Some(s) = s.filter(|s| !s.is_empty() && !sources.contains(s)) {

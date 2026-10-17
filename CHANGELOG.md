@@ -4,6 +4,11 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 
 ## Unreleased
 
+### Talking to your bots
+- **X search:** bots can search recent X (Twitter) posts (`x_search`) with your own X API bearer token
+  (**Settings → Web search → X**). Good for a morning routine of fresh posts. See
+  [docs/connect.md](docs/connect.md#x-search) for getting a token.
+
 ### Safety
 - **Tool server pinning, tightened:** servers added before 0.4.0 are pinned the next time they start. A version range
   (`pkg@^2`, `pkg@1`) is left as you wrote it instead of jumping to the newest release, and **Update** never offers an

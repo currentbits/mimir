@@ -23,6 +23,7 @@ Bots act through **tools**. Every tool call is checked against your rules before
 | `send_file` | Send a workspace file, or a screenshot of the bots' computer, to this chat with the reply ([Photos, voice notes and files](bots-and-chats.md#photos-voice-notes-and-files)). Not in incognito or for a bot working on another's task | allow in your own direct chat; **ask** in a group, channel or guest's chat |
 | `email_send` | Send an email as you, after you approve it: every email asks (never "Always"), with who it's to first and the whole text on the card; one too long for the card has to be a draft instead; at most 20 a day from a chat. Sent through your outgoing server (worked out from the incoming one, or set in Settings → Email), with a copy in your Sent folder | **asks, every time** |
 | `web_search` | Search the web through **Settings → Web search** (Brave Search with a free key, or your own SearXNG), for every AI account; offered once one is set up. Results are outside content; after outside content, a search that would carry one of your memories (or over 200 characters) asks | allow |
+| `x_search` | Search recent X (Twitter) posts (last 7 days) with your X API bearer token (**Settings → Web search → X**); offered once one is saved. Posts are outside content; asks like `web_search` | allow |
 | `meeting_search`, `meeting_read` | Look through your transcribed meetings ([Meetings](meetings.md)); offered once you have one | allow |
 | `calendar_create` | Add an event straight to your calendar (**Settings → Calendar**: iCloud, Fastmail, Nextcloud or any CalDAV, with an app password); offered once one is connected, in a chat with you only. The card shows when, what and where; "Always" works for it | **ask** |
 | `calendar_list` | Read your calendar between two dates (from the calendar link in Settings); offered once one is linked, in a chat with you only. Event titles are outside content | allow |
@@ -98,7 +99,7 @@ tools, found one of its memories, or had them in its standing memory), these ask
 allow:
 
 - `email_send` (it always asks; the card now also says why);
-- `web_fetch` and `web_search`, whatever the address or query, and `computer_open`, `computer_type`;
+- `web_fetch`, `web_search` and `x_search`, whatever the address or query, and `computer_open`, `computer_type`;
 - `ask_bot`: a task for another bot;
 - a message to someone else's chat: a reminder `for` them, `send_file` in a group or a guest's chat;
 - `memory_store` with `household`: the household's guests read those memories;

@@ -56,12 +56,13 @@ pub fn secret_set(name: &str, value: &str) -> Result<()> {
 }
 
 /// Accounts that take an API key: (secret name, env var fallback).
-/// (`brave` is Brave Search's key, for the bots' web_search, not an AI account.)
-const KEYED: [(&str, &str, &str); 4] = [
+/// (`brave` is Brave Search's key, for the bots' web_search, and `x` an X API bearer token, for x_search: not AI accounts.)
+const KEYED: [(&str, &str, &str); 5] = [
     ("openai", "openai_api_key", "OPENAI_API_KEY"),
     ("openrouter", OPENROUTER_KEY, "OPENROUTER_API_KEY"),
     ("xai", "xai_api_key", "XAI_API_KEY"),
     ("brave", "brave_api_key", "BRAVE_API_KEY"),
+    ("x", "x_bearer_token", "X_BEARER_TOKEN"),
 ];
 const OPENROUTER_KEY: &str = "openrouter_api_key";
 
@@ -584,7 +585,8 @@ impl Host {
                     None => json!({"guess": email.as_ref().map(|e| crate::caldav::guess(&e.host)).unwrap_or(""), "user": email.map(|e| e.user).unwrap_or_default()}),
                 })
             }
-            // Web search for the bots (web_search): Brave Search's key (set_api_key, kind brave) or a SearXNG address.
+            // Web search for the bots (web_search): Brave Search's key (set_api_key, kind brave) or a SearXNG address; and
+            // whether an X bearer token is saved (x_search, set_api_key kind x).
             "search_settings" => {
                 if let Some(url) = arg::<Option<String>>(a, "searxng_url")? {
                     let url = url.trim().trim_end_matches('/').to_string();
@@ -593,7 +595,7 @@ impl Host {
                     }
                     self.db.set_setting("searxng_url", &url)?;
                 }
-                ok(json!({"brave": api_key("brave").is_some(), "searxng_url": self.db.setting("searxng_url")?.unwrap_or_default()}))
+                ok(json!({"brave": api_key("brave").is_some(), "x": api_key("x").is_some(), "searxng_url": self.db.setting("searxng_url")?.unwrap_or_default()}))
             }
             "chats" => ok(self.db.chats()?),
             // Each topic in a private Telegram chat its own conversation (read per message, so no restart).

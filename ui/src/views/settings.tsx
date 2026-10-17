@@ -16,7 +16,7 @@ const SETTING_WORDS: Record<string, string> = {
   'AI keys': 'api key token openai openrouter xai grok anthropic model provider chatgpt sign in plan',
   'Email': 'mail imap smtp gmail icloud fastmail inbox app password send draft',
   'Calendar': 'caldav icloud fastmail nextcloud events schedule',
-  'Web search': 'brave searxng google internet search engine',
+  'Web search': 'brave searxng google internet search engine x twitter tweets posts bearer token',
   'Daily digest': 'quiet hours notifications summary weekly review do not disturb',
   'Limits': 'cap budget tokens cost usage limit plan subscription quota five hour weekly cheaper model haiku',
   'Permissions': 'allow ask deny approve rules tools safety always',
@@ -656,8 +656,9 @@ function KnowMeSettings() {
 
 /** Web search for every bot (web_search): Brave Search's key, or your own SearXNG. Claude's own search works without. */
 function WebSearchSettings() {
-  const st = useLoad(() => invoke<{ brave: boolean; searxng_url: string }>('search_settings', {}), [])
+  const st = useLoad(() => invoke<{ brave: boolean; x: boolean; searxng_url: string }>('search_settings', {}), [])
   const [key, setKey] = useState('')
+  const [xKey, setXKey] = useState('')
   const [url, setUrl] = useState<string | null>(null)
   const [err, setErr] = useState<string | null>(null)
   const done = () => { setErr(null); return st.reload() }
@@ -676,6 +677,14 @@ function WebSearchSettings() {
         <input className="input" style={{ width: 230 }} placeholder="https://search.example.com" aria-label="SearXNG address" disabled={!s}
           value={url ?? s?.searxng_url ?? ''} onChange={e => setUrl(e.target.value)}
           onBlur={() => url !== null && invoke('search_settings', { searxngUrl: url }).then(() => { setUrl(null); return done() }, e => setErr(String(e)))} />
+      </Row>
+      <Row icon={<Icon name="search" size={15} />} title="X (Twitter)"
+        desc={s?.x ? 'A token is saved; bots can search posts from the last 7 days' : <>A bearer token from the <a href="https://console.x.com" onClick={openLink}>X developer console</a> (search needs paid API access). <a href="https://github.com/currentbits/mimir/blob/master/docs/connect.md#x-search" onClick={openLink}>How</a></>}>
+        {s?.x ? <button className="btn btn-sm btn-ghost btn-danger" onClick={() => invoke('set_api_key', { kind: 'x', key: '' }).then(done, e => setErr(String(e)))}>Remove</button>
+          : <form className="er" style={{ gap: 8 }} onSubmit={e => { e.preventDefault(); if (xKey.trim()) invoke('set_api_key', { kind: 'x', key: xKey.trim() }).then(() => { setXKey(''); return done() }, er => setErr(String(er))) }}>
+              <input className="input" type="password" style={{ width: 200 }} placeholder="X bearer token" aria-label="X bearer token" value={xKey} onChange={e => setXKey(e.target.value)} autoComplete="off" />
+              <button className="btn btn-sm" disabled={!xKey.trim()}>Save</button>
+            </form>}
       </Row>
     </Group>
   )
