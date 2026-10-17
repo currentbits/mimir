@@ -1,6 +1,6 @@
-# Connect your email, calendar, web search and Signal
+# Connect your email, calendar, web search, Signal and WhatsApp
 
-Bots work with what you connect: your email, your calendar and a web search service, and you can reach them on Signal.
+Bots work with what you connect: your email, your calendar and a web search service, and you can reach them on Signal and WhatsApp.
 Each is optional and takes a few minutes. This page is the setup, service by service; what bots then do (and what always asks you first) is at the end
 of each part.
 
@@ -201,6 +201,36 @@ keep working until it's decided. Replies arrive whole, as plain text (no streami
 group the bot stays silent. Messages sent while Mimir isn't connected to signal-cli-rest-api aren't fetched later, as
 they are on Telegram. For `mimir serve`, set `SIGNAL_NUMBER` (and `MIMIR_SIGNAL_API`).
 
+## WhatsApp
+
+A bot can be on WhatsApp through Meta's official Cloud API (unofficial WhatsApp Web bridges get numbers banned). Meta
+sends the bot's messages to Mimir, so this needs Mimir running as a [server](self-hosting.md) at an `https://` address
+Meta can reach; the desktop app on its own can't take them. You need a Meta business account, and the bot needs a
+phone number of its own that isn't already on WhatsApp.
+
+1. **Make a Meta app** at [developers.facebook.com](https://developers.facebook.com/apps): type *Business*, add the
+   **WhatsApp** product, and add the bot's number under WhatsApp → API Setup. Note its **phone number id** (digits,
+   not the number itself).
+2. **Get an access token that doesn't expire**: in Business Settings → Users → System users, add one, give it the
+   app with `whatsapp_business_messaging` and `whatsapp_business_management`, and generate a token. (The temporary
+   token on API Setup works for a day.)
+3. **Note the app secret**: App settings → Basic → App secret. Every call Meta makes to Mimir is signed with it.
+4. **Add it in Mimir**: the bot's page → Messaging apps → **WhatsApp** → **Set up**: the phone number id, the token
+   and the app secret. Save; it shows *Connected · +1 555…*.
+5. **Point the webhook at Mimir**: WhatsApp → Configuration → Webhook: callback URL `https://<your server>/whatsapp`,
+   verify token the phone number id, then **Verify and save** and subscribe to **messages**.
+6. **Pair**: from your own WhatsApp, message the bot's number `pair` and the code on the bot's page.
+
+Text, photos, voice notes (transcribed as on Telegram; WhatsApp's are Ogg Opus), PDFs and other files work both ways,
+with a typing indicator while the bot writes. Approval cards and a bot's questions come as buttons when they have up to
+three short choices, else as a numbered list you answer with a number, as on Signal. A forwarded message counts as
+someone else's words. Replies arrive whole, as plain text (no streaming). Direct chats only.
+
+WhatsApp lets a business write to you only within **24 hours of your last message**. A routine's result or a card
+after that isn't delivered: it shows as not sent in the run (Runs), where you can still read it.
+Messages sent while Mimir was down are delivered when Meta retries, if they're less than a day old. Not for
+`mimir serve`, which has no webhook.
+
 ## Files
 
 Nothing to set up: each chat has a small workspace of text files bots keep there (notes, lists, drafts), under
@@ -213,4 +243,5 @@ Nothing to set up: each chat has a small workspace of text files bots keep there
   adding events, Settings → Calendar → **Remove**.
 - **Web search**: Settings → Web search → **Remove** the key, or clear the SearXNG address.
 - **Signal**: the bot's page → Signal → **Disconnect**, and remove *mimir* under Linked devices on the bot's phone.
+- **WhatsApp**: the bot's page → WhatsApp → **Disconnect**, and remove the webhook (or the app) in Meta's dashboard.
 - **One tool for one bot**: the bot's page → its tools. **One tool for all bots**: Settings → Permissions → *deny*.

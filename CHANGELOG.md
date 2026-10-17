@@ -4,6 +4,12 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 
 ## Unreleased
 
+### Talking to your bots
+- **WhatsApp:** a bot on a [server](docs/self-hosting.md) can be on WhatsApp, with a business number of its own,
+  through Meta's official Cloud API. Text, photos, voice notes and files both ways, typing, pairing, and approval cards
+  and questions as buttons. It can only write within 24 hours of your last message there: a routine's result after
+  that isn't delivered, and shows as not sent in its run. Setup is under [Connect](docs/connect.md#whatsapp).
+
 ### Safety
 - **Tool server pinning, tightened:** servers added before 0.4.0 are pinned the next time they start. A version range
   (`pkg@^2`, `pkg@1`) is left as you wrote it instead of jumping to the newest release, and **Update** never offers an

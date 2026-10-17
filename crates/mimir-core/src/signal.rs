@@ -22,9 +22,13 @@ pub(crate) struct Signal {
     api: String,
     /// The bot's own number, as signal-cli knows it ("+31…").
     number: String,
-    /// Chat → the bot's latest message there and the numbered choices still open.
-    choices: Arc<Mutex<HashMap<String, Numbers>>>,
+    picks: Picks,
 }
+
+/// Chat → the bot's latest message there and the numbered choices still open (Signal, and WhatsApp when its buttons
+/// won't fit).
+#[derive(Clone, Default)]
+pub(crate) struct Picks(Arc<Mutex<HashMap<String, Numbers>>>);
 
 #[derive(Default)]
 struct Numbers {
@@ -103,7 +107,7 @@ pub(crate) fn message_of(env: &Value, me: &str) -> Option<Incoming> {
 }
 
 /// Buttons as a numbered list under the text (a card's say how to answer it later); returns each number's button data.
-fn numbered(text: &mut String, rows: &[Row], card: bool) -> Vec<String> {
+pub(crate) fn numbered(text: &mut String, rows: &[Row], card: bool) -> Vec<String> {
     let all: Vec<&(String, String)> = rows.iter().flatten().collect();
     if all.is_empty() {
         return vec![];
@@ -122,8 +126,65 @@ fn numbered(text: &mut String, rows: &[Row], card: bool) -> Vec<String> {
 }
 
 /// "2", "2." or " 2 " → 2.
-fn pick(text: &str) -> Option<usize> {
+pub(crate) fn pick(text: &str) -> Option<usize> {
     text.trim().trim_end_matches('.').parse().ok().filter(|n| *n > 0)
+}
+
+impl Picks {
+    /// The bot wrote in a chat: a bare number there now answers only this message, and a question's numbers are gone.
+    pub(crate) fn sent(&self, chat: &str, msg: &str) {
+        let mut choices = self.0.lock().unwrap();
+        let n = choices.entry(chat.into()).or_default();
+        n.last = msg.into();
+        n.open.retain(|c| c.card);
+    }
+
+    /// The numbered choices under a message just sent.
+    pub(crate) fn offer(&self, chat: &str, msg: String, card: bool, data: Vec<String>) {
+        if !data.is_empty() {
+            self.0.lock().unwrap().entry(chat.into()).or_default().open.push(Choices { msg, card, data });
+        }
+    }
+
+    /// The button a reply of just a number picks: on the message it replies to, else on the bot's latest message. So a
+    /// number meant for something the bot wrote later can't answer an older card.
+    pub(crate) fn picked(&self, chat: &str, text: &str, quoted: Option<&str>) -> Option<String> {
+        let n = pick(text)?;
+        let mut choices = self.0.lock().unwrap();
+        let c = choices.get_mut(chat)?;
+        let under = quoted.unwrap_or(&c.last).to_string();
+        let i = c.open.iter().position(|o| o.msg == under)?;
+        let data = c.open[i].data.get(n - 1)?.clone();
+        c.open.remove(i);
+        Some(data)
+    }
+
+    /// A card was decided: its numbers stop working.
+    pub(crate) fn drop(&self, chat: &str, msg: &str) {
+        if let Some(c) = self.0.lock().unwrap().get_mut(chat) {
+            c.open.retain(|o| o.msg != msg);
+        }
+    }
+}
+
+/// A number picked from a card or a question (or a button tapped on WhatsApp): what pressing that button does
+/// elsewhere, said back.
+pub(crate) async fn choose(me: &Chan, core: &Arc<Core>, chat: &str, from: Sender<'_>, data: &str) -> Result<()> {
+    let said = match parse_decision(data) {
+        Some((id, d)) => match core.decide(me, chat, from, id, d) {
+            Ok(Some(a)) => verdict_for(&a, d),
+            Ok(None) => tr("This request is no longer pending.").into(),
+            Err(e) => e.to_string(),
+        },
+        None => match core.tap(me, chat, from, data).await {
+            // "Something else" has already asked them to type it.
+            Ok(Some(did)) if did != tr("Type your answer.") => did,
+            Ok(_) => return Ok(()),
+            Err(e) => e.to_string(),
+        },
+    };
+    me.send(chat, &said).await;
+    Ok(())
 }
 
 impl Signal {
@@ -137,7 +198,7 @@ impl Signal {
         if !number.starts_with('+') {
             bail!("Signal needs the bot's number with its country code (+…)");
         }
-        Ok(Signal { http: reqwest::Client::builder().timeout(Duration::from_secs(60)).build()?, api: api.trim_end_matches('/').into(), number, choices: Default::default() })
+        Ok(Signal { http: reqwest::Client::builder().timeout(Duration::from_secs(60)).build()?, api: api.trim_end_matches('/').into(), number, picks: Default::default() })
     }
 
     /// Sends a message (and attachments as data: URIs); its Signal timestamp, which is its id.
@@ -151,36 +212,8 @@ impl Signal {
         }
         let v: Value = serde_json::from_str(&text).unwrap_or_default();
         let msg = v["timestamp"].as_str().map(String::from).or(v["timestamp"].as_i64().map(|t| t.to_string())).unwrap_or_default();
-        self.sent(to, &msg);
+        self.picks.sent(to, &msg);
         Ok(msg)
-    }
-
-    /// The bot wrote in a chat: a bare number there now answers only this message, and a question's numbers are gone.
-    fn sent(&self, chat: &str, msg: &str) {
-        let mut choices = self.choices.lock().unwrap();
-        let n = choices.entry(chat.into()).or_default();
-        n.last = msg.into();
-        n.open.retain(|c| c.card);
-    }
-
-    /// The numbered choices under a message just sent.
-    fn offer(&self, chat: &str, msg: String, card: bool, data: Vec<String>) {
-        if !data.is_empty() {
-            self.choices.lock().unwrap().entry(chat.into()).or_default().open.push(Choices { msg, card, data });
-        }
-    }
-
-    /// The button a reply of just a number picks: on the message it replies to, else on the bot's latest message. So a
-    /// number meant for something the bot wrote later can't answer an older card.
-    fn picked(&self, chat: &str, text: &str, quoted: Option<&str>) -> Option<String> {
-        let n = pick(text)?;
-        let mut choices = self.choices.lock().unwrap();
-        let c = choices.get_mut(chat)?;
-        let under = quoted.unwrap_or(&c.last).to_string();
-        let i = c.open.iter().position(|o| o.msg == under)?;
-        let data = c.open[i].data.get(n - 1)?.clone();
-        c.open.remove(i);
-        Some(data)
     }
 
     pub(crate) async fn upload(&self, chat: &str, name: &str, bytes: Vec<u8>) -> Result<()> {
@@ -203,7 +236,7 @@ impl Signal {
         let mut text = crate::fmt::plain(text);
         let data = numbered(&mut text, rows, false);
         let msg = self.send(chat, &text, vec![]).await?;
-        self.offer(chat, msg, false, data);
+        self.picks.offer(chat, msg, false, data);
         Ok(())
     }
 
@@ -213,9 +246,7 @@ impl Signal {
 
     /// Only a card is ever "edited" (there are no drafts): its outcome comes as a new message, and its numbers stop working.
     pub(crate) async fn draft_edit(&self, chat: &str, msg: &str, text: &str) {
-        if let Some(c) = self.choices.lock().unwrap().get_mut(chat) {
-            c.open.retain(|o| o.msg != msg);
-        }
+        self.picks.drop(chat, msg);
         if let Err(e) = self.send(chat, text, vec![]).await {
             eprintln!("signal: {e:#}");
         }
@@ -235,7 +266,7 @@ impl Signal {
         let mut text = card_text(a);
         let data = numbered(&mut text, &crate::runtime::card_buttons(a), true);
         let msg = self.send(chat, &text, vec![]).await?;
-        self.offer(chat, msg.clone(), true, data);
+        self.picks.offer(chat, msg.clone(), true, data);
         Ok(Some(msg))
     }
 
@@ -277,9 +308,9 @@ impl Signal {
         let Some(m) = message_of(env, &self.number) else { return Ok(()) };
         let (chat, from) = (m.from.as_str(), Sender { id: &m.from, dm: true });
         if m.files.is_empty()
-            && let Some(data) = self.picked(chat, &m.said, m.quoted.as_deref())
+            && let Some(data) = self.picks.picked(chat, &m.said, m.quoted.as_deref())
         {
-            return self.choose(me, core, chat, from, &data).await;
+            return choose(me, core, chat, from, &data).await;
         }
         // A reply to a card waiting for an answer, not a number: no, and why.
         if m.files.is_empty()
@@ -293,25 +324,6 @@ impl Signal {
             return core.incoming_files(me, chat, from, &m.text, &files, m.sent, |f| self.download(f.url.clone())).await;
         }
         core.incoming(me, chat, from, format!("Signal {}", m.name).trim_end(), &m.text, m.sent).await
-    }
-
-    /// A number picked from a card or a question: what pressing that button does elsewhere, said back.
-    async fn choose(&self, me: &Chan, core: &Arc<Core>, chat: &str, from: Sender<'_>, data: &str) -> Result<()> {
-        let said = match parse_decision(data) {
-            Some((id, d)) => match core.decide(me, chat, from, id, d) {
-                Ok(Some(a)) => verdict_for(&a, d),
-                Ok(None) => tr("This request is no longer pending.").into(),
-                Err(e) => e.to_string(),
-            },
-            None => match core.tap(me, chat, from, data).await {
-                // "Something else" has already asked them to type it.
-                Ok(Some(did)) if did != tr("Type your answer.") => did,
-                Ok(_) => return Ok(()),
-                Err(e) => e.to_string(),
-            },
-        };
-        me.send(chat, &said).await;
-        Ok(())
     }
 
     /// An attachment someone sent, as signal-cli saved it.
@@ -379,26 +391,26 @@ mod tests {
         assert!(Signal::new("", "0612").is_err(), "needs the country code");
         // What `send` then `finish` / `card` do for a message.
         let post = |msg: &str, card: bool, data: Vec<String>| {
-            s.sent("u-1", msg);
-            s.offer("u-1", msg.into(), card, data);
+            s.picks.sent("u-1", msg);
+            s.picks.offer("u-1", msg.into(), card, data);
         };
         post("100", true, data.clone());
-        assert_eq!(s.picked("u-1", "4", None), None, "out of range");
-        assert_eq!(s.picked("u-2", "1", None), None, "another chat's");
-        assert_eq!(s.picked("u-1", "2", None).as_deref(), Some("ap:7:n"), "the card is the latest message");
-        assert_eq!(s.picked("u-1", "2", None), None, "used up");
+        assert_eq!(s.picks.picked("u-1", "4", None), None, "out of range");
+        assert_eq!(s.picks.picked("u-2", "1", None), None, "another chat's");
+        assert_eq!(s.picks.picked("u-1", "2", None).as_deref(), Some("ap:7:n"), "the card is the latest message");
+        assert_eq!(s.picks.picked("u-1", "2", None), None, "used up");
 
         // Hours later the bot writes something else, its own list in plain text: "1" is an answer to that, not to the
         // card. Replying to the card still answers it.
         post("200", true, data);
         post("201", false, vec![]);
-        assert_eq!(s.picked("u-1", "1", None), None, "a bare number can't reach an older card");
-        assert_eq!(s.picked("u-1", "1", Some("201")), None);
-        assert_eq!(s.picked("u-1", "1", Some("200")).as_deref(), Some("ap:7:y"), "replying to the card");
+        assert_eq!(s.picks.picked("u-1", "1", None), None, "a bare number can't reach an older card");
+        assert_eq!(s.picks.picked("u-1", "1", Some("201")), None);
+        assert_eq!(s.picks.picked("u-1", "1", Some("200")).as_deref(), Some("ap:7:y"), "replying to the card");
 
         // A question's numbers go with the bot's next message, even when that message is replied to.
         post("300", false, vec!["tp:a:0".into()]);
         post("301", false, vec![]);
-        assert_eq!(s.picked("u-1", "1", Some("300")), None);
+        assert_eq!(s.picks.picked("u-1", "1", Some("300")), None);
     }
 }

@@ -87,6 +87,9 @@ does the same with the bot's own file: an export, then an import on this compute
   for never, under **Settings → Limits**.
 - **Signal**, through signal-cli-rest-api and a number of the bot's own: direct chats, with approval cards and
   questions as numbered lists you answer with a number. Setup: [Connect](connect.md#signal).
+- **WhatsApp**, through Meta's Cloud API and a business number of the bot's own, on a server only (Meta calls Mimir's
+  webhook): direct chats, with buttons, and it can only write within 24 hours of your last message there. Setup:
+  [Connect](connect.md#whatsapp).
 
 ### What a reply did, from the log
 

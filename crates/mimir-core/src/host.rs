@@ -76,7 +76,10 @@ const SLACK_APP: &str = "slack_app_token";
 const DISCORD: &str = "discord_bot_token";
 const SIGNAL: &str = "signal_number";
 const SIGNAL_API: &str = "signal_api";
-const CHANNEL_SECRETS: [&str; 6] = [TG, SLACK_BOT, SLACK_APP, DISCORD, SIGNAL, SIGNAL_API];
+const WHATSAPP: &str = "whatsapp_number_id";
+const WHATSAPP_TOKEN: &str = "whatsapp_token";
+const WHATSAPP_SECRET: &str = "whatsapp_app_secret";
+const CHANNEL_SECRETS: [&str; 9] = [TG, SLACK_BOT, SLACK_APP, DISCORD, SIGNAL, SIGNAL_API, WHATSAPP, WHATSAPP_TOKEN, WHATSAPP_SECRET];
 /// Chat id of the built-in chat in the app (no messaging app needed).
 pub const LOCAL_CHAT: i64 = 0;
 
@@ -100,7 +103,13 @@ fn key(bot: i64, name: &str) -> String {
 /// A bot's channel tokens from the process's secret store, for code outside a Host (`mimir doctor`).
 pub(crate) fn channels_of(bot: i64) -> runtime::Channels {
     let s = |n| secret_get(&key(bot, n));
-    runtime::Channels { telegram: s(TG), slack: s(SLACK_BOT).zip(s(SLACK_APP)), discord: s(DISCORD), signal: s(SIGNAL).map(|n| (s(SIGNAL_API).unwrap_or_default(), n)) }
+    runtime::Channels {
+        telegram: s(TG),
+        slack: s(SLACK_BOT).zip(s(SLACK_APP)),
+        discord: s(DISCORD),
+        signal: s(SIGNAL).map(|n| (s(SIGNAL_API).unwrap_or_default(), n)),
+        whatsapp: s(WHATSAPP).zip(s(WHATSAPP_TOKEN)).zip(s(WHATSAPP_SECRET)).map(|((i, t), a)| (i, t, a)),
+    }
 }
 
 struct Live {
@@ -130,6 +139,7 @@ struct BotView {
     has_slack: bool,
     has_discord: bool,
     has_signal: bool,
+    has_whatsapp: bool,
 }
 
 /// Write-only channel secrets: None = keep, "" = remove, else replace.
@@ -142,6 +152,9 @@ struct Secrets {
     discord_token: Option<String>,
     signal_number: Option<String>,
     signal_api: Option<String>,
+    whatsapp_number_id: Option<String>,
+    whatsapp_token: Option<String>,
+    whatsapp_app_secret: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -256,7 +269,13 @@ impl Host {
 
     fn channels(&self, bot: i64) -> runtime::Channels {
         let s = |n| self.secrets.get(&key(bot, n));
-        runtime::Channels { telegram: s(TG), slack: s(SLACK_BOT).zip(s(SLACK_APP)), discord: s(DISCORD), signal: s(SIGNAL).map(|n| (s(SIGNAL_API).unwrap_or_default(), n)) }
+        runtime::Channels {
+        telegram: s(TG),
+        slack: s(SLACK_BOT).zip(s(SLACK_APP)),
+        discord: s(DISCORD),
+        signal: s(SIGNAL).map(|n| (s(SIGNAL_API).unwrap_or_default(), n)),
+        whatsapp: s(WHATSAPP).zip(s(WHATSAPP_TOKEN)).zip(s(WHATSAPP_SECRET)).map(|((i, t), a)| (i, t, a)),
+    }
     }
 
     fn provider(&self, bot: i64) -> Result<Provider> {
@@ -393,14 +412,14 @@ impl Host {
                 .into_iter()
                 .map(|b| {
                     let ch = self.channels(b.id);
-                    BotView { has_telegram_token: ch.telegram.is_some(), has_slack: ch.slack.is_some(), has_discord: ch.discord.is_some(), has_signal: ch.signal.is_some(), bot: b }
+                    BotView { has_telegram_token: ch.telegram.is_some(), has_slack: ch.slack.is_some(), has_discord: ch.discord.is_some(), has_signal: ch.signal.is_some(), has_whatsapp: ch.whatsapp.is_some(), bot: b }
                 })
                 .collect::<Vec<_>>()),
             "save_bot" => {
                 // The UI sends back the bot as `bots` listed it: the channel flags are that list's, not the bot's.
                 let mut bot = a.get("bot").cloned().unwrap_or_default();
                 if let Some(o) = bot.as_object_mut() {
-                    for k in ["has_telegram_token", "has_slack", "has_discord", "has_signal"] {
+                    for k in ["has_telegram_token", "has_slack", "has_discord", "has_signal", "has_whatsapp"] {
                         o.remove(k);
                     }
                 }
@@ -414,7 +433,12 @@ impl Host {
                 }
                 let id = self.db.bot_save(&bot)?;
                 for (name, value) in
-                    [(TG, secrets.telegram_token), (SLACK_BOT, secrets.slack_bot_token), (SLACK_APP, secrets.slack_app_token), (DISCORD, secrets.discord_token), (SIGNAL, secrets.signal_number), (SIGNAL_API, secrets.signal_api)]
+                    [(TG, secrets.telegram_token), (SLACK_BOT, secrets.slack_bot_token), (SLACK_APP, secrets.slack_app_token), (DISCORD, secrets.discord_token), (SIGNAL, secrets.signal_number),
+                    (SIGNAL_API, secrets.signal_api),
+                    (WHATSAPP, secrets.whatsapp_number_id),
+                    (WHATSAPP_TOKEN, secrets.whatsapp_token),
+                    (WHATSAPP_SECRET, secrets.whatsapp_app_secret),
+                ]
                 {
                     if let Some(v) = value {
                         self.secrets.set(&key(id, name), v.trim())?;
