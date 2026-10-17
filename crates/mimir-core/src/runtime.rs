@@ -393,9 +393,15 @@ pub(crate) fn offers_all(a: &Approval) -> bool {
     a.kind == "rule" && !a.parked
 }
 
-/// …and "Always" for plain rule asks (not after outside content, not a saved login, not a plan), like the app.
+/// …and "Always" on every card with something to allow, like the app. Not in a guest's chat (of any kind): the guest
+/// answers there, and Always would change your rules for every chat.
 pub(crate) fn offers_always(a: &Approval) -> bool {
-    a.kind == "rule"
+    !matches!(a.kind.as_str(), "signin" | "takeover" | "guest") && !a.guest
+}
+
+/// Allowed the same plain ask a few times already: the card offers to stop asking.
+fn learned(a: &Approval) -> bool {
+    a.kind == "rule" && a.allowed_before >= 2
 }
 
 /// The buttons of a chat-app approval card, in rows: (label, button data "ap:<id>:<y|n|a|w>", or a link's address).
@@ -417,8 +423,9 @@ pub(crate) fn card_buttons(a: &Approval) -> Vec<Vec<(String, String)>> {
         rows.push(vec![b(tr("Approve all like this").into(), 'a')]);
     }
     if offers_always(a) {
-        // Allowed a few times already: Always comes right after Approve / Deny.
-        let at = if a.allowed_before >= 2 { 1 } else { rows.len() };
+        // Allowed a few times already: Always comes right after Approve / Deny. Only on a plain ask: never a nudge to
+        // drop a guard (outside content, an email…).
+        let at = if learned(a) { 1 } else { rows.len() };
         rows.insert(at, vec![b(crate::tools::always_label(a), 'w')]);
     }
     rows
@@ -597,7 +604,7 @@ pub(crate) fn card_text(a: &Approval) -> String {
     let wait = if mins >= 120 { trf("{n} h", &[("n", &(mins / 60).to_string())]) } else { trf("{n} min", &[("n", &mins.to_string())]) };
     let then = if a.parked { tr("It runs when you approve.") } else { tr("No answer means deny.") };
     // Allowed the same thing a few times already: offer to stop asking (like the app).
-    let again = if offers_always(a) && a.allowed_before >= 2 { format!("\n{}", trf("You've allowed this {n} times. Press Always to stop being asked.", &[("n", &a.allowed_before.to_string())])) } else { String::new() };
+    let again = if learned(a) { format!("\n{}", trf("You've allowed this {n} times. Press Always to stop being asked.", &[("n", &a.allowed_before.to_string())])) } else { String::new() };
     if a.kind == "takeover" {
         return trf("🖐 I need you on the computer\n\n{summary}\n\nWaits {wait}.", &[("summary", &a.summary), ("wait", &wait)]);
     }
@@ -1083,7 +1090,7 @@ impl Core {
                 let a = self.db.approval_decide(id, approve, scope)?;
                 if let Some(a) = &a {
                     crate::tools::after_decision(&self.db, a);
-                    if d == Decision::Always {
+                    if d == Decision::Always && offers_always(a) {
                         crate::tools::always_allow(&self.db, a)?;
                     }
                     // The button handler edits its own card; the approvals loop closes the other one.
@@ -1695,8 +1702,13 @@ impl Core {
                     asker.restore_private(&kept);
                 }
                 let (ctx, task) = (asker.clone(), d.task.clone());
+                let own = db.setting_take(&crate::tools::delegation_own_key(d.id)).ok().flatten().is_some();
                 // In its own task: a crash in it fails this hand-off only, and says so.
-                let work = tokio::spawn(async move { crate::tools::delegate(&ctx, &ctx.db.bot(d.to_bot)?, &task).await });
+                let work = tokio::spawn(async move {
+                    let target = ctx.db.bot(d.to_bot)?;
+                    let reply = crate::tools::delegate(&ctx, &target, &task, own).await?;
+                    if own { crate::tools::own_chat_answer(&ctx.db, &target, &reply) } else { Ok(reply) }
+                });
                 HANDED.lock().unwrap().insert(d.id, work.abort_handle());
                 let out = work.await;
                 HANDED.lock().unwrap().remove(&d.id);
@@ -2332,6 +2344,50 @@ mod tests {
         assert!(!helper.iter().any(|t| t.starts_with("email_") || t.starts_with("computer_") || t.starts_with("browser__") || t == "bot_create"), "{helper:?}");
     }
 
+    #[tokio::test]
+    async fn a_task_done_in_its_own_chat_stays_there() {
+        let p = std::env::temp_dir().join(format!("mimir-own-chat-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = Db::open(&p).unwrap();
+        let (base, asked) = recording_ai().await;
+        let scout = crate::db::Bot { id: 0, name: "Scout".into(), persona: String::new(), provider: "openai".into(), model: "m".into(), base_url: base.clone(), tools: String::new(), look: String::new() };
+        let scout = db.bot_save(&scout).unwrap();
+        db.set_setting("public_url", "https://mimir.example").unwrap();
+        // Asked from your Telegram chat: the task and its whole answer land in Scout's app chat, the asker gets a link.
+        db.pair(300, "You").unwrap();
+        let run = db.run_start(1, 300, "message", None, "test").unwrap();
+        let ctx = ToolCtx::new(db.clone(), 1, 300).with_run(Some(run));
+        let out = crate::tools::call(&ctx, "ask_bot", &serde_json::json!({"bot": "Scout", "task": "Write a marketing plan", "in_own_chat": true})).await.unwrap();
+        assert!(out.contains(&format!("https://mimir.example/#bot-{scout}")) && out.contains("Seen."), "{out}");
+        let kept: Vec<_> = db.messages_of(crate::host::LOCAL_CHAT, Some(scout), None, 0, 10).unwrap().into_iter().map(|m| (m.role, m.content)).collect();
+        assert!(kept.len() == 2 && kept[0].1.starts_with("[Task from ") && kept[0].1.contains("marketing plan") && kept[1].1.starts_with("Seen."), "{kept:?}");
+        assert!(db.messages(300, 10).unwrap().is_empty(), "nothing of it in the asking chat");
+        assert_eq!(db.child_runs(run).unwrap()[0].chat_id, crate::host::LOCAL_CHAT, "its run is in its own chat, under the asking one");
+        // Its next turn there knows what it wrote (it was outside its session).
+        assert!(db.last_outside_session(scout, crate::host::LOCAL_CHAT).unwrap().is_some_and(|(_, said)| said.starts_with("Seen.")));
+        // Not from a guest's or a group's chat: your app chat's memory and files would flow back there.
+        db.pair(200, "Sam").unwrap();
+        db.chat_set_guest(200, true).unwrap();
+        let guest = ToolCtx::new(db.clone(), 1, 200);
+        let e = crate::tools::call(&guest, "ask_bot", &serde_json::json!({"bot": "Scout", "task": "x", "in_own_chat": true})).await.unwrap_err();
+        assert!(e.to_string().contains("own private chat"), "{e}");
+        // Later: done in its own chat on its own, and what comes back to the asker is the link.
+        let n = asked.lock().unwrap().len();
+        crate::tools::call(&ctx, "ask_bot", &serde_json::json!({"bot": "Scout", "task": "Write a launch plan", "later": true, "in_own_chat": true})).await.unwrap();
+        let core = Arc::new(core_on(&db, &base));
+        core.delegations(&[]).await.unwrap();
+        for _ in 0..100 {
+            if !db.delegations(1, "done").unwrap().is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        core.delegations(&[]).await.unwrap();
+        let reqs = asked.lock().unwrap()[n..].to_vec();
+        assert!(reqs.len() == 2 && reqs[0].contains("in your own chat") && reqs[1].contains("did it in its own chat"), "{reqs:?}");
+        assert_eq!(db.messages_of(crate::host::LOCAL_CHAT, Some(scout), None, 0, 10).unwrap().len(), 4);
+    }
+
     /// Against scripts/fake-mail.py: `python3 scripts/fake-mail.py`, then
     /// `cargo test -p mimir-core fake_mail_triggers -- --ignored`.
     #[tokio::test]
@@ -2714,7 +2770,7 @@ mod tests {
     }
 
     #[test]
-    fn always_from_a_chat_card_makes_a_rule_only_for_plain_asks() {
+    fn always_from_a_chat_card_makes_a_rule() {
         let p = std::env::temp_dir().join(format!("mimir-always-{}.db", std::process::id()));
         let _ = std::fs::remove_file(&p);
         let db = Db::open(&p).unwrap();
@@ -2735,19 +2791,46 @@ mod tests {
         crate::tools::always_allow(&db, &w).unwrap();
         assert!(db.site_rules().unwrap().iter().any(|(t, h, act)| t == "web_fetch" && h == "example.com" && act == "allow"));
         assert_ne!(db.rule("web_fetch").unwrap().as_deref(), Some("allow"), "not the whole tool");
-        // After outside content, saved logins and plans keep asking: no button, and refused if forced.
-        for kind in ["guarded", "login", "plan"] {
+        // Asked for more than its rule (after outside content, an email, a new bot, a loop…): Always means never ask
+        // again, not even after outside content.
+        for kind in ["guarded", "sensitive", "unasked", "send", "bot", "remind", "loop", "plan"] {
             let g = ask("routine_create", kind, None);
-            assert!(!card_buttons(&g).iter().flatten().any(|(_, d)| d.ends_with(":w")), "{kind}");
-            assert!(crate::tools::always_allow(&db, &g).is_err(), "{kind}");
+            assert!(card_buttons(&g).iter().flatten().any(|(_, d)| d.ends_with(":w")), "{kind}");
+            crate::tools::always_allow(&db, &g).unwrap();
+            assert_eq!(db.rule("routine_create").unwrap().as_deref(), Some("always"), "{kind}");
+            assert_eq!(crate::tools::decide(&db, "routine_create", true).unwrap(), "allow", "{kind}");
+            db.set_rule("routine_create", "default").unwrap();
         }
-        assert_ne!(db.rule("routine_create").unwrap().as_deref(), Some("allow"));
+        // A saved login: on its site only.
+        let l = ask("computer_signin", "login", Some("bank.example"));
+        crate::tools::always_allow(&db, &l).unwrap();
+        assert!(crate::tools::trusted(&db, "computer_signin", Some("bank.example")) && !crate::tools::trusted(&db, "computer_signin", Some("other.example")));
+        // Signing in and taking over are the person's own steps; a guest answers in their chat and can't change your rules.
+        for kind in ["signin", "takeover", "guest"] {
+            let k = Approval { kind: kind.into(), ..a.clone() };
+            assert!(!card_buttons(&k).iter().flatten().any(|(_, d)| d.ends_with(":w")), "{kind}");
+        }
+        assert!(crate::tools::always_allow(&db, &ask("memory_forget", "takeover", None)).is_err());
+        // In a guest's chat no card of any kind offers it there: the guest answers it.
+        db.pair(200, "Sam").unwrap();
+        db.chat_set_guest(200, true).unwrap();
+        let id = db.approval_create(1, 200, "send_file", "Send a file", 60, "send", None).unwrap();
+        let theirs = db.approval(id).unwrap().unwrap();
+        assert!(theirs.guest && !offers_always(&theirs));
         // Allowed twice before: the card says so and Always moves up.
         let mut again = ask("memory_store", "rule", None);
         again.allowed_before = 2;
         assert!(card_text(&again).contains("allowed this 2 times"));
         assert!(card_buttons(&again)[1][0].1.ends_with(":w"), "{:?}", card_buttons(&again));
-        assert!(!card_text(&ask("memory_store", "guarded", None)).contains("allowed this"));
+        let mut guarded = ask("memory_store", "send", None);
+        guarded.edit_link = Some("https://mimir.example/#approval-1".into());
+        let plain = card_buttons(&guarded);
+        guarded.allowed_before = 2;
+        assert!(!card_text(&guarded).contains("allowed this") && card_buttons(&guarded) == plain, "no nudge to drop a guard");
+        // A guest's plain ask, from the app: Allow, not never-ask.
+        let g = ask("memory_forget", "guest", None);
+        crate::tools::always_allow(&db, &g).unwrap();
+        assert_eq!(db.rule("memory_forget").unwrap().as_deref(), Some("allow"));
     }
 
     #[test]

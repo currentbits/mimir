@@ -114,7 +114,7 @@ afterwards.
 
 - What's on the screen counts as **outside content**: after a bot has looked, anything that changes data asks you
   first ([Tools and safety](tools-and-safety.md#outside-content-taint)).
-- Opening a site asks (per-site "always" is available); saved logins ask every time. A sign-in card's login is typed
+- Opening a site asks (per-site "always" is available); saved logins ask every time, until you press "Always on" that site on the card. A sign-in card's login is typed
   by Mimir from its own form, only on the card's site, and never passes through a chat or the AI. After outside content, jumping
   to the address bar (keys or a click on the browser's bar) asks too, so a page can't steer the bot to another site.
 - With compose, the computer is a separate container: user `computer`, no `/data` mount, no published ports, all

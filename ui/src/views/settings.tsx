@@ -9,7 +9,7 @@ import type { Bot, ComputerStatus, Chat, Account, ToolServer } from '../types'
 
 type VaultEntry = { name: string; domains: string[]; bot?: number; totp?: boolean }
 
-type Rule = { tool: string; description: string; action: 'allow' | 'ask' | 'deny'; default: string }
+type Rule = { tool: string; description: string; action: 'always' | 'allow' | 'ask' | 'deny'; default: string }
 
 /** Words a setting goes by besides its own text, so a search finds it ("token" → AI keys, "2fa"…). */
 const SETTING_WORDS: Record<string, string> = {
@@ -999,6 +999,16 @@ export const TOOL_LABEL: Record<string, string> = {
   memory_store: 'Remember things', memory_search: 'Look up memories', memory_forget: 'Forget a memory',
   routine_create: 'Create routines', routine_list: 'List routines', routine_delete: 'Delete a routine', web_fetch: 'Read web pages',
   chat_search: 'Search earlier conversations', meeting_search: 'Search your meetings', meeting_read: 'Read a meeting transcript', ask_bot: 'Hand tasks to other bots', skill_view: 'Read its skills', plan_propose: 'Propose a plan to approve once',
+  ask_choice: 'Ask with buttons', bot_create: 'Make new bots', calendar_add: 'Give calendar links',
+  calendar_create: 'Add calendar events', calendar_list: 'Look at your calendar', card_write: 'Update pinned cards',
+  computer_click: 'Click on the computer', computer_handoff: 'Ask you to take over the computer',
+  computer_key: 'Press keys on the computer', computer_open: 'Open sites on the computer',
+  computer_screenshot: "Look at the computer's screen", computer_scroll: 'Scroll on the computer',
+  computer_signin: 'Use saved logins', computer_type: 'Type on the computer', email_draft: 'Draft emails',
+  email_read: 'Read your email', email_search: 'Search your email', email_send: 'Send emails',
+  file_delete: 'Delete files', file_list: 'List files', file_read: 'Read files', file_write: 'Write files',
+  goal_set: 'Set goals', goal_update: 'Update goals', routine_update: 'Change routines', send_file: 'Send files',
+  skill_save: 'Save skills', web_search: 'Search the web',
 }
 
 /** "browser__browser_click" → "Click" (grouped under Browser) */
@@ -1014,9 +1024,10 @@ function Permissions() {
   const byServer = new Map<string, Rule[]>()
   all.filter(r => r.tool.includes('__')).forEach(r => { const s = r.tool.split('__')[0]; byServer.set(s, [...(byServer.get(s) ?? []), r]) })
   const row = (r: Rule) => (
-    <Row key={r.tool} title={toolLabel(r.tool)} desc={r.action !== r.default ? `Changed from “${r.default}”` : undefined}>
+    <Row key={r.tool} title={toolLabel(r.tool)} desc={r.action === 'always' ? 'Never asks, not even after a bot reads a web page (Always on a card)' : r.action !== r.default ? `Changed from “${r.default}”` : undefined}>
+      {/* Always is set from a card; here it shows, and goes back to Allow, Ask or Deny. */}
       <Segmented size="sm" label={toolLabel(r.tool)} value={r.action} onChange={a => set(r.tool, a)}
-        options={[{ id: 'allow', label: 'Allow' }, { id: 'ask', label: 'Ask' }, { id: 'deny', label: 'Deny' }]} />
+        options={[...(r.action === 'always' ? [{ id: 'always', label: 'Always' }] : []), { id: 'allow', label: 'Allow' }, { id: 'ask', label: 'Ask' }, { id: 'deny', label: 'Deny' }]} />
     </Row>
   )
   const sites = useLoad(() => invoke<{ tool: string; host: string; action: string }[]>('site_rules'), [], 60000)
@@ -1026,18 +1037,19 @@ function Permissions() {
       ? 'Allow every tool without asking? Sending an email, making a bot and using a saved login still ask every time, and after a bot reads outside content, anything that changes your data still asks.'
       : 'Put every tool back to how Mimir comes (deleting and opening sites ask, the rest is allowed)?'
     if (!await ask(msg, action === 'allow' ? 'Allow all' : 'Back to defaults', action === 'allow')) return
-    for (const r of all) if (r.action !== (action === 'default' ? r.default : 'allow')) await invoke('set_rule', { tool: r.tool, action }).catch(e => setErr(String(e)))
+    // Allow all leaves a tool at Always as it is (that's already more than allow).
+    for (const r of all) if (r.action !== (action === 'default' ? r.default : 'allow') && !(action === 'allow' && r.action === 'always')) await invoke('set_rule', { tool: r.tool, action }).catch(e => setErr(String(e)))
     rules.reload()
   }
   return (
     <Group title="Permissions" action={<span className="perm-all">
       <button type="button" className="btn btn-sm btn-ghost" onClick={() => setAll('default')} disabled={all.every(r => r.action === r.default)}>Back to defaults</button>
-      <button type="button" className="btn btn-sm btn-ghost" onClick={() => setAll('allow')} disabled={!all.length || all.every(r => r.action === 'allow')}>Allow all</button>
+      <button type="button" className="btn btn-sm btn-ghost" onClick={() => setAll('allow')} disabled={!all.length || all.every(r => r.action === 'allow' || r.action === 'always')}>Allow all</button>
     </span>} note={err ?? '“Ask” sends you Approve / Deny first. After a bot reads a web page, anything that changes your data asks, whatever is set here.'}>
       {builtin.map(row)}
       {(sites.data ?? []).map(r => (
         <Row key={r.tool + r.host} icon={<Icon name="globe" size={15} />} title={r.host}
-          desc={`${r.tool === 'web_fetch' ? 'Read pages' : 'Open in the browser'} · ${r.action === 'allow' ? 'always allowed' : r.action}`}>
+          desc={`${r.tool === 'web_fetch' ? 'Read pages' : r.tool === 'computer_signin' ? 'Type its saved login' : r.tool.startsWith('browser__') ? 'Open in the browser' : toolLabel(r.tool)} · ${r.action === 'always' ? 'never asks, not even after a web page' : r.action === 'allow' ? 'always allowed' : r.action}`}>
           <button className="btn btn-sm btn-ghost btn-danger" onClick={() => removeSite(r.tool, r.host)}>Remove</button>
         </Row>
       ))}

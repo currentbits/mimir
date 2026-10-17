@@ -21,7 +21,7 @@ Bots act through **tools**. Every tool call is checked against your rules before
 | `file_list`, `file_read`, `file_write` | A text-file workspace per chat (notes, lists, drafts, research), shown under Memory → Files. Paths stay inside it (no `..`, no links); rewriting keeps the previous version; a file written after outside content (or dropped in by hand) counts as outside content when read. Not in incognito | allow |
 | `file_delete` | Delete a workspace file | **ask** |
 | `send_file` | Send a workspace file, or a screenshot of the bots' computer, to this chat with the reply ([Photos, voice notes and files](bots-and-chats.md#photos-voice-notes-and-files)). Not in incognito or for a bot working on another's task | allow in your own direct chat; **ask** in a group, channel or guest's chat |
-| `email_send` | Send an email as you, after you approve it: every email asks (never "Always"), with who it's to first and the whole text on the card; one too long for the card has to be a draft instead; at most 20 a day from a chat. Sent through your outgoing server (worked out from the incoming one, or set in Settings → Email), with a copy in your Sent folder | **asks, every time** |
+| `email_send` | Send an email as you, after you approve it: every email asks (until you press "Always" on one), with who it's to first and the whole text on the card; one too long for the card has to be a draft instead; at most 20 a day from a chat. Sent through your outgoing server (worked out from the incoming one, or set in Settings → Email), with a copy in your Sent folder | **asks, every time** |
 | `web_search` | Search the web through **Settings → Web search** (Brave Search with a free key, or your own SearXNG), for every AI account; offered once one is set up. Results are outside content; after outside content, a search that would carry one of your memories (or over 200 characters) asks | allow |
 | `meeting_search`, `meeting_read` | Look through your transcribed meetings ([Meetings](meetings.md)); offered once you have one | allow |
 | `calendar_create` | Add an event straight to your calendar (**Settings → Calendar**: iCloud, Fastmail, Nextcloud or any CalDAV, with an app password); offered once one is connected, in a chat with you only. The card shows when, what and where; "Always" works for it | **ask** |
@@ -42,7 +42,9 @@ Each bot has a tool allowlist on its page; tools outside it are hidden from that
 
 Every tool has a rule under **Settings → Permissions**: *allow*, *ask* or *deny*. *Ask* sends Approve / Deny buttons
 to Telegram, Slack or Discord and shows a card in the app with **Allow once**, **Always allow** (per tool, or per website
-for opening pages: "Always on this site") and **Deny**. Every "always" becomes a visible rule in Settings → Permissions.
+for opening pages: "Always on this site") and **Deny**. Every card offers "Always" except signing in and taking over
+the computer (those are steps only you can do), and a guest can't press it in their own chat. Every "always" becomes a
+visible rule in Settings → Permissions.
 Once you've allowed the same thing twice, the card makes "always" the main button. No answer within 5 minutes means
 deny (routines park their asks for 24 hours instead; see [Needs you](routines.md#needs-you)). From the command line:
 `mimir approvals`, `mimir approve <id>`, `mimir deny <id> [why]`.
@@ -76,12 +78,18 @@ out:
 - a web search whose query holds one of your memories.
 
 Those ask too. "Start fresh" (or `/new`) ends it, and so does a messaging chat's fresh start after a quiet spell
-(unless the outside content is in the "where we left off" it quotes). Requests made after reading outside content, and any use of a saved
-login, never become "always". Approval cards show where an action goes (recipient, address, path) first, so a long
-message body can't push it off the card.
+(unless the outside content is in the "where we left off" it quotes). Approval cards show where an action goes
+(recipient, address, path) first, so a long message body can't push it off the card.
 
-**Always asks, whatever the rules say.** Sending an email and making a new bot ask every time, even if someone set
-their rule to allow, and never offer "always" or "all like this". An email can only be sent if all of it (who it's to
+**"Always" on one of these cards turns the guard off for that tool.** Pressing **Always** on a card that asked because
+of outside content, a sensitive source, a request that didn't match yours, or a repeating step sets the tool (or the tool
+on that site) to **Always**: no bot asks before it again, *not even after reading a web page*. A page's instructions can
+then use it without you. The app asks you to confirm first for the outside-content, sensitive and mismatch cards; chat
+apps don't. Settings → Permissions shows such a tool as *Always*, set it back to Allow, Ask or Deny there, and the
+[health check](faq.md) lists every tool at Always.
+
+**Asks, whatever the rules say.** Sending an email and making a new bot ask every time, even if someone set their rule
+to allow, until you press **Always** on one of their cards. They never offer "all like this". An email can only be sent if all of it (who it's to
 first, then the subject and text) fits on the card; anything longer is saved as a draft for you to send.
 
 Memories saved after reading outside content are marked as such and treated as unconfirmed
@@ -105,8 +113,9 @@ allow:
 - any tool server's tool that changes something, and its read-only tools that reach the internet (except the sensitive
   server's own).
 
-The card starts with *"This run read from bank, which you marked sensitive."* These asks never offer "always", aren't
-covered by a plan or "all like this", and aren't in **Allow all**. Like outside content, it lasts for the rest of the
+The card starts with *"This run read from bank, which you marked sensitive."* These asks aren't covered by a plan or
+"all like this", and aren't in Settings' **Allow all**; **Always** on one sets that tool to never ask, not even after a
+sensitive source. Like outside content, it lasts for the rest of the
 conversation ("Start fresh" ends it), goes along with a task handed to another bot, and sticks to a routine the run
 creates or rewrites (every run of it asks the same way). It only ever turns an allow into an ask.
 
@@ -128,12 +137,13 @@ without asking until the reply ends. Neither covers anything after the bot read 
 routines.
 
 To stop being asked at all, press **Always** on the card (in the app, Telegram, Slack or Discord): from then on that
-tool, or that tool on that website, runs without asking. Change it back in **Settings → Permissions**. Asks after
-outside content, saved logins and plans don't offer it.
+tool, or that tool on that website, runs without asking. On a plain card that's Allow (it still asks after outside
+content); on any other card it's Always (see above). On a saved login's card it's that site's login; on a plan's card,
+plans no longer ask. Change it back in **Settings → Permissions**.
 
-**Several at once.** With two or more waiting, **Allow all** and **Deny all** (in the app and in Needs you) answer the
-plain asks together. An email to send, a new bot, a saved login and anything asked after outside content stay to be
-answered one by one: those are the ones to read. **Settings → Permissions → Allow all** sets every tool to allow (the
+**Several at once.** With two or more waiting, **Allow all** and **Deny all** (in the app and in Needs you) answer every
+waiting card together, after a confirmation that lists each one. Signing in and taking over the computer aren't
+included: those need you to do them. Asks from routines that wait in Needs you are announced at the top of the app. **Settings → Permissions → Allow all** sets every tool to allow (the
 always-ask ones above still ask, and so does anything after outside content); **Back to defaults** undoes it.
 
 ## The browser and saved logins

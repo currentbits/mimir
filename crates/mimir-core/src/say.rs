@@ -154,6 +154,7 @@ static NL: &[(&str, &str)] = &[
     ("Can't now", "Lukt nu niet"),
     ("Always on {site}", "Altijd op {site}"),
     ("Always: {tool}", "Altijd: {tool}"),
+    ("Always approve plans", "Plannen altijd goedkeuren"),
     ("{n} h", "{n} uur"),
     ("{n} min", "{n} min"),
     ("It runs when you approve.", "Het gebeurt zodra je het goedkeurt."),

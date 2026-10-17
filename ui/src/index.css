@@ -1033,7 +1033,7 @@ kbd, .keys { font: 500 11.5px var(--sans); color: var(--text-2); padding: 3px 7p
 /* The in-app "are you sure?" dialog (ask() in ui.tsx). */
 .ask-backdrop { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; background: color-mix(in srgb, var(--bg) 55%, transparent); animation: fade-in 120ms ease-out both; }
 .ask-box { width: min(420px, calc(100vw - 32px)); display: grid; gap: 14px; padding: 18px; border-radius: 14px; background: var(--surface); box-shadow: var(--shadow-md), 0 0 0 0.5px var(--line); --rise: 8px; animation: rise 240ms var(--spring) both; }
-.ask-box p { margin: 0; font-size: 13.5px; line-height: 1.5; }
+.ask-box p { margin: 0; font-size: 13.5px; line-height: 1.5; white-space: pre-line; max-height: 55vh; overflow-y: auto; }
 .ask-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .btn-danger-solid { background: var(--danger); color: #fff; border-color: transparent; }
 .btn-danger-solid:hover { background: color-mix(in srgb, var(--danger) 88%, #000); }
@@ -1045,6 +1045,12 @@ kbd, .keys { font: 500 11.5px var(--sans); color: var(--text-2); padding: 3px 7p
 .confirm-all span { flex: 1; }
 .decide-all { margin-left: auto; display: flex; gap: 6px; }
 .approvals > .decide-all { justify-content: flex-end; margin-bottom: 6px; }
+.approval-notice {
+  display: flex; align-items: center; gap: 8px; justify-self: center; padding: 7px 14px; border: 0; border-radius: 999px;
+  background: color-mix(in srgb, var(--surface) 96%, transparent); box-shadow: var(--shadow-lg); color: var(--pending);
+  font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; animation: drop-in 320ms cubic-bezier(.2, .9, .25, 1);
+}
+.approval-notice b { color: var(--text); margin-left: 4px; }
 .perm-all { display: flex; gap: 4px; }
 
 /* Onboarding's starter team: one card per suggestion, ticked by default. */

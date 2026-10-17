@@ -233,11 +233,18 @@ and the report back together. Handed-over tasks are kept in the database: one no
 one Mimir stopped in the middle isn't run again (it may have done half of something), and the bot says it didn't
 finish. A paused bot's handed-over tasks wait until the pause ends. In a rehearsal the bot waits for the answer instead.
 
+When the work should be the other bot's own ("have each marketer write its plan in its own chat"), the bot hands it
+over to be done *in that bot's own chat*: you see the task and the whole answer in that bot's chat in the app, where it
+stays in its history (a later hiccup can't lose it), and files it writes go to that chat's folder. Its approval cards
+still come to the chat you asked from (say, Telegram), from the bot you asked, naming the helper. The bot you asked gets a link and tells you in a line. This works from the app and from your own private
+messaging chats, not from a group or a guest's chat (your app chat's memory and files would flow back there). Combined
+with reporting back later, the link comes when it's done. In a rehearsal it's handed over the usual way.
+
 ## A bot that makes a bot
 
 Ask a bot for a new one ("make me a bot for SEO on heymimir.app") and it drafts it with `bot_create`: a name and a role
 (its standing instructions). You see the whole role on the approval card, and nothing is made until you approve. The
-card never offers *Always*, so every new bot is your call; after a web page or file it's marked as such, since the role
+card asks every time unless you press *Always* on one; after a web page or file it's marked as such, since the role
 could be that page's words. The new bot uses the same AI account as the one that made it and gets at most the same
 tools (minus making bots itself); messaging apps and saved logins aren't passed on, so connect those on its page if you
 want them. Then chat with it in the app, or let the first bot hand it tasks: "check our SEO every Monday" becomes a

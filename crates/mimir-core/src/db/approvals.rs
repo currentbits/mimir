@@ -25,6 +25,8 @@ pub struct Approval {
     pub draft: Option<serde_json::Value>,
     /// Why you said no, in your words (the bot is told).
     pub reason: Option<String>,
+    /// Asked in a guest's chat: the guest answers there, so its chat-app card never offers Always (your rules).
+    pub guest: bool,
     /// A link to this card in the app, for chat-app cards you can edit there. Not stored.
     #[serde(skip)]
     pub edit_link: Option<String>,
@@ -35,11 +37,23 @@ impl Db {
 
     /// User override for a tool, if any (None = use the built-in default).
     pub fn rule(&self, tool: &str) -> Result<Option<String>> {
-        Ok(self.c().query_row("SELECT action FROM policy_rules WHERE tool=?1", [tool], |r| r.get(0)).optional()?)
+        let a: Option<String> = self.c().query_row("SELECT action FROM policy_rules WHERE tool=?1", [tool], |r| r.get(0)).optional()?;
+        self.with_always(a, &always_key(tool, None))
     }
 
-    /// action = allow | ask | deny, or "default" to remove the override.
+    /// "always": an allow that the person marked to never ask, not even after outside content. Kept as "allow" plus a
+    /// mark in the settings (no new schema), so an older Mimir reads it as a plain allow.
+    fn with_always(&self, action: Option<String>, key: &str) -> Result<Option<String>> {
+        Ok(match action {
+            Some(a) if a == "allow" && self.setting(key)?.is_some() => Some("always".into()),
+            a => a,
+        })
+    }
+
+    /// action = always | allow | ask | deny, or "default" to remove the override.
     pub fn set_rule(&self, tool: &str, action: &str) -> Result<()> {
+        self.set_always(&always_key(tool, None), action)?;
+        let action = if action == "always" { "allow" } else { action };
         if action == "default" {
             self.c().execute("DELETE FROM policy_rules WHERE tool=?1", [tool])?;
         } else {
@@ -53,11 +67,22 @@ impl Db {
 
     /// A rule for one tool on one website (e.g. open github.com in the browser), checked before the tool's rule.
     pub fn site_rule(&self, tool: &str, host: &str) -> Result<Option<String>> {
-        Ok(self.c().query_row("SELECT action FROM site_rules WHERE tool=?1 AND host=?2", [tool, host], |r| r.get(0)).optional()?)
+        let a: Option<String> = self.c().query_row("SELECT action FROM site_rules WHERE tool=?1 AND host=?2", [tool, host], |r| r.get(0)).optional()?;
+        self.with_always(a, &always_key(tool, Some(host)))
     }
 
-    /// action = allow | ask | deny, or "default" to remove it.
+    fn set_always(&self, key: &str, action: &str) -> Result<()> {
+        if action == "always" {
+            self.set_setting(key, "1")
+        } else {
+            self.setting_take(key).map(|_| ())
+        }
+    }
+
+    /// action = always | allow | ask | deny, or "default" to remove it.
     pub fn set_site_rule(&self, tool: &str, host: &str, action: &str) -> Result<()> {
+        self.set_always(&always_key(tool, Some(host)), action)?;
+        let action = if action == "always" { "allow" } else { action };
         if action == "default" {
             self.c().execute("DELETE FROM site_rules WHERE tool=?1 AND host=?2", [tool, host])?;
         } else {
@@ -70,10 +95,17 @@ impl Db {
     }
 
     pub fn site_rules(&self) -> Result<Vec<(String, String, String)>> {
-        let c = self.c();
-        let mut st = c.prepare("SELECT tool, host, action FROM site_rules ORDER BY host, tool")?;
-        let v = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<Result<_, _>>()?;
-        Ok(v)
+        let v: Vec<(String, String, String)> = {
+            let c = self.c();
+            let mut st = c.prepare("SELECT tool, host, action FROM site_rules ORDER BY host, tool")?;
+            st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<Result<_, _>>()?
+        };
+        v.into_iter()
+            .map(|(t, h, a)| {
+                let a = self.with_always(Some(a), &always_key(&t, Some(&h)))?.unwrap_or_default();
+                Ok((t, h, a))
+            })
+            .collect()
     }
 
     /// A new incognito chat starts clean: the last one's "read a web page" flag goes.
@@ -201,7 +233,7 @@ impl Db {
         let mut st = c.prepare(&format!(
             "SELECT id, chat_id, tool, summary, status, created_at, expires_at, tg_message_id, bot_id, kind, site, parked_args IS NOT NULL,
              (SELECT COUNT(*) FROM approvals p WHERE p.tool = approvals.tool AND p.site IS approvals.site AND p.kind = 'rule' AND p.status = 'approved' AND p.id < approvals.id),
-             draft, reason
+             draft, reason, coalesce((SELECT guest FROM chats WHERE chats.chat_id = approvals.chat_id AND approvals.chat_id != 0), 0)
              FROM approvals WHERE {sql} ORDER BY id"
         ))?;
         let v = st
@@ -222,6 +254,7 @@ impl Db {
                     allowed_before: r.get(12)?,
                     draft: r.get::<_, Option<String>>(13)?.and_then(|d| serde_json::from_str(&d).ok()),
                     reason: r.get(14)?,
+                    guest: r.get(15)?,
                     edit_link: None,
                 })
             })?
@@ -447,5 +480,13 @@ impl Db {
     pub fn mirror_mark_closed(&self, id: i64) -> Result<()> {
         self.c().execute("UPDATE approvals SET mirror_ref=NULL WHERE id=?1", [id])?;
         Ok(())
+    }
+}
+
+/// The settings mark that makes a tool's (or a tool-on-a-site's) allow an "always".
+fn always_key(tool: &str, host: Option<&str>) -> String {
+    match host {
+        Some(h) => format!("always:{tool}@{h}"),
+        None => format!("always:{tool}"),
     }
 }

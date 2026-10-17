@@ -19,6 +19,7 @@ pub fn ctx_from_args(db: crate::db::Db, args: &[String]) -> Result<ToolCtx> {
     let chat = flag("--chat").ok_or_else(|| anyhow::anyhow!("--chat <id> required"))?;
     let mut ctx = ToolCtx::new(db, flag("--bot").unwrap_or(1), chat).with_run(flag("--run"));
     ctx.conv = flag("--conv").unwrap_or(chat);
+    ctx.ask_chat = flag("--ask-chat").unwrap_or(chat);
     ctx.tools_off = args.iter().any(|a| a == "--no-tools");
     ctx.read_only = args.iter().any(|a| a == "--read-only");
     ctx.depth = flag("--depth").unwrap_or(0).clamp(0, 9) as u8;

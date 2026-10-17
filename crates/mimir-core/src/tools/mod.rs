@@ -26,6 +26,9 @@ pub struct ToolCtx {
     /// The conversation within the chat (session, taint, history, live draft): the chat itself, or a Telegram
     /// topic's own (`Db::topic_conv`). Memory, routines and approvals stay the chat's.
     pub conv: i64,
+    /// Where its approval cards go: its chat, or for a task a helper does in its own chat, the chat it was asked from
+    /// (the person is there, maybe on Telegram).
+    pub ask_chat: i64,
     pub http: reqwest::Client,
     /// Run log id for this turn, so tool calls (even from an MCP subprocess) land on the right run.
     pub run_id: Option<i64>,
@@ -76,6 +79,7 @@ impl ToolCtx {
             bot_id,
             chat_id,
             conv: chat_id,
+            ask_chat: chat_id,
             http,
             run_id: None,
             stream: false,
@@ -192,6 +196,9 @@ impl ToolCtx {
         if self.conv != self.chat_id {
             a.extend(["--conv".into(), self.conv.to_string()]);
         }
+        if self.ask_chat != self.chat_id {
+            a.extend(["--ask-chat".into(), self.ask_chat.to_string()]);
+        }
         if self.tools_off {
             a.push("--no-tools".into());
         }
@@ -296,6 +303,9 @@ async fn gated(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
     let (decision, why) = if from.is_some() { ("ask".to_string(), "sensitive") } else { (decision, why) };
     // A write that doesn't fit what the person asked (or the routine's brief) asks first. Only ever allow → ask.
     let (decision, why) = if decision == "allow" && off_brief(ctx, name, args) { ("ask".to_string(), "unasked") } else { (decision, why) };
+    // Always, pressed on such a card: the person chose never to be asked before this again, whatever made it ask.
+    let trusted = trusted(&ctx.db, name, site.as_deref());
+    let (decision, why) = if decision == "ask" && trusted { ("allow".to_string(), "rule") } else { (decision, why) };
     let mut decision = decision;
     // A rehearsal: what would change or send something, or ask the person, says what it would do instead.
     let would_ask = decision == "ask";
@@ -314,7 +324,7 @@ async fn gated(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
         Some(src) => format!("This run read from {src}, which you marked sensitive. {summary}"),
         None => summary.clone(),
     };
-    if matches!(decision.as_str(), "allow" | "plan") && looping(ctx, name, &summary) {
+    if matches!(decision.as_str(), "allow" | "plan") && !trusted && looping(ctx, name, &summary) {
         decision = "loop".into();
     }
     // Tools running in this process (API-key providers): say what's happening while it does.
@@ -341,8 +351,9 @@ async fn gated(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
             }
             Err(e) => Err(e),
         },
-        "loop" if ctx.unattended => park(ctx, name, args, &format!("{LOOP_CARD}{summary}"), "loop", None),
-        "loop" => match wait_for_approval_with(ctx, name, &Value::Null, &format!("{LOOP_CARD}{summary}"), "loop", None).await {
+        // With its site: Always on it is for that site, not the tool everywhere.
+        "loop" if ctx.unattended => park(ctx, name, args, &format!("{LOOP_CARD}{summary}"), "loop", site.as_deref()),
+        "loop" => match wait_for_approval_with(ctx, name, &Value::Null, &format!("{LOOP_CARD}{summary}"), "loop", site.as_deref()).await {
             Ok(_) => exec(ctx, name, args).await,
             Err(_) => Err(anyhow::anyhow!("stopped: you are repeating the same step ({summary}) and the user didn't let it go on. Don't call it again; stop and tell the user what you found and where you got stuck.")),
         },
@@ -517,6 +528,60 @@ pub(crate) fn looks_secret(db: &Db, text: &str) -> Option<&'static str> {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn always_on_a_card_never_asks_again_even_after_outside_content() {
+        let p = std::env::temp_dir().join(format!("mimir-always-tainted-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = Db::open(&p).unwrap();
+        db.set_setting("email_accounts", r#"[{"host":"127.0.0.1","port":9,"smtp_host":"127.0.0.1","smtp_port":9,"user":"me@example.com","oauth":"gone"}]"#).unwrap();
+        let ctx = ToolCtx::new(db.clone(), 1, 0);
+        ctx.taint();
+        // Always pressed on an email card asked after a web page: the next email goes without a card (and here fails
+        // to send, which is past the ask).
+        let id = db.approval_create(1, 0, "email_send", "Send an email", 60, "guarded", None).unwrap();
+        always_allow(&db, &db.approval_decide(id, true, None).unwrap().unwrap()).unwrap();
+        assert_eq!(db.rule("email_send").unwrap().as_deref(), Some("always"));
+        let mail = json!({"to": "sam@example.com", "subject": "Hi", "body": "Hello"});
+        let _ = tokio::time::timeout(Duration::from_secs(20), call(&ctx, "email_send", &mail)).await.expect("didn't wait for an OK");
+        assert!(db.approvals_pending().unwrap().is_empty());
+        // Set back to Allow in Settings: it's guarded again.
+        db.set_rule("email_send", "allow").unwrap();
+        assert_eq!(db.rule("email_send").unwrap().as_deref(), Some("allow"));
+        assert!(!trusted(&db, "email_send", None));
+    }
+
+    #[tokio::test]
+    async fn a_helper_in_its_own_chat_asks_in_the_chat_it_was_asked_from() {
+        let p = std::env::temp_dir().join(format!("mimir-askchat-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = Db::open(&p).unwrap();
+        let scout = crate::db::Bot { id: 0, name: "Scout".into(), persona: String::new(), provider: "openai".into(), model: "m".into(), base_url: String::new(), tools: String::new(), look: String::new() };
+        let scout = db.bot_save(&scout).unwrap();
+        // Working in its app chat for a bot you asked on Telegram (chat 300): the card goes there, from that bot.
+        let mut ctx = ToolCtx::new(db.clone(), scout, 0);
+        (ctx.ask_chat, ctx.via_bot, ctx.depth, ctx.unattended) = (300, Some(1), 1, true);
+        call(&ctx, "routine_delete", &json!({"id": 1})).await.unwrap();
+        let a = db.approvals_pending().unwrap().pop().unwrap();
+        assert!(a.chat_id == 300 && a.bot_id == 1 && a.summary.starts_with("Scout, on a task from"), "{a:?}");
+        // Tools run in `mimir mcp` for CLI accounts: it keeps where to ask.
+        let back = crate::mcp::ctx_from_args(db.clone(), &ctx.mcp_args()).unwrap();
+        assert_eq!((back.chat_id, back.ask_chat), (0, 300));
+    }
+
+    #[test]
+    fn a_helpers_card_says_which_bot_acts() {
+        let p = std::env::temp_dir().join(format!("mimir-helpercard-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = Db::open(&p).unwrap();
+        let scout = crate::db::Bot { id: 0, name: "Scout".into(), persona: String::new(), provider: "openai".into(), model: "m".into(), base_url: String::new(), tools: String::new(), look: String::new() };
+        let scout = db.bot_save(&scout).unwrap();
+        let mut ctx = ToolCtx::new(db.clone(), scout, 0);
+        assert_eq!(gate::for_helper(&ctx, "Open x.com".into()), "Open x.com", "its own ask");
+        ctx.via_bot = Some(1);
+        let asker = db.bot(1).unwrap().name;
+        assert_eq!(gate::for_helper(&ctx, "Open x.com".into()), format!("Scout, on a task from {asker}: Open x.com"));
+    }
+
     #[tokio::test]
     async fn new_memories_after_outside_content_dont_ask_but_replacements_do() {
         let p = std::env::temp_dir().join(format!("mimir-taintstore-{}.db", std::process::id()));
@@ -747,7 +812,7 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(50)).await;
         };
         assert_eq!((ask.kind.as_str(), ask.tool.as_str()), ("plan", "plan_propose"));
-        assert!(ask.summary.contains("1. Forget the two outdated memories") && ask.summary.contains("memory forget") && !ask.summary.contains("no_such"), "{}", ask.summary);
+        assert!(ask.summary.contains("1. Forget the two outdated memories") && ask.summary.contains("Uses: forget a memory") && !ask.summary.contains("no_such"), "{}", ask.summary);
         db.approval_decide(ask.id, true, None).unwrap();
         assert!(waiting.await.unwrap().unwrap().contains("approved the plan"));
         // memory_forget asks by default; the plan covers it, twice, with no new approval.

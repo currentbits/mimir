@@ -98,6 +98,10 @@ pub(super) fn gate(db: &Db, tool: &str, site: Option<&str>, tainted: bool) -> Re
         Some(a) => a,
         None => db.rule(tool)?.unwrap_or_else(|| default_for(db, tool).to_string()),
     };
+    // "Always" pressed on a card that asked after outside content (or for another reason): never asks, not even then.
+    if action == "always" {
+        return Ok(("allow".into(), "rule"));
+    }
     // The browser's and the computer's own actions read pages by nature: they're gated per site, not guarded.
     let browser = crate::ext::split(tool).is_some_and(|(s, _)| s == crate::ext::BROWSER) || tool.starts_with("computer_");
     // plan_propose only ever asks (and refuses on its own after outside content), so asking first would be a double ask.
@@ -272,6 +276,11 @@ pub(crate) fn routine_private_key(id: i64) -> String {
 /// the turn that reports back.
 pub(crate) fn delegation_private_key(id: i64) -> String {
     format!("private-delegation:{id}")
+}
+
+/// Set on a task handed over with `later` and `in_own_chat`: the helper does it in its own chat.
+pub(crate) fn delegation_own_key(id: i64) -> String {
+    format!("own-delegation:{id}")
 }
 
 /// The website a call acts on, for per-site rules ("always allow opening github.com").
@@ -516,7 +525,9 @@ pub(super) async fn propose_plan(ctx: &ToolCtx, args: &Value) -> Result<String> 
         uses.join(", "),
         steps.iter().enumerate().map(|(i, s)| format!("{}. {s}", i + 1)).collect::<Vec<_>>().join("\n")
     );
-    wait_for_approval_with(ctx, "plan_propose", args, &summary, "plan", None).await?;
+    if !trusted(&ctx.db, "plan_propose", None) {
+        wait_for_approval_with(ctx, "plan_propose", args, &summary, "plan", None).await?;
+    }
     // Add to what's already allowed in this reply ("all like this" earlier), don't replace it.
     let mut plan = plan_of(ctx);
     plan.extend(actions.into_iter().filter(|a| !plan_of(ctx).contains(a)));
@@ -690,11 +701,67 @@ fn card_text(summary: &str) -> String {
     if n <= MAX { summary.to_string() } else { format!("{}… (+{} more characters not shown)", summary.chars().take(MAX).collect::<String>(), n - MAX) }
 }
 
+/// A card for a task handed to another bot comes from the bot the person talks to, but the helper acts: it says so.
+pub(super) fn for_helper(ctx: &ToolCtx, summary: String) -> String {
+    match ctx.via_bot.filter(|v| *v != ctx.bot_id) {
+        Some(v) => {
+            let name = |id| ctx.db.bot(id).map(|b| b.name).unwrap_or_else(|_| "Another bot".into());
+            format!("{}, on a task from {}: {summary}", name(ctx.bot_id), name(v))
+        }
+        None => summary,
+    }
+}
+
 /// A tool's name in words, for a plan card: "browser: navigate", "Forget a memory".
-fn describe_tool(name: &str) -> String {
+pub(crate) fn describe_tool(name: &str) -> String {
     match crate::ext::split(name) {
         Some((server, tool)) => format!("{server}: {}", tool.trim_start_matches("browser_").replace('_', " ")),
-        None => name.replace('_', " "),
+        // In words, like Settings → Permissions in the app (its TOOL_LABEL).
+        None => match name {
+        "ask_bot" => "hand tasks to other bots",
+        "ask_choice" => "ask with buttons",
+        "bot_create" => "make new bots",
+        "calendar_add" => "give calendar links",
+        "calendar_create" => "add calendar events",
+        "calendar_list" => "look at your calendar",
+        "card_write" => "update pinned cards",
+        "chat_search" => "search earlier conversations",
+        "computer_click" => "click on the computer",
+        "computer_handoff" => "ask you to take over the computer",
+        "computer_key" => "press keys on the computer",
+        "computer_open" => "open sites on the computer",
+        "computer_screenshot" => "look at the computer's screen",
+        "computer_scroll" => "scroll on the computer",
+        "computer_signin" => "use saved logins",
+        "computer_type" => "type on the computer",
+        "email_draft" => "draft emails",
+        "email_read" => "read your email",
+        "email_search" => "search your email",
+        "email_send" => "send emails",
+        "file_delete" => "delete files",
+        "file_list" => "list files",
+        "file_read" => "read files",
+        "file_write" => "write files",
+        "goal_set" => "set goals",
+        "goal_update" => "update goals",
+        "meeting_read" => "read a meeting transcript",
+        "meeting_search" => "search your meetings",
+        "memory_forget" => "forget a memory",
+        "memory_search" => "look up memories",
+        "memory_store" => "remember things",
+        "plan_propose" => "propose plans",
+        "routine_create" => "create routines",
+        "routine_delete" => "delete a routine",
+        "routine_list" => "list routines",
+        "routine_update" => "change routines",
+        "send_file" => "send files",
+        "skill_save" => "save skills",
+        "skill_view" => "read its skills",
+        "web_fetch" => "read web pages",
+        "web_search" => "search the web",
+            _ => return name.replace('_', " "),
+        }
+        .into(),
     }
 }
 
@@ -751,9 +818,9 @@ pub fn edit_card(db: &Db, a: &crate::db::Approval, edits: &Value) -> Result<()> 
 /// `kind` says why it asks (rule | guarded | login); `site` is the website, for a per-site "always".
 /// Approved, it gives back the call's arguments with any text you edited on the card (`args` itself otherwise).
 pub(crate) async fn wait_for_approval_with(ctx: &ToolCtx, name: &str, args: &Value, summary: &str, kind: &str, site: Option<&str>) -> Result<Value> {
-    let summary = card_text(summary);
+    let summary = for_helper(ctx, card_text(summary));
     let kind = guest_kind(ctx, kind);
-    let id = ctx.db.approval_create(ctx.via_bot.unwrap_or(ctx.bot_id), ctx.chat_id, name, &summary, APPROVAL_TTL_SECS, kind, site)?;
+    let id = ctx.db.approval_create(ctx.via_bot.unwrap_or(ctx.bot_id), ctx.ask_chat, name, &summary, APPROVAL_TTL_SECS, kind, site)?;
     if let Some(d) = draft_of(name, args) {
         ctx.db.approval_set_draft(id, &d)?;
     }
@@ -822,12 +889,12 @@ pub(super) const PARKED_TTL_SECS: i64 = 24 * 3600;
 /// An unattended run can't wait for a person: park the exact call in the inbox and carry on.
 /// A plain ask in a guest's chat is their OK for this once: "always" would change your rules for every chat.
 fn guest_kind<'a>(ctx: &ToolCtx, kind: &'a str) -> &'a str {
-    if kind == "rule" && ctx.db.chat_guest(ctx.chat_id) { "guest" } else { kind }
+    if kind == "rule" && ctx.db.chat_guest(ctx.ask_chat) { "guest" } else { kind }
 }
 
 pub(super) fn park(ctx: &ToolCtx, name: &str, args: &Value, summary: &str, why: &str, site: Option<&str>) -> Result<String> {
-    let summary = card_text(summary);
-    let id = ctx.db.approval_create(ctx.via_bot.unwrap_or(ctx.bot_id), ctx.chat_id, name, &summary, PARKED_TTL_SECS, guest_kind(ctx, why), site)?;
+    let summary = for_helper(ctx, card_text(summary));
+    let id = ctx.db.approval_create(ctx.via_bot.unwrap_or(ctx.bot_id), ctx.ask_chat, name, &summary, PARKED_TTL_SECS, guest_kind(ctx, why), site)?;
     ctx.db.approval_park(id, &args.to_string(), ctx.is_tainted())?;
     if let Some(d) = draft_of(name, args) {
         ctx.db.approval_set_draft(id, &d)?;
@@ -888,19 +955,31 @@ pub fn always_allow(db: &Db, a: &crate::db::Approval) -> Result<()> {
     if a.status != "approved" {
         return Ok(());
     }
-    if a.kind != "rule" {
-        bail!("approved once; this kind of request always asks");
+    // Signing in and taking over are the person's own steps: there's nothing to allow.
+    if matches!(a.kind.as_str(), "signin" | "takeover") {
+        bail!("approved once; this needs you every time");
     }
+    // A plain ask: allowed, still asking after outside content. Any other (after outside content, a sensitive source,
+    // an email, a new bot, a saved login, a plan, a loop…): the person chose never to be asked before it again.
+    // A guest's card was a plain ask in their chat.
+    let action = if matches!(a.kind.as_str(), "rule" | "guest") { "allow" } else { "always" };
     match a.site.as_deref() {
-        Some(site) => db.set_site_rule(&a.tool, site, "allow"),
-        None => db.set_rule(&a.tool, "allow"),
+        Some(site) => db.set_site_rule(&a.tool, site, action),
+        None => db.set_rule(&a.tool, action),
     }
+}
+
+/// The person pressed Always on a card that asked for more than its rule: this tool (on this site) never asks again.
+pub(crate) fn trusted(db: &Db, tool: &str, site: Option<&str>) -> bool {
+    let by_site = site.and_then(|h| db.site_rule(tool, h).ok().flatten());
+    by_site.or_else(|| db.rule(tool).ok().flatten()).as_deref() == Some("always")
 }
 
 /// The button text for "always" on a chat-app card: the whole tool, or the tool on one site.
 pub fn always_label(a: &crate::db::Approval) -> String {
     let s = match a.site.as_deref() {
         Some(site) => crate::say::trf("Always on {site}", &[("site", site)]),
+        None if a.kind == "plan" => crate::say::tr("Always approve plans").into(),
         None => crate::say::trf("Always: {tool}", &[("tool", &describe_tool(&a.tool))]),
     };
     // Buttons are short on every app (Slack allows 75 characters).

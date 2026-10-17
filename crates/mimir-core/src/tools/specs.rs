@@ -285,11 +285,14 @@ pub fn specs() -> Vec<(&'static str, &'static str, Value)> {
             "Hand a task to another of the user's bots (see <team>) and get its answer back. It works with its own \
              tools and the same memory of this user. Use it when the task fits that bot's role better than yours. \
              For a long task, set later: you get an answer straight away and can reply to the person; when the other \
-             bot is done, its result comes back to you in this chat and you tell them.",
+             bot is done, its result comes back to you in this chat and you tell them. Set in_own_chat when the work \
+             should be that bot's own (\"each in its own bot\", \"show it in its chat\"): it does the task in its own chat \
+             with the person, keeps its answer there and saves files in its own folder; you get a link to it.",
             json!({"type":"object","properties":{
                 "bot":{"type":"string","description":"the bot's name"},
                 "task":{"type":"string","description":"self-contained task with all needed context"},
-                "later":{"type":"boolean","description":"don't wait: it reports back in this chat when done"}
+                "later":{"type":"boolean","description":"don't wait: it reports back in this chat when done"},
+                "in_own_chat":{"type":"boolean","description":"it works in, and answers in, its own chat; you get a link"}
             },"required":["bot","task"]}),
         ),
         (

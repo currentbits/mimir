@@ -93,9 +93,19 @@ async fn security(db: &Db) -> Vec<Check> {
     let setting = |k: &str| db.setting(k).ok().flatten();
     let mut out: Vec<Check> = exposure(setting("server_listen").as_deref(), crate::server_update::in_docker(), setting("public_url").as_deref()).into_iter().collect();
     let specs = crate::tools::all_specs(db);
-    let allowed = |t: &str| db.rule(t).ok().flatten().unwrap_or_else(|| crate::tools::default_for(db, t).into()) == "allow";
-    if !specs.is_empty() && specs.iter().all(|(t, ..)| allowed(t)) {
+    let rule = |t: &str| db.rule(t).ok().flatten().unwrap_or_else(|| crate::tools::default_for(db, t).into());
+    if !specs.is_empty() && specs.iter().all(|(t, ..)| ["allow", "always"].contains(&rule(t).as_str())) {
         out.push(bad(State::Warn, "Permissions are at “Allow all”: bots run every tool without asking", "Settings → Permissions → Back to defaults (deleting and opening sites ask again)."));
+    }
+    // Always pressed on a card that asked after a web page: a page's instructions can use these without an ask.
+    let mut never: Vec<String> = specs.iter().filter(|(t, ..)| rule(t) == "always").map(|(t, ..)| crate::tools::describe_tool(t)).collect();
+    never.extend(db.site_rules().unwrap_or_default().into_iter().filter(|(.., a)| a == "always").map(|(t, h, _)| format!("{} on {h}", crate::tools::describe_tool(&t))));
+    if !never.is_empty() {
+        out.push(bad(
+            State::Warn,
+            format!("Never asks, even after a bot reads a web page: {}", never.join(", ")),
+            "Settings → Permissions: set these back to Allow or Ask, so a page's instructions can't use them without you.",
+        ));
     }
     let loose = crate::ext::unpinned(db);
     if !loose.is_empty() {

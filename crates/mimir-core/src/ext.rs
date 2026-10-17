@@ -1157,7 +1157,12 @@ pub async fn call(ctx: &ToolCtx, full: &str, args: &Value) -> Result<String> {
             }
         }
         let names: Vec<&str> = used.iter().map(|e| e.name.as_str()).collect();
-        crate::tools::wait_for_approval_with(ctx, full, &Value::Null, &format!("Use saved login {} on {url}", names.join(", ")), "login", None).await?;
+        // Per site, like computer_signin: Always on the card types this site's logins without asking from then on (and
+        // only that: the browser tool keeps its other asks).
+        let site = site_of(&url).context("this page has no website address to type a saved login on")?;
+        if !crate::tools::trusted(&ctx.db, full, Some(&site)) {
+            crate::tools::wait_for_approval_with(ctx, full, &Value::Null, &format!("Use saved login {} on {url}", names.join(", ")), "login", Some(&site)).await?;
+        }
         codes = used.iter().filter(|e| e.totp).filter_map(|e| vault_code(&e.name).map(|c| (format!("{}_CODE", e.name), c))).collect();
     }
     let args = &fill_codes(args, &codes);

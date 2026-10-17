@@ -57,12 +57,12 @@ bot's instructions), everything that goes out asks, even if its rule says allow,
 - a memory saved for the household, which its guests read;
 - any tool server's change, and its reads that reach the internet (not the sensitive server's own).
 
-Like outside content, it never becomes "always", "all like this" or part of a plan, it sticks to the conversation until
+Like outside content, it never becomes "all like this" or part of a plan (only "Always", if you press it), it sticks to the conversation until
 "Start fresh", and it carries over to tasks handed to other bots and to routines the run creates or rewrites. Deleting a
 tool server removes its marks. It can only make things stricter.
 
 **Some actions always ask.** Sending an email and making a bot ask every time, whatever the rules say, as their own
-kind of approval: never "always", never "all like this". An email is sent only if all of it fits on the card you
+kind of approval, until you press "Always" on one; never "all like this". An email is sent only if all of it fits on the card you
 approve (recipient first), at most 20 a day from a chat, with addresses checked so nothing can add a hidden
 recipient. A new bot gets at most the tools of the bot that made it, and can't make bots itself.
 
@@ -88,8 +88,10 @@ left: no `..`, no links, size limits.
 - Long text is cut with a note saying so; the limits on memories, routines and hand-offs keep theirs whole.
 - Hidden direction marks are made visible.
 - Plans list what they pre-approve before their steps.
-- "Always" never comes from a request made after outside content (even for an action that already asks), from one
-  that uses a saved login, or from a guest's chat (your rules are yours).
+- "Always" is offered on every card but signing in and taking over, never from a guest's chat (your rules are yours).
+  Pressed on a card that asked after outside content (or a sensitive source, a mismatch, an email, a new bot, a saved
+  login), it's your choice to drop that guard for the tool: Settings → Permissions shows it as *Always*, the app
+  confirms first for the guards against outside content, and the health check lists every such tool.
 
 **Saved logins never reach the model.** They are typed by name into the browser, only on the sites you listed (the
 site is read the way the browser reads it), and each use asks. Authenticator codes are worked out by Mimir from a key

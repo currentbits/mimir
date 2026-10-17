@@ -562,7 +562,7 @@ pub(super) async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<Stri
             if ctx.unattended {
                 let routine = ctx.run_id.and_then(|r| ctx.db.run_routine_id(r).ok().flatten()).and_then(|id| ctx.db.routine(id).ok().flatten());
                 let summary = format!("{reason}\n\n{link}, do it on the screen, then press Done here: the routine runs again.");
-                let id = ctx.db.approval_create(ctx.via_bot.unwrap_or(ctx.bot_id), ctx.chat_id, "computer_handoff", &summary, PARKED_TTL_SECS, "takeover", None)?;
+                let id = ctx.db.approval_create(ctx.via_bot.unwrap_or(ctx.bot_id), ctx.ask_chat, "computer_handoff", &summary, PARKED_TTL_SECS, "takeover", None)?;
                 let again = json!({"reason": reason, "routine": routine.as_ref().map(|r| r.id), "prompt": routine.as_ref().map(|r| r.prompt.clone()), "quiet": routine.as_ref().is_some_and(|r| r.quiet)});
                 ctx.db.approval_park(id, &again.to_string(), ctx.is_tainted())?;
                 return Ok("The person has been asked to take over for this step. When they're done, this routine runs again from the start. \
@@ -570,7 +570,7 @@ pub(super) async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<Stri
                     .into());
             }
             let summary = format!("{reason}\n\n{link}, do it on the screen, then press Give back.");
-            let id = ctx.db.approval_create(ctx.via_bot.unwrap_or(ctx.bot_id), ctx.chat_id, "computer_handoff", &summary, HANDOFF_SECS, "takeover", None)?;
+            let id = ctx.db.approval_create(ctx.via_bot.unwrap_or(ctx.bot_id), ctx.ask_chat, "computer_handoff", &summary, HANDOFF_SECS, "takeover", None)?;
             // Done when they give it back after taking over, or say so on the card; "Can't now" or nobody in time, stop.
             let mut took = false;
             loop {
@@ -799,6 +799,12 @@ pub(super) async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<Stri
             if ctx.db.paused(target.id, crate::db::now())?.is_some() {
                 bail!("{} is paused by the user; do the task yourself or say it has to wait", target.name);
             }
+            // Its own chat is the person's app chat: what it reads and writes there may only flow back to another chat of
+            // theirs alone. A rehearsal posts nothing, so it runs the usual way.
+            let own = args["in_own_chat"].as_bool() == Some(true) && !ctx.rehearsing();
+            if own && ctx.chat_id != crate::host::LOCAL_CHAT && !crate::runtime::decisions_ok(&ctx.db, ctx.chat_id) {
+                bail!("in_own_chat only works from the person's own private chat; hand it over without it");
+            }
             // Later: it runs on its own (the asking bot's scheduler starts it) and reports back. A rehearsal waits for it,
             // so nothing outlives the rehearsal.
             if args["later"].as_bool() == Some(true) && !ctx.rehearsing() {
@@ -819,9 +825,16 @@ pub(super) async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<Stri
                 if ctx.saw_private() {
                     ctx.db.set_setting(&delegation_private_key(id), &ctx.private_value())?;
                 }
+                if own {
+                    ctx.db.set_setting(&delegation_own_key(id), "1")?;
+                    return Ok(format!("Handed to {}; it works in its own chat. A link to its answer comes back to you here when it's done; tell the person then.", target.name));
+                }
                 return Ok(format!("Handed to {}. Its result comes back to you in this chat when it's done; tell the person then.", target.name));
             }
-            let reply = delegate(ctx, target, task).await?;
+            let reply = delegate(ctx, target, task, own).await?;
+            if own {
+                return own_chat_answer(&ctx.db, target, &reply);
+            }
             format!("{} replied:\n{}", target.name, truncate(&reply, 6000))
         }
         _ => bail!("unknown tool {name}"),
@@ -829,11 +842,13 @@ pub(super) async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<Stri
 }
 
 /// `target`'s turn on a task from the bot of `ctx`, one level down (no chains), under the asking run.
-pub(crate) async fn delegate(ctx: &ToolCtx, target: &crate::db::Bot, task: &str) -> Result<String> {
+/// `own`: in the target's own app chat, where the task and its answer are kept and its files go, instead of the asker's.
+pub(crate) async fn delegate(ctx: &ToolCtx, target: &crate::db::Bot, task: &str, own: bool) -> Result<String> {
     let from = ctx.db.bot(ctx.bot_id)?.name;
     let provider = crate::provider::Provider::for_bot(target, ctx.db.dir())?;
+    let chat = if own { crate::host::LOCAL_CHAT } else { ctx.chat_id };
     // Carries the asking run's id into turn(), which links the delegate's run to it (then replaces it).
-    let mut sub = ToolCtx::new(ctx.db.clone(), target.id, ctx.chat_id).with_run(ctx.run_id);
+    let mut sub = ToolCtx::new(ctx.db.clone(), target.id, chat).with_run(ctx.run_id);
     // Taint flows both ways: a tainted caller hands it on, and a delegate that read the web taints the caller.
     sub.tainted = ctx.tainted.clone();
     sub.private = ctx.private.clone();
@@ -843,13 +858,29 @@ pub(crate) async fn delegate(ctx: &ToolCtx, target: &crate::db::Bot, task: &str)
     sub.unattended = ctx.unattended;
     // A rehearsal stays one in the helper.
     sub.rehearsal = ctx.rehearsing();
+    // Its asks come from the bot the person is talking to, in the chat they asked from (even when it works in its own
+    // chat: the person may be on Telegram), naming the helper (gate.rs, for_helper).
     sub.via_bot = Some(ctx.via_bot.unwrap_or(ctx.bot_id));
+    sub.ask_chat = ctx.ask_chat;
     // Boxed: the handed-over turn may itself call tools::call (async recursion).
-    let reply = Box::pin(crate::turn(&provider, &sub, crate::Trigger::Delegated { from: &from, task })).await?;
-    if ctx.db.delegated_tainted(target.id, ctx.chat_id).unwrap_or(false) {
+    let reply = Box::pin(crate::turn(&provider, &sub, crate::Trigger::Delegated { from: &from, task, own })).await?;
+    if ctx.db.delegated_tainted(target.id, chat, ctx.run_id).unwrap_or(false) {
         ctx.taint(); // the delegate ran in its own process (CLI providers): its taint is in the run log
     }
     Ok(reply)
+}
+
+/// What the asking bot hears of a task done in the helper's own chat: a link to it there, and how it starts.
+pub(crate) fn own_chat_answer(db: &Db, target: &crate::db::Bot, reply: &str) -> Result<String> {
+    let link = match db.setting("public_url")? {
+        Some(u) => format!("{}/#bot-{}", u.trim_end_matches('/'), target.id),
+        None => format!("in Mimir, open {}", target.name),
+    };
+    Ok(format!(
+        "{} did it in its own chat, where its whole answer is kept: {link}\nTell the person in one line, with that link; don't repeat its answer. It starts:\n{}",
+        target.name,
+        truncate(reply, 600)
+    ))
 }
 
 /// One computer action, then a screenshot of what it led to.
@@ -879,7 +910,10 @@ async fn computer_signin(ctx: &ToolCtx) -> Result<String> {
     // with there replaces it.
     let stale = crate::ext::vault_for(&ctx.db, ctx.bot_id).into_iter().find(|e| e.bot == Some(ctx.bot_id) && crate::ext::host_allowed(&url, &e.domains) && crate::ext::login_failed(&ctx.db, &e.name));
     if let Some(e) = crate::ext::signin_login(&ctx.db, ctx.bot_id, &url) {
-        crate::tools::wait_for_approval_with(ctx, "computer_signin", &Value::Null, &format!("Use saved login {} on {url}", e.name), "login", None).await?;
+        // Always on the card: this site's saved login is typed without asking from then on.
+        if !crate::tools::trusted(&ctx.db, "computer_signin", Some(&site)) {
+            crate::tools::wait_for_approval_with(ctx, "computer_signin", &Value::Null, &format!("Use saved login {} on {url}", e.name), "login", Some(&site)).await?;
+        }
         // The OK can take longer than the computer's lease: take it again, and type only into this bot's own browser
         // (sign_in checks), so another bot that used the computer meanwhile never gets this login.
         hold_computer(ctx).await?;
