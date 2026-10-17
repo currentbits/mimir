@@ -45,7 +45,9 @@ SCRIPT = [
 
 
 def text_of(c):
-    return c if isinstance(c, str) else " ".join(p.get("text", "") for p in c or [] if isinstance(p, dict))
+    t = c if isinstance(c, str) else " ".join(p.get("text", "") for p in c or [] if isinstance(p, dict))
+    # Each message starts with "Now: <date and time>"; the echo is of what the person said.
+    return re.sub(r"^Now: [^\n]*\n\n", "", t)
 
 
 class H(BaseHTTPRequestHandler):
