@@ -452,24 +452,20 @@ fn card_fields(v: &Value) -> String {
             _ => false,
         }
     }
+    // A value; `whole` under a destination key, so a list of recipients is cut per item, never as one string.
+    fn shown(v: &Value, whole: bool) -> String {
+        let cut = if whole { 300 } else { 120 };
+        match v {
+            Value::Object(_) => format!("{{{}}}", card_fields(v)),
+            Value::Array(a) if whole || has_where(v) => format!("[{}]", a.iter().map(|i| shown(i, whole)).collect::<Vec<_>>().join(", ")),
+            Value::String(s) => truncate(s, cut),
+            other => truncate(&other.to_string(), cut),
+        }
+    }
     let Some(m) = v.as_object() else { return String::new() };
     let mut fields: Vec<(&String, &Value)> = m.iter().collect();
     fields.sort_by_key(|(k, v)| !is_where(k) && !has_where(v));
-    fields
-        .iter()
-        .map(|(k, v)| {
-            let shown = match v {
-                Value::Object(_) => format!("{{{}}}", card_fields(v)),
-                Value::Array(a) if has_where(v) => format!("[{}]", a.iter().map(|i| if i.is_object() { format!("{{{}}}", card_fields(i)) } else { truncate(&i.to_string(), 120) }).collect::<Vec<_>>().join(", ")),
-                Value::String(s) if WHERE.contains(&k.to_ascii_lowercase().as_str()) => truncate(s, 300),
-                Value::String(s) => truncate(s, 120),
-                other if WHERE.contains(&k.to_ascii_lowercase().as_str()) => truncate(&other.to_string(), 300),
-                other => truncate(&other.to_string(), 120),
-            };
-            format!("{k}: {shown}")
-        })
-        .collect::<Vec<_>>()
-        .join("; ")
+    fields.iter().map(|(k, v)| format!("{k}: {}", shown(v, is_where(k)))).collect::<Vec<_>>().join("; ")
 }
 
 /// An approved plan's actions for this run: (tool, site). A site-less entry covers every call of that tool.
