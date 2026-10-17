@@ -53,7 +53,7 @@ PRAGMA secure_delete=ON;
 
 /// The schema version this build writes (`PRAGMA user_version`). A schema change bumps it and adds a step to
 /// `migrate`; each step runs once per database.
-pub(crate) const VERSION: i64 = 12;
+pub(crate) const VERSION: i64 = 13;
 
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS entries(
@@ -224,6 +224,9 @@ fn migrate(c: &Connection) -> Result<()> {
     }
     if v < 12 {
         migrate_v12(c)?;
+    }
+    if v < 13 {
+        migrate_v13(c)?;
     }
     c.execute(
         "INSERT INTO settings(key, value) VALUES ('schema_written_by', ?1) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -507,6 +510,17 @@ fn migrate_v12(c: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Version 13: cache writes per run (#10), and what a CLI session already holds (#218): the memories recalled into
+/// it (comma-separated ids, so they aren't sent again) and a hash of its instructions ('' = unknown, from before).
+fn migrate_v13(c: &Connection) -> Result<()> {
+    for (table, col, ty) in [("runs", "cache_write", "INTEGER NOT NULL DEFAULT 0"), ("sessions", "sent", "TEXT NOT NULL DEFAULT ''"), ("sessions", "prompt", "TEXT NOT NULL DEFAULT ''")] {
+        if !c.prepare(&format!("SELECT 1 FROM pragma_table_info('{table}') WHERE name='{col}'"))?.exists([])? {
+            c.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {col} {ty}"))?;
+        }
+    }
+    Ok(())
+}
+
 impl Db {
     /// Opens the database, migrating it first if an older Mimir wrote it. An up-to-date database only reads its
     /// version: the tools process opens it on every turn, and mustn't compete with the app for the write lock.
@@ -640,22 +654,24 @@ mod tests {
         assert_eq!(n, 2);
         drop(d);
 
-        // Version 10 → 12: the goals (11), then an approval's draft and reason (12).
+        // Version 10 → 13: the goals (11), an approval's draft and reason (12), cache writes and what a session holds (13).
         Connection::open(&p)
             .unwrap()
             .execute_batch(
                 "DROP TABLE goals; ALTER TABLE routines DROP COLUMN goal_id; ALTER TABLE delegations DROP COLUMN goal_id; ALTER TABLE runs DROP COLUMN goal_id;
-                 ALTER TABLE approvals DROP COLUMN draft; ALTER TABLE approvals DROP COLUMN reason; PRAGMA user_version = 10",
+                 ALTER TABLE approvals DROP COLUMN draft; ALTER TABLE approvals DROP COLUMN reason;
+                 ALTER TABLE runs DROP COLUMN cache_write; ALTER TABLE sessions DROP COLUMN sent; ALTER TABLE sessions DROP COLUMN prompt; PRAGMA user_version = 10",
             )
             .unwrap();
         let d = Db::open(&p).unwrap();
-        assert_eq!(user_version(&d.c()).unwrap(), 12);
+        assert_eq!(user_version(&d.c()).unwrap(), 13);
         assert!(d.c().prepare("SELECT goal_id FROM runs").is_ok() && d.c().prepare("SELECT id FROM goals").is_ok(), "v11 ran");
         assert!(d.c().prepare("SELECT draft, reason FROM approvals").is_ok(), "v12 ran");
+        assert!(d.c().prepare("SELECT cache_write FROM runs").is_ok() && d.c().prepare("SELECT sent, prompt FROM sessions").is_ok(), "v13 ran");
         drop(d);
         // A new database starts at the latest.
         let fresh = dir.join("fresh.db");
-        assert_eq!(user_version(&Db::open(&fresh).unwrap().c()).unwrap(), 12);
+        assert_eq!(user_version(&Db::open(&fresh).unwrap().c()).unwrap(), 13);
 
         // Written by a newer Mimir: refused, untouched.
         Connection::open(&p).unwrap().execute_batch("PRAGMA user_version = 99; UPDATE settings SET value='9.9.9' WHERE key='schema_written_by'").unwrap();
@@ -1399,8 +1415,17 @@ mod tests {
         d.set_session(1, 5, Some("s1")).unwrap();
         d.set_session(id, 5, Some("s2")).unwrap();
         assert_eq!((d.session(1, 5).unwrap().as_deref(), d.session(id, 5).unwrap().as_deref()), (Some("s1"), Some("s2")));
+        d.set_session_held(1, 5, &[3, 7], "h1").unwrap();
+        d.set_session(1, 5, Some("s1b")).unwrap();
+        assert_eq!(d.session_held(1, 5).unwrap(), (vec![3, 7], "h1".into()), "kept when the CLI names the resumed session anew");
         d.set_session(1, 5, None).unwrap();
         assert_eq!(d.session(1, 5).unwrap(), None);
+        assert_eq!(d.session_held(1, 5).unwrap(), (vec![], String::new()), "a fresh conversation starts with nothing held");
+        // API history: its start moves 10 messages at a time.
+        let lens: Vec<usize> = (0..25).map(|i| { d.log(1, 77, "user", &i.to_string(), None).unwrap(); d.recent_stepped(1, 77).unwrap().len() }).collect();
+        assert_eq!(&lens[..12], &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+        assert_eq!((lens[18], lens[19], lens[24]), (19, 10, 15));
+        assert_eq!(d.recent_stepped(1, 77).unwrap()[0].1, "10");
 
         d.log(1, 5, "user", "hi A", None).unwrap();
         d.log(id, 5, "user", "hi B", None).unwrap();
