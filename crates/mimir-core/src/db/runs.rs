@@ -10,6 +10,10 @@ pub struct Usage {
     /// Of tokens_in, how many were read back from the prompt cache (billed at about a tenth).
     #[serde(default)]
     pub cache_read: i64,
+    /// Of tokens_in, how many were written to the prompt cache (billed at about 1.25×). Many writes and few reads on
+    /// a resumed session mean its cached prefix keeps changing.
+    #[serde(default)]
+    pub cache_write: i64,
     /// The account didn't say what it used: worked out from the text's length.
     #[serde(default)]
     pub estimated: bool,
@@ -45,6 +49,8 @@ pub struct Run {
     pub repeats: i64,
     /// Of tokens_in, read back from the prompt cache.
     pub cache_read: i64,
+    /// Of tokens_in, written to the prompt cache.
+    pub cache_write: i64,
     /// Tokens worked out from the text, the account didn't report them.
     pub estimated: bool,
 }
@@ -309,8 +315,8 @@ impl Db {
         let c = self.c();
         match outcome {
             Ok(u) => c.execute(
-                "UPDATE runs SET status='ok', ended_at=?2, model=?3, tokens_in=?4, tokens_out=?5, cost_usd=?6, cache_read=?7, estimated=?8 WHERE id=?1",
-                params![id, now(), u.model, u.tokens_in, u.tokens_out, u.cost_usd, u.cache_read, u.estimated],
+                "UPDATE runs SET status='ok', ended_at=?2, model=?3, tokens_in=?4, tokens_out=?5, cost_usd=?6, cache_read=?7, estimated=?8, cache_write=?9 WHERE id=?1",
+                params![id, now(), u.model, u.tokens_in, u.tokens_out, u.cost_usd, u.cache_read, u.estimated, u.cache_write],
             )?,
             Err(e) => c.execute("UPDATE runs SET status='error', ended_at=?2, error=?3 WHERE id=?1", params![id, now(), e])?,
         };
@@ -389,7 +395,7 @@ impl Db {
         let c = self.c();
         let mut st = c.prepare(
             "SELECT r.id, r.chat_id, r.trigger, r.routine_id, r.provider, r.model, r.status, r.error, r.started_at, r.ended_at,
-                    r.tokens_in, r.tokens_out, r.cost_usd, (SELECT count(*) FROM tool_calls t WHERE t.run_id = r.id), r.bot_id, r.reply, r.parent_run, r.delivered, r.cache_read, r.estimated
+                    r.tokens_in, r.tokens_out, r.cost_usd, (SELECT count(*) FROM tool_calls t WHERE t.run_id = r.id), r.bot_id, r.reply, r.parent_run, r.delivered, r.cache_read, r.estimated, r.cache_write
              FROM runs r WHERE (?1 IS NULL OR r.chat_id = ?1) AND (?3 IS NULL OR r.parent_run = ?3) ORDER BY r.id DESC LIMIT ?2",
         )?;
         let v = st
@@ -416,6 +422,7 @@ impl Db {
                     repeats: 1,
                     cache_read: r.get(18)?,
                     estimated: r.get(19)?,
+                    cache_write: r.get(20)?,
                 })
             })?
             .collect::<Result<_, _>>()?;
