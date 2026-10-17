@@ -13,6 +13,8 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 - **Bot files, follow-ups:** routines keep their watched page, delivery, "right away when" rule and end date, **Show**
   on a skill opens its full instructions before you add it, and addresses in the file never carry a password or a
   `?key=`.
+- **The bots' computer outside Docker:** `mimir doctor`'s warning now also says that other accounts on the machine
+  can type and click on its screen, not only use its browser's DevTools.
 
 ## 0.4.0
 

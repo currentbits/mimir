@@ -120,7 +120,8 @@ pub fn reach() -> Option<Result<()>> {
 }
 
 /// For `mimir doctor`: switched on and run in Mimir's own process outside a container, where Chromium's DevTools
-/// (127.0.0.1:9222, no token) are open to every account on this machine.
+/// (127.0.0.1:9222, no token) and the screen (Xvfb :99, started without -auth) are open to every account on this
+/// machine. Kept on purpose (#141): an -auth cookie alone wouldn't help while DevTools are open.
 pub fn devtools_shared(db: &crate::db::Db) -> bool {
     enabled(db) && remote().is_none() && cfg!(target_os = "linux") && !crate::server_update::in_docker()
 }
