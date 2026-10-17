@@ -2731,6 +2731,18 @@ mod tests {
         let rows = core.result_rows(&r, "x");
         assert_eq!(core.tap(&chan, "C2", me, &rows[0][0].1).await.unwrap().as_deref(), Some("Already done."));
         assert_eq!(core.tap(&chan, "C1", me, &rows[0][0].1).await.unwrap().as_deref(), Some("👍 Noted."), "still there for its own chat");
+
+        // In a family group the household can talk, but only the person who paired it can press the buttons (#135).
+        let sam = db.pair_external("discord", "D2", "Sam").unwrap();
+        db.chat_set_dm(sam, true).unwrap();
+        db.chat_set_owner(sam, "U2").unwrap();
+        db.chat_set_household(sam, true).unwrap();
+        db.chat_set_family(chat, true).unwrap();
+        let fam = Sender { id: "U2", dm: false };
+        assert_eq!(core.sender_ok(chat, fam).unwrap(), Some(true), "a family member may talk here");
+        let rows = core.result_rows(&once, "Call mum!");
+        assert!(core.tap(&chan, "C1", fam, &rows[0][0].1).await.is_err());
+        assert_eq!(core.tap(&chan, "C1", me, &rows[0][0].1).await.unwrap().as_deref(), Some("✅ Done"), "not used up");
     }
 
     #[test]
