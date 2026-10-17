@@ -45,7 +45,8 @@ SCRIPT = [
 
 
 def text_of(c):
-    return c if isinstance(c, str) else " ".join(p.get("text", "") for p in c or [] if isinstance(p, dict))
+    t = c if isinstance(c, str) else " ".join(p.get("text", "") for p in c or [] if isinstance(p, dict))
+    return re.sub(r"\ANow: [^\n]*\n\n", "", t)  # the time line each turn's message starts with
 
 
 class H(BaseHTTPRequestHandler):
