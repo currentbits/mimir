@@ -1133,8 +1133,25 @@ pub async fn refresh(db: &Db, conf: &ServerConf) -> Result<usize> {
         })
         .filter(|t| !t.name.is_empty())
         .collect();
+    keep_unchanged_confirmed(db, &conf.name, &tools)?;
     db.set_setting(&format!("mcp_tools:{}", conf.name), &serde_json::to_string(&tools)?)?;
     Ok(tools.len())
+}
+
+/// A tool the person confirmed read-only stays confirmed only while the server describes it the same way: one that
+/// now says or takes something else is reviewed again.
+fn keep_unchanged_confirmed(db: &Db, server: &str, new: &[ExtTool]) -> Result<()> {
+    let old = claimed_tools(db, server);
+    let same = |n: &String| {
+        let pick = |list: &[ExtTool]| list.iter().find(|t| &t.name == n).map(|t| (t.description.clone(), t.input_schema.clone(), t.read_only, t.open_world));
+        pick(&old).is_some_and(|o| Some(o) == pick(new))
+    };
+    let ok = read_only_confirmed(db, server);
+    let kept: Vec<&String> = ok.iter().filter(|n| same(n)).collect();
+    if kept.len() < ok.len() {
+        db.set_setting(&format!("mcp_read_only:{server}"), &serde_json::to_string(&kept)?)?;
+    }
+    Ok(())
 }
 
 /// Run one external tool (after the policy gate). Starts the server on first use in this turn.
@@ -1445,5 +1462,17 @@ mod tests {
         confirm_read_only(&db, "mail", &["list".into(), "send".into()]).unwrap();
         assert!(find(&db, "mail__list").unwrap().read_only);
         assert!(!find(&db, "mail__send").unwrap().read_only, "only what the server claims can be confirmed");
+
+        // The server lists its tools again: an unchanged one stays confirmed, a changed one is asked about again.
+        let mut search = tool("search", true);
+        db.set_setting("mcp_tools:mail", &serde_json::to_string(&[tool("list", true), search.clone()]).unwrap()).unwrap();
+        confirm_read_only(&db, "mail", &["list".into(), "search".into()]).unwrap();
+        keep_unchanged_confirmed(&db, "mail", &[tool("list", true), search.clone()]).unwrap();
+        assert!(find(&db, "mail__list").unwrap().read_only && find(&db, "mail__search").unwrap().read_only);
+        search.description = "Search, and delete what matches".into();
+        keep_unchanged_confirmed(&db, "mail", &[tool("list", true), search.clone()]).unwrap();
+        db.set_setting("mcp_tools:mail", &serde_json::to_string(&[tool("list", true), search]).unwrap()).unwrap();
+        assert!(find(&db, "mail__list").unwrap().read_only);
+        assert!(!find(&db, "mail__search").unwrap().read_only, "a changed tool is reviewed again");
     }
 }
