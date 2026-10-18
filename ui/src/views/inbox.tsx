@@ -1,6 +1,6 @@
 import { useContext, useEffect, useState } from 'react'
 import { invoke } from '../api'
-import { ago, ahead, fullTime } from '../format'
+import { ago, ahead, fullTime, IDLE } from '../format'
 import { Markdown, openLink } from '../markdown'
 import { ask, tell, Avatar, Empty, Icon, Row } from '../ui'
 import { RUN_TITLE } from './activity'
@@ -326,6 +326,19 @@ export function InboxView({ data, troubled, reload, chats, chatName, openBot, op
           const names = hs.map(x => botOf(x.bot_id).name)
           const who = names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}` : names[0]
           const what = h.routine ? `“${h.routine}”` : h.routine_id ? 'A routine' : `${who}’s routines`
+          // A one-off cut off mid-run, or failed: it waits for you (db::IDLE), not for a time.
+          if (h.until >= IDLE) return (
+            <div key={h.key} className="inbox-row">
+              <Avatar id={b.id} name={b.name} size={28} still />
+              <div className="inbox-main">
+                <div className="inbox-title">{what} waits for you</div>
+                <div className="inbox-desc">{h.why[0].toUpperCase()}{h.why.slice(1)}. Run it again?</div>
+              </div>
+              <div className="row-ctl">
+                <button className="btn btn-sm" onClick={() => invoke('hold_clear', { key: h.key }).then(reload, e => tell(`Couldn't run it again: ${e}`))}>Run again</button>
+              </div>
+            </div>
+          )
           return (
             <div key={h.key} className="inbox-row">
               <Avatar id={b.id} name={b.name} size={28} still />

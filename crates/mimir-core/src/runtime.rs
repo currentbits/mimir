@@ -2245,12 +2245,45 @@ mod tests {
         assert!(db.runs_failed(0).unwrap().is_empty(), "healed");
         assert_eq!(db.runs(Some(0), 1).unwrap()[0].delivered.as_deref(), Some("in the app"));
 
-        // A one-off stays until its run is over (a crash mid-run tries it again), then it's gone.
+        // A one-off stays, parked, until its run is over, then it's gone.
         let once = db.routine_once(1, 0, now + 60, "call mum", false).unwrap();
         db.routine_advance(&once).unwrap();
-        assert!(db.routines(0).unwrap().iter().any(|x| x.id == once.id && x.next_fire > now + 3000));
+        assert!(db.routines(0).unwrap().iter().any(|x| x.id == once.id && x.next_fire == crate::db::IDLE));
         ok.run_routine(&[], once.clone(), None).await.unwrap();
         assert!(!db.routines(0).unwrap().iter().any(|x| x.id == once.id));
+
+        // One that fails for any other reason isn't lost: it waits in Needs you, and Run again runs it.
+        let bad = core_on(&db, &fake_ai("400 Bad Request", r#"{"error":{"message":"bad request"}}"#).await);
+        let once = db.routine_once(1, 0, now + 60, "book the dentist", false).unwrap();
+        bad.run_routine(&[], once.clone(), None).await.unwrap();
+        let key = format!("hold:routine:{}", once.id);
+        assert!(db.holds(crate::db::now()).unwrap().iter().any(|h| h.0 == key), "waits for you");
+        assert!(db.due(1, crate::db::now() + 86400).unwrap().iter().all(|x| x.id != once.id), "not on its own");
+        db.hold_clear(&key, true).unwrap();
+        assert!(db.due(1, crate::db::now()).unwrap().iter().any(|x| x.id == once.id), "Run again");
+    }
+
+    #[test]
+    fn a_one_off_cut_off_mid_run_waits_for_you() {
+        let p = std::env::temp_dir().join(format!("mimir-cutoff-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = Db::open(&p).unwrap();
+        let once = db.routine_once(1, 0, crate::db::now() + 60, "email the landlord", false).unwrap();
+        // Mimir was killed mid-run, a minute in.
+        db.routine_advance(&once).unwrap();
+        let run = db.run_start(1, 0, "routine", Some(once.id), "fake").unwrap();
+        db.close_interrupted().unwrap();
+        assert_eq!(db.runs(Some(0), 1).unwrap()[0].status, "error", "a fresh run is closed too");
+        assert_eq!(db.runs(Some(0), 1).unwrap()[0].id, run);
+        let key = format!("hold:routine:{}", once.id);
+        let held = db.holds(crate::db::now()).unwrap();
+        assert!(held.iter().any(|h| h.0 == key && h.3.why.contains("interrupted")), "{held:?}");
+        // The scheduler doesn't run it on its own, not in an hour, not tomorrow.
+        assert!(db.due(1, crate::db::now() + 86400).unwrap().iter().all(|x| x.id != once.id));
+        // Another restart leaves it as it is; Run again runs it.
+        db.close_interrupted().unwrap();
+        db.hold_clear(&key, true).unwrap();
+        assert!(db.due(1, crate::db::now()).unwrap().iter().any(|x| x.id == once.id));
     }
 
     /// A pretend AI that answers "Seen." and keeps what each request asked.
