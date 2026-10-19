@@ -8,6 +8,9 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 - **Tool servers' interactive cards:** when a tool server answers with a card (MCP Apps: Figma, Notion, Canva…), the app
   and the web UI show it under the reply, in a sandboxed frame. A button in it that changes something asks first, like
   any other write. Chat apps keep the text answer. See [Tool servers](docs/tools-and-safety.md#tool-servers-mcp).
+- **Scanned PDFs read on your computer:** set a local document model in **Settings → Scanned PDFs** (an
+  [Ollama](https://ollama.com) model such as dots.ocr, or any vision model) and a scan's pages reach the bot as text,
+  tables included, instead of photos: less of your plan per page, and the scan stays here. Off until you set one.
 - **X search:** bots can search recent X (Twitter) posts (`x_search`) with your own X API bearer token
   (**Settings → Web search → X**). Good for a morning routine of fresh posts. See
   [docs/connect.md](docs/connect.md#x-search) for getting a token.
