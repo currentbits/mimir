@@ -530,6 +530,38 @@ pub(crate) fn looks_secret(db: &Db, text: &str) -> Option<&'static str> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn needs_you_suggests_a_rule_after_five_plain_allows_and_stops_when_dismissed() {
+        let p = std::env::temp_dir().join(format!("mimir-rule-hints-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = Db::open(&p).unwrap();
+        let allow = |tool: &str, kind: &str, site: Option<&str>, n: usize| {
+            for _ in 0..n {
+                let id = db.approval_create(1, 0, tool, "x", 60, kind, site).unwrap();
+                db.approval_decide(id, true, None).unwrap();
+            }
+        };
+        allow("calendar_create", "rule", None, 4);
+        assert!(rule_hints(&db).unwrap().is_empty(), "four isn't enough");
+        allow("calendar_create", "rule", None, 1);
+        // An email asks as its own kind, a site after outside content as guarded: never suggested.
+        allow("email_send", "send", None, 6);
+        allow("computer_open", "guarded", Some("a.com"), 6);
+        // Allowed often but denied once: not suggested.
+        allow("computer_open", "rule", Some("b.com"), 6);
+        let id = db.approval_create(1, 0, "computer_open", "x", 60, "rule", Some("b.com")).unwrap();
+        db.approval_decide(id, false, None).unwrap();
+        allow("computer_open", "rule", Some("c.com"), 5);
+        let hints = rule_hints(&db).unwrap();
+        let pairs: Vec<_> = hints.iter().map(|h| (h["tool"].as_str().unwrap(), h["site"].as_str())).collect();
+        assert_eq!(pairs.len(), 2, "{pairs:?}");
+        assert!(pairs.contains(&("calendar_create", None)) && pairs.contains(&("computer_open", Some("c.com"))));
+        // Accepted (now allowed) or dismissed: gone.
+        db.set_rule("calendar_create", "allow").unwrap();
+        rule_hint_dismiss(&db, "computer_open", Some("c.com")).unwrap();
+        assert!(rule_hints(&db).unwrap().is_empty());
+    }
+
     #[tokio::test]
     async fn always_on_a_card_never_asks_again_even_after_outside_content() {
         let p = std::env::temp_dir().join(format!("mimir-always-tainted-{}.db", std::process::id()));
