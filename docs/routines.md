@@ -198,6 +198,15 @@ unread messages), up to about 3,000 characters. So a check every 15 minutes cost
 The first look runs the AI as usual, since there's nothing to compare with yet. If Mimir can't reach the page, the
 check runs as it would without a watch.
 
+Some pages build themselves in the browser (a booking calendar, a price, a stock level), so a plain fetch sees nothing.
+Open such a page on the [bots' computer](computer.md) while you're in control (taking over, or showing a task): Mimir
+notes the JSON the page loads for itself (GET requests only). When a quiet check then watches that page, the form offers
+the address that held what you clicked: "Watch this instead: `GET …/availability?date=…`". Mimir compares that data a
+value per line (`slots[2].free: true`), with no browser and no AI until it changes. It's sent with the cookies the bot's
+own browser had for that site, kept with Mimir's secrets; the AI never sees them, and what comes back is outside
+content like any page. When those cookies go stale the look fails and the check runs as it would without a watch,
+until you open the page on the computer again.
+
 Pages say things that change on their own. Times of day, timestamps and "5 minutes ago" are never counted. When a
 page did change, Mimir looks again a few seconds later: lines that differ between those two looks (a visitor counter,
 a session id, a rotating ad) are the page's own churn, and lines like them are left out from then on. The routine
