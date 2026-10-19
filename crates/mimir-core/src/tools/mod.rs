@@ -63,6 +63,8 @@ pub struct ToolCtx {
     pub(crate) ext: Arc<tokio::sync::Mutex<std::collections::HashMap<String, crate::ext::Client>>>,
     /// The browser's current page, for checking where a saved login may be typed.
     pub(crate) page_url: Arc<std::sync::Mutex<Option<String>>>,
+    /// A tool server's last answer as it gave it (MCP's CallToolResult), for the card that made the call.
+    pub(crate) raw_result: Arc<std::sync::Mutex<Option<Value>>>,
 }
 
 impl ToolCtx {
@@ -96,6 +98,7 @@ impl ToolCtx {
             images: vec![],
             ext: Arc::default(),
             page_url: Arc::default(),
+            raw_result: Arc::default(),
         }
     }
     /// This turn read untrusted content: record it on the turn, its run, and (for conversations) the conversation.

@@ -208,6 +208,15 @@ apps register themselves (GitHub's hosted one, for example) takes a token in a h
 `Authorization` with `Bearer <your token>`. A header always wins over a sign-in. On a self-hosted server you paste the
 address your browser ended up on, as with ChatGPT.
 
+**Interactive cards (MCP Apps).** Some servers answer with a card as well as text (Figma, Notion, Canva and others
+that support [MCP Apps](https://modelcontextprotocol.io/docs/extensions/apps)). In the app and the web UI the card shows
+under the reply. It runs in a sandboxed frame on its own address: it can't reach Mimir's data or your sign-in, can't
+open other pages in the window, and only connects to the sites the server named for it. Pressing a button in a card
+runs one of that server's tools through the same rules as the bot's own calls. The card counts as outside content, so
+anything except a read-only tool you confirmed asks first. A card that wants to send the bot a message puts it in the
+message box for you to send or not; a link it wants to open asks first. Telegram, Slack, Discord and the other chat
+apps get the text answer. Cards are kept with the chat's history and go with it (or after six months).
+
 ## The run log
 
 Every reply and routine is recorded with its model, tokens, cost and each tool call, with its allow / ask / deny

@@ -34,6 +34,19 @@ fn default_kind() -> String {
 /// Reason prefix of a habit a bot wanted to remember but the person never stated.
 pub const BOT_PROPOSED: &str = "A bot wants to remember this";
 
+/// The other memory of a pair a suggestion settles ("Duplicate of #N …", "Contradicts #N …"): the one it keeps.
+pub fn paired(reason: &str) -> Option<i64> {
+    let r = reason.strip_prefix("Duplicate of #").or_else(|| reason.strip_prefix("Contradicts #"))?;
+    r.split(|c: char| !c.is_ascii_digit()).next()?.parse().ok()
+}
+
+/// How long a suggestion seen in one conversation waits for a second one.
+const WAIT_DAYS: i64 = 30;
+
+fn day(at: i64) -> String {
+    chrono::TimeZone::timestamp_opt(&chrono::Local, at, 0).single().map(|d| d.format("%-d %b").to_string()).unwrap_or_default()
+}
+
 impl Db {
     // ---------- memory suggestions ----------
 
@@ -97,10 +110,7 @@ impl Db {
             let similar: Vec<(String, i64)> = dismissed.into_iter().filter(|(t, b, _)| alike(&text, &format!("{t} {b}"))).map(|(t, _, at)| (t, at)).collect();
             match similar.as_slice() {
                 [] => {}
-                [(t, at)] => {
-                    let day = chrono::TimeZone::timestamp_opt(&chrono::Local, *at, 0).single().map(|d| d.format("%-d %b").to_string()).unwrap_or_default();
-                    reason.push_str(&format!(" You dismissed a similar one on {day} (“{t}”)."));
-                }
+                [(t, at)] => reason.push_str(&format!(" You dismissed a similar one on {} (“{t}”).", day(*at))),
                 _ => return Ok(None),
             }
         }
@@ -109,6 +119,31 @@ impl Db {
             params![scope, s.action, s.entry_id, s.kind, s.title.trim(), s.body.trim(), reason, now(), tainted],
         )?;
         Ok(Some(c.last_insert_rowid()))
+    }
+
+    /// A suggestion the tidy-up found in one conversation only waits, unseen, until a later tidy-up (another
+    /// conversation) proposes it again; then it's shown, saying when it first came up. `started`: when this tidy-up
+    /// began, so the same thing twice in one reply isn't a second conversation. Returns the id when it's shown now.
+    // ponytail: waiting rows past WAIT_DAYS are just ignored, never pruned
+    pub fn suggestion_recur(&self, scope: &str, s: &Suggestion, started: i64) -> Result<Option<i64>> {
+        let text = format!("{} {}", s.title, s.body);
+        let earlier: Vec<(i64, i64)> = {
+            let c = self.c();
+            let mut st = c.prepare("SELECT id, title || ' ' || body, created_at FROM suggestions WHERE scope=?1 AND status='waiting' AND type=?2 AND created_at > ?3 AND created_at < ?4")?;
+            let rows: Vec<(i64, String, i64)> = st.query_map(params![scope, s.kind, now() - WAIT_DAYS * 86400, started], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<Result<_, _>>()?;
+            rows.into_iter().filter(|(_, t, _)| alike(&text, t)).map(|(id, _, at)| (id, at)).collect()
+        };
+        let Some(first) = earlier.iter().map(|e| e.1).min() else {
+            if let Some(id) = self.suggestion_add(scope, s)? {
+                self.c().execute("UPDATE suggestions SET status='waiting' WHERE id=?1", [id])?;
+            }
+            return Ok(None);
+        };
+        let id = self.suggestion_add(scope, &Suggestion { reason: format!("{} It came up in an earlier conversation too ({}).", s.reason.trim(), day(first)), ..s.clone() })?;
+        for (w, _) in earlier {
+            self.c().execute("UPDATE suggestions SET status='recurred' WHERE id=?1", [w])?;
+        }
+        Ok(id)
     }
 
     pub fn suggestions(&self, scope: &str) -> Result<Vec<Suggestion>> {
@@ -210,5 +245,17 @@ impl Db {
         let status = if accept && applied.is_ok() { "accepted" } else { "dismissed" };
         self.c().execute("UPDATE suggestions SET status=?2 WHERE id=?1", params![id, status])?;
         applied
+    }
+
+    /// Settle a suggestion by forgetting another memory than it proposes: the other one of a pair (you keep the one
+    /// it would forget), or its own instead of moving it to background.
+    pub fn suggestion_forget(&self, scope: &str, id: i64, entry: i64) -> Result<String> {
+        let Some(s) = self.suggestions(scope)?.into_iter().find(|s| s.id == id) else { bail!("no pending suggestion #{id}") };
+        if !(s.entry_id == Some(entry) || paired(&s.reason) == Some(entry)) {
+            bail!("#{entry} isn't one this suggestion is about");
+        }
+        let n = self.c().execute("UPDATE entries SET invalid=1 WHERE id=?1 AND scope=?2 AND superseded_by IS NULL AND invalid=0", params![entry, scope])?;
+        self.c().execute("UPDATE suggestions SET status=?2 WHERE id=?1", params![id, if n > 0 { "accepted" } else { "dismissed" }])?;
+        if n == 0 { bail!("#{entry} changed since: it's replaced or already gone") } else { Ok(format!("forgot #{entry}")) }
     }
 }

@@ -16,6 +16,9 @@ pub struct Message {
     /// Replies: what the reply drew on ("2 memories · 1 skill · read 3 pages").
     #[serde(skip_serializing_if = "Option::is_none")]
     pub used: Option<Used>,
+    /// Replies: tool servers' interactive cards (MCP Apps) from the run.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub cards: Vec<ToolCard>,
 }
 
 /// What one run drew on: the memories recalled for it, the skills it read, the pages it opened.
@@ -233,7 +236,7 @@ impl Db {
                AND (?4 IS NULL OR id < ?4) AND id >= ?5 ORDER BY id DESC LIMIT ?2",
         )?;
         let mut v: Vec<(Message, Option<i64>)> = st
-            .query_map(params![chat, n as i64, bot, before, from], |r| Ok((Message { id: r.get(5)?, bot_id: r.get(0)?, role: r.get(1)?, content: r.get(2)?, ts: r.get(3)?, actions: vec![], run_id: None, used: None }, r.get(4)?)))?
+            .query_map(params![chat, n as i64, bot, before, from], |r| Ok((Message { id: r.get(5)?, bot_id: r.get(0)?, role: r.get(1)?, content: r.get(2)?, ts: r.get(3)?, actions: vec![], run_id: None, used: None, cards: vec![] }, r.get(4)?)))?
             .collect::<Result<_, _>>()?;
         v.reverse();
         // One query for every reply's actions.
@@ -260,6 +263,7 @@ impl Db {
         for (m, _) in v.iter_mut() {
             if let Some(run) = m.run_id {
                 m.used = Some(self.run_used(run)?).filter(|u| !u.is_empty());
+                m.cards = self.tool_cards(run)?;
             }
         }
         Ok(v.into_iter().map(|(m, _)| m).collect())

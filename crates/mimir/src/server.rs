@@ -148,6 +148,16 @@ async fn hook(State(app): State<App>, Path(id): Path<i64>, headers: HeaderMap, b
     }
 }
 
+async fn card(State(app): State<App>, Path(key): Path<String>) -> Response {
+    match mimir_core::ext::card_page(&app.host.db, &key) {
+        Some((html, csp)) => match HeaderValue::from_str(&csp) {
+            Ok(csp) => ([(header::CONTENT_TYPE, HeaderValue::from_static("text/html; charset=utf-8")), (header::CONTENT_SECURITY_POLICY, csp)], html).into_response(),
+            Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        },
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
 /// Meta's check when WhatsApp's webhook is set up (the verify token is the bot's phone number id).
 async fn whatsapp_verify(Query(q): Query<std::collections::HashMap<String, String>>) -> Response {
     let get = |k: &str| q.get(k).map(String::as_str).unwrap_or("");
@@ -182,16 +192,20 @@ async fn api(State(app): State<App>, Path(cmd): Path<String>, body: axum::body::
 /// scripts, and browsers don't guess content types.
 async fn harden(req: Request, next: Next) -> Response {
     let asset = req.uri().path().starts_with("/assets/");
+    let card = req.uri().path().starts_with("/card/");
     let mut r = next.run(req).await;
     // Vite names each built file after its content, so a browser may keep one forever. Not a missing one, which the
     // fallback answers with index.html.
     let keep = asset && r.status().is_success() && r.headers().get(header::CONTENT_TYPE).is_none_or(|t| !t.as_bytes().starts_with(b"text/html"));
     let h = r.headers_mut();
-    h.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
-    h.insert(
-        header::CONTENT_SECURITY_POLICY,
-        HeaderValue::from_static("default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"),
-    );
+    // A card brings its own CSP (sandboxed, framed by the app only).
+    if !card {
+        h.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+        h.insert(
+            header::CONTENT_SECURITY_POLICY,
+            HeaderValue::from_static("default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"),
+        );
+    }
     h.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
     h.insert(header::REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
     // Anything else, nothing a browser or a proxy in between should keep: index.html updates with the server, and
@@ -230,6 +244,8 @@ pub async fn run(db: Db, home: PathBuf, listen: &str) -> Result<()> {
         .route("/v1/models", get(models).route_layer(axum::middleware::from_fn_with_state(state.clone(), require_chat_token)))
         .route("/hook/{id}", post(hook).layer(DefaultBodyLimit::max(256 * 1024)))
         .route("/whatsapp", get(whatsapp_verify).post(whatsapp).layer(DefaultBodyLimit::max(1024 * 1024)))
+        // A tool server's card (MCP Apps): no token (an iframe can't send one); its key is the lock.
+        .route("/card/{key}", get(card))
         .route("/healthz", get(|| async { "ok" }))
         // Token auth (no cookies), so any origin may call it: the desktop app in remote mode needs this.
         .layer(CorsLayer::new().allow_origin(Any).allow_methods([Method::GET, Method::POST]).allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]))

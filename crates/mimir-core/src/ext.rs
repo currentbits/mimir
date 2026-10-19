@@ -90,6 +90,9 @@ pub struct ExtTool {
     /// doesn't say. A read-only tool like that can still carry data out in what it's asked to look up.
     #[serde(default = "yes")]
     pub open_world: bool,
+    /// Its interactive card (MCP Apps): the `ui://` resource its answers are shown in, in the app and web UI.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ui: Option<String>,
 }
 
 fn yes() -> bool {
@@ -566,6 +569,9 @@ pub(crate) fn vault_values(db: &Db) -> Vec<(String, String)> {
 // ---------------- MCP client (stdio: newline-delimited JSON-RPC; remote: Streamable HTTP) ----------------
 
 const PROTOCOL: &str = "2025-06-18";
+/// MCP Apps: tool servers' interactive cards.
+const UI_EXT: &str = "io.modelcontextprotocol/ui";
+const UI_MIME: &str = "text/html;profile=mcp-app";
 const TIMEOUT: Duration = Duration::from_secs(180);
 
 pub struct Client {
@@ -612,7 +618,7 @@ impl Client {
             (Io::Http(Http { client: reqwest::Client::builder().timeout(TIMEOUT).build()?, url: conf.url.clone(), headers, session: None, version: None, oauth }), None)
         };
         let mut c = Client { io, next: 0 };
-        let init = c.request("initialize", json!({"protocolVersion": PROTOCOL, "capabilities": {}, "clientInfo": {"name": "mimir", "version": env!("CARGO_PKG_VERSION")}})).await;
+        let init = c.request("initialize", json!({"protocolVersion": PROTOCOL, "capabilities": {"extensions": {UI_EXT: {"mimeTypes": [UI_MIME]}}}, "clientInfo": {"name": "mimir", "version": env!("CARGO_PKG_VERSION")}})).await;
         // The server has read its secrets by now; don't leave them on disk.
         if let Some(f) = secrets_file {
             let _ = std::fs::remove_file(f);
@@ -1177,12 +1183,76 @@ pub async fn refresh(db: &Db, conf: &ServerConf) -> Result<usize> {
             input_schema: t["inputSchema"].clone(),
             read_only: t["annotations"]["readOnlyHint"].as_bool().unwrap_or(false),
             open_world: t["annotations"]["openWorldHint"].as_bool().unwrap_or(true),
+            ui: ui_of(t),
         })
         .filter(|t| !t.name.is_empty())
         .collect();
     keep_unchanged_confirmed(db, &conf.name, &tools)?;
     db.set_setting(&format!("mcp_tools:{}", conf.name), &serde_json::to_string(&tools)?)?;
     Ok(tools.len())
+}
+
+/// A tool's card: `_meta.ui.resourceUri` (or the older `_meta["ui/resourceUri"]`), only a `ui://` one.
+fn ui_of(tool: &Value) -> Option<String> {
+    let m = &tool["_meta"];
+    m["ui"]["resourceUri"].as_str().or(m["ui/resourceUri"].as_str()).filter(|u| u.starts_with("ui://")).map(String::from)
+}
+
+/// The CSP a card's page is served with: MCP Apps' default, opened only to the origins its resource names
+/// (`_meta.ui.csp`). An entry that isn't a plain https origin (`'unsafe-eval'`, `*`, `; script-src …`) is dropped.
+fn card_csp(page: &Value) -> String {
+    let list = |k: &str| -> String {
+        let ok = |d: &&str| url::Url::parse(d).is_ok_and(|u| u.scheme() == "https" && u.host_str().is_some() && u.path() == "/" && *d == u.origin().ascii_serialization());
+        page["_meta"]["ui"]["csp"][k].as_array().into_iter().flatten().filter_map(Value::as_str).filter(ok).map(|d| format!(" {d}")).collect()
+    };
+    let (connect, res, frame, base) = (list("connectDomains"), list("resourceDomains"), list("frameDomains"), list("baseUriDomains"));
+    let none = |s: &str| if s.is_empty() { " 'none'".to_string() } else { s.to_string() };
+    format!(
+        "default-src 'none'; script-src 'unsafe-inline'{res}; style-src 'unsafe-inline'{res}; img-src data:{res}; font-src data:{res}; media-src data:{res}; \
+         connect-src{}; frame-src{}; base-uri{}; object-src 'none'; form-action 'none'",
+        none(&connect),
+        none(&frame),
+        none(&base)
+    )
+}
+
+/// Keep a tool's card with the run, to show with the reply: its page (read from the server now, as it is for this
+/// answer) and what the call took and gave. Not from the browser, and not for calls the card itself makes.
+async fn keep_card(ctx: &ToolCtx, client: &mut Client, full: &str, uri: &str, args: &Value, res: &Value) -> Result<()> {
+    let Some(run) = ctx.run_id else { return Ok(()) };
+    let read = client.request("resources/read", json!({"uri": uri})).await?;
+    let page = read["contents"].as_array().into_iter().flatten().find(|c| c["uri"] == uri || c["mimeType"].as_str().is_some_and(|m| m.starts_with("text/html"))).context("no page")?;
+    let html = match page["text"].as_str() {
+        Some(t) => t.to_string(),
+        None => String::from_utf8(base64::Engine::decode(&base64::engine::general_purpose::STANDARD, page["blob"].as_str().context("empty page")?)?)?,
+    };
+    ctx.db.tool_card_add(run, ctx.chat_id, ctx.bot_id, full, &html, &card_csp(page), args, res)?;
+    Ok(())
+}
+
+/// A card's page, and the CSP header it's served with (at the server's /card/<key>, and the desktop app's mimir-card:).
+/// `sandbox` keeps it off the app's origin even opened on its own; only the app may frame it.
+pub fn card_page(db: &Db, key: &str) -> Option<(String, String)> {
+    let (html, csp) = db.tool_card_page(key).ok().flatten()?;
+    Some((html, format!("sandbox allow-scripts; {csp}; frame-ancestors 'self' tauri://localhost http://tauri.localhost https://tauri.localhost http://localhost:5173")))
+}
+
+/// A card's `tools/call`: one of its own server's tools, through the tool gate like the bot's own calls. The card is
+/// the server's page, so it counts as outside content: a tool that isn't confirmed read-only asks first. Answers as a
+/// CallToolResult (a refusal too, with isError).
+/// Boxed here, not where it's awaited: the tool gate's future is big, and Host::call's match (debug builds give every
+/// arm its own stack space) already sits near Windows' test-thread stack.
+pub fn card_call<'a>(db: &'a Db, key: &'a str, name: &'a str, args: &'a Value) -> futures_util::future::BoxFuture<'a, Result<Value>> {
+    Box::pin(async move {
+        let (chat, bot, tool) = db.tool_card_owner(key)?.context("that card is gone")?;
+        let (server, _) = split(&tool).context("not a tool server's card")?;
+        let ctx = ToolCtx::new(db.clone(), bot, chat);
+        ctx.pre_taint();
+        Ok(match crate::tools::call(&ctx, &format!("{server}{SEP}{name}"), args).await {
+            Ok(text) => ctx.raw_result.lock().unwrap().take().unwrap_or_else(|| json!({"content": [{"type": "text", "text": text}]})),
+            Err(e) => json!({"content": [{"type": "text", "text": format!("{e:#}")}], "isError": true}),
+        })
+    })
 }
 
 /// A tool the person confirmed read-only stays confirmed only while the server describes it the same way: one that
@@ -1243,6 +1313,18 @@ pub async fn call(ctx: &ToolCtx, full: &str, args: &Value) -> Result<String> {
     }
     let client = sessions.get_mut(server).expect("just inserted");
     let res = client.request("tools/call", json!({"name": tool, "arguments": args})).await?;
+    if server != BROWSER {
+        // The answer as the server gave it, without any saved login's value (as the model gets it): for its card, and for
+        // a card that made this call.
+        let shown: Value = serde_json::from_str(&redact(&res.to_string(), &vault_values(&ctx.db))).unwrap_or(Value::Null);
+        if let Some(uri) = find(&ctx.db, full).and_then(|t| t.ui).filter(|_| res["isError"].as_bool() != Some(true)) {
+            // A card that doesn't come up leaves the text answer, as on Telegram.
+            if let Err(e) = keep_card(ctx, client, full, &uri, args, &shown).await {
+                eprintln!("{full}: no card ({e:#})");
+            }
+        }
+        *ctx.raw_result.lock().unwrap() = Some(shown);
+    }
     let text: String = res["content"].as_array().into_iter().flatten().filter_map(|c| c["text"].as_str()).collect::<Vec<_>>().join("\n");
     // Only from the browser's own "### Page" section: a page can print "Page URL: …" into a console message or its
     // text (which come first in the result) to pass for a site a saved login is allowed on.
@@ -1536,7 +1618,7 @@ mod tests {
         let p = std::env::temp_dir().join(format!("mimir-ext-ro-{}.db", std::process::id()));
         let _ = std::fs::remove_file(&p);
         let db = Db::open(&p).unwrap();
-        let tool = |name: &str, read_only| ExtTool { name: name.into(), description: String::new(), input_schema: Value::Null, read_only, open_world: true };
+        let tool = |name: &str, read_only| ExtTool { name: name.into(), description: String::new(), input_schema: Value::Null, read_only, open_world: true, ui: None };
         db.set_setting("mcp_tools:mail", &serde_json::to_string(&[tool("list", true), tool("send", false)]).unwrap()).unwrap();
         set_servers(&db, &[ServerConf { name: "mail".into(), command: "x".into(), ..Default::default() }]).unwrap();
         assert!(!find(&db, "mail__list").unwrap().read_only, "the server's word alone");
@@ -1555,5 +1637,76 @@ mod tests {
         db.set_setting("mcp_tools:mail", &serde_json::to_string(&[tool("list", true), search]).unwrap()).unwrap();
         assert!(find(&db, "mail__list").unwrap().read_only);
         assert!(!find(&db, "mail__search").unwrap().read_only, "a changed tool is reviewed again");
+    }
+
+    #[test]
+    fn card_metadata() {
+        assert_eq!(ui_of(&json!({"_meta": {"ui": {"resourceUri": "ui://a/b"}}})).as_deref(), Some("ui://a/b"));
+        assert_eq!(ui_of(&json!({"_meta": {"ui/resourceUri": "ui://a/old"}})).as_deref(), Some("ui://a/old"), "the older key");
+        assert_eq!(ui_of(&json!({"_meta": {"ui": {"resourceUri": "https://a/b"}}})), None, "only ui://");
+        let csp = card_csp(&json!({"_meta": {}}));
+        assert!(csp.contains("connect-src 'none'") && csp.contains("frame-src 'none'") && csp.starts_with("default-src 'none'"), "{csp}");
+        let csp = card_csp(&json!({"_meta": {"ui": {"csp": {
+            "connectDomains": ["https://api.example.com", "*", "https://x.com; script-src *", "http://plain.example", "https://a.example/path"],
+            "resourceDomains": ["https://cdn.example.com", "'unsafe-eval'"]}}}}));
+        assert!(csp.contains("connect-src https://api.example.com;"), "{csp}");
+        assert!(csp.contains("script-src 'unsafe-inline' https://cdn.example.com;"), "{csp}");
+        assert!(!csp.contains('*') && !csp.contains("eval") && !csp.contains("plain") && !csp.contains("/path"), "{csp}");
+    }
+
+    /// A stdio tool server with an MCP Apps card: the card is kept with the run, served with its CSP, and its own
+    /// calls go through the tool gate.
+    #[tokio::test]
+    async fn tool_card_round_trip() {
+        let dir = std::env::temp_dir().join(format!("mimir-card-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("server.py");
+        std::fs::write(&script, r#"
+import json, sys
+HTML = "<!doctype html><p>card</p>"
+for line in sys.stdin:
+    m = json.loads(line)
+    if "id" not in m: continue
+    p, r = m.get("params", {}), None
+    if m["method"] == "initialize":
+        assert p["capabilities"]["extensions"]["io.modelcontextprotocol/ui"]["mimeTypes"] == ["text/html;profile=mcp-app"]
+        r = {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}, "resources": {}}, "serverInfo": {"name": "demo", "version": "1"}}
+    elif m["method"] == "tools/list":
+        r = {"tools": [{"name": "show", "inputSchema": {"type": "object"}, "annotations": {"readOnlyHint": True}, "_meta": {"ui": {"resourceUri": "ui://demo/card"}}},
+                       {"name": "save", "inputSchema": {"type": "object"}}]}
+    elif m["method"] == "tools/call":
+        r = {"content": [{"type": "text", "text": "shown " + p["name"]}], "structuredContent": {"n": 3}}
+    elif m["method"] == "resources/read":
+        r = {"contents": [{"uri": p["uri"], "mimeType": "text/html;profile=mcp-app", "text": HTML, "_meta": {"ui": {"csp": {"connectDomains": ["https://api.example.com"]}}}}]}
+    print(json.dumps({"jsonrpc": "2.0", "id": m["id"], "result": r}), flush=True)
+"#).unwrap();
+        let db = Db::open(&dir.join("t.db")).unwrap();
+        let conf = ServerConf { name: "demo".into(), command: "python3".into(), args: vec![script.display().to_string()], ..Default::default() };
+        set_servers(&db, std::slice::from_ref(&conf)).unwrap();
+        assert_eq!(refresh(&db, &conf).await.unwrap(), 2);
+        assert_eq!(find(&db, "demo__show").unwrap().ui.as_deref(), Some("ui://demo/card"));
+
+        let ctx = ToolCtx::new(db.clone(), 1, 1).with_run(Some(7));
+        assert_eq!(call(&ctx, "demo__show", &json!({"q": 1})).await.unwrap(), "shown show", "the text answer stays (Telegram, the model)");
+        call(&ctx, "demo__save", &json!({})).await.unwrap();
+        let cards = db.tool_cards(7).unwrap();
+        assert_eq!(cards.len(), 1, "only the tool with a card");
+        assert_eq!((cards[0].tool.as_str(), &cards[0].input, &cards[0].result["structuredContent"]), ("demo__show", &json!({"q": 1}), &json!({"n": 3})));
+        let (html, csp) = card_page(&db, &cards[0].key).unwrap();
+        assert!(html.contains("<p>card</p>"));
+        assert!(csp.starts_with("sandbox allow-scripts; default-src 'none'") && csp.contains("connect-src https://api.example.com;"), "{csp}");
+        assert!(card_page(&db, "nope").is_none());
+
+        // From the card: the tool's own answer back, but nothing that writes without the person's say.
+        confirm_read_only(&db, "demo", &["show".into()]).unwrap();
+        let r = card_call(&db, &cards[0].key, "show", &json!({})).await.unwrap();
+        assert_eq!(r["structuredContent"], json!({"n": 3}), "{r}");
+        db.set_rule("demo__save", "deny").unwrap();
+        let r = card_call(&db, &cards[0].key, "save", &json!({})).await.unwrap();
+        assert_eq!(r["isError"], true, "{r}");
+        assert!(card_call(&db, "nope", "show", &json!({})).await.is_err());
+        assert!(db.tool_cards(0).unwrap().is_empty(), "a card's own calls make no cards");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
