@@ -829,6 +829,8 @@ impl Host {
             "decide_skill" => ok(self.db.skill_decide(&scope(a)?, arg(a, "id")?, arg(a, "accept")?)?),
             "remove_skill" => ok(self.db.skill_remove(&scope(a)?, arg(a, "id")?)?),
             "undo_memory" => ok(self.db.undo(&scope(a)?, arg(a, "id")?)?),
+            // A button in a tool server's card (MCP Apps): its tool, through the tool gate.
+            "card_call" => ok(crate::ext::card_call(&self.db, &arg::<String>(a, "key")?, &arg::<String>(a, "name")?, &a["arguments"]).await?),
             // The weekly look back: how the last four weeks went, and when you last reviewed what was learned.
             "learning" => {
                 let chat: i64 = arg(a, "chat_id")?;
