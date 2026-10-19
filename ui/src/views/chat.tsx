@@ -365,9 +365,13 @@ export function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, 
   const box = useRef<HTMLTextAreaElement>(null)
   const local = chat.chat_id === LOCAL
   const msgs = incognito ? secret : log.data ?? []
-  const conv = useLoad(() => invoke<{ tainted: boolean }>('conversation', { botId, chatId: cid }), [botId, cid], 4000)
+  const conv = useLoad(() => invoke<{ tainted: boolean; title: string | null; so_far: string | null }>('conversation', { botId, chatId: cid }), [botId, cid], 4000)
+  // Where the conversation had got to, as it was when you opened it (the routine model writes it); gone once you write.
+  const [back, setBack] = useState<{ title: string; line: string } | null | undefined>(undefined)
+  useEffect(() => setBack(undefined), [botId, cid])
+  useEffect(() => { if (back === undefined && conv.data) setBack(!incognito && conv.data.so_far ? { title: conv.data.title ?? '', line: conv.data.so_far } : null) }, [conv.data, back, incognito])
   const [fresh, setFresh] = useState<string | null>(null)
-  const freshNote = (note: string, ms: number) => { conv.reload(); setFresh(note); setTimeout(() => setFresh(f => (f === note ? null : f)), ms) }
+  const freshNote = (note: string, ms: number) => { conv.reload(); setBack(null); setFresh(note); setTimeout(() => setFresh(f => (f === note ? null : f)), ms) }
   const startFresh = () => invoke('new_conversation', { botId, chatId: chat.chat_id }).then(() => freshNote('Fresh conversation. Your memories are kept.', 2600), e => setErr(String(e)))
   // A new conversation that opens with the chat up to this message, to try another direction from there.
   const branchFrom = (m: Message) => invoke('branch', { botId: m.bot_id, chatId: chat.chat_id, messageId: m.id }).then(() => {
@@ -534,6 +538,7 @@ export function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, 
       invoke<boolean>('steer', { botId: replier, chatId: cid, text: t }).then(took => took ? setSteered(s => [...s, t]) : setText(x => x || t), e => { setText(x => x || t); setErr(String(e)) })
       return
     }
+    setBack(null)
     const at = incognito ? null : mentioned(value.trim())
     const t = at ? at[1].trim() : value.trim()
     if (!t && !photos.length && !doc) return
@@ -625,6 +630,7 @@ export function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, 
         )}
         <div className="thread selectable">
           {hasEarlier && msgs.length > 0 && <button type="button" className="btn btn-sm btn-ghost show-earlier" onClick={showEarlier}>Show earlier messages</button>}
+          {back && msgs.length > 0 && <p className="so-far" role="note">{back.title && <b>{back.title}</b>}<span>So far: {back.line}</span></p>}
           {msgs.length === 0 && !working && (
             incognito ? (
               <Empty icon="incognito" title="Incognito chat">

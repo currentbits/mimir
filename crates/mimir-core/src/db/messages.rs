@@ -170,6 +170,16 @@ impl Db {
         Ok(self.c().query_row("SELECT max(ts) FROM messages WHERE bot_id=?1 AND chat_id=?2", [bot, chat], |r| r.get(0))?)
     }
 
+    /// How many messages a conversation has after message `id` (since it last started fresh), and its newest id.
+    pub fn messages_after(&self, bot: i64, chat: i64, id: i64) -> Result<(i64, i64)> {
+        Ok(self.c().query_row(
+            "SELECT count(*), coalesce(max(id), 0) FROM messages WHERE bot_id=?1 AND chat_id=?2 AND id > ?3
+               AND id > coalesce((SELECT CAST(value AS INTEGER) FROM settings WHERE key='fresh:' || ?1 || ':' || ?2), 0)",
+            [bot, chat, id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?)
+    }
+
     /// All bots' messages with a chat, oldest first (UI).
     /// Whether the last `n` messages a bot would be given as history hold outside content: a file's or forward's
     /// text, or a reply from a run that had read some.
