@@ -5,6 +5,10 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 ## Unreleased
 
 ### Talking to your bots
+- **Chat titles and a catch-up line:** after a chat's first exchange, and again every ten messages, the model in
+  **Model for routines** names it in 3–6 words and writes a line on where it's got to. The title shows under the bot
+  in the sidebar; the line shows at the top of the chat when you come back to it. Not for incognito chats; **Start
+  fresh** and deleting a chat's history remove them.
 - **Branch from here:** a new conversation that picks up from a message, with a short "where we left off", to try
   another direction without re-explaining. The branch icon on a reply in the app, or `/branch` as a reply in your
   messaging app; with Telegram topics on it opens a new topic. See [Bots and chats](docs/bots-and-chats.md).
