@@ -115,9 +115,9 @@ function Main() {
   // Incognito ends when you go to another chat.
   useEffect(() => setIncognito(false), [chatId])
   // A link to the live computer (a bot asking you to take over) opens it: #computer. "Edit in Mimir" on a chat app's
-  // card opens Needs you, where the card is: #approval-<id>. A sign-in card's opens the sign-in form: #signin. A task
+  // card opens Needs you, where the card is: #approval-<id> (a webhook out's link: #inbox). A sign-in card's opens the sign-in form: #signin. A task
   // a bot did in its own chat for another bot links to that bot's chat: #bot-<id>.
-  const linked = (): View | null => location.hash === '#computer' ? 'computer' : location.hash.startsWith('#approval-') ? 'inbox' : null
+  const linked = (): View | null => location.hash === '#computer' ? 'computer' : location.hash === '#inbox' || location.hash.startsWith('#approval-') ? 'inbox' : null
   const [view, setView] = useState<View>(() => linked() ?? 'chat')
   const [signIn, setSignIn] = useState(false)
   useEffect(() => {

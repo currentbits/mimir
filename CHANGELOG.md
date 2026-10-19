@@ -9,6 +9,13 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
   **Model for routines** names it in 3–6 words and writes a line on where it's got to. The title shows under the bot
   in the sidebar; the line shows at the top of the chat when you come back to it. Not for incognito chats; **Start
   fresh** and deleting a chat's history remove them.
+- **Branch from here:** a new conversation that picks up from a message, with a short "where we left off", to try
+  another direction without re-explaining. The branch icon on a reply in the app, or `/branch` as a reply in your
+  messaging app; with Telegram topics on it opens a new topic. See [Bots and chats](docs/bots-and-chats.md).
+- **Webhooks out:** **Settings → Webhooks out** posts a small signed JSON to an address of yours when a routine
+  finishes or fails, an approval is waiting, or a reply was sent. You can use it with Home Assistant, ntfy or n8n.
+  Message text is only included if you ask for it. A failed send is tried again. See
+  [docs/routines.md](docs/routines.md#webhooks-out).
 - **Scanned PDFs read on your computer:** set a local document model in **Settings → Scanned PDFs** (an
   [Ollama](https://ollama.com) model such as dots.ocr, or any vision model) and a scan's pages reach the bot as text,
   tables included, instead of photos: less of your plan per page, and the scan stays here. Off until you set one.

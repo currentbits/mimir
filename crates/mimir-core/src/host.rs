@@ -580,6 +580,32 @@ impl Host {
                 }
                 ok(self.db.setting("email_tasks")?.as_deref() == Some("on"))
             }
+            // Webhooks out: the address, which events go to it, and whether the text goes too. The secret the bodies
+            // are signed with is made (in the keychain) the first time an address is saved, or anew with `rotate`.
+            "webhook_out" => {
+                if let Some(url) = arg::<Option<String>>(a, "url")? {
+                    let url = url.trim();
+                    if !url.is_empty() && url::Url::parse(url).map_or(true, |u| !["http", "https"].contains(&u.scheme())) {
+                        bail!("not a web address (http:// or https://)");
+                    }
+                    let events: Vec<String> = arg::<Option<Vec<String>>>(a, "events")?.unwrap_or_default().into_iter().filter(|e| crate::hooks::EVENTS.contains(&e.as_str())).collect();
+                    self.db.set_setting("webhook_out_url", url)?;
+                    self.db.set_setting("webhook_out_events", &events.join(","))?;
+                    self.db.set_setting("webhook_out_text", if arg::<Option<bool>>(a, "text")?.unwrap_or(false) { "on" } else { "off" })?;
+                    if !url.is_empty() && (self.secrets.get(crate::hooks::SECRET).is_none() || arg::<Option<bool>>(a, "rotate")?.unwrap_or(false)) {
+                        self.secrets.set(crate::hooks::SECRET, &crate::random_hex(24)?)?;
+                    }
+                }
+                let (url, events, text) = crate::hooks::settings(&self.db);
+                ok(json!({"url": url, "events": events, "text": text, "secret": self.secrets.get(crate::hooks::SECRET)}))
+            }
+            // A test body to the saved address, sent now (not through the outbox): says what went wrong.
+            "webhook_out_test" => {
+                let url = crate::hooks::settings(&self.db).0.context("save an address first")?;
+                let body = json!({"event": "test", "at": crate::db::now(), "summary": "A test from Mimir"}).to_string();
+                crate::hooks::post(&url, &body).await?;
+                ok(())
+            }
             // Adding events to your calendar (calendar_create) over CalDAV: the server, the login and which calendar.
             // Saving signs in and lists the calendars; no password given keeps the saved one (or the email's, same login).
             "caldav_settings" => {
@@ -679,6 +705,11 @@ impl Host {
                     p.forget_session(&s);
                 }
                 ok(self.db.set_session(bot, chat, None)?)
+            }
+            // Branch from a message: a fresh conversation that opens with the chat up to it.
+            "branch" => {
+                let (bot, chat): (i64, i64) = (arg(a, "bot_id")?, arg(a, "chat_id")?);
+                ok(crate::branch(&self.db, &self.provider(bot)?, bot, chat, chat, Some(arg(a, "message_id")?))?)
             }
             // Delete a chat's history (conversation, run log, corrections, the AI CLIs' copies); memories stay.
             "clear_history" => {
@@ -991,6 +1022,7 @@ impl Host {
                     }
                     self.db.computer_lease("you", "you", crate::computer::TEACH_SECS as i64)?;
                     crate::computer::teach_start();
+                    crate::computer::sniff(&self.home, crate::computer::TEACH_SECS);
                     ok(true)
                 }
                 "stop" => {
@@ -1021,6 +1053,7 @@ impl Host {
                 // Taking over: bots pause until a minute after your last input (or Give back); while showing, until it ends.
                 let secs = if crate::computer::teaching().is_some() { crate::computer::TEACH_SECS as i64 } else { 60 };
                 self.db.computer_lease("you", "you", secs)?;
+                crate::computer::sniff(&self.home, secs as u64);
                 crate::computer::teach_note(&self.home, a).await;
                 let a = a.clone();
                 tokio::task::spawn_blocking(move || -> Result<()> {
@@ -1272,6 +1305,11 @@ impl Host {
             }
             "reset_watch_noise" => ok(self.db.routine_reset_noise(arg(a, "chat_id")?, arg(a, "id")?)?),
             "set_watch" => ok(self.db.routine_set_watch(arg(a, "chat_id")?, arg(a, "id")?, &arg::<String>(a, "watch")?)?),
+            // The data a watched page loaded on the bots' computer while you were in control, to watch instead.
+            "watch_offer" => {
+                let offers = crate::computer::page_data(arg(a, "bot_id")?, &arg::<String>(a, "url")?);
+                ok(offers.into_iter().map(|(url, holds)| json!({"url": url, "holds": holds})).collect::<Vec<_>>())
+            }
             // Only the person sets this (no bot tool does): what the bot read can't widen what comes through.
             "set_ends" => ok(self.db.routine_set_ends(arg(a, "chat_id")?, arg(a, "id")?, arg(a, "ends")?)?),
             "set_urgent" => ok(self.db.routine_set_urgent(arg(a, "chat_id")?, arg(a, "id")?, &arg::<String>(a, "rule")?)?),
@@ -1473,6 +1511,8 @@ impl Host {
                     "goals": self.db.goals_waiting()?,
                     // The daily check found the database damaged: restore a backup.
                     "damage": self.db.setting(crate::backup::DAMAGE)?,
+                    // Plain asks you keep allowing: stop asking?
+                    "rule_hints": tools::rule_hints(&self.db)?,
                     "unconfirmed": self.db.unconfirmed_counts()?.into_iter().map(|(chat, n)| json!({"chat_id": chat, "count": n})).collect::<Vec<_>>(),
                     // A newer release than this server runs (looked up by the bots' loops twice a day).
                     "server_update": is_server().then(|| self.db.setting("update_latest").ok().flatten()).flatten()
@@ -1552,6 +1592,7 @@ impl Host {
             // The AI plan's usage windows, where the AI reports them (Claude Code does).
             "ai_windows" => ok(crate::provider::windows(&self.db)),
             "inbox_dismiss" => ok(self.db.inbox_dismiss(&arg::<String>(a, "kind")?, arg(a, "id")?)?),
+            "rule_hint_dismiss" => ok(tools::rule_hint_dismiss(&self.db, &arg::<String>(a, "tool")?, arg::<Option<String>>(a, "site")?.as_deref())?),
             "site_rules" => ok(self.db.site_rules()?.into_iter().map(|(tool, host, action)| json!({"tool": tool, "host": host, "action": action})).collect::<Vec<_>>()),
             "set_site_rule" => ok(self.db.set_site_rule(&arg::<String>(a, "tool")?, &arg::<String>(a, "host")?, &arg::<String>(a, "action")?)?),
             "rules" => ok(tools::all_specs(&self.db)

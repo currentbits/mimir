@@ -51,6 +51,7 @@ const PATHS: Record<string, string> = {
   pause: 'M9 5.5v13m6-13v13',
   play: 'M7.5 5.5v13l11-6.5-11-6.5Z',
   retry:'M4.5 12a7.5 7.5 0 1 0 2.2-5.3L4.5 9m0-4.5V9H9',
+  branch: 'M6.5 3.5v11m0 0a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5Zm11-6a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5Zm0 0c0 4.5-11 3-11 6',
 }
 
 export function Icon({ name, size = 16, className }: { name: keyof typeof PATHS | string; size?: number; className?: string }) {

@@ -90,6 +90,26 @@ before the run starts go to one run together (up to 20). In chat, "tell me when 
 mail one (`cron` is `mail:<rule>`); it ends after the first match unless you say "every time". **Only the first one**
 does the same in the Routines tab. Bots can't make webhooks: the secret is yours to hand out.
 
+### Webhooks out
+
+The other way round: **Settings → Webhooks out** posts to one address of yours when a routine finishes or fails, an
+approval is waiting, or a reply was sent (you pick which). You can use it to flash a Home Assistant light, push a phone
+notification through ntfy, or start an n8n flow. The body is a small JSON:
+
+```json
+{"event": "approval_waiting", "at": 1760870000, "summary": "An approval is waiting: email_send",
+ "bot": {"id": 1, "name": "Mimir"}, "chat": {"id": 5, "title": "You"}, "routine": null,
+ "link": "https://<your server>/#approval-12"}
+```
+
+`event` is `routine_finished`, `routine_failed`, `approval_waiting` or `reply_sent` (`test` from **Send a test**), and
+the `X-Mimir-Event` header says the same. `link` opens Needs you and is only there when the app has a web address (on
+`mimir server`). Message text (the result, the error, the reply, what the approval is for) is only sent as `text` when
+you turn on **Include the text**. Each body is signed like the calls Mimir takes, `X-Hub-Signature-256: sha256=<HMAC-SHA256
+hex>`, with the signing secret shown there (kept in the keychain, or the server's database). A send goes through the
+outbox: if the address doesn't answer with 2xx, it's tried again every 5 minutes, up to 5 times. A quiet check that
+found nothing to say doesn't count as finished.
+
 The scheduler checks every 30 seconds, so a routine runs within half a minute of its time, as long as Mimir is running.
 On a laptop, **Settings → Keep this computer awake** helps; for 24/7, [self-host](self-hosting.md).
 
@@ -198,6 +218,15 @@ free). When something did change, the AI runs with what changed: the lines that 
 unread messages), up to about 3,000 characters. So a check every 15 minutes costs a fetch, not 96 AI runs a day.
 The first look runs the AI as usual, since there's nothing to compare with yet. If Mimir can't reach the page, the
 check runs as it would without a watch.
+
+Some pages build themselves in the browser (a booking calendar, a price, a stock level), so a plain fetch sees nothing.
+Open such a page on the [bots' computer](computer.md) while you're in control (taking over, or showing a task): Mimir
+notes the JSON the page loads for itself (GET requests only). When a quiet check then watches that page, the form offers
+the address that held what you clicked: "Watch this instead: `GET …/availability?date=…`". Mimir compares that data a
+value per line (`slots[2].free: true`), with no browser and no AI until it changes. It's sent with the cookies the bot's
+own browser had for that site, kept with Mimir's secrets; the AI never sees them, and what comes back is outside
+content like any page. When those cookies go stale the look fails and the check runs as it would without a watch,
+until you open the page on the computer again.
 
 Pages say things that change on their own. Times of day, timestamps and "5 minutes ago" are never counted. When a
 page did change, Mimir looks again a few seconds later: lines that differ between those two looks (a visitor counter,

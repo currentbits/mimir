@@ -27,6 +27,7 @@ const SETTING_WORDS: Record<string, string> = {
   'Sensitive sources': 'bank banking health medical private finance money leak',
   'Your data': 'export backup download delete privacy doctor check health troubleshoot problem usage stats telemetry analytics',
   'Chat API': 'openai token shortcuts siri home assistant integration v1 completions',
+  'Webhooks out': 'home assistant ntfy n8n zapier notify notification push phone light hmac signed events integration',
 }
 
 /** Shows only the settings that match, live as you type: whole groups whose title or note matches, else the rows that do. */
@@ -109,6 +110,7 @@ export function SettingsView({ onComputer, find = '' }: { onComputer: () => void
       <ToolServerSettings onChange={toolsChanged} />
       <SensitiveSettings key={'s' + tools} />
       <Permissions key={tools} />
+      <WebhooksOutSettings />
       <DataSettings />
       {(!inDesktop || remoteServer()) && <ChatApiSettings />}
       <ServerSettings />
@@ -196,6 +198,45 @@ function DoctorRow() {
     : 'AI sign-ins, each bot’s Telegram, Slack and Discord connection, email, the bots’ computer, disk space, the database and its backups. Nothing is spent or sent.')}>
     <button type="button" className="btn btn-sm" disabled={busy} onClick={run}>{busy ? 'Checking…' : 'Check'}</button>
   </Row>
+}
+
+type WebhookOut = { url: string | null; events: string[]; text: boolean; secret: string | null }
+
+const HOOK_EVENTS: [string, string][] = [['routine_finished', 'A routine finished'], ['routine_failed', 'A routine failed'], ['approval_waiting', 'An approval is waiting'], ['reply_sent', 'A reply was sent']]
+
+/** A signed JSON to one address when something happens: flash a light, push a phone notification, start an n8n flow. */
+function WebhooksOutSettings() {
+  const [d, setD] = useState<WebhookOut | null>(null)
+  const [msg, setMsg] = useState<ReactNode>(null)
+  const fail = (e: unknown) => setMsg(<span className="error">{String(e)}</span>)
+  useEffect(() => { invoke<WebhookOut>('webhook_out', {}).then(setD, fail) }, [])
+  if (!d) return null
+  const save = (v: WebhookOut, rotate = false) => invoke<WebhookOut>('webhook_out', { url: v.url ?? '', events: v.events, text: v.text, rotate }).then(r => { setD(r); setMsg(null) }, fail)
+  const test = () => invoke('webhook_out_test').then(() => setMsg('Sent a test. Check that it arrived.'), fail)
+  const rotate = async () => { if (await ask('Make a new signing secret? Whatever checks the old one refuses these calls until you give it the new one.', 'New secret', true)) void save(d, true) }
+  return (
+    <Group title="Webhooks out" note={msg ?? <>When something happens, Mimir posts a small JSON (the event, bot, chat, routine, a short summary and a link to Needs you) to this address, signed in <code>X-Hub-Signature-256</code> the way GitHub signs. A failed send is tried again a few times. Message text is left out unless you include it.</>}>
+      <form className="row-block" onSubmit={e => { e.preventDefault(); void save(d) }}>
+        <div className="editor" style={{ margin: 0 }}><div className="er">
+          <input className="input" type="url" placeholder="https://ntfy.sh/…, or a Home Assistant or n8n webhook" aria-label="Webhook address" value={d.url ?? ''} onChange={e => setD({ ...d, url: e.target.value })} />
+          <button className="btn">Save</button>
+          {d.url && <button type="button" className="btn btn-ghost" onClick={test}>Send a test</button>}
+        </div></div>
+      </form>
+      {HOOK_EVENTS.map(([id, label]) => (
+        <Row key={id} title={label}>
+          <Switch label={label} checked={d.events.includes(id)} onChange={on => save({ ...d, events: on ? [...d.events, id] : d.events.filter(e => e !== id) })} />
+        </Row>
+      ))}
+      <Row title="Include the text" desc="The routine's result or error, the reply, or what the approval is for. It leaves Mimir for that address.">
+        <Switch label="Include the text" checked={d.text} onChange={text => save({ ...d, text })} />
+      </Row>
+      {d.secret && <Row icon={<Icon name="key" size={15} />} title="Signing secret" desc={<code className="selectable">{d.secret}</code>}>
+        <button type="button" className="btn btn-sm" onClick={() => navigator.clipboard.writeText(d.secret!).catch(() => {})}><Icon name="copy" size={13} />Copy</button>
+        <button type="button" className="btn btn-sm btn-ghost" onClick={rotate}>New</button>
+      </Row>}
+    </Group>
+  )
 }
 
 /** Server only: tokens for an OpenAI-compatible chat API, each reaching one bot (Shortcuts, Home Assistant). */
