@@ -159,13 +159,18 @@ impl Db {
 
     #[allow(clippy::too_many_arguments)]
     pub fn approval_create(&self, bot: i64, chat: i64, tool: &str, summary: &str, ttl_secs: i64, kind: &str, site: Option<&str>) -> Result<i64> {
-        let c = self.c();
-        let t = now();
-        c.execute(
-            "INSERT INTO approvals(bot_id, chat_id, tool, summary, created_at, expires_at, kind, site) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
-            params![bot, chat, tool, summary, t, t + ttl_secs, kind, site],
-        )?;
-        Ok(c.last_insert_rowid())
+        let id = {
+            let c = self.c();
+            let t = now();
+            c.execute(
+                "INSERT INTO approvals(bot_id, chat_id, tool, summary, created_at, expires_at, kind, site) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+                params![bot, chat, tool, summary, t, t + ttl_secs, kind, site],
+            )?;
+            c.last_insert_rowid()
+        };
+        // Every ask goes through here (a rule, a sign-in, taking over the computer): Webhooks out hears of each.
+        crate::hooks::fire(self, bot, chat, crate::hooks::Event::Approval { id, tool, summary });
+        Ok(id)
     }
 
     fn expire_stale(c: &Connection) -> Result<()> {

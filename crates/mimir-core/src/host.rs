@@ -580,6 +580,32 @@ impl Host {
                 }
                 ok(self.db.setting("email_tasks")?.as_deref() == Some("on"))
             }
+            // Webhooks out: the address, which events go to it, and whether the text goes too. The secret the bodies
+            // are signed with is made (in the keychain) the first time an address is saved, or anew with `rotate`.
+            "webhook_out" => {
+                if let Some(url) = arg::<Option<String>>(a, "url")? {
+                    let url = url.trim();
+                    if !url.is_empty() && url::Url::parse(url).map_or(true, |u| !["http", "https"].contains(&u.scheme())) {
+                        bail!("not a web address (http:// or https://)");
+                    }
+                    let events: Vec<String> = arg::<Option<Vec<String>>>(a, "events")?.unwrap_or_default().into_iter().filter(|e| crate::hooks::EVENTS.contains(&e.as_str())).collect();
+                    self.db.set_setting("webhook_out_url", url)?;
+                    self.db.set_setting("webhook_out_events", &events.join(","))?;
+                    self.db.set_setting("webhook_out_text", if arg::<Option<bool>>(a, "text")?.unwrap_or(false) { "on" } else { "off" })?;
+                    if !url.is_empty() && (self.secrets.get(crate::hooks::SECRET).is_none() || arg::<Option<bool>>(a, "rotate")?.unwrap_or(false)) {
+                        self.secrets.set(crate::hooks::SECRET, &crate::random_hex(24)?)?;
+                    }
+                }
+                let (url, events, text) = crate::hooks::settings(&self.db);
+                ok(json!({"url": url, "events": events, "text": text, "secret": self.secrets.get(crate::hooks::SECRET)}))
+            }
+            // A test body to the saved address, sent now (not through the outbox): says what went wrong.
+            "webhook_out_test" => {
+                let url = crate::hooks::settings(&self.db).0.context("save an address first")?;
+                let body = json!({"event": "test", "at": crate::db::now(), "summary": "A test from Mimir"}).to_string();
+                crate::hooks::post(&url, &body).await?;
+                ok(())
+            }
             // Adding events to your calendar (calendar_create) over CalDAV: the server, the login and which calendar.
             // Saving signs in and lists the calendars; no password given keeps the saved one (or the email's, same login).
             "caldav_settings" => {
