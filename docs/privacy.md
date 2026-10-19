@@ -29,6 +29,9 @@ to the services you connected.
   the tidy-up (Settings). So a conversation with a bot on a local model reaches that account too, if it's a cloud one.
 - **Voice notes** are transcribed with your OpenAI-compatible key if you added one, else on the computer the bot runs
   on. **Push-to-talk** in the app always transcribes on your computer.
+- **Scanned PDFs**: their pages go to the bot's AI account as photos, unless you set a local document model
+  (Settings → Scanned PDFs). Then they go to Ollama at the address you gave (this computer by default), and only
+  their text, plus any page it couldn't read, reaches the AI account.
 - **Messaging apps** carry the messages you exchange there (Telegram, Slack, Discord).
 - **Meetings**: transcription and speaker separation run on your computer. A transcript leaves only when a bot reads it
   (it then goes to that bot's AI account like any other message). Without the built-in engine, the OpenAI-compatible

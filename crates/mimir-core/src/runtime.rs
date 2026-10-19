@@ -681,16 +681,18 @@ impl Core {
                 chan.send(ext, &format!("I {e}. Could you send it another way, or paste the part you need?")).await;
                 Ok(())
             }
-            // A scan: its pages go to the bot as photos.
+            // A scan: its pages go to the bot as photos, or as text where a local model read them.
             Some(Ok(t)) if t.split_whitespace().count() < 5 => {
                 let pages = if crate::is_pdf(name, mime) { crate::read_pdf_pages(bytes.to_vec()).await } else { vec![] };
                 if pages.is_empty() {
                     chan.send(ext, tr("That file has no text I can read (a scanned PDF?). Send photos of the pages instead.")).await;
                     return Ok(());
                 }
+                let (read, pages) = crate::ocr::read_pages(&self.db, pages).await;
                 let saved = pages.iter().map(|p| self.save_media(p, "jpg")).collect::<Result<Vec<_>>>()?;
                 self.db.conv_taint(self.bot, self.conv(chan, ext, chat)?)?;
-                self.incoming_with(chan, ext, from, "", &crate::with_scan(said, name, saved.len()), saved, sent).await
+                let msg = if read.is_empty() { crate::with_scan(said, name, saved.len()) } else { crate::with_document(said, name, &read) };
+                self.incoming_with(chan, ext, from, "", &msg, saved, sent).await
             }
             Some(Ok(t)) => {
                 self.db.conv_taint(self.bot, self.conv(chan, ext, chat)?)?;
