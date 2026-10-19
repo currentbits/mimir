@@ -1249,6 +1249,10 @@ pub async fn call(ctx: &ToolCtx, full: &str, args: &Value) -> Result<String> {
     if let Some(url) = text.split("\n### Page").nth(1).and_then(|page| page.lines().find_map(|l| l.trim().trim_start_matches("- ").strip_prefix("Page URL: "))) {
         *ctx.page_url.lock().unwrap() = Some(url.trim().to_string());
     }
+    if server == BROWSER && tool == "browser_navigate" && crate::computer::usable(&ctx.db) {
+        // How often sites block the server's browser (#160), in the daily usage count: a number, never the page.
+        crate::usage_stats::count_page(&ctx.db, &text);
+    }
     let text = redact(&text, &[vault_values(&ctx.db), codes].concat());
     if res["isError"].as_bool() == Some(true) {
         bail!("{}", crate::tools::truncate(&text, 2000));
