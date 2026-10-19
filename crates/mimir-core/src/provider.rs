@@ -2,7 +2,8 @@
 //! (`claude -p`, `codex exec` = ChatGPT subscription, `grok -p` = a Grok plan); we never touch their
 //! credentials. `OpenAi` speaks /chat/completions: the `openai` account (OpenAI or any
 //! compatible endpoint), `openrouter`, and `local` (Ollama / LM Studio on this machine). `ChatGpt` is your ChatGPT
-//! plan signed in from Mimir ("Sign in with ChatGPT"), on the Responses API: see chatgpt.rs.
+//! plan signed in from Mimir ("Sign in with ChatGPT"), on the Responses API: see chatgpt.rs. An `xai` bot without a key
+//! runs on the person's Grok plan, signed in from Mimir: see grok_plan.rs.
 
 use crate::db::Usage;
 use crate::tools::{self, ToolCtx};
@@ -17,8 +18,16 @@ pub enum Provider {
     Claude { model: Option<String>, home: PathBuf },
     Codex { model: Option<String>, home: PathBuf },
     Grok { model: Option<String>, home: PathBuf },
-    OpenAi { base: String, key: String, model: String },
+    OpenAi { base: String, key: Key, model: String },
     ChatGpt { model: Option<String> },
+}
+
+/// What an API request is signed with.
+#[derive(Clone)]
+pub enum Key {
+    Fixed(String),
+    /// The Grok plan signed in from Mimir: a short-lived token, fetched (and refreshed) for each request.
+    GrokPlan,
 }
 
 #[derive(Debug)]
@@ -83,13 +92,18 @@ impl Provider {
                 };
                 match kind {
                     "openrouter" if key.is_none() => bail!("add your OpenRouter key in Settings first"),
-                    "xai" if key.is_none() => bail!("add your xAI key in Settings first"),
+                    "xai" if key.is_none() && crate::grok_plan::account().is_none() => bail!("add your xAI key, or sign in with your Grok plan, in Settings first"),
                     _ => {}
+                }
+                let model = model.or(default_model.map(String::from)).context("pick a model for this bot")?;
+                // No key, so the Grok plan: its token only ever goes to xAI, whatever address the bot names.
+                if kind == "xai" && key.is_none() {
+                    return Ok(Provider::OpenAi { base: crate::grok_plan::api_base(), key: Key::GrokPlan, model });
                 }
                 Ok(Provider::OpenAi {
                     base: base.filter(|b| !b.trim().is_empty()).unwrap_or_else(|| default_base.into()),
-                    key: key.unwrap_or_default(),
-                    model: model.or(default_model.map(String::from)).context("pick a model for this bot")?,
+                    key: Key::Fixed(key.unwrap_or_default()),
+                    model,
                 })
             }
         }
@@ -106,6 +120,7 @@ impl Provider {
             Provider::Claude { model, .. } => format!("claude -p ({})", model.as_deref().unwrap_or("default model")),
             Provider::Codex { model, .. } => format!("codex exec ({})", model.as_deref().unwrap_or("default model")),
             Provider::Grok { model, .. } => format!("grok -p ({})", model.as_deref().unwrap_or("default model")),
+            Provider::OpenAi { model, key: Key::GrokPlan, .. } => format!("{model} on your Grok plan"),
             Provider::OpenAi { base, model, .. } => format!("{model} @ {base}"),
             Provider::ChatGpt { model } => format!("ChatGPT plan ({})", model.as_deref().unwrap_or("default model")),
         }
@@ -867,6 +882,12 @@ pub async fn detect(kind: &str, home: &std::path::Path) -> Value {
             }
             json!({"installed": false})
         }
+        // A key, or the Grok plan signed in from Mimir (and why the last sign-in didn't finish).
+        "xai" => {
+            let account = crate::grok_plan::account();
+            json!({"installed": true, "signed_in": crate::host::api_key(kind).is_some() || account.is_some(), "account": account,
+                   "key": crate::host::api_key(kind).is_some(), "error": crate::grok_plan::sign_in_error()})
+        }
         // Signed in from Mimir: nothing to install.
         "chatgpt" => {
             let account = crate::chatgpt::account();
@@ -884,6 +905,14 @@ pub async fn models(kind: &str, base: Option<&str>, key: Option<&str>) -> Result
         return crate::chatgpt::models().await;
     }
     let Some((default_base, _)) = api_defaults(kind) else { return Ok(vec![]) };
+    // No xAI key: the Grok plan's list, from xAI only.
+    let (plan_base, plan_key);
+    let (base, key) = if kind == "xai" && key.is_none_or(str::is_empty) && crate::grok_plan::account().is_some() {
+        (plan_base, plan_key) = (crate::grok_plan::api_base(), crate::grok_plan::access_token().await?);
+        (Some(plan_base.as_str()), Some(plan_key.as_str()))
+    } else {
+        (base, key)
+    };
     let base = base.filter(|b| !b.trim().is_empty()).unwrap_or(default_base).trim_end_matches('/');
     let url = if kind == "openrouter" { format!("{base}/models?supported_parameters=tools") } else { format!("{base}/models") };
     let http = reqwest::Client::builder().timeout(Duration::from_secs(if kind == "local" { 2 } else { 15 })).build()?;
@@ -1153,7 +1182,7 @@ impl Acc {
     }
 }
 
-async fn openai(ctx: &ToolCtx, base: &str, key: &str, model: &str, system: &str, history: &[(String, String)], user: &str) -> Result<Reply> {
+async fn openai(ctx: &ToolCtx, base: &str, key: &Key, model: &str, system: &str, history: &[(String, String)], user: &str) -> Result<Reply> {
     let mut messages = vec![json!({"role":"system","content":system})];
     messages.extend(history.iter().map(|(role, content)| json!({"role":role,"content":content})));
     if ctx.images.is_empty() {
@@ -1179,6 +1208,7 @@ async fn openai(ctx: &ToolCtx, base: &str, key: &str, model: &str, system: &str,
     let mut usage = Usage { model: Some(model.to_string()), ..Default::default() };
     // Using the computer takes many small steps (look, click, type, look again).
     let rounds = if tools::specs_for(ctx).iter().any(|s| s.0 == "computer_screenshot") { 40 } else { MAX_TOOL_ROUNDS };
+    let mut retried_auth = false;
     for _ in 0..rounds {
         // Our own bookkeeping field stays out of the request (strict APIs reject unknown fields).
         let mut sent: Vec<Value> = messages.iter().map(|m| { let mut m = m.clone(); if let Some(o) = m.as_object_mut() { o.remove("mimir_screenshot"); } m }).collect();
@@ -1204,8 +1234,12 @@ async fn openai(ctx: &ToolCtx, base: &str, key: &str, model: &str, system: &str,
             body["stream_options"] = json!({"include_usage": true});
         }
         let mut req = http.post(&url).json(&body);
-        if !key.is_empty() {
-            req = req.bearer_auth(key);
+        let bearer = match key {
+            Key::Fixed(k) => k.clone(),
+            Key::GrokPlan => crate::grok_plan::access_token().await?,
+        };
+        if !bearer.is_empty() {
+            req = req.bearer_auth(bearer);
         }
         let mut resp = req.send().await?;
         let status = resp.status();
@@ -1242,6 +1276,17 @@ async fn openai(ctx: &ToolCtx, base: &str, key: &str, model: &str, system: &str,
                     tool_specs.clear();
                     messages[0]["content"] = json!(format!("{system}\n\nThis model can't use tools: you can't save memories, set routines or open pages. If asked to, say so."));
                     continue;
+                }
+                if matches!(key, Key::GrokPlan) {
+                    // Ended early: refresh once and ask again.
+                    if status == reqwest::StatusCode::UNAUTHORIZED && !retried_auth {
+                        retried_auth = true;
+                        crate::grok_plan::forget_access();
+                        continue;
+                    }
+                    if status == reqwest::StatusCode::FORBIDDEN {
+                        bail!("{}", crate::grok_plan::not_on_plan(&msg));
+                    }
                 }
                 if status == reqwest::StatusCode::UNAUTHORIZED {
                     bail!("the API key was rejected ({msg}); check it in Settings → AI keys");

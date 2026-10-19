@@ -460,7 +460,8 @@ function ApiKeySettings() {
   const [has, setHas] = useState<Record<string, boolean>>({})
   const [grok, setGrok] = useState<Account | null>(null)
   const [chatgpt, setChatgpt] = useState<Account | null>(null)
-  const loadGrok = () => invoke<Record<string, Account>>('accounts').then(a => { setGrok(a?.grok ?? null); setChatgpt(a?.chatgpt ?? null) }, () => {})
+  const [xai, setXai] = useState<Account | null>(null)
+  const loadGrok = () => invoke<Record<string, Account>>('accounts').then(a => { setGrok(a?.grok ?? null); setChatgpt(a?.chatgpt ?? null); setXai(a?.xai ?? null) }, () => {})
   useEffect(() => { loadGrok() }, [])
   const [open, setOpen] = useState<string | null>(null)
   const [key, setKey] = useState('')
@@ -468,7 +469,7 @@ function ApiKeySettings() {
   const [err, setErr] = useState<string | null>(null)
   const load = () => invoke<Record<string, boolean>>('api_keys').then(h => setHas(h ?? {}), e => setErr(String(e)))
   useEffect(() => { load() }, [])
-  const save = (kind: string, k: string) => invoke('set_api_key', { kind, key: k }).then(load)
+  const save = (kind: string, k: string) => invoke('set_api_key', { kind, key: k }).then(() => { load(); loadGrok() })
     .then(() => { setKey(''); setOpen(null); setErr(null); setMsg({ ...msg, [kind]: k ? 'Key saved' : 'Key removed' }) }, e => setErr(String(e)))
   return (
     <Group title="AI keys" note={err ? <span className="error">{err}</span> : `Shared by all your bots on that account. Stored in ${SECRETS_AT}.`}>
@@ -485,6 +486,11 @@ function ApiKeySettings() {
       <Row icon={<Icon name="user" size={15} />} title="Grok subscription"
         desc={!grok ? 'Checking…' : !grok.installed ? 'Install Grok Build to use your SuperGrok or X Premium+ plan' : grok.signed_in ? 'Signed in for Mimir' : 'Not signed in'}>
         {grok?.installed && !grok.signed_in && <SignInGrok onDone={loadGrok} />}
+      </Row>
+      <Row icon={<Icon name="user" size={15} />} title="Grok plan on xAI’s API"
+        desc={!xai ? 'Checking…' : xai.account ? `Signed in (${xai.account}). Bots on the xAI account use your plan${xai.key ? ' once the xAI key below is removed' : ''}.` : 'Sign in to run bots on the xAI account with your X Subscription, SuperGrok or X Premium+ plan. Nothing to install'}>
+        {xai?.account ? <button className="btn btn-sm btn-ghost btn-danger" onClick={() => invoke('grok_plan_sign_out').then(loadGrok, e => setErr(String(e)))}>Sign out</button>
+          : xai && <SignInGrok plan onDone={loadGrok} />}
       </Row>
       {KEY_ROWS.map(r => (
         <Fragment key={r.kind}>

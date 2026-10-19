@@ -5,6 +5,11 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 ## Unreleased
 
 ### Talking to your bots
+- **Grok without Grok Build:** *Sign in with your Grok plan* (Settings → AI keys) runs bots on the xAI API account
+  on your X Subscription, SuperGrok or X Premium+ plan, with no CLI and no API key. Confirm a code at x.ai from any
+  browser, so it works on a server too. Bots use Mimir's tools directly and get photos at full size. If xAI doesn't
+  offer its API to your plan, the bot says so; the Grok (Grok Build) account still works. See
+  [docs/ai-accounts.md](docs/ai-accounts.md#signing-in).
 - **X search:** bots can search recent X (Twitter) posts (`x_search`) with your own X API bearer token
   (**Settings → Web search → X**). Good for a morning routine of fresh posts. See
   [docs/connect.md](docs/connect.md#x-search) for getting a token.

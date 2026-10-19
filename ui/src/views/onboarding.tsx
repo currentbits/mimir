@@ -111,7 +111,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
               {ACCOUNT_ORDER.map(k => {
                 const a = accounts?.[k]
                 const [label, tone] = !accounts ? ['Checking…', '']
-                  : KEYED[k] ? (a?.signed_in ? ['Key saved', 'live'] : ['Bring your own', ''])
+                  : KEYED[k] ? (a?.key === false && a.account ? ['Signed in', 'live'] : a?.signed_in ? ['Key saved', 'live'] : ['Bring your own', ''])
                   : k === 'local' ? (!a?.installed ? ['Not running', 'pending'] : !a.signed_in ? ['No models yet', 'pending'] : [`${a.server} · ${a.models?.length} model${a.models?.length === 1 ? '' : 's'}`, 'live'])
                   : !a?.installed ? ['Not installed', 'pending'] : !a.signed_in ? ['Not signed in', 'pending']
                   : [a.plan ? `${a.plan[0].toUpperCase()}${a.plan.slice(1)} plan` : 'Signed in', 'live']
@@ -129,6 +129,8 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
                 <button className="btn btn-sm" onClick={check}>Check again</button></div>
             )}
             {provider === 'grok' && acc?.installed && !acc.signed_in && <div className="connect-row"><SignInGrok onDone={check} /></div>}
+            {provider === 'xai' && accounts && !acc?.signed_in && <div className="connect-row"><SignInGrok plan onDone={check} /><span className="hint">or paste a key below</span></div>}
+            {provider === 'xai' && acc?.account && !acc.key && <p className="hint" style={{ margin: 0 }}>You’re using your Grok plan ({acc.account}), on xAI’s API.</p>}
             {provider === 'chatgpt' && accounts && !acc?.signed_in && <SignInChatGPT onDone={check} place={(control, below) => <><div className="connect-row">{control}</div>{below}</>} />}
             {provider === 'chatgpt' && acc?.signed_in && <p className="hint" style={{ margin: 0 }}>You’re using your ChatGPT plan ({acc.account}). Set how much Mimir may use each week in <a href="https://chatgpt.com/#settings" onClick={openLink}>ChatGPT’s settings</a>.</p>}
             {provider === 'openrouter' && !acc?.signed_in && inDesktop && !remoteServer() && (

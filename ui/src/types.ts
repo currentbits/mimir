@@ -36,7 +36,7 @@ export type Approval = { id: number; bot_id: number; chat_id: number; tool: stri
 
 export type Busy = { bot_id: number; chat_id: number; trigger: string; step: string | null }
 
-export type Account = { installed: boolean; signed_in?: boolean; version?: string; plan?: string | null; account?: string | null; server?: string; base?: string; models?: Model[] }
+export type Account = { installed: boolean; signed_in?: boolean; version?: string; plan?: string | null; account?: string | null; key?: boolean; error?: string | null; server?: string; base?: string; models?: Model[] }
 
 export type Model = { id: string; tools: boolean | null; name?: string }
 

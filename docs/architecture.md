@@ -21,6 +21,7 @@ For contributors: how the pieces fit together.
 | `telegram`, `slack`, `discord`, `signal`, `whatsapp` | The messaging apps (outbound connections, streaming replies; WhatsApp's messages come in on the server's `/whatsapp` webhook) |
 | `provider` | AI accounts: starts `claude -p` / `codex exec` / `grok -p`, or calls an OpenAI-compatible API; streams replies |
 | `chatgpt` | Sign in with ChatGPT: OAuth (PKCE, dynamic registration), the plan's tokens, and replies on the Responses API |
+| `grok_plan` | Sign in with your Grok plan: xAI's device-code sign-in, the plan's rotating tokens, used as the `xai` account's key |
 | `oauth` | OAuth sign-in with PKCE for tool servers and Outlook: the browser's return trip (or a pasted address), tokens in the secret store, refreshing |
 | `lib.rs` (`turn`) | One run: builds the instructions (role, standing memory, skills), calls the provider, records the run; `/skill` commands (`skill_command`) |
 | `tools` | `mod.rs`: `ToolCtx`, `call` (every tool call), taint, shared helpers; `specs.rs`: tool definitions; `gate.rs`: the allow / ask / deny gate, plans, loops, parked calls; `builtin.rs`: the built-in tools' code |

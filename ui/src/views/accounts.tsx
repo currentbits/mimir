@@ -10,7 +10,7 @@ export const ACCOUNTS: Record<string, { name: string; mark: string; desc: string
   codex: { name: 'Codex CLI', mark: 'G', desc: 'Your ChatGPT subscription, through the Codex CLI', install: 'Install the Codex CLI with npm install -g @openai/codex, then check again.', signin: 'Open Terminal and run codex login to sign in with ChatGPT.' },
   grok: { name: 'Grok', mark: 'X', desc: 'Your SuperGrok or X Premium+ subscription, through Grok Build', install: 'Install Grok Build with curl -fsSL https://x.ai/cli/install.sh | bash in Terminal, then check again.', signin: 'Sign in to Grok for Mimir. It keeps its own login, separate from your grok setup.' },
   openrouter: { name: 'OpenRouter', mark: 'R', desc: 'One key for Claude, GPT, Gemini, Llama and hundreds more', install: '', signin: '' },
-  xai: { name: 'xAI API', mark: 'X', desc: 'Grok models billed per token, with an xAI API key', install: '', signin: '' },
+  xai: { name: 'xAI API', mark: 'X', desc: 'Grok models on xAI’s API: your Grok plan, signed in, or an API key billed per token', install: '', signin: '' },
   local: { name: 'Local model', mark: 'L', desc: 'Ollama or LM Studio on this computer. Private and free.', install: "Install Ollama from ollama.com and run ollama pull qwen3:4b in Terminal (or start LM Studio's local server), then check again.", signin: 'Ollama is running but has no models yet. Run ollama pull qwen3:4b in Terminal, then check again.' },
   openai: { name: 'API key', mark: 'K', desc: 'OpenAI, or any OpenAI-compatible service', install: '', signin: '' },
 }
@@ -142,27 +142,32 @@ export function SignInBrowser<T>({ label, what, start, wait, paste, onDone, disa
   </>
 }
 
-/** Sign in to Grok for Mimir with a device code: open the page, confirm the code, and this notices when it's done. */
-export function SignInGrok({ onDone }: { onDone: () => void }) {
+/** Sign in to Grok for Mimir with a device code: open the page, confirm the code, and this notices when it's done.
+ *  `plan`: the Grok plan on xAI's API (the xAI account, no Grok Build) instead of Grok Build's own login. */
+export function SignInGrok({ onDone, plan = false }: { onDone: () => void; plan?: boolean }) {
   const [login, setLogin] = useState<{ url: string; code: string } | null>(null)
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [start, stop] = plan ? ['grok_plan_sign_in', 'grok_plan_sign_in_cancel'] : ['grok_login', 'grok_login_cancel']
   useEffect(() => {
     if (!login) return
-    const t = setInterval(() => invoke<Record<string, Account>>('accounts').then(a => { if (a?.grok?.signed_in) { setLogin(null); onDone() } }, () => {}), 3000)
+    const t = setInterval(() => invoke<Record<string, Account>>('accounts').then(a => {
+      if (plan ? a?.xai?.account : a?.grok?.signed_in) { setLogin(null); (plan ? invoke('grok_plan_signed_in') : Promise.resolve()).finally(onDone) }
+      else if (plan && a?.xai?.error) { setLogin(null); setErr(a.xai.error) }
+    }, () => {}), 3000)
     return () => clearInterval(t)
   }, [login]) // eslint-disable-line react-hooks/exhaustive-deps
   const go = () => {
     setBusy(true); setErr(null)
-    invoke<{ url: string; code: string }>('grok_login').then(l => { setLogin(l); if (inDesktop) localInvoke('open_url', { url: l.url }).catch(() => {}) }, e => setErr(String(e))).finally(() => setBusy(false))
+    invoke<{ url: string; code: string }>(start).then(l => { setLogin(l); if (inDesktop) localInvoke('open_url', { url: l.url }).catch(() => {}) }, e => setErr(String(e))).finally(() => setBusy(false))
   }
   if (login) return (
     <span className="connect-wait" role="status"><span className="typing" aria-hidden="true"><i /><i /><i /></span>
       Confirm <code>{login.code}</code> at <a href={login.url} target="_blank" rel="noreferrer" onClick={openLink}>{(() => { try { return new URL(login.url).hostname } catch { return login.url } })()}</a>…
-      <button type="button" className="btn btn-sm btn-ghost" onClick={() => { setLogin(null); invoke('grok_login_cancel').catch(() => {}) }}>Cancel</button></span>
+      <button type="button" className="btn btn-sm btn-ghost" onClick={() => { setLogin(null); invoke(stop).catch(() => {}) }}>Cancel</button></span>
   )
   return <>
-    <button type="button" className="btn" disabled={busy} onClick={go}><Icon name="bolt" size={14} />{busy ? 'Starting…' : 'Sign in to Grok'}</button>
+    <button type="button" className="btn" disabled={busy} onClick={go}><Icon name="bolt" size={14} />{busy ? 'Starting…' : plan ? 'Sign in with your Grok plan' : 'Sign in to Grok'}</button>
     {err && <span className="error" style={{ margin: 0 }}>{err}</span>}
   </>
 }
