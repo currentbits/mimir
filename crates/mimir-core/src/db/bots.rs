@@ -167,6 +167,7 @@ impl Db {
             "DELETE FROM sessions WHERE chat_id=?1",
             "DELETE FROM conv_taint WHERE chat_id=?1",
             "DELETE FROM settings WHERE key LIKE 'private:%:' || ?1",
+            "DELETE FROM settings WHERE key LIKE 'catchup:%:' || ?1",
         ] {
             tx.execute(sql, [chat])?;
         }
