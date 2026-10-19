@@ -1240,14 +1240,18 @@ pub fn card_page(db: &Db, key: &str) -> Option<(String, String)> {
 /// A card's `tools/call`: one of its own server's tools, through the tool gate like the bot's own calls. The card is
 /// the server's page, so it counts as outside content: a tool that isn't confirmed read-only asks first. Answers as a
 /// CallToolResult (a refusal too, with isError).
-pub async fn card_call(db: &Db, key: &str, name: &str, args: &Value) -> Result<Value> {
-    let (chat, bot, tool) = db.tool_card_owner(key)?.context("that card is gone")?;
-    let (server, _) = split(&tool).context("not a tool server's card")?;
-    let ctx = ToolCtx::new(db.clone(), bot, chat);
-    ctx.pre_taint();
-    Ok(match crate::tools::call(&ctx, &format!("{server}{SEP}{name}"), args).await {
-        Ok(text) => ctx.raw_result.lock().unwrap().take().unwrap_or_else(|| json!({"content": [{"type": "text", "text": text}]})),
-        Err(e) => json!({"content": [{"type": "text", "text": format!("{e:#}")}], "isError": true}),
+/// Boxed here, not where it's awaited: the tool gate's future is big, and Host::call's match (debug builds give every
+/// arm its own stack space) already sits near Windows' test-thread stack.
+pub fn card_call<'a>(db: &'a Db, key: &'a str, name: &'a str, args: &'a Value) -> futures_util::future::BoxFuture<'a, Result<Value>> {
+    Box::pin(async move {
+        let (chat, bot, tool) = db.tool_card_owner(key)?.context("that card is gone")?;
+        let (server, _) = split(&tool).context("not a tool server's card")?;
+        let ctx = ToolCtx::new(db.clone(), bot, chat);
+        ctx.pre_taint();
+        Ok(match crate::tools::call(&ctx, &format!("{server}{SEP}{name}"), args).await {
+            Ok(text) => ctx.raw_result.lock().unwrap().take().unwrap_or_else(|| json!({"content": [{"type": "text", "text": text}]})),
+            Err(e) => json!({"content": [{"type": "text", "text": format!("{e:#}")}], "isError": true}),
+        })
     })
 }
 
