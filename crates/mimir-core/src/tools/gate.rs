@@ -227,6 +227,148 @@ pub(super) fn off_brief(ctx: &ToolCtx, name: &str, args: &Value) -> bool {
     !crate::fits_ask(&brief, &target)
 }
 
+/// The setting that keeps a routine's earlier writes, per tool, for the drift guard (removed with it).
+pub(crate) fn drift_key(routine: i64) -> String {
+    format!("drift:{routine}")
+}
+
+/// What a write looked like, for comparing a routine's runs: where it went, its units and currencies, and its sizes
+/// (amounts and quantities, and how many items a list held), by where they sit in the call.
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+pub(super) struct Shape {
+    to: Vec<String>,
+    units: Vec<String>,
+    sizes: std::collections::BTreeMap<String, f64>,
+}
+
+/// Where a write goes. Not a file path: a routine writing a new day's note each run is the usual.
+const DRIFT_TO: [&str; 14] = ["to", "recipient", "recipients", "email", "cc", "bcc", "url", "address", "channel", "account", "chat_id", "phone", "repo", "destination"];
+/// How much: the numbers watched (by the key's words, so `item_quantity` and `totalAmount` count).
+const DRIFT_SIZE: [&str; 9] = ["quantity", "qty", "count", "amount", "total", "price", "sum", "weight", "units"];
+const DRIFT_UNIT: [&str; 4] = ["unit", "units", "currency", "uom"];
+
+/// A key's words: `item_quantity` and `itemQuantity` are both item, quantity.
+fn key_words(k: &str) -> Vec<String> {
+    let mut words = vec![String::new()];
+    let mut prev_lower = false;
+    for c in k.chars() {
+        if !c.is_alphanumeric() || (c.is_uppercase() && prev_lower) {
+            words.push(String::new());
+        }
+        if c.is_alphanumeric() {
+            words.last_mut().unwrap().push(c.to_ascii_lowercase());
+        }
+        prev_lower = c.is_lowercase();
+    }
+    words.retain(|w| !w.is_empty());
+    words
+}
+
+pub(super) fn shape_of(args: &Value) -> Shape {
+    fn walk(v: &Value, path: &str, key: &str, s: &mut Shape) {
+        let words = key_words(key);
+        let has = |list: &[&str]| words.iter().any(|w| list.contains(&w.as_str()));
+        match v {
+            Value::Object(m) => m.iter().for_each(|(k, v)| walk(v, &if path.is_empty() { k.clone() } else { format!("{path}.{k}") }, k, s)),
+            Value::Array(a) => {
+                s.sizes.insert(path.to_string(), a.len() as f64);
+                a.iter().for_each(|i| walk(i, path, key, s));
+            }
+            // By the key's last word: `to_address` and `recipient_email` go somewhere, `email_body` doesn't.
+            _ if DRIFT_TO.contains(&key.to_lowercase().as_str()) || words.last().is_some_and(|w| DRIFT_TO.contains(&w.as_str())) => {
+                let text = v.as_str().map(String::from).unwrap_or_else(|| v.to_string());
+                for t in text.split([',', ';']).map(|t| t.trim().to_lowercase()).filter(|t| !t.is_empty()) {
+                    // A site by its host: a different page on it each time isn't somewhere new.
+                    let t = url::Url::parse(&t).ok().and_then(|u| u.host_str().map(String::from)).unwrap_or(t);
+                    if !s.to.contains(&t) {
+                        s.to.push(t);
+                    }
+                }
+            }
+            Value::Number(n) if has(&DRIFT_SIZE) => {
+                let n = n.as_f64().unwrap_or(0.0);
+                let e = s.sizes.entry(path.to_string()).or_insert(n);
+                *e = e.max(n);
+            }
+            Value::String(u) if has(&DRIFT_UNIT) && !u.trim().is_empty() && u.len() <= 20 => {
+                let u = u.trim().to_lowercase();
+                if !s.units.contains(&u) {
+                    s.units.push(u);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut s = Shape::default();
+    walk(args, "", "", &mut s);
+    s
+}
+
+/// Earlier runs needed before a routine's write is compared with them, and how many are kept.
+const DRIFT_MIN: usize = 3;
+const DRIFT_KEEP: usize = 20;
+
+/// How this write differs from the routine's earlier ones, in words for its card ("new recipient bob@x.example",
+/// "items: usually 1–3, this time 14"); empty when it looks like them or there's too little to go on.
+// ponytail: per call, against the last 20; many small calls (one add-to-cart per item) aren't summed per run.
+pub(super) fn drifted(earlier: &[Shape], now: &Shape) -> Vec<String> {
+    if earlier.len() < DRIFT_MIN {
+        return vec![];
+    }
+    let mut why: Vec<String> = now.to.iter().filter(|t| !earlier.iter().any(|e| e.to.contains(t))).map(|t| format!("new recipient {t}")).collect();
+    let usual: Vec<&String> = earlier.iter().flat_map(|e| &e.units).fold(vec![], |mut v, u| {
+        if !v.contains(&u) {
+            v.push(u);
+        }
+        v
+    });
+    for u in now.units.iter().filter(|u| !usual.is_empty() && !usual.contains(u)) {
+        why.push(format!("in {u}, usually {}", usual.iter().map(|u| u.as_str()).collect::<Vec<_>>().join(" or ")));
+    }
+    for (path, &n) in &now.sizes {
+        let seen: Vec<f64> = earlier.iter().filter_map(|e| e.sizes.get(path).copied()).collect();
+        let (lo, hi) = seen.iter().fold((f64::MAX, f64::MIN), |(lo, hi), &v| (lo.min(v), hi.max(v)));
+        // Well outside: more than three times the most it ever was. Less is never riskier.
+        if !seen.is_empty() && hi > 0.0 && n > 3.0 * hi {
+            let label = path.rsplit('.').next().unwrap_or(path).replace('_', " ");
+            let usually = if lo == hi { format!("{hi}") } else { format!("{lo}–{hi}") };
+            why.push(format!("{label}: usually {usually}, this time {n}"));
+        }
+    }
+    why
+}
+
+/// The writes the drift guard watches: an email, and a tool server's write (not the browser's or the computer's
+/// steps, which act on pages one click at a time).
+fn drift_watched(db: &Db, name: &str) -> bool {
+    name == "email_send" || (crate::ext::split(name).is_some_and(|(s, _)| s != crate::ext::BROWSER) && !is_read_only(db, name))
+}
+
+fn drift_history(db: &Db, routine: i64) -> serde_json::Map<String, Value> {
+    db.setting(&drift_key(routine)).ok().flatten().and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default()
+}
+
+/// The drift guard: in a routine's run, a write it may do without asking that looks unlike its earlier runs asks this
+/// once, saying why. Only ever allow → ask.
+pub(super) fn drift(ctx: &ToolCtx, name: &str, args: &Value) -> Vec<String> {
+    let Some(routine) = ctx.run_id.and_then(|r| ctx.db.run_routine(r).ok().flatten()).filter(|_| drift_watched(&ctx.db, name)) else { return vec![] };
+    let earlier: Vec<Shape> = drift_history(&ctx.db, routine).get(name).and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
+    drifted(&earlier, &shape_of(args))
+}
+
+/// A routine's write went ahead (by itself, or once you approved it): it counts as usual from now on.
+pub(crate) fn drift_note(db: &Db, routine: i64, name: &str, args: &Value) -> Result<()> {
+    if !drift_watched(db, name) {
+        return Ok(());
+    }
+    let mut all = drift_history(db, routine);
+    let mut earlier: Vec<Shape> = all.get(name).and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
+    earlier.push(shape_of(args));
+    let from = earlier.len().saturating_sub(DRIFT_KEEP);
+    all.insert(name.to_string(), serde_json::to_value(&earlier[from..])?);
+    db.set_setting(&drift_key(routine), &Value::Object(all).to_string())
+}
+
 /// What the person marked sensitive (Settings → Sensitive sources): tool servers by name, single tools
 /// (`bank__balance`), memory scopes (`chat:7`). Never set by Mimir itself.
 pub fn sensitive_list(db: &Db) -> Vec<String> {
@@ -913,6 +1055,10 @@ pub(super) fn park(ctx: &ToolCtx, name: &str, args: &Value, summary: &str, why: 
     let summary = for_helper(ctx, card_text(summary));
     let id = ctx.db.approval_create(ctx.via_bot.unwrap_or(ctx.bot_id), ctx.ask_chat, name, &summary, PARKED_TTL_SECS, guest_kind(ctx, why), site)?;
     ctx.db.approval_park(id, &args.to_string(), ctx.is_tainted())?;
+    // Its run, so a routine's write you approve counts as its usual (the drift guard).
+    if let Some(run) = ctx.run_id {
+        ctx.db.approval_set_run(id, run)?;
+    }
     if let Some(d) = draft_of(name, args) {
         ctx.db.approval_set_draft(id, &d)?;
     }
@@ -961,6 +1107,11 @@ pub async fn run_parked(db: Db, a: crate::db::Approval) {
         Err(e) => truncate(&format!("{e:#}"), 400),
     };
     let _ = db.tool_call_log(None, a.chat_id, &a.tool, &a.summary, "approved later", out.is_ok(), &result);
+    if out.is_ok()
+        && let Ok(Some(routine)) = db.approval_routine(a.id)
+    {
+        let _ = drift_note(&db, routine, &a.tool, &args);
+    }
     let note = if out.is_ok() { format!("Done, as you approved: {}", a.summary) } else { format!("I tried what you approved ({}), but it failed: {result}", a.summary) };
     let _ = db.log(a.bot_id, a.chat_id, "assistant", &note, None);
 }
@@ -975,6 +1126,10 @@ pub fn always_allow(db: &Db, a: &crate::db::Approval) -> Result<()> {
     // Signing in and taking over are the person's own steps: there's nothing to allow.
     if matches!(a.kind.as_str(), "signin" | "takeover") {
         bail!("approved once; this needs you every time");
+    }
+    // A routine doing something unlike its earlier runs: approved, it's the usual now; there's no rule to change.
+    if a.kind == "drift" {
+        bail!("approved once; from now on this counts as usual for the routine");
     }
     // A plain ask: allowed, still asking after outside content. Any other (after outside content, a sensitive source,
     // an email, a new bot, a saved login, a plan, a loop…): the person chose never to be asked before it again.

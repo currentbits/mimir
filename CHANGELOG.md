@@ -9,6 +9,10 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
   (`progress_set`) that it ticks as it goes. It shows above the reply being written, in the app and in the Telegram,
   Slack and Discord draft, and goes when the reply arrives. A reply that ends with steps still open gets one more turn
   to finish them or say what blocks them, so it doesn't stop at "I'll now do X".
+- **Webhooks out:** **Settings → Webhooks out** posts a small signed JSON to an address of yours when a routine
+  finishes or fails, an approval is waiting, or a reply was sent. You can use it with Home Assistant, ntfy or n8n.
+  Message text is only included if you ask for it. A failed send is tried again. See
+  [docs/routines.md](docs/routines.md#webhooks-out).
 - **Scanned PDFs read on your computer:** set a local document model in **Settings → Scanned PDFs** (an
   [Ollama](https://ollama.com) model such as dots.ocr, or any vision model) and a scan's pages reach the bot as text,
   tables included, instead of photos: less of your plan per page, and the scan stays here. Off until you set one.

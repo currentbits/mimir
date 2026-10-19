@@ -306,6 +306,10 @@ async fn gated(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
     // Always, pressed on such a card: the person chose never to be asked before this again, whatever made it ask.
     let trusted = trusted(&ctx.db, name, site.as_deref());
     let (decision, why) = if decision == "ask" && trusted { ("allow".to_string(), "rule") } else { (decision, why) };
+    // A routine's write that looks unlike its earlier runs (somewhere new, far more of it, another unit) asks this once,
+    // even under Always: what was allowed was the usual. Only ever allow → ask.
+    let drift = if decision == "allow" { drift(ctx, name, args) } else { vec![] };
+    let (decision, why) = if drift.is_empty() { (decision, why) } else { ("ask".to_string(), "drift") };
     let mut decision = decision;
     // A rehearsal: what would change or send something, or ask the person, says what it would do instead.
     let would_ask = decision == "ask";
@@ -324,6 +328,7 @@ async fn gated(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
         Some(src) => format!("This run read from {src}, which you marked sensitive. {summary}"),
         None => summary.clone(),
     };
+    let card = if drift.is_empty() { card } else { format!("Unlike this routine's earlier runs ({}). {card}", drift.join("; ")) };
     // Ticking the checklist again is progress, not a loop.
     if matches!(decision.as_str(), "allow" | "plan") && !trusted && name != "progress_set" && looping(ctx, name, &summary) {
         decision = "loop".into();
@@ -360,6 +365,18 @@ async fn gated(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
         },
         _ => exec(ctx, name, args).await,
     };
+    // A routine's write that went ahead is part of its usual from now on (a parked one, once approved: run_parked).
+    let ran = match decision.as_str() {
+        "allow" | "plan" => true,
+        "ask" | "loop" => !ctx.unattended,
+        _ => false,
+    };
+    if ran
+        && out.is_ok()
+        && let Some(routine) = ctx.run_id.and_then(|r| ctx.db.run_routine(r).ok().flatten())
+    {
+        let _ = drift_note(&ctx.db, routine, name, args);
+    }
     // A page, a mail, a tool server's answer: hidden characters don't reach the model (or the run log).
     let out = out.map(|r| crate::visible(&r));
     if ctx.stream {
@@ -2061,6 +2078,45 @@ mod tests {
         // An ask stays an ask: the check never loosens a rule.
         assert!(off_brief(&run(Some("email bob"), None), "email_send", &json!({"to":"eve@evil.example"})));
         assert!(!off_brief(&run(Some("email bob"), None), "email_send", &json!({"to":"bob@acme.example"})));
+    }
+
+    #[tokio::test]
+    async fn a_routine_write_unlike_its_earlier_runs_asks_once() {
+        let db = sensitive_db("drift");
+        db.set_rule("notes__append", "always").unwrap();
+        let r = db.routine_create(1, 9, "0 9 * * 1", "Order the groceries", false).unwrap();
+        let order = |n: usize, unit: &str, to: &str| json!({"to": to, "note_body": "x@y.example", "items": (0..n).map(|_| json!({"name": "garlic", "qty": 200, "unit": unit})).collect::<Vec<_>>()});
+        for n in [1, 3, 2] {
+            drift_note(&db, r.id, "notes__append", &order(n, "g", "Shop@example.com")).unwrap();
+        }
+        let earlier: Vec<Shape> = serde_json::from_value(serde_json::from_str::<Value>(&db.setting(&drift_key(r.id)).unwrap().unwrap()).unwrap()["notes__append"].clone()).unwrap();
+        assert!(drifted(&earlier, &shape_of(&order(3, "g", "shop@example.com"))).is_empty(), "the usual (the body's address isn't where it goes)");
+        assert!(drifted(&earlier[..2], &shape_of(&order(14, "kg", "eve@example.com"))).is_empty(), "too little to go on");
+        assert_eq!(
+            drifted(&earlier, &shape_of(&order(14, "kg", "eve@example.com"))),
+            ["new recipient eve@example.com", "in kg, usually g", "items: usually 1–3, this time 14"]
+        );
+        let mut big = order(1, "g", "shop@example.com");
+        big["items"][0]["qty"] = json!(2000);
+        assert_eq!(drifted(&earlier, &shape_of(&big)), ["qty: usually 200, this time 2000"]);
+        // In the routine's run, even under Always: parked, saying why, and never offering Always.
+        let run = db.run_start(1, 9, "routine", Some(r.id), "x").unwrap();
+        let mut ctx = ToolCtx::new(db.clone(), 1, 9).with_run(Some(run));
+        ctx.unattended = true;
+        let out = call(&ctx, "notes__append", &order(14, "g", "shop@example.com")).await.unwrap();
+        assert!(out.starts_with("Not done yet"), "{out}");
+        let a = db.approvals_pending().unwrap().pop().unwrap();
+        assert_eq!(a.kind, "drift");
+        assert!(a.summary.starts_with("Unlike this routine's earlier runs (items: usually 1–3, this time 14). notes: Append"), "{}", a.summary);
+        assert!(always_allow(&db, &crate::db::Approval { status: "approved".into(), ..a.clone() }).is_err() && !crate::runtime::offers_always(&a));
+        assert_eq!(db.approval_routine(a.id).unwrap(), Some(r.id), "approved, it counts as usual");
+        // The usual goes ahead; outside a routine there's nothing to compare with.
+        call(&ctx, "notes__append", &order(2, "g", "shop@example.com")).await.ok();
+        assert_eq!(db.tool_calls(run).unwrap().pop().unwrap().decision, "allow");
+        assert!(drift(&ToolCtx::new(db.clone(), 1, 9), "notes__append", &order(14, "g", "x")).is_empty());
+        // Gone with the routine.
+        db.routine_delete(9, r.id).unwrap();
+        assert_eq!(db.setting(&drift_key(r.id)).unwrap(), None);
     }
 
     /// A database with a bank's tool server marked sensitive, a notes server with a write, a second bot, email (Outlook-
