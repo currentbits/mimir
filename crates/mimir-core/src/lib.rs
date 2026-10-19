@@ -803,7 +803,7 @@ pub fn with_document(said: &str, name: &str, text: &str) -> String {
 }
 
 const QUOTA: &[&str] = &["extra usage", "usage limit", "rate limit", "quota", "429"];
-const SIGNED_OUT: &[&str] = &["isn't signed in", "not signed in", "not logged in", "log in", "sign in", "unauthor", "401", "rejected", "api key"];
+const SIGNED_OUT: &[&str] = &["isn't signed in", "not signed in", "not logged in", "log in", "sign in", "unauthor", "401", "rejected", "api key", "failed to authenticate"];
 const NOT_STARTED: &[&str] = &["failed to start", "not installed", "no such file"];
 const NETWORK: &[&str] = &["error sending request", "connection refused", "connection reset", "connection error", "dns", "unreachable", "couldn't connect", "network"];
 
@@ -1654,6 +1654,9 @@ echo '{{"type":"result","result":"ok","session_id":"s1","usage":{{"input_tokens"
         assert_eq!(cause("error sending request for url (http://localhost:11434/v1/chat/completions)"), Cause::Network);
         assert_eq!(cause("claude isn't signed in, so the routine didn't run"), Cause::Setup);
         assert_eq!(cause("failed to start `codex` — is the Codex CLI installed"), Cause::Setup);
+        // Claude Code 2.1.300's `-p` on a revoked login.
+        assert_eq!(cause("claude error: Failed to authenticate. Please run /login"), Cause::Setup);
+        assert!(super::friendly_error("claude error: Failed to authenticate. Please run /login").contains("isn't signed in"));
         assert_eq!(cause("claude timed out"), Cause::Other);
         assert!(super::friendly_error("claude error: You're out of extra usage · resets 5pm").contains("paid extra usage"));
         assert!(super::friendly_error("grok isn't signed in for Mimir yet: sign in to Grok in Settings").contains("isn't signed in"));

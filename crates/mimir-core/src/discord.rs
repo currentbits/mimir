@@ -129,6 +129,10 @@ impl Discord {
 
     /// A file the bot sends (needs Attach Files), as an attachment in the same place as a reply.
     pub(crate) async fn upload(&self, channel: &str, name: &str, bytes: Vec<u8>) -> Result<()> {
+        // Discord's limit for a bot's file since 2026-09-03; bigger ones would only come back as a 413.
+        if bytes.len() > 20 << 20 {
+            bail!("it's over 20 MB, more than Discord takes");
+        }
         let to = self.dest(channel);
         let payload = json!({"attachments": [{"id": 0, "filename": name}], "allowed_mentions": {"parse": []}});
         let form = reqwest::multipart::Form::new().text("payload_json", payload.to_string()).part("files[0]", reqwest::multipart::Part::bytes(bytes).file_name(name.to_string()));
