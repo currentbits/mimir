@@ -367,6 +367,8 @@ async fn gated(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
     let result = match &out {
         // A search's addresses, all of them: what a reply's links are checked against (receipts::footer).
         Ok(r) if matches!(name, "web_search" | "x_search") => truncate(&r.lines().map(str::trim).filter(|l| l.starts_with("http")).collect::<Vec<_>>().join("\n"), 2000),
+        // A page as it was read (already cut to 15k): what a reply's quotes are checked against (receipts::footer).
+        Ok(r) if name == "web_fetch" => r.clone(),
         // A screenshot's file is for the model, not the run log.
         Ok(r) =>truncate(&crate::computer::split_image(r, &ctx.db.dir()).1, 400),
         Err(e) => truncate(&format!("{e:#}"), 400),
