@@ -771,6 +771,14 @@ mod tests {
         assert!(ids.contains(&third) && !ids.contains(&fixed) && !ids.contains(&old));
         assert!(d.search(s, 0, "negative", 5).unwrap().is_empty());
         assert_eq!(d.erase("chat:2", third).unwrap(), 0, "other scope");
+
+        // A tool server's card that showed it goes too, its JSON-escaped copy included; other cards stay.
+        let secret = d.store(s, "knowledge", "Door code", "Door code \"4711\"\nback gate", "", None).unwrap();
+        let shown = serde_json::json!({"content": [{"type": "text", "text": "Door code \"4711\"\nback gate"}]});
+        d.tool_card_add(1, 1, 1, "demo__show", "<p>x</p>", "", &serde_json::json!({}), &shown).unwrap();
+        d.tool_card_add(1, 1, 1, "demo__show", "<p>y</p>", "", &serde_json::json!({}), &serde_json::json!({})).unwrap();
+        d.erase(s, secret).unwrap();
+        assert_eq!(d.tool_cards(1).unwrap().len(), 1);
     }
 
     #[test]
