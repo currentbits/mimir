@@ -5,6 +5,10 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 ## Unreleased
 
 ### Talking to your bots
+- **Webhooks out:** **Settings → Webhooks out** posts a small signed JSON to an address of yours when a routine
+  finishes or fails, an approval is waiting, or a reply was sent. You can use it with Home Assistant, ntfy or n8n.
+  Message text is only included if you ask for it. A failed send is tried again. See
+  [docs/routines.md](docs/routines.md#webhooks-out).
 - **X search:** bots can search recent X (Twitter) posts (`x_search`) with your own X API bearer token
   (**Settings → Web search → X**). Good for a morning routine of fresh posts. See
   [docs/connect.md](docs/connect.md#x-search) for getting a token.
