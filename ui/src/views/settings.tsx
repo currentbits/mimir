@@ -18,6 +18,7 @@ const SETTING_WORDS: Record<string, string> = {
   'Email': 'mail imap smtp gmail icloud fastmail inbox app password send draft',
   'Calendar': 'caldav icloud fastmail nextcloud events schedule',
   'Web search': 'brave searxng google internet search engine x twitter tweets posts bearer token',
+  'Scanned PDFs': 'ocr scan local model ollama dots.ocr vision photos pages private',
   'Daily digest': 'quiet hours notifications summary weekly review do not disturb',
   'Limits': 'cap budget tokens cost usage limit plan subscription quota five hour weekly cheaper model haiku',
   'Permissions': 'allow ask deny approve rules tools safety always',
@@ -100,6 +101,7 @@ export function SettingsView({ onComputer, find = '' }: { onComputer: () => void
       <LimitsSettings />
       <ApiKeySettings />
       <WebSearchSettings />
+      <ScanSettings />
       <EmailSettings />
       <CalendarSettings />
       <KnowMeSettings />
@@ -735,6 +737,29 @@ function WebSearchSettings() {
         {' '}4. In the App's <b>Keys and tokens</b>, generate the <b>Bearer Token</b>, copy it (it's shown once) and paste it above.
         {' '}You don't need the other keys. <a href="https://github.com/currentbits/mimir/blob/master/docs/connect.md#x-search" onClick={openLink}>Step by step</a>
       </p>}
+    </Group>
+  )
+}
+
+/** Scanned PDFs read on this computer: a document model in Ollama turns the pages into text before the bot sees them. */
+function ScanSettings() {
+  const st = useLoad(() => invoke<{ model: string; url: string; default_url: string }>('ocr_settings', {}), [])
+  const [model, setModel] = useState<string | null>(null)
+  const [url, setUrl] = useState<string | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+  const save = (a: { model?: string; url?: string }) => invoke('ocr_settings', a).then(() => { setModel(null); setUrl(null); setErr(null); return st.reload() }, e => setErr(String(e)))
+  const s = st.data
+  return (
+    <Group title="Scanned PDFs" note={err ? <span className="error">{err}</span> : 'Without a model, a scan’s pages go to the bot’s AI as photos: more of your plan per page, and the scan leaves this computer. With one, they’re read here first; a page it can’t read still goes as a photo.'}>
+      <Row icon={<Icon name="file" size={15} />} title="Read scans with a local model"
+        desc={<>An <a href="https://ollama.com" onClick={openLink}>Ollama</a> model that reads pages, e.g. a build of <a href="https://github.com/studio-dots-ai/dots.ocr" onClick={openLink}>dots.ocr</a> or any vision model you’ve pulled. Empty: off.</>}>
+        <input className="input" style={{ width: 200 }} placeholder="Model name" aria-label="Local document model" disabled={!s}
+          value={model ?? s?.model ?? ''} onChange={e => setModel(e.target.value)} onBlur={() => model !== null && save({ model })} />
+      </Row>
+      {!!s?.model && <Row icon={<Icon name="server" size={15} />} title="Ollama's address" desc="Where Ollama runs; usually this computer.">
+        <input className="input" style={{ width: 230 }} placeholder={s.default_url} aria-label="Ollama address"
+          value={url ?? s.url} onChange={e => setUrl(e.target.value)} onBlur={() => url !== null && save({ url })} />
+      </Row>}
     </Group>
   )
 }

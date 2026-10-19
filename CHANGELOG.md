@@ -9,6 +9,9 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
   finishes or fails, an approval is waiting, or a reply was sent. You can use it with Home Assistant, ntfy or n8n.
   Message text is only included if you ask for it. A failed send is tried again. See
   [docs/routines.md](docs/routines.md#webhooks-out).
+- **Scanned PDFs read on your computer:** set a local document model in **Settings → Scanned PDFs** (an
+  [Ollama](https://ollama.com) model such as dots.ocr, or any vision model) and a scan's pages reach the bot as text,
+  tables included, instead of photos: less of your plan per page, and the scan stays here. Off until you set one.
 - **X search:** bots can search recent X (Twitter) posts (`x_search`) with your own X API bearer token
   (**Settings → Web search → X**). Good for a morning routine of fresh posts. See
   [docs/connect.md](docs/connect.md#x-search) for getting a token.

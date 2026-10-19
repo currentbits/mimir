@@ -32,6 +32,9 @@ pub struct Approval {
     pub edit_link: Option<String>,
 }
 
+/// (tool, site, times allowed, the bot that asked last).
+pub type AllowedOften = (String, Option<String>, i64, i64);
+
 impl Db {
     // ---------- policy rules & approvals ----------
 
@@ -415,6 +418,20 @@ impl Db {
     pub fn inbox_dismiss(&self, kind: &str, id: i64) -> Result<()> {
         self.c().execute("INSERT OR IGNORE INTO inbox_dismissed(kind, ref) VALUES (?1,?2)", params![kind, id])?;
         Ok(())
+    }
+
+    /// Tool (and site) pairs whose plain asks were allowed at least `min` times since `since` and never denied then (any
+    /// card for the pair, after outside content too). Only `rule` asks
+    /// count, so never one after outside content, an email, a new bot or a saved login (those have their own kinds).
+    pub fn approvals_allowed_often(&self, since: i64, min: i64) -> Result<Vec<AllowedOften>> {
+        let c = self.c();
+        // SQLite fills the bare bot_id from the row max(id) picked: the newest card's bot.
+        let mut st = c.prepare(
+            "SELECT tool, site, sum(kind = 'rule' AND status = 'approved') AS n, bot_id, max(id) FROM approvals WHERE created_at > ?1
+             GROUP BY tool, site HAVING n >= ?2 AND sum(status = 'denied') = 0 ORDER BY n DESC",
+        )?;
+        let v = st.query_map(params![since, min], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?.collect::<Result<_, _>>()?;
+        Ok(v)
     }
 
     pub fn approvals_pending(&self) -> Result<Vec<Approval>> {

@@ -78,7 +78,9 @@ pub async fn handle(ctx: &ToolCtx, line: &str) -> Option<Value> {
     let params = &req["params"];
     let result = match method {
         "initialize" => json!({
-            "protocolVersion": params["protocolVersion"].as_str().unwrap_or("2025-06-18"),
+            // The version asked for if it's one this server speaks, else its own: a 2026-07-28 client (stateless, no
+            // initialize) falls back to it. ponytail: 2026-07-28 itself waits until MCP Events need it.
+            "protocolVersion": params["protocolVersion"].as_str().filter(|v| ["2025-06-18", "2025-03-26", "2024-11-05"].contains(v)).unwrap_or("2025-06-18"),
             "capabilities": {"tools": {}},
             "serverInfo": {"name": "mimir", "version": env!("CARGO_PKG_VERSION")}
         }),
