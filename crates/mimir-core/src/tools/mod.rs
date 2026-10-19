@@ -324,7 +324,8 @@ async fn gated(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
         Some(src) => format!("This run read from {src}, which you marked sensitive. {summary}"),
         None => summary.clone(),
     };
-    if matches!(decision.as_str(), "allow" | "plan") && !trusted && looping(ctx, name, &summary) {
+    // Ticking the checklist again is progress, not a loop.
+    if matches!(decision.as_str(), "allow" | "plan") && !trusted && name != "progress_set" && looping(ctx, name, &summary) {
         decision = "loop".into();
     }
     // Tools running in this process (API-key providers): say what's happening while it does.

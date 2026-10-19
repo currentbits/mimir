@@ -5,6 +5,10 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 ## Unreleased
 
 ### Talking to your bots
+- **A checklist for long runs:** on a task with several steps (research, a booking, a form) a bot keeps a checklist
+  (`progress_set`) that it ticks as it goes. It shows above the reply being written, in the app and in the Telegram,
+  Slack and Discord draft, and goes when the reply arrives. A reply that ends with steps still open gets one more turn
+  to finish them or say what blocks them, so it doesn't stop at "I'll now do X".
 - **X search:** bots can search recent X (Twitter) posts (`x_search`) with your own X API bearer token
   (**Settings → Web search → X**). Good for a morning routine of fresh posts. See
   [docs/connect.md](docs/connect.md#x-search) for getting a token.

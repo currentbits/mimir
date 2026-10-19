@@ -430,6 +430,9 @@ a { color: inherit; }
 .steps li .icon { flex: none; color: var(--live); }
 .steps li.failed .icon { color: var(--danger); }
 .steps li.now { color: var(--text-2); }
+.checklist { padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+.checklist li.open { color: var(--text-2); }
+.checklist li .box { flex: none; width: 9px; height: 9px; margin: 0 1px; border: 1.5px solid var(--text-3); border-radius: 3px; }
 .steps li.now .typing { padding: 0; transform: scale(.8); }
 .steps li { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .steps .shine { background: linear-gradient(90deg, var(--text-2) 0%, var(--text-2) 35%, var(--text-3) 50%, var(--text-2) 65%, var(--text-2) 100%); background-size: 200% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; overflow: hidden; text-overflow: ellipsis; }
