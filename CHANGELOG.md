@@ -9,6 +9,9 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
   (`progress_set`) that it ticks as it goes. It shows above the reply being written, in the app and in the Telegram,
   Slack and Discord draft, and goes when the reply arrives. A reply that ends with steps still open gets one more turn
   to finish them or say what blocks them, so it doesn't stop at "I'll now do X".
+- **Scanned PDFs read on your computer:** set a local document model in **Settings → Scanned PDFs** (an
+  [Ollama](https://ollama.com) model such as dots.ocr, or any vision model) and a scan's pages reach the bot as text,
+  tables included, instead of photos: less of your plan per page, and the scan stays here. Off until you set one.
 - **X search:** bots can search recent X (Twitter) posts (`x_search`) with your own X API bearer token
   (**Settings → Web search → X**). Good for a morning routine of fresh posts. See
   [docs/connect.md](docs/connect.md#x-search) for getting a token.
@@ -64,6 +67,8 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
   Cyrillic "о") is now flagged too, and the card says so plainly while you edit an email as well.
 - **The bots' computer outside Docker:** `mimir doctor`'s warning now also says that other accounts on the machine
   can type and click on its screen, not only use its browser's DevTools.
+- **Usage stats on a server** now also count how many pages the bots' browser opened and how many of those a site
+  blocked (a "verify you are human" page, say). Two numbers, never the pages; **See what's sent** shows them.
 
 ## 0.4.0
 

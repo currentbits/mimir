@@ -368,6 +368,8 @@ async fn gated(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
     let result = match &out {
         // A search's addresses, all of them: what a reply's links are checked against (receipts::footer).
         Ok(r) if matches!(name, "web_search" | "x_search") => truncate(&r.lines().map(str::trim).filter(|l| l.starts_with("http")).collect::<Vec<_>>().join("\n"), 2000),
+        // A page as it was read (already cut to 15k): what a reply's quotes are checked against (receipts::footer).
+        Ok(r) if name == "web_fetch" => r.clone(),
         // A screenshot's file is for the model, not the run log.
         Ok(r) =>truncate(&crate::computer::split_image(r, &ctx.db.dir()).1, 400),
         Err(e) => truncate(&format!("{e:#}"), 400),
@@ -529,6 +531,38 @@ pub(crate) fn looks_secret(db: &Db, text: &str) -> Option<&'static str> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn needs_you_suggests_a_rule_after_five_plain_allows_and_stops_when_dismissed() {
+        let p = std::env::temp_dir().join(format!("mimir-rule-hints-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = Db::open(&p).unwrap();
+        let allow = |tool: &str, kind: &str, site: Option<&str>, n: usize| {
+            for _ in 0..n {
+                let id = db.approval_create(1, 0, tool, "x", 60, kind, site).unwrap();
+                db.approval_decide(id, true, None).unwrap();
+            }
+        };
+        allow("calendar_create", "rule", None, 4);
+        assert!(rule_hints(&db).unwrap().is_empty(), "four isn't enough");
+        allow("calendar_create", "rule", None, 1);
+        // An email asks as its own kind, a site after outside content as guarded: never suggested.
+        allow("email_send", "send", None, 6);
+        allow("computer_open", "guarded", Some("a.com"), 6);
+        // Allowed often but denied once: not suggested.
+        allow("computer_open", "rule", Some("b.com"), 6);
+        let id = db.approval_create(1, 0, "computer_open", "x", 60, "rule", Some("b.com")).unwrap();
+        db.approval_decide(id, false, None).unwrap();
+        allow("computer_open", "rule", Some("c.com"), 5);
+        let hints = rule_hints(&db).unwrap();
+        let pairs: Vec<_> = hints.iter().map(|h| (h["tool"].as_str().unwrap(), h["site"].as_str())).collect();
+        assert_eq!(pairs.len(), 2, "{pairs:?}");
+        assert!(pairs.contains(&("calendar_create", None)) && pairs.contains(&("computer_open", Some("c.com"))));
+        // Accepted (now allowed) or dismissed: gone.
+        db.set_rule("calendar_create", "allow").unwrap();
+        rule_hint_dismiss(&db, "computer_open", Some("c.com")).unwrap();
+        assert!(rule_hints(&db).unwrap().is_empty());
+    }
+
     #[tokio::test]
     async fn always_on_a_card_never_asks_again_even_after_outside_content() {
         let p = std::env::temp_dir().join(format!("mimir-always-tainted-{}.db", std::process::id()));
