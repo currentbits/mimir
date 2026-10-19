@@ -480,7 +480,7 @@ export function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, 
     for (const f of files) {
       const ext = ({ 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' } as Record<string, string>)[f.type]
       if (!ext) {
-        if (f.type === 'application/pdf' || f.type.startsWith('text/') || /\.(pdf|docx|xlsx|txt|md|csv|json|log)$/i.test(f.name)) {
+        if (f.type === 'application/pdf' || f.type.startsWith('text/') || /\.(pdf|docx|xlsx|pptx|txt|md|csv|json|log)$/i.test(f.name)) {
           const r = new FileReader()
           r.onload = () => { const url = String(r.result); setDoc({ name: f.name, data: url.slice(url.indexOf(',') + 1) }) }
           r.readAsDataURL(f)
