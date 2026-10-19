@@ -202,7 +202,10 @@ chat shows your message with the file's name. A file's text is outside content, 
 instructions written in it, and anything that changes data asks you first for the rest of that conversation
 ([Tools and safety](tools-and-safety.md#outside-content-taint)). Excel files arrive sheet by sheet, a row per line;
 dates show as Excel's day numbers. PowerPoint files arrive slide by slide, with each slide's speaker notes. A scanned PDF has no text, so its pages go to the bot as photos instead (the first
-10; a page stored as a JPEG or plain grey/colour pixels, which is how scanners and scanning apps save them). Slack needs the `files:read` scope for this (see the hint when you add Slack). In a channel or server,
+10; a page stored as a JPEG or plain grey/colour pixels, which is how scanners and scanning apps save them). To keep scans on your computer and off your AI plan, set a
+local document model under **Settings → Scanned PDFs**: any [Ollama](https://ollama.com) model that reads pages, such
+as a build of [dots.ocr](https://github.com/studio-dots-ai/dots.ocr) or a vision model you've pulled. Mimir sends it the
+pages first and the bot gets their text, tables included; a page it can't read still goes as a photo. Slack needs the `files:read` scope for this (see the hint when you add Slack). In a channel or server,
 only the files of the person who paired it are fetched.
 
 Bots send files back too, with `send_file`: a file from the chat's workspace, or a screenshot of the bots' computer

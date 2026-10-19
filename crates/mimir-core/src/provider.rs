@@ -204,7 +204,16 @@ impl Provider {
                     }
                 };
                 // A session that can't be reopened is the caller's to retry: it has the chat to start the new one with.
-                go(session.as_deref()).await
+                let r = go(session.as_deref()).await;
+                // A saved model ChatGPT has retired (gpt-5.5 on 2026-10-14): once more on the default, and say so.
+                if let (Provider::Codex { .. }, Some(m), Err(e)) = (self, model, &r)
+                    && model_gone(&format!("{e:#}"))
+                {
+                    let mut reply = codex(ctx, home, None, system, user, session.as_deref()).await?;
+                    reply.text = format!("{}\n\n{}", crate::say::trf("(The model {model} isn't offered any more, so I used the default. Pick another on my page in Mimir.)", &[("model", m)]), reply.text);
+                    return Ok(reply);
+                }
+                r
             }
             // One deadline for the whole reply, however many tool rounds it takes.
             Provider::OpenAi { base, key, model } => tokio::time::timeout(TURN_TIMEOUT, openai(ctx, base, key, model, system, history, user)).await.context("the AI service took too long")?,
@@ -1013,6 +1022,12 @@ impl Provider {
     }
 }
 
+/// Codex refusing the model it was asked for: retired, or never offered on this sign-in.
+fn model_gone(e: &str) -> bool {
+    let l = e.to_lowercase();
+    ["model is not supported", "model_not_found", "unknown model", "model does not exist", "has been retired"].iter().any(|w| l.contains(w))
+}
+
 pub(crate) fn is_usage_limit(e: &anyhow::Error) -> bool {
     let m = format!("{e:#}").to_lowercase();
     m.contains("usage limit") || m.contains("rate limit") || m.contains("extra usage")
@@ -1585,6 +1600,9 @@ mod tests {
 {"type":"turn.failed","error":{"message":"You've hit your usage limit."}}"#;
         let e = parse_codex_jsonl(limited).unwrap_err();
         assert!(is_usage_limit(&e), "{e}");
+        let retired = r#"{"type":"turn.failed","error":{"message":"{\"detail\":\"The 'gpt-5.5' model is not supported when using Codex with a ChatGPT account.\"}"}}"#;
+        assert!(model_gone(&format!("{:#}", parse_codex_jsonl(retired).unwrap_err())));
+        assert!(!model_gone(&format!("{e:#}")), "a usage limit isn't a retired model");
         // When it resets: what Claude Code reported, else the time in the error.
         let p = std::env::temp_dir().join(format!("mimir-reset-{}.db", std::process::id()));
         let _ = std::fs::remove_file(&p);

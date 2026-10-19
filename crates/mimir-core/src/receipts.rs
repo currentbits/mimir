@@ -78,8 +78,65 @@ fn links(text: &str) -> Vec<String> {
     out
 }
 
+/// Text as quotes are compared: lower-case words only, so spacing, punctuation, Markdown and entities don't count.
+fn words(text: &str) -> String {
+    let mut plain = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(c) = rest.chars().next() {
+        // "&rsquo;", "&#8217;": an entity strip_html left is a mark, not a word.
+        let entity = rest.strip_prefix('&').and_then(|r| r.find(';').filter(|&n| n > 0 && n < 9 && r[..n].chars().all(|c| c == '#' || c.is_ascii_alphanumeric())));
+        match entity {
+            Some(n) => rest = &rest[n + 2..],
+            None => {
+                plain.push(c);
+                rest = &rest[c.len_utf8()..];
+            }
+        }
+    }
+    plain.to_lowercase().split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).collect::<Vec<_>>().join(" ")
+}
+
+/// The quoted spans in a reply: "…", “…”, ‘…’, '…' or «…». A quote opens after a non-letter and closes before one, so
+/// "don't" and "users' rights" aren't quotes.
+// ponytail: quote marks only; a Markdown blockquote ("> …") isn't checked
+fn quotes(reply: &str) -> Vec<&str> {
+    const PAIRS: &[(char, &[char])] = &[('"', &['"', '”']), ('“', &['”', '"']), ('‘', &['’', '\'']), ('\'', &['\'', '’']), ('«', &['»'])];
+    let mut out = vec![];
+    let mut prev = ' ';
+    let mut i = 0;
+    while let Some(c) = reply[i..].chars().next() {
+        i += c.len_utf8();
+        let Some((_, closers)) = PAIRS.iter().find(|(o, _)| *o == c).filter(|_| !prev.is_alphanumeric()) else {
+            prev = c;
+            continue;
+        };
+        let close = reply[i..].char_indices().find(|&(j, d)| closers.contains(&d) && !reply[i + j + d.len_utf8()..].starts_with(char::is_alphanumeric));
+        match close {
+            Some((j, d)) => {
+                out.push(&reply[i..i + j]);
+                i += j + d.len_utf8();
+                prev = d;
+            }
+            None => prev = c,
+        }
+    }
+    out
+}
+
+/// Quotes of 8 words or more that aren't in the pages this run read (or anything else it was given or got back).
+/// Each part between "…" is looked for on its own: an ellipsis is a cut, not a claim.
+fn misquoted<'a>(reply: &'a str, read: &str) -> Vec<&'a str> {
+    // Padded, so a quote's first and last words match whole words.
+    let read = format!(" {} ", words(read));
+    quotes(reply)
+        .into_iter()
+        .filter(|q| q.split('…').flat_map(|p| p.split("...")).map(words).any(|p| p.split(' ').count() >= 8 && !read.contains(&format!(" {p} "))))
+        .collect()
+}
+
 /// The lines added under a reply: receipts and sources (for a messaging app; the app shows them as chips), then a
-/// note for each claim with no successful call behind it, and the links it gives that it never opened or found.
+/// note for each claim with no successful call behind it, the links it gives that it never opened or found, and the
+/// quotes it gives from pages it read that aren't on them.
 /// `asked` is what the run was given: links from there are the person's own and aren't flagged.
 pub fn footer(calls: &[ToolCall], asked: &str, reply: &str, receipts: bool) -> String {
     let done: Vec<&ToolCall> = calls.iter().filter(|c| done(c)).collect();
@@ -114,6 +171,15 @@ pub fn footer(calls: &[ToolCall], asked: &str, reply: &str, receipts: bool) -> S
     let unread: Vec<String> = links(reply).into_iter().filter(|u| !seen.contains(&norm(u))).collect();
     if !unread.is_empty() {
         notes.push(format!("_I didn't open {} in this reply, so I haven't checked {}: {}_", if unread.len() == 1 { "this link" } else { "these links" }, if unread.len() == 1 { "it" } else { "them" }, unread.join(", ")));
+    }
+    // Only for a reply that read pages: a quote from memory or an email isn't the web's to check.
+    if done.iter().any(|c| c.tool == "web_fetch") {
+        let read = done.iter().map(|c| c.result.as_str()).chain([asked]).collect::<Vec<_>>().join("\n");
+        for q in misquoted(reply, &read) {
+            let q = q.trim();
+            let short = q.char_indices().nth(120).map_or(q.to_string(), |(i, _)| format!("{}…", &q[..i]));
+            notes.push(format!("_Not found on the pages read: \"{short}\"_"));
+        }
     }
     [out.join("\n"), notes.join("\n")].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join("\n\n")
 }
@@ -168,5 +234,24 @@ mod tests {
         let f = footer(&[search], "see https://example.org/x", "[Rust 1.99](https://blog.rust-lang.org/1.99/) and https://example.org/x, also https://made.up/page.", true);
         assert!(f.ends_with("I didn't open this link in this reply, so I haven't checked it: https://made.up/page_"), "{f}");
         assert!(f.starts_with("Sources: a search for \"rust\""), "{f}");
+    }
+
+    #[test]
+    fn quotes_checked_against_pages_read() {
+        let page = call("web_fetch", "Read https://shop.example/terms", "allow", true, "Refunds. Customers may return &rsquo;unused&rsquo; items within   thirty days of delivery for a full refund. Sale items can't be returned.");
+        let f = |reply: &str| footer(std::slice::from_ref(&page), "", reply, false);
+        // On the page, give or take case, spacing, punctuation, entities and a cut.
+        assert_eq!(f("The terms say “customers may return unused items within thirty days of delivery.”"), "");
+        assert_eq!(f("They say: 'Customers may return unused items within thirty days … for a full refund'"), "");
+        // Not on it: the note quotes it; the reply stays as it was.
+        let made_up = "They say 'customers may return any item within ninety days for a full refund' and don't charge.";
+        assert_eq!(f(made_up), "_Not found on the pages read: \"customers may return any item within ninety days for a full refund\"_");
+        // Short quotes, apostrophes, and replies that read no pages aren't checked.
+        assert_eq!(f("It says \"sale items\" can't be returned, and the users' rights don't change."), "");
+        assert_eq!(footer(&[], "", made_up, false), "");
+        // A whole word only: "ustomers" isn't "customers".
+        assert!(!f("\"ustomers may return unused items within thirty days of\"").is_empty());
+        // What the person sent counts as read.
+        assert_eq!(footer(std::slice::from_ref(&page), "my note: we never refund opened boxes after the first week", "You wrote \"we never refund opened boxes after the first week\".", false), "");
     }
 }

@@ -21,7 +21,7 @@ export const ACCOUNT_ORDER = ['claude', 'chatgpt', 'codex', 'grok', 'openrouter'
 export const KEYED: Record<string, string> = { openrouter: 'OpenRouter key (sk-or-…)', xai: 'xAI key (xai-…)', openai: 'API key (sk-…)' }
 
 const MODEL_HINT: Record<string, string> = {
-  claude: 'Default — or sonnet, opus, haiku', chatgpt: 'Default — or one your plan offers', codex: 'Default — or gpt-5.5', grok: 'Default — or grok-4.7-build-fast', openrouter: 'Auto — or pick one, e.g. anthropic/claude-sonnet-5.5',
+  claude: 'Default — or sonnet, opus, haiku', chatgpt: 'Default — or one your plan offers', codex: 'Default — or one your plan offers', grok: 'Default — or grok-4.7-build-fast', openrouter: 'Auto — or pick one, e.g. anthropic/claude-sonnet-5.5',
   xai: 'grok-4.7', local: "Pick a model you've downloaded", openai: 'gpt-5-mini',
 }
 

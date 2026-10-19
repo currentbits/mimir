@@ -32,6 +32,9 @@ set up Brave Search or your own SearXNG once in Settings → Web search, and eve
   credit (announced for June 15, 2026) was paused that day, and Anthropic says it will announce any new plan before it
   takes effect. If a reply ever fails because your plan counts it as paid "extra usage", the bot says so plainly; turn
   on extra usage in your Claude account, or use another account (ChatGPT's login is supported for tools like this).
+  Since October 7, 2026, Max and Team plans also come with [monthly API credits](https://support.claude.com/en/articles/17154008).
+  They pay only for use through an API key from the Claude Console organisation linked to your plan, never for the
+  Claude sign-in bots use here; to spend them, add that key as an *API key* account.
 - **Grok**: Settings → AI keys → *Sign in to Grok* (a device code). Mimir keeps that login in its own Grok home
   (`~/.mimir/grok`), so your personal Grok plugins, hooks and tool servers never load into a bot, and neither do
   your Claude or Cursor settings. Grok's own memory and `/goal` stay off, so bots can't read each other's notes and
