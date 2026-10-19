@@ -1,4 +1,4 @@
-import { Fragment, useContext, useEffect, useRef, useState } from 'react'
+import { Fragment, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
 import { inDesktop, insecureServer, invoke, saveDownload, localInvoke, probe, remoteServer, setWebToken, connectServer, shortcut, trayName } from '../api'
 import { ago, fullTime } from '../format'
 import { openLink } from '../markdown'
@@ -6,6 +6,7 @@ import { ask, tell, Empty, Group, Icon, Row, Segmented, Switch } from '../ui'
 import { SignInChatGPT, SignInGrok, ConnectOpenRouter, SignInBrowser } from './accounts'
 import { useLoad, Bots, SECRETS_AT, LOCAL } from '../shared'
 import type { Bot, ComputerStatus, Chat, Account, ToolServer } from '../types'
+import { DIRECTORY, type Listed } from '../directory'
 
 type VaultEntry = { name: string; domains: string[]; bot?: number; totp?: boolean }
 
@@ -21,7 +22,7 @@ const SETTING_WORDS: Record<string, string> = {
   'Limits': 'cap budget tokens cost usage limit plan subscription quota five hour weekly cheaper model haiku',
   'Permissions': 'allow ask deny approve rules tools safety always',
   'Browser': 'playwright chromium saved logins passwords vault',
-  'Tool servers': 'mcp plugins integrations connectors',
+  'Tool servers': `mcp plugins integrations connectors apps browse directory ${DIRECTORY.map(d => d.name).join(' ')}`,
   'Sensitive sources': 'bank banking health medical private finance money leak',
   'Your data': 'export backup download delete privacy doctor check health troubleshoot problem usage stats telemetry analytics',
   'Chat API': 'openai token shortcuts siri home assistant integration v1 completions',
@@ -820,8 +821,7 @@ function ToolServerSettings({ onChange }: { onChange: () => void }) {
   // Its tools are shown next, so the person confirms which really only read.
   const [review, setReview] = useState<string | null>(null)
   const ready = (name: string) => (n: number) => { setMsg(`${name} is ready with ${n} tool${n === 1 ? '' : 's'}.`); setErr(null); setForm(null); setReview(name); list.reload(); onChange() }
-  const save = async () => {
-    const server = conf()
+  const save = async (server = conf()) => {
     if (!server) return
     setBusy(true); setErr(null)
     try { ready(server.name)(await invoke<number>('tool_server_save', { server })) } catch (e) { setErr(String(e)) } finally { setBusy(false) }
@@ -836,6 +836,31 @@ function ToolServerSettings({ onChange }: { onChange: () => void }) {
     setBusy(true); setErr(null)
     try { ready(s.name)(await invoke<number>('tool_server_update', { name: s.name })) } catch (e) { setErr(String(e)) } finally { setBusy(false) }
   }
+  // From the directory: one that signs in is added right away (asking it lands on "Sign in to …" in the form);
+  // one that takes a token opens the form with its header to fill in.
+  const [browse, setBrowse] = useState<string | null>(null)
+  const add = (d: Listed) => {
+    const base = slug(d.name)
+    const name = servers.some(s => s.name === base) ? `${base}_2` : base
+    setBrowse(null); setErr(null); setMsg(null)
+    setForm({ text: d.url, name, guess: name, env: d.header ? [{ key: d.header, value: '' }] : [], editing: false })
+    if (!d.header) void save({ name, command: '', args: [], url: d.url, headers: {} })
+  }
+  const words = (browse ?? '').toLowerCase().split(/\s+/).filter(Boolean)
+  const listed = DIRECTORY.filter(d => words.every(w => `${d.name} ${d.category} ${d.desc}`.toLowerCase().includes(w)))
+  // Anything else: the official MCP registry, only servers on their publisher's own domain (the backend filters).
+  type Found = Listed & { domain: string }
+  const [found, setFound] = useState<{ q: string; list?: Found[]; err?: string } | null>(null)
+  const q = (browse ?? '').trim()
+  const searchRegistry = () => {
+    setFound({ q })
+    invoke<Found[]>('tool_server_registry', { q }).then(list => setFound({ q, list: list.filter(d => !DIRECTORY.some(x => x.url === d.url)) }), e => setFound({ q, err: String(e) }))
+  }
+  const addRow = (d: Listed, desc: ReactNode = d.desc) => (
+    <Row key={d.url} icon={<Icon name="plug" size={15} />} title={d.name} desc={desc}>
+      {servers.some(s => s.url === d.url) ? <span className="hint">Added</span> : <button className="btn btn-sm" disabled={busy} onClick={() => add(d)}>Add</button>}
+    </Row>
+  )
   const remove = (s: ToolServer) => ask(`Remove ${s.name}? Your bots lose its tools.`, 'Remove', true).then(ok => { if (ok) void invoke('tool_server_delete', { name: s.name }).then(() => { setMsg(null); list.reload(); onChange() }, e => setErr(String(e))) })
 
   return (
@@ -851,9 +876,30 @@ function ToolServerSettings({ onChange }: { onChange: () => void }) {
       ))}
       {review && <ReadOnlyReview key={review} server={review} onDone={() => { setReview(null); list.reload(); onChange() }} />}
       {!form && (
-        <Row icon={<Icon name="plus" size={15} />} title={servers.length ? 'Add another tool server' : 'Add a tool server'} desc={msg ?? 'Paste the setup line or JSON config from the server’s instructions.'}>
-          <button className="btn btn-sm" onClick={() => open()}>Add</button>
+        <Row icon={<Icon name="plus" size={15} />} title={servers.length ? 'Add another tool server' : 'Add a tool server'} desc={msg ?? 'Pick a popular one, or paste the setup line or JSON config from the server’s instructions.'}>
+          <button className="btn btn-sm" aria-expanded={browse !== null} onClick={() => setBrowse(browse === null ? '' : null)}>Browse</button>
+          <button className="btn btn-sm" onClick={() => { setBrowse(null); open() }}>Paste</button>
         </Row>
+      )}
+      {!form && browse !== null && (
+        <div className="row-block" style={{ maxHeight: 460, overflowY: 'auto' }}>
+          <input className="input" autoFocus placeholder="Search Stripe, Notion, GitHub…" aria-label="Search tool servers" value={browse} onChange={e => setBrowse(e.target.value)} />
+          {[...new Set(listed.map(d => d.category))].map(c => (
+            <Fragment key={c}>
+              <div className="field-label"><span>{c}</span></div>
+              {listed.filter(d => d.category === c).map(d => addRow(d))}
+            </Fragment>
+          ))}
+          <span className="hint">Hosted by each company on its own site. Signing in happens on their page; Mimir keeps the sign-in, never your password.</span>
+          {!!q && found?.q !== q && <span><button type="button" className="btn btn-sm btn-ghost" onClick={searchRegistry}><Icon name="search" size={13} />Search the MCP registry for “{q}”</button></span>}
+          {found?.q === q && !found.list && !found.err && <span className="hint">Searching the MCP registry…</span>}
+          {found?.q === q && found.err && <span className="hint warn"><Icon name="alert" size={13} />{found.err}</span>}
+          {found?.q === q && found.list && <>
+            <div className="field-label"><span>From the MCP registry</span></div>
+            {found.list.map(d => addRow(d, <>{d.desc} · <code>{d.domain}</code></>))}
+            <span className="hint">{found.list.length ? 'Each runs on the site shown, which its publisher proved is theirs; Mimir hasn’t checked them otherwise. Anything that changes something still asks you first.' : 'Nothing there that runs on its publisher’s own site. Use Paste with the address from the server’s instructions.'}</span>
+          </>}
+        </div>
       )}
       {form && (
         <form className="row-block" onSubmit={e => { e.preventDefault(); save() }}>
@@ -882,7 +928,7 @@ function ToolServerSettings({ onChange }: { onChange: () => void }) {
             <span className="grow">{busy && <span className="hint">{remote ? 'Connecting once to see what it can do.' : 'Starting it once to see what it can do. The first time can take a minute.'}</span>}</span>
             <button className="btn btn-primary" disabled={busy || !parsed || typeof parsed === 'string' || !form.name.trim()}>{busy ? 'Starting…' : form.editing ? 'Save' : 'Add server'}</button>
           </div>
-          {err && <p className="error" style={{ margin: 0 }}>{err}</p>}
+          {err && <p className={wantsSignIn ? 'hint' : 'error'} style={{ margin: 0 }}>{err}</p>}
           {wantsSignIn && <div className="er">{signIn(server, server.name || 'the server')}<span className="hint">You sign in in your browser; Mimir keeps the sign-in, never your password.</span></div>}
         </form>
       )}

@@ -34,6 +34,12 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 - **Fewer tokens per turn:** a Claude, Codex or Grok chat isn't sent a recalled memory it already has, Claude models
   on OpenRouter use the prompt cache, and the run log shows cache writes next to cache reads.
 
+### Tools
+- **Browse tool servers:** Settings → Tool servers → **Browse** lists about forty popular hosted MCP servers by
+  category (finance, research, work, files and design, developer), each on the company's own site. **Add** connects
+  one and takes you to its sign-in; no setup line to find and paste. For one that isn't listed, **Search the MCP
+  registry** finds it in the official registry, showing the domain each one runs on.
+
 ### Safety
 - **A one-off cut off mid-run waits for you:** if Mimir stops in the middle of a one-off, it no longer runs it again by
   itself an hour later (repeating what it already did, an email say). It waits in Needs you as interrupted, with

@@ -1063,6 +1063,53 @@ pub fn unpinned(db: &Db) -> Vec<String> {
     servers(db).into_iter().filter(|s| s.preset.is_none() && package_of(&s.command, &s.args).is_some_and(|p| p.version.is_none())).map(|s| s.name).collect()
 }
 
+/// Hosted servers in the official MCP registry matching `q`, for Settings → Tool servers when the app's own list
+/// doesn't have one. `{name, desc, url, domain, header}`; see registry_pick for which ones.
+pub async fn registry_search(q: &str) -> Result<Vec<Value>> {
+    let base = std::env::var("MIMIR_MCP_REGISTRY").unwrap_or_else(|_| "https://registry.modelcontextprotocol.io".into());
+    // Its search is slow at times (20s and more).
+    let http = reqwest::Client::builder().timeout(Duration::from_secs(45)).build()?;
+    let mut url = url::Url::parse(&format!("{base}/v0.1/servers"))?;
+    url.query_pairs_mut().append_pair("search", q.trim()).append_pair("version", "latest").append_pair("limit", "100");
+    let res = http.get(url).send().await.context("couldn't reach the MCP registry")?;
+    Ok(registry_pick(&res.error_for_status()?.json().await?))
+}
+
+/// Hosts anyone can get a name under: verifying one says nothing about who runs the server.
+const SHARED_HOSTS: &[&str] = &[
+    "vercel.app", "netlify.app", "pages.dev", "workers.dev", "trycloudflare.com", "github.io", "onrender.com", "fly.dev", "herokuapp.com",
+    "railway.app", "ngrok.app", "ngrok-free.app", "ngrok.io", "replit.app", "web.app", "firebaseapp.com", "azurewebsites.net", "deno.dev",
+    "glitch.me", "smithery.ai", "vercel.sh", "run.app", "supabase.co",
+];
+
+/// The registry checks a publisher's domain (`com.stripe/…` is published by whoever controls stripe.com), so only
+/// servers whose address is on that same domain are kept: a third party can list "ahrefs", but not on ahrefs.com.
+/// Streamable HTTP over https only, no address templates. GitHub-verified publishers (`io.github.<user>`) and shared
+/// hosts prove nothing about the address, so they're left out.
+// ponytail: SHARED_HOSTS is a short hand-kept slice of the Public Suffix List; the full list if strays get through.
+fn registry_pick(answer: &Value) -> Vec<Value> {
+    let mut out = vec![];
+    for s in answer["servers"].as_array().into_iter().flatten().map(|s| &s["server"]) {
+        let name = s["name"].as_str().unwrap_or("");
+        let Some((ns, short)) = name.split_once('/') else { continue };
+        let domain = ns.to_lowercase().split('.').rev().collect::<Vec<_>>().join(".");
+        let under = |host: &str, d: &str| host == d || host.ends_with(&format!(".{d}"));
+        if ns.starts_with("io.github.") || !domain.contains('.') || SHARED_HOSTS.iter().any(|h| under(&domain, h)) {
+            continue;
+        }
+        let remote = s["remotes"].as_array().into_iter().flatten().find(|r| {
+            let url = r["url"].as_str().unwrap_or("");
+            r["type"] == "streamable-http" && url.starts_with("https://") && !url.contains('{')
+                && url::Url::parse(url).ok().and_then(|u| u.host_str().map(|h| under(&h.to_lowercase(), &domain))).unwrap_or(false)
+        });
+        let Some(r) = remote else { continue };
+        let header = r["headers"].as_array().into_iter().flatten().find(|h| h["isRequired"] == true).and_then(|h| h["name"].as_str());
+        let title = s["title"].as_str().filter(|t| !t.trim().is_empty()).unwrap_or(short);
+        out.push(json!({"name": title, "desc": s["description"].as_str().unwrap_or(""), "url": r["url"], "domain": domain, "header": header}));
+    }
+    out
+}
+
 /// The malicious-package advisory (OSV `MAL-…`) in an OSV query answer, if any.
 fn malicious(answer: &Value) -> Option<String> {
     answer["vulns"].as_array()?.iter().find_map(|v| {
@@ -1409,6 +1456,30 @@ mod tests {
         assert_eq!(malicious(&json!({"vulns": [{"id": "GHSA-y", "aliases": ["CVE-1", "MAL-2024-9"]}]})).as_deref(), Some("MAL-2024-9 (GHSA-y)"));
         assert_eq!(malicious(&json!({"vulns": [{"id": "GHSA-z"}]})), None, "an ordinary vulnerability doesn't block");
         assert_eq!(malicious(&json!({})), None);
+    }
+
+    #[test]
+    fn registry_keeps_servers_on_their_publishers_domain() {
+        let server = |name: &str, url: &str, kind: &str| json!({"server": {"name": name, "description": "d", "remotes": [{"type": kind, "url": url}]}});
+        let answer = json!({"servers": [
+            server("com.stripe/mcp", "https://mcp.stripe.com", "streamable-http"),
+            server("com.jojapi/ahrefs", "https://mcp.jojapi.com/ahrefs", "streamable-http"),
+            server("com.ahrefs/fake", "https://evil.example/mcp", "streamable-http"),
+            server("io.github.someone/stripe", "https://someone.github.io/mcp", "streamable-http"),
+            server("app.vercel.stripecheckup/x", "https://stripecheckup.vercel.app/api/mcp", "streamable-http"),
+            server("com.notion/mcp", "https://mcp.notion.com/sse", "sse"),
+            server("com.neevcloud/sandbox", "https://mcp.sandboxes.{region}.ai.neevcloud.com/mcp", "streamable-http"),
+            server("com.linear/x", "https://notlinear.com/mcp", "streamable-http"),
+            server("com.paypal.mcp/mcp", "http://mcp.paypal.com/mcp", "streamable-http"),
+            json!({"server": {"name": "com.monday/monday.com", "title": "monday.com", "remotes": [
+                {"type": "sse", "url": "https://mcp.monday.com/sse"},
+                {"type": "streamable-http", "url": "https://mcp.monday.com/mcp", "headers": [{"name": "Authorization", "isRequired": true}]}]}}),
+        ]});
+        let got = registry_pick(&answer);
+        let urls: Vec<String> = got.iter().map(|v| format!("{} {}", v["url"].as_str().unwrap(), v["header"].as_str().unwrap_or("-"))).collect();
+        assert_eq!(urls, ["https://mcp.stripe.com -", "https://mcp.jojapi.com/ahrefs -", "https://mcp.monday.com/mcp Authorization"]);
+        assert_eq!(got[2]["name"], "monday.com");
+        assert_eq!(got[1]["domain"], "jojapi.com", "a third party's own server stays, under its own domain");
     }
 
     /// Against a one-file fake OSV: a flagged package is refused, the verdict is cached, and OSV being down blocks only
