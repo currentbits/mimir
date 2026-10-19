@@ -641,9 +641,26 @@ impl Host {
             "set_ask_check" => ok(self.db.set_setting("ask_check", if arg(a, "on")? { "on" } else { "off" })?),
             "set_telegram_topics" => ok(self.db.set_setting(&format!("telegram_topics:{}", arg::<i64>(a, "bot_id")?), if arg(a, "on")? { "on" } else { "off" })?),
             // Has this conversation read untrusted content (so changes ask first)? And: start a fresh one.
-            "conversation" => ok(json!({"tainted": self.db.conv_tainted(arg(a, "bot_id")?, arg(a, "chat_id")?)?})),
+            // Whether it read outside content, and its title and "so far" line (tidy::catch_up), if it has them yet.
+            "conversation" => {
+                let (bot, chat): (i64, i64) = (arg(a, "bot_id")?, arg(a, "chat_id")?);
+                let c: Value = self.db.setting(&crate::tidy::catch_up_key(bot, chat))?.and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default();
+                ok(json!({"tainted": self.db.conv_tainted(bot, chat)?, "title": c["title"], "so_far": c["so_far"]}))
+            }
+            // Each bot's title for its chat on this computer, for the sidebar.
+            "chat_titles" => ok(self
+                .db
+                .bots()?
+                .into_iter()
+                .filter_map(|b| {
+                    let c: Value = serde_json::from_str(&self.db.setting(&crate::tidy::catch_up_key(b.id, LOCAL_CHAT)).ok()??).ok()?;
+                    Some(json!({"bot_id": b.id, "title": c["title"].as_str()?}))
+                })
+                .collect::<Vec<_>>()),
             "new_conversation" => {
                 let (bot, chat): (i64, i64) = (arg(a, "bot_id")?, arg(a, "chat_id")?);
+                // A fresh start gets a title of its own once its first exchange is in.
+                self.db.setting_take(&crate::tidy::catch_up_key(bot, chat))?;
                 if let (Some(s), Ok(p)) = (self.db.session(bot, chat)?, self.provider(bot)) {
                     p.forget_session(&s);
                 }

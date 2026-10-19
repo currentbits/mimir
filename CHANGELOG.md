@@ -5,6 +5,10 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 ## Unreleased
 
 ### Talking to your bots
+- **Chat titles and a catch-up line:** after a chat's first exchange, and again every ten messages, the model in
+  **Model for routines** names it in 3–6 words and writes a line on where it's got to. The title shows under the bot
+  in the sidebar; the line shows at the top of the chat when you come back to it. Not for incognito chats; **Start
+  fresh** and deleting a chat's history remove them.
 - **X search:** bots can search recent X (Twitter) posts (`x_search`) with your own X API bearer token
   (**Settings → Web search → X**). Good for a morning routine of fresh posts. See
   [docs/connect.md](docs/connect.md#x-search) for getting a token.

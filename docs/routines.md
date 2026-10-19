@@ -145,7 +145,8 @@ your plan's own windows: how much of the 5-hour and weekly windows is used, and 
 **Model for routines** (also in Limits) runs every routine on a lighter model of the same account, e.g. `haiku` on
 Claude or `gpt-5-mini` on ChatGPT, while replies to you keep the bot's own model. Routines are usually the bulk of
 what a plan's windows go to, and most don't need the biggest model. A routine's **Test run** uses it too, so you can
-see whether it's good enough first. With bots on different kinds of account, there's one field for each kind.
+see whether it's good enough first. With bots on different kinds of account, there's one field for each kind. The same
+model names your chats and writes the "So far" line at the top of one you come back to.
 
 ## When a run doesn't work
 
