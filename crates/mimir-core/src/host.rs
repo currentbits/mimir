@@ -840,6 +840,8 @@ impl Host {
             // Add or replace one server: {name, command, args, env} or {name, url, headers}. Its package is pinned to a
             // release (see ext::pin). Starts it once; returns its tool count.
             "tool_server_save" => ok(ext::save_server(&self.db, arg(a, "server")?).await?),
+            // Hosted servers in the official MCP registry, on their publisher's own domain (see ext::registry_pick).
+            "tool_server_registry" => ok(ext::registry_search(&arg::<String>(a, "q")?).await?),
             "tool_server_update" => ok(ext::update_server(&self.db, &arg::<String>(a, "name")?).await?),
             // Sensitive sources: once a run has read one, everything that goes out asks. Only you set them.
             "sensitive" => ok(tools::sensitive_list(&self.db)),
