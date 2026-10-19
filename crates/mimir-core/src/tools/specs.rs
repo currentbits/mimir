@@ -261,6 +261,19 @@ pub fn specs() -> Vec<(&'static str, &'static str, Value)> {
             },"required":["question","options"]}),
         ),
         (
+            "progress_set",
+            "Keep a checklist for a task with several steps (research, a booking, filling in a form): the person sees it \
+             above your reply as you work. Set the steps when you start, then call again with the same list, ticking each \
+             step as it's done. Steps still open when you finish get you one more turn to do them or say what blocks \
+             them. Skip it for a quick answer.",
+            json!({"type":"object","properties":{
+                "steps":{"type":"array","maxItems":50,"items":{"type":"object","properties":{
+                    "step":{"type":"string","description":"a few words"},
+                    "done":{"type":"boolean"}
+                },"required":["step","done"]}}
+            },"required":["steps"]}),
+        ),
+        (
             "skill_save",
             concat!(
                 "Save how you just did a task as a reusable skill, when the person asks you to (\"save that as a skill\", \

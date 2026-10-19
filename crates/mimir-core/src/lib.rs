@@ -307,7 +307,11 @@ pub async fn turn(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) -> R
         // Messages sent from now until it's answered steer this reply instead of waiting their turn.
         live::listen(ctx.bot_id, ctx.chat_id);
     }
+    // A checklist is the run's own: none left from before, none after (progress_set).
+    let progress = tools::progress_key(ctx.bot_id, ctx.chat_id);
+    let _ = ctx.db.setting_take(&progress);
     let out = turn_inner(provider, &ctx, trigger).await;
+    let _ = ctx.db.setting_take(&progress);
     if ctx.stream {
         live::end(ctx.bot_id, ctx.chat_id);
     }
@@ -1411,6 +1415,29 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
         }
         r => r?,
     };
+    // Steps on its checklist it left open (progress_set): one more turn to do them or say what blocks them, so a reply
+    // doesn't end on "I'll now do X". Not when it just asked the person something with buttons: that waits for them.
+    let open: Vec<String> = tools::progress(&ctx.db, ctx.bot_id, ctx.chat_id).into_iter().filter(|(_, done)| !done).map(|(s, _)| s).collect();
+    let asked = ctx.db.setting(&tools::choice_key(ctx.bot_id, ctx.chat_id))?.is_some();
+    if !open.is_empty() && !asked && (provider.uses_history() || reply.session.is_some()) {
+        let nudge = format!("These steps on your checklist are still open: {}. Continue with them now, or say what blocks them.", open.join("; "));
+        // An account handed the history gets this turn's message and reply; a CLI resumes the session that has them.
+        let mut then = history.clone();
+        if provider.uses_history() {
+            then.extend([("user".to_string(), user.clone()), ("assistant".to_string(), reply.text.clone())]);
+        }
+        match provider.run(ctx, &system, &then, &nudge, reply.session.clone()).await {
+            Ok(more) => {
+                reply.text = format!("{}\n\n{}", reply.text.trim_end(), more.text.trim_start()).trim().to_string();
+                reply.session = more.session.or(reply.session);
+                let (u, m) = (&mut reply.usage, more.usage);
+                (u.tokens_in, u.tokens_out, u.cache_read, u.cache_write) = (u.tokens_in + m.tokens_in, u.tokens_out + m.tokens_out, u.cache_read + m.cache_read, u.cache_write + m.cache_write);
+                u.cost_usd = u.cost_usd.zip(m.cost_usd).map(|(a, b)| a + b).or(u.cost_usd).or(m.cost_usd);
+            }
+            // What it already wrote still goes out.
+            Err(e) => eprintln!("open steps turn: {e:#}"),
+        }
+    }
     // An account that doesn't say what it used (some local models): about 4 characters a token, so caps and the
     // routine's use still see it. ponytail: tool rounds aren't counted, so it's low for runs that use many tools.
     if reply.usage.tokens_in == 0 && reply.usage.tokens_out == 0 {

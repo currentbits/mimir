@@ -1149,14 +1149,16 @@ impl Host {
             }
             // The reply being written right now (streams while send_local is running).
             "draft" => ok(crate::live::get(arg(a, "bot_id")?, arg(a, "chat_id")?)),
-            // A reply in progress: the text so far, what it's doing now, and the steps it has finished.
+            // A reply in progress: the text so far, what it's doing now, the steps it has finished, and its checklist.
             "live" => {
                 let (bot, chat): (i64, i64) = (arg(a, "bot_id")?, arg(a, "chat_id")?);
                 let done = match self.db.running_run(bot, chat)? {
-                    Some(run) => self.db.tool_calls(run)?.into_iter().map(|c| json!({"summary": c.summary, "ok": c.ok, "decision": c.decision})).collect(),
+                    // Ticking the checklist shows as the checklist itself.
+                    Some(run) => self.db.tool_calls(run)?.into_iter().filter(|c| c.tool != "progress_set").map(|c| json!({"summary": c.summary, "ok": c.ok, "decision": c.decision})).collect(),
                     None => vec![],
                 };
-                ok(json!({"draft": crate::live::get(bot, chat), "step": crate::live::step(bot, chat), "done": done}))
+                let checklist: Vec<Value> = crate::tools::progress(&self.db, bot, chat).into_iter().map(|(step, done)| json!({"step": step, "done": done})).collect();
+                ok(json!({"draft": crate::live::get(bot, chat), "step": crate::live::step(bot, chat), "done": done, "checklist": checklist}))
             }
             // Stop from the Runs list: a reply in a messaging app (it records itself as stopped and says so there), or
             // one in the app (below).

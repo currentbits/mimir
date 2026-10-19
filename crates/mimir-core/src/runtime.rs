@@ -126,8 +126,9 @@ impl Chan {
         }
     }
 
-    /// Stream a reply into one message: post the draft once text arrives, then edit it as it grows.
-    fn follow(&self, bot: i64, chat_id: i64, ext: &str) -> Follower {
+    /// Stream a reply into one message: post the draft once text arrives, then edit it as it grows. The run's checklist
+    /// (progress_set) goes above the text, so the reply replacing the draft clears it too.
+    fn follow(&self, db: Db, bot: i64, chat_id: i64, ext: &str) -> Follower {
         let (chan, ext, stop) = (self.clone(), ext.to_string(), Arc::new(Notify::new()));
         let stopped = stop.clone();
         let task = tokio::spawn(async move {
@@ -137,7 +138,12 @@ impl Chan {
                     _ = tokio::time::sleep(EDIT_EVERY) => {}
                     _ = stopped.notified() => return id,
                 }
-                let Some(draft) = crate::live::get(bot, chat_id).filter(|d| !d.trim().is_empty()) else { continue };
+                let steps = crate::tools::checklist(&crate::tools::progress(&db, bot, chat_id));
+                let text = crate::live::get(bot, chat_id).unwrap_or_default();
+                let draft = [steps, text].into_iter().filter(|s| !s.trim().is_empty()).collect::<Vec<_>>().join("\n\n");
+                if draft.is_empty() {
+                    continue;
+                }
                 // A long reply's draft stops growing at DRAFT_MAX; the final message has all of it.
                 let head: String = draft.chars().take(DRAFT_MAX).collect();
                 // No cursor on Slack: a draft there may be a stream, which is only appended to, so one would stay in the text.
@@ -1094,7 +1100,7 @@ impl Core {
                 }
             };
             // The reply shows up as it's written: one message, edited as it grows, then formatted.
-            let follower = chan.follow(core.bot, chat, &ext);
+            let follower = chan.follow(core.db.clone(), core.bot, chat, &ext);
             let mut ctx = ToolCtx::new(core.db.clone(), core.bot, chat);
             ctx.conv = conv;
             ctx.images = images;
@@ -2408,6 +2414,11 @@ mod tests {
 
     /// A pretend AI that answers "Seen." and keeps what each request asked.
     async fn recording_ai() -> (String, Arc<std::sync::Mutex<Vec<String>>>) {
+        scripted_ai(&[r#"{"choices":[{"message":{"role":"assistant","content":"Seen."}}],"usage":{"prompt_tokens":3,"completion_tokens":2}}"#]).await
+    }
+
+    /// A pretend AI service answering with these bodies in turn (the last one from then on), keeping every request.
+    async fn scripted_ai(bodies: &'static [&'static str]) -> (String, Arc<std::sync::Mutex<Vec<String>>>) {
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let (addr, seen) = (l.local_addr().unwrap(), Arc::new(std::sync::Mutex::new(vec![])));
         let keep = seen.clone();
@@ -2425,12 +2436,40 @@ mod tests {
                         break;
                     }
                 }
-                keep.lock().unwrap().push(String::from_utf8_lossy(&req).to_string());
-                let body = r#"{"choices":[{"message":{"role":"assistant","content":"Seen."}}],"usage":{"prompt_tokens":3,"completion_tokens":2}}"#;
+                let n = {
+                    let mut k = keep.lock().unwrap();
+                    k.push(String::from_utf8_lossy(&req).to_string());
+                    k.len()
+                };
+                let body = bodies[n.min(bodies.len()) - 1];
                 let _ = s.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await;
             }
         });
         (format!("http://{addr}/v1"), seen)
+    }
+
+    /// #154: a reply that ends with steps on its checklist still open gets one more turn, told which; then the
+    /// checklist is gone.
+    #[tokio::test]
+    async fn open_steps_get_one_more_turn() {
+        let p = std::env::temp_dir().join(format!("mimir-open-steps-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = Db::open(&p).unwrap();
+        let (base, asked) = scripted_ai(&[
+            r#"{"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[{"id":"c1","type":"function","function":{"name":"progress_set","arguments":"{\"steps\":[{\"step\":\"Find flights\",\"done\":true},{\"step\":\"Book the cheapest\",\"done\":false}]}"}}]}}]}"#,
+            r#"{"choices":[{"message":{"role":"assistant","content":"Found three. I'll now book the cheapest."}}]}"#,
+            r#"{"choices":[{"message":{"role":"assistant","content":"I can't book it: the airline needs your login."}}]}"#,
+        ])
+        .await;
+        let provider = Provider::new("openai", Some("m".into()), Some(base), Some("k".into()), std::env::temp_dir()).unwrap();
+        let ctx = ToolCtx::new(db.clone(), 1, 0);
+        let reply = crate::turn(&provider, &ctx, crate::Trigger::Message("Book me a flight to Lisbon")).await.unwrap();
+        assert_eq!(reply, "Found three. I'll now book the cheapest.\n\nI can't book it: the airline needs your login.");
+        let asked = asked.lock().unwrap().clone();
+        assert_eq!(asked.len(), 3, "one more turn, not more");
+        assert!(asked[2].contains("still open: Book the cheapest.") && asked[2].contains("I'll now book the cheapest."), "{}", asked[2]);
+        assert!(crate::tools::progress(&db, 1, 0).is_empty(), "the checklist ends with its run");
+        assert_eq!(crate::tools::checklist(&[("Find flights".into(), true), ("Book".into(), false)]), "☑ Find flights\n☐ Book");
     }
 
     #[tokio::test]

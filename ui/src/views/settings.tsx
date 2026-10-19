@@ -1133,7 +1133,7 @@ export const TOOL_LABEL: Record<string, string> = {
   memory_store: 'Remember things', memory_search: 'Look up memories', memory_forget: 'Forget a memory',
   routine_create: 'Create routines', routine_list: 'List routines', routine_delete: 'Delete a routine', web_fetch: 'Read web pages',
   chat_search: 'Search earlier conversations', meeting_search: 'Search your meetings', meeting_read: 'Read a meeting transcript', ask_bot: 'Hand tasks to other bots', skill_view: 'Read its skills', plan_propose: 'Propose a plan to approve once',
-  ask_choice: 'Ask with buttons', bot_create: 'Make new bots', calendar_add: 'Give calendar links',
+  ask_choice: 'Ask with buttons', progress_set: 'Keep a checklist', bot_create: 'Make new bots', calendar_add: 'Give calendar links',
   calendar_create: 'Add calendar events', calendar_list: 'Look at your calendar', card_write: 'Update pinned cards',
   computer_click: 'Click on the computer', computer_handoff: 'Ask you to take over the computer',
   computer_key: 'Press keys on the computer', computer_open: 'Open sites on the computer',

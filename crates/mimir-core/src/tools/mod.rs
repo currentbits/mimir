@@ -332,7 +332,8 @@ async fn gated(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
         None => summary.clone(),
     };
     let card = if drift.is_empty() { card } else { format!("Unlike this routine's earlier runs ({}). {card}", drift.join("; ")) };
-    if matches!(decision.as_str(), "allow" | "plan") && !trusted && looping(ctx, name, &summary) {
+    // Ticking the checklist again is progress, not a loop.
+    if matches!(decision.as_str(), "allow" | "plan") && !trusted && name != "progress_set" && looping(ctx, name, &summary) {
         decision = "loop".into();
     }
     // Tools running in this process (API-key providers): say what's happening while it does.
