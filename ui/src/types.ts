@@ -45,7 +45,9 @@ export type Hold = { key: string; bot_id: number; routine_id: number | null; rou
 /** A chat's goal: one lasting objective its bot works on until it's done. */
 export type Goal = { id: number; bot_id: number; chat_id: number; text: string; done_when: string; status: 'active' | 'paused' | 'blocked' | 'done'; progress: string; why: string; budget: number; spent: number; tainted: boolean; updated_at: number }
 
-export type Inbox = { approvals: Approval[]; missed: Approval[]; failed: Run[]; holds?: Hold[]; goals?: Goal[]; suggestions: { chat_id: number; count: number }[]; unconfirmed?: { chat_id: number; count: number }[]; server_update?: { current: string; latest: string; how: string } | null; damage?: string | null }
+/** A plain ask you keep allowing (5 times in 30 days, never denied): Needs you offers to stop asking. */
+export type RuleHint = { tool: string; site: string | null; times: number; bot_id: number }
+export type Inbox = { approvals: Approval[]; missed: Approval[]; failed: Run[]; holds?: Hold[]; goals?: Goal[]; suggestions: { chat_id: number; count: number }[]; unconfirmed?: { chat_id: number; count: number }[]; rule_hints?: RuleHint[]; server_update?: { current: string; latest: string; how: string } | null; damage?: string | null }
 
 /** A pause: the bot, or null for all of them; until when (0: until you resume). */
 export type Pause = { bot_id: number | null; until: number }
