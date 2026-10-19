@@ -196,7 +196,7 @@ fn late(due: i64, now: i64) -> String {
 }
 
 /// The newest messages that fit in `max` characters, oldest first, one per line ("user: …", "assistant: …").
-fn so_far(msgs: &[(String, String)], max: usize) -> String {
+pub(crate) fn so_far(msgs: &[(String, String)], max: usize) -> String {
     let mut kept: Vec<String> = vec![];
     let mut len = 0;
     for (role, text) in msgs.iter().rev() {
@@ -222,6 +222,8 @@ pub fn branch(db: &db::Db, provider: &Provider, bot: i64, from: i64, to: i64, up
         provider.forget_session(&s);
     }
     db.set_session(bot, to, None)?;
+    // A new conversation: its own title once its first exchange is in.
+    db.setting_take(&tidy::catch_up_key(bot, to))?;
     if tainted {
         db.conv_taint(bot, to)?;
     }
@@ -319,7 +321,23 @@ pub async fn turn(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) -> R
     if let Err(e) = logged {
         eprintln!("run log: {e:#}");
     }
+    // The chat's title and "so far" line, by the routine model, after the reply is out. Not for a guest mode reply,
+    // a rehearsal or a task from another bot (incognito turns don't come through here). Off in tests, whose fake
+    // accounts count every call.
+    if kind == "message" && out.is_ok() && ctx.depth == 0 && !ctx.rehearsal && !ctx.incognito() && !ctx.db.is_guest_mode(ctx.conv) && !cfg!(test) {
+        let light = provider.with_model(ctx.db.setting(&format!("routine_model:{}", provider.kind())).ok().flatten().as_deref());
+        spawn_catch_up(ctx.db.clone(), light, ctx.bot_id, ctx.conv);
+    }
     out.map(|(text, _)| text)
+}
+
+/// Out of `turn` itself: a task spawned inside it can't be proven Send (turn → tools → ask_bot → turn).
+fn spawn_catch_up(db: db::Db, provider: Provider, bot: i64, conv: i64) {
+    tokio::spawn(async move {
+        if let Err(e) = tidy::catch_up(&db, &provider, bot, conv).await {
+            eprintln!("chat title: {e:#}");
+        }
+    });
 }
 
 /// A skill's command name: "Book padel" → "book-padel" (Telegram's menu wants underscores: book_padel; both work).
