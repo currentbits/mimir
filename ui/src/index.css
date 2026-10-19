@@ -442,6 +442,7 @@ a { color: inherit; }
 .msg-copy { margin-left: auto; width: 22px; height: 22px; border: 0; border-radius: 6px; background: none; color: var(--text-3); display: grid; place-items: center; opacity: 0; transform: scale(0.9); transition: opacity 160ms ease, transform 300ms var(--spring), background-color 120ms ease, color 120ms ease; }
 .msg-bot:hover .msg-copy, .msg-copy:focus-visible, .msg-copy.done { opacity: 1; transform: none; }
 .msg-copy:hover { background: var(--hover); color: var(--text); }
+.msg-copy + .msg-copy { margin-left: 0; }
 .msg-copy:active { transform: scale(0.9); }
 .msg-copy.done { color: var(--live); }
 .msg-copy.done .icon { animation: pop 320ms var(--spring-soft) both; }

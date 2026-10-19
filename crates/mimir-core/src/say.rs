@@ -107,8 +107,8 @@ static NL: &[(&str, &str)] = &[
     // Commands.
     ("Nothing to stop: I'm not writing anything right now.", "Niets te stoppen: ik ben nu niets aan het schrijven."),
     (
-        "Hi! Just talk to me. /memory shows what I remember, /routines lists schedules, /why shows what my last reply used, /new starts a fresh conversation, /stop cuts off a reply I'm writing, /undo N takes back something from my weekly list of what I learned.",
-        "Hoi! Praat gewoon met me. /memory laat zien wat ik onthoud, /routines toont wat ik volgens schema doe, /why laat zien wat mijn laatste antwoord gebruikte, /new begint een nieuw gesprek, /stop breekt een antwoord af dat ik aan het schrijven ben, /undo N neemt iets terug uit mijn wekelijkse lijst van wat ik heb geleerd.",
+        "Hi! Just talk to me. /memory shows what I remember, /routines lists schedules, /why shows what my last reply used, /new starts a fresh conversation, /branch (as a reply to a message) starts a new one from there, /stop cuts off a reply I'm writing, /undo N takes back something from my weekly list of what I learned.",
+        "Hoi! Praat gewoon met me. /memory laat zien wat ik onthoud, /routines toont wat ik volgens schema doe, /why laat zien wat mijn laatste antwoord gebruikte, /new begint een nieuw gesprek, /branch (als antwoord op een bericht) begint er een nieuw gesprek vanaf, /stop breekt een antwoord af dat ik aan het schrijven ben, /undo N neemt iets terug uit mijn wekelijkse lijst van wat ik heb geleerd.",
     ),
     ("Not confirmed yet (saved after reading outside content; check them in the app):", "Nog niet bevestigd (opgeslagen na het lezen van inhoud van buitenaf; bekijk ze in de app):"),
     ("Nothing remembered yet.", "Nog niets onthouden."),
@@ -122,6 +122,10 @@ static NL: &[(&str, &str)] = &[
         "\nKlopt een herinnering niet? Zeg het me (\"vergeet #{id}\", of wat nu klopt), of pas het aan in de app onder Memory.",
     ),
     ("Fresh conversation started (memories kept).", "Nieuw gesprek begonnen (herinneringen blijven bewaard)."),
+    ("Branch", "Aftakking"),
+    ("Branched into a new topic; this one carries on as it was.", "Afgetakt naar een nieuw onderwerp; dit gesprek gaat gewoon door."),
+    ("New conversation, picking up from there (memories kept). Where shall we take it?", "Nieuw gesprek, verder vanaf daar (herinneringen blijven bewaard). Welke kant gaan we op?"),
+    ("Branch off a new conversation from here (reply to a message to branch from it)", "Begin hier een nieuw gesprek (antwoord op een bericht om vanaf dat bericht te beginnen)"),
     ("_Stopped before replying._", "_Gestopt voordat ik antwoordde._"),
     ("_Stopped._", "_Gestopt._"),
     ("Sorry for the slow reply: I was offline when you wrote {ago}.", "Sorry voor het late antwoord: ik was offline toen je {ago} schreef."),
