@@ -1000,6 +1000,7 @@ impl Host {
                     }
                     self.db.computer_lease("you", "you", crate::computer::TEACH_SECS as i64)?;
                     crate::computer::teach_start();
+                    crate::computer::sniff(&self.home, crate::computer::TEACH_SECS);
                     ok(true)
                 }
                 "stop" => {
@@ -1030,6 +1031,7 @@ impl Host {
                 // Taking over: bots pause until a minute after your last input (or Give back); while showing, until it ends.
                 let secs = if crate::computer::teaching().is_some() { crate::computer::TEACH_SECS as i64 } else { 60 };
                 self.db.computer_lease("you", "you", secs)?;
+                crate::computer::sniff(&self.home, secs as u64);
                 crate::computer::teach_note(&self.home, a).await;
                 let a = a.clone();
                 tokio::task::spawn_blocking(move || -> Result<()> {
@@ -1281,6 +1283,11 @@ impl Host {
             }
             "reset_watch_noise" => ok(self.db.routine_reset_noise(arg(a, "chat_id")?, arg(a, "id")?)?),
             "set_watch" => ok(self.db.routine_set_watch(arg(a, "chat_id")?, arg(a, "id")?, &arg::<String>(a, "watch")?)?),
+            // The data a watched page loaded on the bots' computer while you were in control, to watch instead.
+            "watch_offer" => {
+                let offers = crate::computer::page_data(arg(a, "bot_id")?, &arg::<String>(a, "url")?);
+                ok(offers.into_iter().map(|(url, holds)| json!({"url": url, "holds": holds})).collect::<Vec<_>>())
+            }
             // Only the person sets this (no bot tool does): what the bot read can't widen what comes through.
             "set_ends" => ok(self.db.routine_set_ends(arg(a, "chat_id")?, arg(a, "id")?, arg(a, "ends")?)?),
             "set_urgent" => ok(self.db.routine_set_urgent(arg(a, "chat_id")?, arg(a, "id")?, &arg::<String>(a, "rule")?)?),
