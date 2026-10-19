@@ -5,6 +5,13 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 ## Unreleased
 
 ### Talking to your bots
+- **Webhooks out:** **Settings → Webhooks out** posts a small signed JSON to an address of yours when a routine
+  finishes or fails, an approval is waiting, or a reply was sent. You can use it with Home Assistant, ntfy or n8n.
+  Message text is only included if you ask for it. A failed send is tried again. See
+  [docs/routines.md](docs/routines.md#webhooks-out).
+- **Scanned PDFs read on your computer:** set a local document model in **Settings → Scanned PDFs** (an
+  [Ollama](https://ollama.com) model such as dots.ocr, or any vision model) and a scan's pages reach the bot as text,
+  tables included, instead of photos: less of your plan per page, and the scan stays here. Off until you set one.
 - **X search:** bots can search recent X (Twitter) posts (`x_search`) with your own X API bearer token
   (**Settings → Web search → X**). Good for a morning routine of fresh posts. See
   [docs/connect.md](docs/connect.md#x-search) for getting a token.
@@ -60,6 +67,8 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
   Cyrillic "о") is now flagged too, and the card says so plainly while you edit an email as well.
 - **The bots' computer outside Docker:** `mimir doctor`'s warning now also says that other accounts on the machine
   can type and click on its screen, not only use its browser's DevTools.
+- **Usage stats on a server** now also count how many pages the bots' browser opened and how many of those a site
+  blocked (a "verify you are human" page, say). Two numbers, never the pages; **See what's sent** shows them.
 
 ## 0.4.0
 

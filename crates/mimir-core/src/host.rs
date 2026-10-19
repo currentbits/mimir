@@ -580,6 +580,32 @@ impl Host {
                 }
                 ok(self.db.setting("email_tasks")?.as_deref() == Some("on"))
             }
+            // Webhooks out: the address, which events go to it, and whether the text goes too. The secret the bodies
+            // are signed with is made (in the keychain) the first time an address is saved, or anew with `rotate`.
+            "webhook_out" => {
+                if let Some(url) = arg::<Option<String>>(a, "url")? {
+                    let url = url.trim();
+                    if !url.is_empty() && url::Url::parse(url).map_or(true, |u| !["http", "https"].contains(&u.scheme())) {
+                        bail!("not a web address (http:// or https://)");
+                    }
+                    let events: Vec<String> = arg::<Option<Vec<String>>>(a, "events")?.unwrap_or_default().into_iter().filter(|e| crate::hooks::EVENTS.contains(&e.as_str())).collect();
+                    self.db.set_setting("webhook_out_url", url)?;
+                    self.db.set_setting("webhook_out_events", &events.join(","))?;
+                    self.db.set_setting("webhook_out_text", if arg::<Option<bool>>(a, "text")?.unwrap_or(false) { "on" } else { "off" })?;
+                    if !url.is_empty() && (self.secrets.get(crate::hooks::SECRET).is_none() || arg::<Option<bool>>(a, "rotate")?.unwrap_or(false)) {
+                        self.secrets.set(crate::hooks::SECRET, &crate::random_hex(24)?)?;
+                    }
+                }
+                let (url, events, text) = crate::hooks::settings(&self.db);
+                ok(json!({"url": url, "events": events, "text": text, "secret": self.secrets.get(crate::hooks::SECRET)}))
+            }
+            // A test body to the saved address, sent now (not through the outbox): says what went wrong.
+            "webhook_out_test" => {
+                let url = crate::hooks::settings(&self.db).0.context("save an address first")?;
+                let body = json!({"event": "test", "at": crate::db::now(), "summary": "A test from Mimir"}).to_string();
+                crate::hooks::post(&url, &body).await?;
+                ok(())
+            }
             // Adding events to your calendar (calendar_create) over CalDAV: the server, the login and which calendar.
             // Saving signs in and lists the calendars; no password given keeps the saved one (or the email's, same login).
             "caldav_settings" => {
@@ -620,6 +646,20 @@ impl Host {
                     self.db.set_setting("searxng_url", &url)?;
                 }
                 ok(json!({"brave": api_key("brave").is_some(), "x": api_key("x").is_some(), "searxng_url": self.db.setting("searxng_url")?.unwrap_or_default()}))
+            }
+            // Scanned PDFs read by a local model behind Ollama (ocr.rs): its name (empty: off) and Ollama's address.
+            "ocr_settings" => {
+                if let Some(model) = arg::<Option<String>>(a, "model")? {
+                    self.db.set_setting("ocr_model", model.trim())?;
+                }
+                if let Some(url) = arg::<Option<String>>(a, "url")? {
+                    let url = url.trim().trim_end_matches('/').to_string();
+                    if !(url.is_empty() || url.starts_with("http://") || url.starts_with("https://")) {
+                        bail!("Ollama's address starts with http:// or https://");
+                    }
+                    self.db.set_setting("ocr_url", &url)?;
+                }
+                ok(json!({"model": self.db.setting("ocr_model")?.unwrap_or_default(), "url": self.db.setting("ocr_url")?.unwrap_or_default(), "default_url": crate::ocr::DEFAULT_URL}))
             }
             "chats" => ok(self.db.chats()?),
             // Each topic in a private Telegram chat its own conversation (read per message, so no restart).
@@ -1209,6 +1249,11 @@ impl Host {
                 if pages.is_empty() {
                     return ok(crate::with_document(&said, &name, &text));
                 }
+                // Read by a local model where one is set; what it couldn't read still goes as photos.
+                let (read, pages) = crate::ocr::read_pages(&self.db, pages).await;
+                if pages.is_empty() {
+                    return ok(crate::with_document(&said, &name, &read));
+                }
                 let dir = self.home.join("media");
                 std::fs::create_dir_all(&dir)?;
                 let mut images = vec![];
@@ -1217,7 +1262,8 @@ impl Host {
                     std::fs::write(&path, p)?;
                     images.push(path.display().to_string());
                 }
-                ok(json!({"text": crate::with_scan(&said, &name, images.len()), "images": images}))
+                let text = if read.is_empty() { crate::with_scan(&said, &name, images.len()) } else { crate::with_document(&said, &name, &read) };
+                ok(json!({"text": text, "images": images}))
             }
             "save_media" => {
                 use base64::Engine;
@@ -1438,6 +1484,8 @@ impl Host {
                     "goals": self.db.goals_waiting()?,
                     // The daily check found the database damaged: restore a backup.
                     "damage": self.db.setting(crate::backup::DAMAGE)?,
+                    // Plain asks you keep allowing: stop asking?
+                    "rule_hints": tools::rule_hints(&self.db)?,
                     "unconfirmed": self.db.unconfirmed_counts()?.into_iter().map(|(chat, n)| json!({"chat_id": chat, "count": n})).collect::<Vec<_>>(),
                     // A newer release than this server runs (looked up by the bots' loops twice a day).
                     "server_update": is_server().then(|| self.db.setting("update_latest").ok().flatten()).flatten()
@@ -1517,6 +1565,7 @@ impl Host {
             // The AI plan's usage windows, where the AI reports them (Claude Code does).
             "ai_windows" => ok(crate::provider::windows(&self.db)),
             "inbox_dismiss" => ok(self.db.inbox_dismiss(&arg::<String>(a, "kind")?, arg(a, "id")?)?),
+            "rule_hint_dismiss" => ok(tools::rule_hint_dismiss(&self.db, &arg::<String>(a, "tool")?, arg::<Option<String>>(a, "site")?.as_deref())?),
             "site_rules" => ok(self.db.site_rules()?.into_iter().map(|(tool, host, action)| json!({"tool": tool, "host": host, "action": action})).collect::<Vec<_>>()),
             "set_site_rule" => ok(self.db.set_site_rule(&arg::<String>(a, "tool")?, &arg::<String>(a, "host")?, &arg::<String>(a, "action")?)?),
             "rules" => ok(tools::all_specs(&self.db)

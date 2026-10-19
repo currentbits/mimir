@@ -640,7 +640,7 @@ a { color: inherit; }
 .timeline li::before { content: ""; position: absolute; left: -18.5px; top: 5px; width: 8px; height: 8px; border-radius: 50%; background: var(--surface); box-shadow: inset 0 0 0 1.5px var(--text-3); }
 .timeline li.failed::before { box-shadow: inset 0 0 0 1.5px var(--danger); }
 .timeline .tl-sum { font-size: 13px; display: flex; gap: 8px; align-items: center; }
-.timeline .tl-res { font: 11.5px/1.45 var(--mono); color: var(--text-3); word-break: break-word; }
+.timeline .tl-res { font: 11.5px/1.45 var(--mono); color: var(--text-3); word-break: break-word; display: -webkit-box; -webkit-line-clamp: 6; -webkit-box-orient: vertical; overflow: hidden; }
 .timeline li.failed .tl-sum { color: var(--danger); }
 
 /* ---------------- bot page ---------------- */

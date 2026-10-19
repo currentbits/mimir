@@ -29,6 +29,9 @@ to the services you connected.
   the tidy-up (Settings). So a conversation with a bot on a local model reaches that account too, if it's a cloud one.
 - **Voice notes** are transcribed with your OpenAI-compatible key if you added one, else on the computer the bot runs
   on. **Push-to-talk** in the app always transcribes on your computer.
+- **Scanned PDFs**: their pages go to the bot's AI account as photos, unless you set a local document model
+  (Settings → Scanned PDFs). Then they go to Ollama at the address you gave (this computer by default), and only
+  their text, plus any page it couldn't read, reaches the AI account.
 - **Messaging apps** carry the messages you exchange there (Telegram, Slack, Discord).
 - **Meetings**: transcription and speaker separation run on your computer. A transcript leaves only when a bot reads it
   (it then goes to that bot's AI account like any other message). Without the built-in engine, the OpenAI-compatible
@@ -55,7 +58,8 @@ to the services you connected.
 
 - **Usage stats**: once a day, a count goes to Meterbird, the analytics service we use, so we know how many people use
   Mimir and on what: a random id made for this install, the Mimir version, the OS, its version and the processor type,
-  whether it's the app or a server, how many bots you have and each bot's AI provider and model. Never names,
+  whether it's the app or a server, how many bots you have, each bot's AI provider and model, and on a server how
+  many pages its browser opened and how many of those a site blocked. Never names,
   messages, memories, files, keys or the addresses your bots use. Meterbird sees your IP address to look up a country
   and doesn't keep it. Settings → Your data → *Send anonymous usage stats* shows exactly what's sent and switches it
   off; on a server, `MIMIR_USAGE_STATS=off` does too.

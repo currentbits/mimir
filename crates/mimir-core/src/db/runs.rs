@@ -142,6 +142,11 @@ impl Db {
         Ok(self.c().query_row("SELECT trigger FROM runs WHERE id=?1", [run], |r| r.get(0)).optional()?)
     }
 
+    /// The routine a run is a run of.
+    pub fn run_routine(&self, run: i64) -> Result<Option<i64>> {
+        Ok(self.c().query_row("SELECT routine_id FROM runs WHERE id=?1", [run], |r| r.get(0)).optional()?.flatten())
+    }
+
     /// What a rehearsal would have done (the steps it only described) and what it looked at.
     pub fn rehearsal_steps(&self, run: i64) -> Result<(Vec<String>, Vec<String>)> {
         let c = self.c();
