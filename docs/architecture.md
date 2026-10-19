@@ -31,6 +31,7 @@ For contributors: how the pieces fit together.
 | `tidy` | The daily memory tidy-up (on `tidy_model` if set): corrections, skills from good runs, fixes for skills that went wrong, weekly upkeep (retire / merge / move to background), the weekly review; teaching a skill from a source or a SKILL.md |
 | `computer` | The bots' computer (Xvfb, xdotool, scrot, Chromium), self-hosted Linux only; recording a showing for teach by showing (page details through Chromium's DevTools port); typing a sign-in into the page on screen (`sign_in`, from a sign-in card's form, `signin_submit` in `host`) |
 | `transcribe` | Speech to text (whisper.cpp built in, or `whisper-cli`, or an API), voice activity, speaker separation |
+| `ocr` | A scanned PDF's pages read by a local document model through Ollama's `/api/chat` (setting `ocr_model`, `ocr_url`); unread pages stay photos |
 | `calendar` | iCal links: parsing, recurrence (`rrule`), the meeting on now, events between dates (`calendar_list`) |
 | `email` | The mailbox list; IMAP (async-imap, mail-parser): search, read, drafts by APPEND, all EXAMINE/PEEK; SMTP sending (lettre); app passwords or Outlook's XOAUTH2; every operation within 60 s |
 | `files` | The per-chat file workspace: path checks, versions under `.history/`, outside-content marks keyed by canonical name and modification time |

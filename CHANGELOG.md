@@ -8,6 +8,9 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 - **Branch from here:** a new conversation that picks up from a message, with a short "where we left off", to try
   another direction without re-explaining. The branch icon on a reply in the app, or `/branch` as a reply in your
   messaging app; with Telegram topics on it opens a new topic. See [Bots and chats](docs/bots-and-chats.md).
+- **Scanned PDFs read on your computer:** set a local document model in **Settings → Scanned PDFs** (an
+  [Ollama](https://ollama.com) model such as dots.ocr, or any vision model) and a scan's pages reach the bot as text,
+  tables included, instead of photos: less of your plan per page, and the scan stays here. Off until you set one.
 - **X search:** bots can search recent X (Twitter) posts (`x_search`) with your own X API bearer token
   (**Settings → Web search → X**). Good for a morning routine of fresh posts. See
   [docs/connect.md](docs/connect.md#x-search) for getting a token.
