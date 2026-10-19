@@ -128,6 +128,11 @@ impl Db {
         Ok(())
     }
 
+    /// The routine whose run asked (a parked call's).
+    pub fn approval_routine(&self, id: i64) -> Result<Option<i64>> {
+        Ok(self.c().query_row("SELECT r.routine_id FROM approvals a JOIN runs r ON r.id = a.run_id WHERE a.id=?1", [id], |r| r.get(0)).optional()?.flatten())
+    }
+
     /// "Allow all like this": the approval's tool (and site) needs no more OKs for the rest of its run. Call it
     /// before approving, so the plan is in place when the waiting tool goes on. Only for a pending plain ask from a
     /// run that's still going, in `chat` if given; returns false otherwise (and nothing changes).
@@ -154,13 +159,18 @@ impl Db {
 
     #[allow(clippy::too_many_arguments)]
     pub fn approval_create(&self, bot: i64, chat: i64, tool: &str, summary: &str, ttl_secs: i64, kind: &str, site: Option<&str>) -> Result<i64> {
-        let c = self.c();
-        let t = now();
-        c.execute(
-            "INSERT INTO approvals(bot_id, chat_id, tool, summary, created_at, expires_at, kind, site) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
-            params![bot, chat, tool, summary, t, t + ttl_secs, kind, site],
-        )?;
-        Ok(c.last_insert_rowid())
+        let id = {
+            let c = self.c();
+            let t = now();
+            c.execute(
+                "INSERT INTO approvals(bot_id, chat_id, tool, summary, created_at, expires_at, kind, site) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+                params![bot, chat, tool, summary, t, t + ttl_secs, kind, site],
+            )?;
+            c.last_insert_rowid()
+        };
+        // Every ask goes through here (a rule, a sign-in, taking over the computer): Webhooks out hears of each.
+        crate::hooks::fire(self, bot, chat, crate::hooks::Event::Approval { id, tool, summary });
+        Ok(id)
     }
 
     fn expire_stale(c: &Connection) -> Result<()> {

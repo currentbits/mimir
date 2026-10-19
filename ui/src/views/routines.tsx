@@ -1,4 +1,4 @@
-import { useContext, useState } from 'react'
+import { useContext, useEffect, useState } from 'react'
 import { inDesktop, invoke, remoteServer } from '../api'
 import { ahead, fullDay, fullTime, IDLE, schedule, tok, untilText, usd } from '../format'
 import { ask, Avatar, Empty, Icon, Segmented, Switch } from '../ui'
@@ -80,6 +80,16 @@ function RoutineForm({ draft, setDraft, bots, onCancel, onSave, inline, skills =
   const cron = toCron(w)
   const when = (patch: Partial<When>) => setDraft({ ...draft, when: { ...w, ...patch } })
   const readable = schedule(cron)
+  // The data a page loaded while you were in control of the bots' computer: a check can watch that instead.
+  const [found, setFound] = useState<{ page: string; offers: { url: string; holds: string }[] }>({ page: '', offers: [] })
+  const page = draft.quiet && /^https?:\/\//.test(draft.watch.trim()) ? draft.watch.trim() : ''
+  const offers = page && found.page === page ? found.offers : []
+  useEffect(() => {
+    if (!page) return
+    let live = true
+    invoke<{ url: string; holds: string }[]>('watch_offer', { botId: draft.botId, url: page }).then(o => { if (live) setFound({ page, offers: o }) }, () => {})
+    return () => { live = false }
+  }, [page, draft.botId])
   return (
     <form className={(inline ? 'routine-inline' : 'editor-card') + ' editor routine-form'} onSubmit={e => { e.preventDefault(); onSave() }}>
       <label className="field-label"><span>What should it do?</span>
@@ -132,6 +142,12 @@ function RoutineForm({ draft, setDraft, bots, onCancel, onSave, inline, skills =
         <label className="field-label"><span>Watch (optional)</span>
           <input className="input" value={draft.watch} placeholder="https://… or mail" onChange={e => setDraft({ ...draft, watch: e.target.value })} />
           <span className="hint">A page, a feed, or <code>mail</code> for new unread email. Mimir looks first and only runs the AI when it changed, so checking often costs almost nothing.</span>
+          {offers.filter(o => o.url !== draft.watch.trim()).map(o => (
+            <span key={o.url} className="hint">
+              Watch this instead: <code>GET {o.url}</code>{o.holds && <> (it holds “{o.holds}”)</>}. The page loaded it on the bots’ computer; watching it needs no browser, and it’s sent with the bot’s own login there.{' '}
+              <button type="button" className="linkish" onClick={() => setDraft({ ...draft, watch: o.url })}>Use it</button>
+            </span>
+          ))}
         </label>
       )}
       <div className="field-label"><span>Send it</span>
