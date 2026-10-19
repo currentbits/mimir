@@ -141,7 +141,7 @@ function UsageStatsRow() {
   if (!s) return null
   return <>
     <Row icon={<Icon name="activity" size={15} />} title="Send anonymous usage stats"
-      desc={<>Once a day: a random id for this install, the version and OS, and each bot’s AI provider and model. Never names, messages, memories or keys. <button type="button" className="linkish" onClick={() => setShow(!show)}>{show ? 'Hide' : 'See what’s sent'}</button></>}>
+      desc={<>Once a day: a random id for this install, the version and OS, each bot’s AI provider and model, and on a server how many pages its browser opened and how many a site blocked. Never names, messages, memories or keys. <button type="button" className="linkish" onClick={() => setShow(!show)}>{show ? 'Hide' : 'See what’s sent'}</button></>}>
       <Switch label="Send anonymous usage stats" checked={s.on} onChange={on => invoke('usage_stats', { on }).then(st.reload, e => tell(String(e)))} />
     </Row>
     {show && <div className="row-block"><pre className="mono" style={{ margin: 0, whiteSpace: 'pre-wrap', fontSize: 12 }}>{JSON.stringify(s.sample, null, 1)}</pre></div>}
