@@ -1502,6 +1502,37 @@ mod tests {
     }
 
     #[test]
+    fn suggestions_wait_for_a_second_conversation_and_pairs_keep_either_side() {
+        let d = db();
+        let sc = "chat:1";
+        let add = Suggestion { id: 0, action: "add".into(), entry_id: None, kind: "convention".into(), title: "Short replies".into(), body: "When replying, keep it to three sentences".into(), reason: "said so".into(), check: None, tainted: false };
+        // First conversation: waits, unseen; the same again in that one tidy-up doesn't count.
+        let t0 = now();
+        assert_eq!(d.suggestion_recur(sc, &add, t0).unwrap(), None);
+        assert_eq!(d.suggestion_recur(sc, &add, t0).unwrap(), None);
+        assert!(d.suggestions(sc).unwrap().is_empty());
+        // A later tidy-up, in other words: shown, saying it came up before; and only once. (Started an hour on: a slow
+        // machine can tick past a second while the rows above are written.)
+        let again = Suggestion { title: "Brief replies".into(), body: "Keep replies to three short sentences".into(), ..add.clone() };
+        let id = d.suggestion_recur(sc, &again, t0 + 3600).unwrap().unwrap();
+        assert!(d.suggestions(sc).unwrap()[0].reason.contains("came up in an earlier conversation too"));
+        d.suggestion_decide(sc, id, false).unwrap();
+        assert_eq!(d.suggestion_recur(sc, &add, t0 + 7200).unwrap(), None, "the waiting ones were used up");
+
+        // A pair: keep the one it would forget, by forgetting the other.
+        let (a, b) = (d.store(sc, "knowledge", "Diet", "Vegetarian", "", None).unwrap(), d.store(sc, "knowledge", "Favourite dish", "Steak", "", None).unwrap());
+        let pair = Suggestion { action: "forget".into(), entry_id: Some(a), kind: "knowledge".into(), title: "Diet".into(), body: "Vegetarian".into(), reason: format!("Contradicts #{b} (\"Favourite dish\")."), ..add.clone() };
+        assert_eq!(paired(&pair.reason), Some(b));
+        let s = d.suggestion_add(sc, &pair).unwrap().unwrap();
+        let c = d.store(sc, "knowledge", "Gym", "Goes Mondays", "", None).unwrap();
+        assert!(d.suggestion_forget(sc, s, c).is_err(), "only a memory it's about");
+        assert_eq!(d.suggestion_forget(sc, s, b).unwrap(), format!("forgot #{b}"));
+        let active: Vec<i64> = d.entries(sc).unwrap().into_iter().filter(|e| e.status == "active").map(|e| e.id).collect();
+        assert!(active.contains(&a) && !active.contains(&b));
+        assert!(d.suggestions(sc).unwrap().is_empty(), "settled");
+    }
+
+    #[test]
     fn lookalikes_of_dismissed_suggestions() {
         let d = db();
         let sc = "chat:1";

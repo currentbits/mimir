@@ -558,6 +558,8 @@ a { color: inherit; }
 .sugg .what b { font: 600 14px var(--serif); margin-right: 5px; }
 .sugg .what { font-size: 13px; line-height: 1.5; }
 .sugg .old { color: var(--text-3); }
+.sugg .either { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 3px 0; }
+.sugg .either + .either { border-top: 0.5px dashed var(--line); }
 .sugg.forget .old { text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--danger) 55%, transparent); }
 .sugg .why { margin-top: 3px; font-size: 12px; color: var(--text-3); font-style: italic; }
 .sugg .why.checked { font-style: normal; color: var(--text-2); display: flex; gap: 5px; align-items: center; }
