@@ -165,9 +165,14 @@ that run stops and starts over with your new message added (anything it already 
 A message that arrives while a routine runs there, or with a photo or file, waits instead: typing at once, and after a
 few seconds one note: "Finishing a routine first…" or "Finishing my last reply first…". Its reply follows.
 
-Chat commands: `/memory`, `/why` (what the last reply used: memories, skills, pages), `/routines`, `/new`, `/stop` (a bare "stop" works too while it's writing), `/undo <n>`
+Chat commands: `/memory`, `/why` (what the last reply used: memories, skills, pages), `/routines`, `/new`, `/branch`, `/stop` (a bare "stop" works too while it's writing), `/undo <n>`
 (take back something it learned; see [Memory](memory.md#learned-this-week)), and `/<skill>` for each of the bot's
 skills (see [Skills](skills.md)). Everything else is plain language.
+
+**Branch from here:** to try another direction without re-explaining, send `/branch` as a reply to a message (in Slack,
+`branch`). A new conversation starts with a short "where we left off" up to that message, the same one a chat gets
+after a quiet spell. With Telegram topics on, it's a new topic and the old one carries on; elsewhere the chat itself
+starts afresh. In the app, hover a reply and click the branch icon next to Copy.
 
 **Telegram topics** (opt-in): with topics turned on in your private chat with the bot, switch on "Each topic is its
 own conversation" under Telegram on the bot's page. Each topic then has its own conversation, its own "read outside

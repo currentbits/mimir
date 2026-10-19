@@ -649,6 +649,11 @@ impl Host {
                 }
                 ok(self.db.set_session(bot, chat, None)?)
             }
+            // Branch from a message: a fresh conversation that opens with the chat up to it.
+            "branch" => {
+                let (bot, chat): (i64, i64) = (arg(a, "bot_id")?, arg(a, "chat_id")?);
+                ok(crate::branch(&self.db, &self.provider(bot)?, bot, chat, chat, Some(arg(a, "message_id")?))?)
+            }
             // Delete a chat's history (conversation, run log, corrections, the AI CLIs' copies); memories stay.
             "clear_history" => {
                 let chat: i64 = arg(a, "chat_id")?;
