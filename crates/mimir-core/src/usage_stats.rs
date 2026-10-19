@@ -1,6 +1,7 @@
 //! Usage stats: once a day, an anonymous count to Meterbird (our analytics) so we know how many installs there are, on
 //! which systems and with which AI accounts. A random id for this install, the version, OS and, per bot, its provider and
-//! model. Never names, messages, memories, keys or addresses. Off in Settings → Your data, or with MIMIR_USAGE_STATS=off.
+//! model, and how many pages the server's browser opened and how many of those a site blocked (#160: does a bot need
+//! your own browser?). Never names, messages, memories, keys or addresses. Off in Settings → Your data, or with MIMIR_USAGE_STATS=off.
 use anyhow::Result;
 use serde_json::{Value, json};
 use std::time::Duration;
@@ -13,6 +14,28 @@ const SITE_KEY: &str = "mb_d3d8b667ed2285f6";
 const ORIGIN: &str = "https://app.heymimir.app";
 const URL: &str = "https://app.meterbird.com/api/batch";
 const EVERY: i64 = 24 * 3600;
+
+/// Phrases of the pages sites show a browser they won't serve: Cloudflare, Akamai, PerimeterX, Google's /sorry.
+// ponytail: phrase match on the page's text, so a page that talks about captchas counts too; a rough share is all #160 needs.
+const BLOCKED: &[&str] = &["just a moment...", "attention required! | cloudflare", "verify you are human", "checking your browser",
+    "unusual traffic from your computer network", "page title: access denied", "page title: 403 forbidden", "are you a robot", "press & hold"];
+
+pub fn blocked(page: &str) -> bool {
+    let page = page.to_lowercase();
+    BLOCKED.iter().any(|b| page.contains(b))
+}
+
+/// Count a page the server's browser opened (what the browser tool returned for it).
+pub fn count_page(db: &Db, page: &str) {
+    let _ = db.bump_setting("browser_pages");
+    if blocked(page) {
+        let _ = db.bump_setting("browser_blocked");
+    }
+}
+
+fn counted(db: &Db, key: &str) -> i64 {
+    db.setting(key).ok().flatten().and_then(|v| v.parse().ok()).unwrap_or(0)
+}
 
 pub fn on(db: &Db) -> bool {
     std::env::var("MIMIR_USAGE_STATS").map_or(true, |v| v != "off" && v != "0")
@@ -56,7 +79,8 @@ pub fn batch(db: &Db) -> Result<Value> {
     let short = |s: &str| s.chars().take(100).collect::<String>();
     let mut events = vec![json!({"type": "custom", "name": "Active", "visitorId": visitor, "sessionId": session, "path": "/app",
         "properties": {"version": crate::server_update::CURRENT, "kind": kind, "os": std::env::consts::OS, "arch": std::env::consts::ARCH,
-            "osVersion": short(&format!("{} {}", os.os_type(), os.version())), "bots": bots.len()}})];
+            "osVersion": short(&format!("{} {}", os.os_type(), os.version())), "bots": bots.len(),
+            "pages": counted(db, "browser_pages"), "blockedPages": counted(db, "browser_blocked")}})];
     // Meterbird takes up to 50 events a batch.
     events.extend(bots.iter().take(49).map(|b| json!({"type": "custom", "name": "Bot", "visitorId": visitor, "sessionId": session, "path": "/app",
         "properties": {"provider": short(&b.provider), "model": short(if b.model.is_empty() { "default" } else { &b.model })}})));
@@ -70,6 +94,9 @@ async fn send(db: &Db) -> Result<()> {
         .header("content-type", "text/plain").header("origin", ORIGIN)
         .header("user-agent", format!("Mimir/{} ({})", crate::server_update::CURRENT, std::env::consts::OS))
         .body(body).send().await?.error_for_status()?;
+    // Pages since the last count. ponytail: a page opened while this was sending is dropped; fine for a share.
+    db.set_setting("browser_pages", "0")?;
+    db.set_setting("browser_blocked", "0")?;
     Ok(())
 }
 
@@ -93,6 +120,11 @@ mod tests {
             keys.sort();
             assert_eq!(keys, ["model", "provider"]);
         }
+        count_page(&db, "### Page\n- Page URL: https://github.com/\n- Page Title: GitHub");
+        count_page(&db, "### Page\n- Page URL: https://shop.example/\n- Page Title: Just a moment...");
+        let p = &batch(&db).unwrap()["events"][0]["properties"];
+        assert_eq!((p["pages"].as_i64(), p["blockedPages"].as_i64()), (Some(2), Some(1)));
+        assert!(blocked("- Page Title: Access Denied") && !blocked("Access denied for this repo? Ask the owner."));
         assert!(on(&db));
         db.set_setting("usage_stats", "off").unwrap();
         assert!(!on(&db), "switched off");
