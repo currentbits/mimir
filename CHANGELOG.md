@@ -63,6 +63,8 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
   Cyrillic "о") is now flagged too, and the card says so plainly while you edit an email as well.
 - **The bots' computer outside Docker:** `mimir doctor`'s warning now also says that other accounts on the machine
   can type and click on its screen, not only use its browser's DevTools.
+- **Usage stats on a server** now also count how many pages the bots' browser opened and how many of those a site
+  blocked (a "verify you are human" page, say). Two numbers, never the pages; **See what's sent** shows them.
 
 ## 0.4.0
 
