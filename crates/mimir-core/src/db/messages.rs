@@ -148,13 +148,19 @@ impl Db {
     }
 
     pub fn recent(&self, bot: i64, chat: i64, n: usize) -> Result<Vec<(String, String)>> {
+        self.recent_until(bot, chat, None, n)
+    }
+
+    /// `recent`, or with `until`, the messages up to and including that one (where a conversation was branched from),
+    /// even from before the conversation last started afresh.
+    pub fn recent_until(&self, bot: i64, chat: i64, until: Option<i64>, n: usize) -> Result<Vec<(String, String)>> {
         let c = self.c();
         let mut st = c.prepare(
-            "SELECT role, content FROM messages WHERE bot_id=?1 AND chat_id=?2
-               AND id > coalesce((SELECT CAST(value AS INTEGER) FROM settings WHERE key='fresh:' || ?1 || ':' || ?2), 0)
+            "SELECT role, content FROM messages WHERE bot_id=?1 AND chat_id=?2 AND id <= coalesce(?4, id)
+               AND (?4 IS NOT NULL OR id > coalesce((SELECT CAST(value AS INTEGER) FROM settings WHERE key='fresh:' || ?1 || ':' || ?2), 0))
              ORDER BY id DESC LIMIT ?3",
         )?;
-        let mut v: Vec<(String, String)> = st.query_map(params![bot, chat, n as i64], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<Result<_, _>>()?;
+        let mut v: Vec<(String, String)> = st.query_map(params![bot, chat, n as i64, until], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<Result<_, _>>()?;
         v.reverse();
         Ok(v)
     }

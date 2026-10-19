@@ -210,6 +210,29 @@ fn so_far(msgs: &[(String, String)], max: usize) -> String {
     kept.join("\n")
 }
 
+/// Branch a conversation: `to` starts afresh, and its next turn opens with where `from` left off, up to message `upto`
+/// (None: its latest), from the same short log as a quiet spell's. `to` may be `from` itself (the app, Slack…) or a new
+/// Telegram topic. What `from` read (outside content, a sensitive source) comes along with the quote.
+pub fn branch(db: &db::Db, provider: &Provider, bot: i64, from: i64, to: i64, upto: Option<i64>) -> Result<()> {
+    let tail = db.recent_until(bot, from, upto, 10)?;
+    let tainted = db.conv_tainted(bot, from)?;
+    let private = db.setting(&tools::private_key(bot, from))?;
+    if let Some(s) = db.session(bot, to)? {
+        provider.forget_session(&s);
+    }
+    db.set_session(bot, to, None)?;
+    if tainted {
+        db.conv_taint(bot, to)?;
+    }
+    if let Some(p) = private {
+        db.set_setting(&tools::private_key(bot, to), &p)?;
+    }
+    if tail.is_empty() {
+        return Ok(());
+    }
+    db.set_setting(&format!("branch:{bot}:{to}"), &so_far(&tail, 3000))
+}
+
 pub enum Trigger<'a> {
     Message(&'a str),
     Routine(&'a db::Routine),
@@ -309,7 +332,7 @@ pub fn skill_slug(name: &str) -> String {
 pub fn skill_menu_name(name: &str) -> Option<String> {
     let cmd: String = skill_slug(name).replace('-', "_").chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_').take(32).collect();
     let cmd = cmd.trim_matches('_').to_string();
-    let builtin = ["start", "help", "memory", "routines", "new", "stop", "undo", "why"].contains(&cmd.as_str()) || cmd.starts_with("pair");
+    let builtin = ["start", "help", "memory", "routines", "new", "branch", "stop", "undo", "why"].contains(&cmd.as_str()) || cmd.starts_with("pair");
     (!cmd.is_empty() && !builtin).then_some(cmd)
 }
 
@@ -1277,6 +1300,14 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
             );
         }
     }
+    // A branch (`branch`): the new conversation's first turn picks up where the old one was branched from.
+    if matches!(trigger, Trigger::Message(_))
+        && let Some(recap) = ctx.db.setting_take(&format!("branch:{}:{}", ctx.bot_id, ctx.conv))?
+    {
+        left_off = format!(
+            "<where_we_left_off>\nThe person branched this new conversation off an earlier one, to take it in another direction. The earlier one up to where they branched, from Mimir's log:\n{recap}\n</where_we_left_off>\n\n"
+        );
+    }
     // A CLI session only holds its own turns: a routine's result, the digest or the weekly review the person may be
     // replying to were sent outside it, so the latest of those comes along (a reply from a page-reading run counts as such).
     let mut last = String::new();
@@ -1525,6 +1556,14 @@ echo '{{"type":"result","result":"ok","session_id":"s1","usage":{{"input_tokens"
             assert!(user.contains("<instructions_update>") && user.contains("Your name is") && !user.contains("Zebrafish"), "{kind}: {user}");
             let after = say("thanks").await;
             assert!(!read(after, "user").contains("instructions_update"), "{kind}: sent once");
+            // #163: branched from the first reply, a new session opens with the chat up to there, not past it.
+            let upto = db.messages_of(0, Some(1), None, 0, 200).unwrap()[1].id;
+            super::branch(&db, &provider, 1, 0, 0, Some(upto)).unwrap();
+            let branched = say("try another way").await;
+            let user = read(branched, "user");
+            assert!(read(branched, "resume").is_empty(), "{kind}: a new session");
+            assert!(user.contains("<where_we_left_off>") && user.contains("user: hello") && !user.contains("and again"), "{kind}: {user}");
+            assert!(!read(say("go on").await, "user").contains("where_we_left_off"), "{kind}: once");
         }
         let _ = std::fs::remove_dir_all(&dir);
     }
