@@ -621,6 +621,20 @@ impl Host {
                 }
                 ok(json!({"brave": api_key("brave").is_some(), "x": api_key("x").is_some(), "searxng_url": self.db.setting("searxng_url")?.unwrap_or_default()}))
             }
+            // Scanned PDFs read by a local model behind Ollama (ocr.rs): its name (empty: off) and Ollama's address.
+            "ocr_settings" => {
+                if let Some(model) = arg::<Option<String>>(a, "model")? {
+                    self.db.set_setting("ocr_model", model.trim())?;
+                }
+                if let Some(url) = arg::<Option<String>>(a, "url")? {
+                    let url = url.trim().trim_end_matches('/').to_string();
+                    if !(url.is_empty() || url.starts_with("http://") || url.starts_with("https://")) {
+                        bail!("Ollama's address starts with http:// or https://");
+                    }
+                    self.db.set_setting("ocr_url", &url)?;
+                }
+                ok(json!({"model": self.db.setting("ocr_model")?.unwrap_or_default(), "url": self.db.setting("ocr_url")?.unwrap_or_default(), "default_url": crate::ocr::DEFAULT_URL}))
+            }
             "chats" => ok(self.db.chats()?),
             // Each topic in a private Telegram chat its own conversation (read per message, so no restart).
             "telegram_topics" => ok(self.db.setting(&format!("telegram_topics:{}", arg::<i64>(a, "bot_id")?))?.as_deref() == Some("on")),
@@ -1209,6 +1223,11 @@ impl Host {
                 if pages.is_empty() {
                     return ok(crate::with_document(&said, &name, &text));
                 }
+                // Read by a local model where one is set; what it couldn't read still goes as photos.
+                let (read, pages) = crate::ocr::read_pages(&self.db, pages).await;
+                if pages.is_empty() {
+                    return ok(crate::with_document(&said, &name, &read));
+                }
                 let dir = self.home.join("media");
                 std::fs::create_dir_all(&dir)?;
                 let mut images = vec![];
@@ -1217,7 +1236,8 @@ impl Host {
                     std::fs::write(&path, p)?;
                     images.push(path.display().to_string());
                 }
-                ok(json!({"text": crate::with_scan(&said, &name, images.len()), "images": images}))
+                let text = if read.is_empty() { crate::with_scan(&said, &name, images.len()) } else { crate::with_document(&said, &name, &read) };
+                ok(json!({"text": text, "images": images}))
             }
             "save_media" => {
                 use base64::Engine;
