@@ -97,6 +97,7 @@ pub mod files;
 pub mod library;
 pub mod lookalike;
 pub mod transcribe;
+pub mod ocr;
 
 use anyhow::Result;
 use db::Entry;
