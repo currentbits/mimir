@@ -407,7 +407,7 @@ pub(crate) fn offers_all(a: &Approval) -> bool {
 /// …and "Always" on every card with something to allow, like the app. Not in a guest's chat (of any kind): the guest
 /// answers there, and Always would change your rules for every chat.
 pub(crate) fn offers_always(a: &Approval) -> bool {
-    !matches!(a.kind.as_str(), "signin" | "takeover" | "guest") && !a.guest
+    !matches!(a.kind.as_str(), "signin" | "takeover" | "guest" | "drift") && !a.guest
 }
 
 /// Allowed the same plain ask a few times already: the card offers to stop asking.
