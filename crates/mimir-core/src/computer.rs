@@ -634,6 +634,7 @@ pub struct Shown {
 
 /// Start recording what you do on the computer (a new start drops an earlier recording).
 pub fn teach_start() {
+    held(&POINTED).clear();
     if let Some(old) = recording().replace(Recording {
         started: std::time::Instant::now(),
         steps: vec![],
@@ -666,6 +667,12 @@ pub fn teach_stop(keep: usize) -> Option<Shown> {
             (None, _) => s.what.clone(),
         };
         steps.push(format!("  [{}:{:02}] {what}", s.secs / 60, s.secs % 60));
+    }
+    // The data behind what you clicked, so the skill can say to watch that instead of the page.
+    let data = offers(held(&PAGE_CALLS).iter().filter(|c| c.at >= r.started), &held(&POINTED));
+    if data.iter().any(|d| !d.1.is_empty()) {
+        steps.push("The page loaded what was clicked from its own data (a quiet check can watch one of these addresses instead of the page, without a browser):".into());
+        steps.extend(data.iter().map(|(url, t)| format!("  GET {url} (holds \"{t}\")")));
     }
     // An even spread of the click screenshots.
     let n = r.shots.len();
@@ -755,6 +762,14 @@ pub async fn teach_note(home: &Path, a: &serde_json::Value) {
                 _ => "clicked",
             };
             step.what = format!("{how} {}", info.as_ref().map_or_else(|| format!("at ({x}, {y})"), element_label));
+            // What you clicked is what you pointed at: the data a check can watch is the call that holds it.
+            if let Some(t) = info.as_ref().and_then(|v| v["text"].as_str()).filter(|t| !t.is_empty()) {
+                let mut p = held(&POINTED);
+                p.push(t.to_string());
+                if p.len() > 20 {
+                    p.remove(0);
+                }
+            }
         }
         None => {
             // Kept only when a plain text field in the focused page is sure to have it; anything else (a password,
@@ -1007,6 +1022,206 @@ async fn fill<F: std::future::Future<Output = Result<()>>>(login: &Login, domain
     }
 }
 
+// ---------- the data a page loads ----------
+
+/// A JSON answer to a GET a page made while you were in control: what a quiet check can watch instead of the page.
+struct Call {
+    /// Whose browser profile it was made in: only that bot's checks send its cookies.
+    bot: i64,
+    /// The page that asked for it.
+    page: String,
+    url: String,
+    body: String,
+    /// Its Cookie header, from the bot's saved login. Never shown to the AI.
+    cookies: String,
+    at: std::time::Instant,
+}
+
+/// How many JSON calls are kept (the latest), and the biggest answer kept.
+const CALLS: usize = 60;
+const CALL_BODY: usize = 200_000;
+
+static PAGE_CALLS: Mutex<Vec<Call>> = Mutex::new(Vec::new());
+/// What you clicked while showing (the data you pointed at), latest last.
+static POINTED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+/// Until when the pages' calls are noted; Some while that runs.
+static SNIFF_UNTIL: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+
+fn held<T>(m: &'static Mutex<T>) -> std::sync::MutexGuard<'static, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Note the JSON the pages load (GETs only) for the next `secs`, in the profile on screen: while you take over or show
+/// something. One listener; a later call only makes it last longer.
+pub fn sniff(home: &Path, secs: u64) {
+    let until = std::time::Instant::now() + Duration::from_secs(secs);
+    {
+        let mut g = held(&SNIFF_UNTIL);
+        let running = g.is_some();
+        *g = Some(g.map_or(until, |u| u.max(until)));
+        if running {
+            return;
+        }
+    }
+    let home = home.to_path_buf();
+    tokio::spawn(async move {
+        // ponytail: whose profile is checked once, at the start; you hold the computer meanwhile, so it can't switch
+        if let Ok(Some(bot)) = tokio::task::spawn_blocking(move || screen_bot(&home)).await {
+            let _ = sniffing(bot).await;
+        }
+        *held(&SNIFF_UNTIL) = None;
+    });
+}
+
+/// The browser's DevTools, attached to every tab: each GET a page's scripts make (fetch or XHR) that answers JSON is
+/// kept, with the cookies the bot's profile has for it.
+async fn sniffing(bot: i64) -> Option<()> {
+    use futures_util::{SinkExt, StreamExt};
+    use serde_json::{Value, json};
+    use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
+    let auth = cdp_auth().ok()?;
+    let mut ver = reqwest::Client::new().get(format!("{}/json/version", cdp_endpoint().ok()?));
+    if let Some(h) = &auth {
+        ver = ver.header("Authorization", h);
+    }
+    let v: Value = ver.send().await.ok()?.json().await.ok()?;
+    let mut req = v["webSocketDebuggerUrl"].as_str()?.into_client_request().ok()?;
+    if let Some(h) = &auth {
+        req.headers_mut().insert("authorization", h.parse().ok()?);
+    }
+    let (mut sock, _) = tokio_tungstenite::connect_async(req).await.ok()?;
+    let msg = |id: i64, method: &str, params: Value, session: &str| Message::text(json!({"id": id, "method": method, "params": params, "sessionId": session}).to_string());
+    let mut id = 1;
+    sock.send(Message::text(json!({"id": id, "method": "Target.setAutoAttach", "params": {"autoAttach": true, "waitForDebuggerOnStart": false, "flatten": true}}).to_string())).await.ok()?;
+    // "session/request" → (page, address) of a GET on its way; command id → the call its answer is for.
+    let mut going: std::collections::HashMap<String, (String, String)> = Default::default();
+    let mut asked: std::collections::HashMap<i64, Call> = Default::default();
+    loop {
+        let left = held(&SNIFF_UNTIL).map(|u| u.saturating_duration_since(std::time::Instant::now()))?;
+        let m = match tokio::time::timeout(left, sock.next()).await {
+            Ok(Some(Ok(m))) => m,
+            Ok(_) => return None,
+            Err(_) => return Some(()),
+        };
+        let Ok(v) = serde_json::from_str::<Value>(m.to_text().unwrap_or("")) else { continue };
+        let (session, p) = (v["sessionId"].as_str().unwrap_or("").to_string(), &v["params"]);
+        let key = format!("{session}/{}", p["requestId"].as_str().unwrap_or(""));
+        let send = match v["method"].as_str() {
+            Some("Target.attachedToTarget") if p["targetInfo"]["type"] == "page" => Some(("Network.enable", json!({}), p["sessionId"].as_str().unwrap_or("").to_string())),
+            Some("Network.requestWillBeSent") => {
+                let url = p["request"]["url"].as_str().unwrap_or("");
+                if matches!(p["type"].as_str(), Some("XHR" | "Fetch")) && p["request"]["method"] == "GET" && url.starts_with("http") && !secretish(url) {
+                    going.insert(key, (p["documentURL"].as_str().unwrap_or("").to_string(), url.to_string()));
+                }
+                None
+            }
+            Some("Network.loadingFailed") => {
+                going.remove(&key);
+                None
+            }
+            Some("Network.loadingFinished") => going.remove(&key).map(|(page, url)| {
+                asked.insert(id + 1, Call { bot, page, url, body: String::new(), cookies: String::new(), at: std::time::Instant::now() });
+                ("Network.getResponseBody", json!({"requestId": p["requestId"]}), session)
+            }),
+            // An answer: first the body (kept when it's JSON), then the cookies for its address.
+            None => match v["id"].as_i64().and_then(|i| asked.remove(&i)) {
+                Some(mut c) if c.body.is_empty() => {
+                    let raw = v["result"]["body"].as_str().unwrap_or("");
+                    // Sent as bytes when the site didn't say it's text.
+                    let body = if v["result"]["base64Encoded"] == true {
+                        use base64::Engine;
+                        base64::engine::general_purpose::STANDARD.decode(raw).ok().and_then(|b| String::from_utf8(b).ok()).unwrap_or_default()
+                    } else {
+                        raw.to_string()
+                    };
+                    let json = body.len() <= CALL_BODY && serde_json::from_str::<Value>(&body).is_ok_and(|j| j.is_object() || j.is_array());
+                    json.then(|| {
+                        c.body = body;
+                        let url = c.url.clone();
+                        asked.insert(id + 1, c);
+                        ("Network.getCookies", json!({"urls": [url]}), session)
+                    })
+                }
+                Some(mut c) => {
+                    let all = v["result"]["cookies"].as_array().cloned().unwrap_or_default();
+                    c.cookies = all.iter().filter_map(|k| Some(format!("{}={}", k["name"].as_str()?, k["value"].as_str()?))).collect::<Vec<_>>().join("; ");
+                    let mut calls = held(&PAGE_CALLS);
+                    calls.retain(|x| !(x.bot == c.bot && x.url == c.url));
+                    calls.push(c);
+                    if calls.len() > CALLS {
+                        calls.remove(0);
+                    }
+                    None
+                }
+                None => None,
+            },
+            _ => None,
+        };
+        if let Some((method, params, session)) = send {
+            id += 1;
+            sock.send(msg(id, method, params, &session)).await.ok()?;
+        }
+    }
+}
+
+/// An address whose query looks like it carries a key or a session: never offered (it would end up in a routine).
+fn secretish(url: &str) -> bool {
+    url::Url::parse(url).map_or(true, |u| {
+        u.query_pairs().any(|(k, _)| ["token", "key", "auth", "sess", "sig", "secret", "pass", "jwt", "nonce"].iter().any(|w| k.to_lowercase().contains(w)))
+    })
+}
+
+/// Whether a JSON answer holds something as the page showed it: the text itself, or its number ("R 1,450.00" is
+/// 1450 or 1450.00 in the data).
+fn holds(body: &str, shown: &str) -> bool {
+    let t = shown.trim();
+    if t.chars().count() < 3 {
+        return false;
+    }
+    if body.contains(t) {
+        return true;
+    }
+    let number = |n: &str| {
+        body.match_indices(n).any(|(i, _)| {
+            let near = |c: Option<char>| c.is_some_and(|c| c.is_ascii_digit() || c == '.');
+            !near(body[..i].chars().last()) && !near(body[i + n.len()..].chars().next())
+        })
+    };
+    t.split(|c: char| !(c.is_ascii_digit() || c == ',' || c == '.')).map(|n| n.trim_matches(['.', ',']).replace(',', "")).filter(|n| n.len() >= 2).any(|n| {
+        let whole = if n.contains('.') { n.trim_end_matches('0').trim_end_matches('.') } else { &n };
+        number(&n) || number(whole)
+    })
+}
+
+/// The data the pages loaded that a check can watch: (address, what you pointed at that it holds, or ""). Ones holding
+/// something you clicked come first; when some do, only those.
+fn offers<'a>(calls: impl Iterator<Item = &'a Call>, pointed: &[String]) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = calls.map(|c| (c.url.clone(), pointed.iter().rev().find(|t| holds(&c.body, t)).cloned().unwrap_or_default())).collect();
+    out.reverse();
+    if out.iter().any(|o| !o.1.is_empty()) {
+        out.retain(|o| !o.1.is_empty());
+    }
+    out.truncate(3);
+    out
+}
+
+fn host_of(url: &str) -> Option<String> {
+    url::Url::parse(url).ok()?.host_str().map(str::to_lowercase)
+}
+
+/// For a quiet check on `page`: the data that page's site loaded in `bot`'s browser while you were in control.
+pub fn page_data(bot: i64, page: &str) -> Vec<(String, String)> {
+    let Some(h) = host_of(page) else { return vec![] };
+    let calls = held(&PAGE_CALLS);
+    offers(calls.iter().filter(|c| c.bot == bot && host_of(&c.page).as_ref() == Some(&h)), &held(&POINTED))
+}
+
+/// The cookies `bot`'s browser sent its latest call to `url`'s site with, if any.
+pub fn page_cookies(bot: i64, url: &str) -> Option<String> {
+    let h = host_of(url)?;
+    held(&PAGE_CALLS).iter().rev().find(|c| c.bot == bot && host_of(&c.url).as_ref() == Some(&h) && !c.cookies.is_empty()).map(|c| c.cookies.clone())
+}
+
 /// A screenshot with a red ring where you clicked, saved in the media folder (where the model may read it).
 fn marked_shot(home: &Path, x: i64, y: i64) -> Result<PathBuf> {
     let mut img = image::load_from_memory(&screenshot_jpeg()?)?.to_rgb8();
@@ -1070,6 +1285,37 @@ mod tests {
         assert!(shown.steps[2].ends_with("typed into the \"Email\" field \"me@x.com\""), "{}", shown.steps[2]);
         assert!(!shown.steps.join("\n").contains("hunter2"));
         assert!(super::teaching().is_none());
+    }
+
+    /// Opt-in, on a Chromium with `--remote-debugging-port=9222` whose open tab loads JSON from its own site every
+    /// second or so: `MIMIR_SNIFF_TEST=1`.
+    #[tokio::test]
+    #[ignore]
+    async fn notes_the_json_a_page_loads() {
+        std::env::var("MIMIR_SNIFF_TEST").unwrap();
+        *super::held(&super::SNIFF_UNTIL) = Some(std::time::Instant::now() + std::time::Duration::from_secs(5));
+        super::sniffing(7).await;
+        let page = {
+            let calls = super::held(&super::PAGE_CALLS);
+            let c = calls.iter().find(|c| c.bot == 7).expect("a JSON call");
+            assert!(c.body.starts_with('{') && c.cookies.contains("seen=1"), "{} {} {}", c.url, c.body, c.cookies);
+            c.page.clone()
+        };
+        assert_eq!(super::page_data(7, &page).len(), 1, "one address, however often it was called");
+        assert_eq!(super::page_cookies(7, &page).as_deref(), Some("seen=1"));
+    }
+
+    #[test]
+    fn the_data_behind_what_you_clicked() {
+        use super::{holds, offers, secretish};
+        let body = r#"{"date":"2026-10-19","slots":[{"at":"18:00","price":1450},{"at":"19:00","price":145.5}]}"#;
+        assert!(holds(body, "R 1,450.00") && holds(body, "R 145.50") && holds(body, "18:00"));
+        assert!(!holds(body, "R 45") && !holds(body, "Book now") && !holds(body, "19"), "a number is a whole number, and short text isn't matched");
+        assert!(secretish("https://club.example/api?session_id=x") && secretish("https://club.example/api?apiKey=x") && !secretish("https://club.example/api/slots?date=2026-10-19"));
+        let call = |url: &str, body: &str| super::Call { bot: 1, page: "https://club.example/book".into(), url: url.into(), body: body.into(), cookies: String::new(), at: std::time::Instant::now() };
+        let calls = [call("https://club.example/api/me", r#"{"name":"Sam"}"#), call("https://club.example/api/slots", body)];
+        assert_eq!(offers(calls.iter(), &["R 1,450.00".into()]), vec![("https://club.example/api/slots".to_string(), "R 1,450.00".to_string())], "only the call that holds it");
+        assert_eq!(offers(calls.iter(), &[]).len(), 2, "nothing pointed at: the page's calls, latest first");
     }
 
     #[test]

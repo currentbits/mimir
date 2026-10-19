@@ -290,6 +290,8 @@ pub(crate) enum Command<'a> {
     Why,
     Routines,
     New,
+    /// "/branch", maybe as a reply to the message to branch from.
+    Branch,
     /// "/stop", or a bare "stop" while a reply is being written.
     Stop(bool),
     /// "/undo N": take back the Nth memory the weekly review listed.
@@ -357,7 +359,8 @@ fn why(used: Option<crate::db::Used>) -> String {
 
 /// Pairing works as "/pair CODE" or "pair CODE" (Slack reserves leading slashes).
 pub(crate) fn parse_command(text: &str) -> Command<'_> {
-    let t = text.trim();
+    // A command sent as a reply (`/branch` under the message to branch from) is still that command.
+    let t = crate::own_part(text).trim();
     let lower = t.to_ascii_lowercase();
     if lower.starts_with("/pair") || lower.starts_with("pair ") {
         return Command::Pair(t.trim_start_matches('/')[4..].trim());
@@ -375,10 +378,24 @@ pub(crate) fn parse_command(text: &str) -> Command<'_> {
         "/why" => Command::Why,
         "/routines" => Command::Routines,
         "/new" => Command::New,
+        "/branch" | "branch" => Command::Branch,
         "/stop" => Command::Stop(true),
         "stop" => Command::Stop(false),
         _ => Command::Chat,
     }
+}
+
+/// The message a `/branch` sent as a reply is under: the newest in the conversation holding the quote's start, and its
+/// text. None (not a reply, or not found): branch from the latest. ponytail: compared on letters and digits only, as
+/// the app shows the bot's Markdown rendered; a message older than the last 200 isn't found.
+fn branch_point(db: &Db, bot: i64, conv: i64, text: &str) -> Option<(i64, String)> {
+    let quote = text.strip_prefix("<replying_to_")?.split_once('>')?.1.split_once("</replying_to_")?.0;
+    let key = |s: &str| s.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect::<String>();
+    let want: String = key(quote).chars().take(40).collect();
+    if want.is_empty() {
+        return None;
+    }
+    db.messages_of(conv, Some(bot), None, 0, 200).ok()?.into_iter().rev().find(|m| key(&m.content).contains(&want)).map(|m| (m.id, m.content))
 }
 
 /// Button payload "ap:<id>:y|n|a" → (approval id, approve, all like this for the rest of the reply).
@@ -997,7 +1014,7 @@ impl Core {
             command = Command::Chat;
         }
         match command {
-            Command::Start => chan.send(ext, tr("Hi! Just talk to me. /memory shows what I remember, /routines lists schedules, /why shows what my last reply used, /new starts a fresh conversation, /stop cuts off a reply I'm writing, /undo N takes back something from my weekly list of what I learned.")).await,
+            Command::Start => chan.send(ext, tr("Hi! Just talk to me. /memory shows what I remember, /routines lists schedules, /why shows what my last reply used, /new starts a fresh conversation, /branch (as a reply to a message) starts a new one from there, /stop cuts off a reply I'm writing, /undo N takes back something from my weekly list of what I learned.")).await,
             Command::Memory => {
                 // What bots keep in mind, then what's waiting for you to confirm (bots don't keep those in mind).
                 let scope = format!("chat:{chat}");
@@ -1019,6 +1036,25 @@ impl Core {
                 }
                 self.db.set_session(self.bot, conv, None)?;
                 chan.send(ext, tr("Fresh conversation started (memories kept).")).await;
+            }
+            Command::Branch => {
+                let from = branch_point(&self.db, self.bot, conv, text);
+                // Telegram with topics on: the branch is a new topic, and this one carries on. Elsewhere it's this
+                // conversation, afresh. ponytail: Slack and Discord threads aren't conversations of their own yet.
+                let name = from.as_ref().map_or_else(|| tr("Branch").to_string(), |(_, said)| format!("↳ {}", crate::tools::truncate(said.lines().next().unwrap_or(""), 60)));
+                let topic = match chan {
+                    Chan::Telegram(tg) if self.topics() && chat > 0 => tg.new_topic(&chat.to_string(), &name).await.inspect_err(|e| eprintln!("telegram topic: {e:#}")).ok(),
+                    _ => None,
+                };
+                let (to, there) = match topic {
+                    Some(t) => (self.db.topic_conv(chat, t)?, format!("{chat}:{t}")),
+                    None => (conv, ext.to_string()),
+                };
+                crate::branch(&self.db, &self.provider, self.bot, conv, to, from.map(|(id, _)| id))?;
+                if to != conv {
+                    chan.send(ext, tr("Branched into a new topic; this one carries on as it was.")).await;
+                }
+                chan.send(&there, tr("New conversation, picking up from there (memories kept). Where shall we take it?")).await;
             }
             Command::Undo(n) => chan.send(ext, &crate::tidy::undo_learned(&self.db, chat, n)?).await,
             Command::Stop(_) => unreachable!("handled above"),
@@ -3110,6 +3146,24 @@ mod tests {
         let g = ask("memory_forget", "guest", None);
         crate::tools::always_allow(&db, &g).unwrap();
         assert_eq!(db.rule("memory_forget").unwrap().as_deref(), Some("allow"));
+    }
+
+    #[test]
+    fn branch_from_a_reply() {
+        let p = std::env::temp_dir().join(format!("mimir-branch-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = Db::open(&p).unwrap();
+        for (role, said) in [("user", "plan a trip"), ("assistant", "**Option A:** Lisbon in May, <cheap> flights"), ("user", "tell me more"), ("assistant", "Lisbon has trams")] {
+            db.log(1, 42, role, said, None).unwrap();
+        }
+        let ids: Vec<i64> = db.messages_of(42, Some(1), None, 0, 10).unwrap().iter().map(|m| m.id).collect();
+        // Telegram quotes the message as shown: Markdown rendered, whitespace folded.
+        let asked = crate::with_reply("/branch", "Option A: Lisbon in  May, ‹cheap› flights");
+        assert!(matches!(parse_command(&asked), Command::Branch));
+        assert_eq!(branch_point(&db, 1, 42, &asked).map(|(id, _)| id), Some(ids[1]));
+        assert_eq!(branch_point(&db, 1, 42, "/branch"), None, "not a reply: from the latest");
+        assert_eq!(branch_point(&db, 1, 42, &crate::with_reply("/branch", "never said")), None);
+        let _ = std::fs::remove_file(&p);
     }
 
     #[test]

@@ -366,8 +366,15 @@ export function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, 
   const local = chat.chat_id === LOCAL
   const msgs = incognito ? secret : log.data ?? []
   const conv = useLoad(() => invoke<{ tainted: boolean }>('conversation', { botId, chatId: cid }), [botId, cid], 4000)
-  const [fresh, setFresh] = useState(false)
-  const startFresh = () => invoke('new_conversation', { botId, chatId: chat.chat_id }).then(() => { conv.reload(); setFresh(true); setTimeout(() => setFresh(false), 2600) }, e => setErr(String(e)))
+  const [fresh, setFresh] = useState<string | null>(null)
+  const freshNote = (note: string, ms: number) => { conv.reload(); setFresh(note); setTimeout(() => setFresh(f => (f === note ? null : f)), ms) }
+  const startFresh = () => invoke('new_conversation', { botId, chatId: chat.chat_id }).then(() => freshNote('Fresh conversation. Your memories are kept.', 2600), e => setErr(String(e)))
+  // A new conversation that opens with the chat up to this message, to try another direction from there.
+  const branchFrom = (m: Message) => invoke('branch', { botId: m.bot_id, chatId: chat.chat_id, messageId: m.id }).then(() => {
+    if (!only) setBotId(m.bot_id)
+    freshNote(`New conversation from that message: ${botOf(m.bot_id).name} picks up from there. Your memories are kept.`, 4000)
+    box.current?.focus()
+  }, e => setErr(String(e)))
   // Messages that arrive while you watch animate in; the first load and your own send's results don't
   // (their bubbles are already on screen).
   const [animFrom, setAnimFrom] = useState(Infinity)
@@ -574,7 +581,9 @@ export function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, 
       <div id={`m${m.id}`} className={'msg-bot' + anim(m)} style={{ '--pig': pigment(b.id) } as React.CSSProperties}>
         <Avatar id={b.id} name={b.name} size={26} still />
         <div>
-          <div className="msg-head"><b>{b.name}</b><time title={fullTime(m.ts)}>{ago(m.ts)}</time><CopyButton text={text} /></div>
+          <div className="msg-head"><b>{b.name}</b><time title={fullTime(m.ts)}>{ago(m.ts)}</time>
+            {local && !incognito && !working && (!only || m.bot_id === botId) && <button type="button" className="msg-copy" onClick={() => branchFrom(m)} aria-label="Branch from here" title="Branch from here: a new conversation that picks up from this message"><Icon name="branch" size={13} /></button>}
+            <CopyButton text={text} /></div>
           {text && <div className="msg-body"><Markdown text={text} /></div>}
           {files.map(f => <SentFile key={f} chatId={chat.chat_id} name={f} />)}
           {/* Only under the latest message: once anything follows, it's been answered one way or another. */}
@@ -688,7 +697,7 @@ export function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, 
                 {openBot && <button className="btn btn-sm btn-ghost" onClick={() => openBot(me.id)}>Settings</button>}</div>
             )
           })()}
-          {fresh && <div className="guarded ok" role="status"><Icon name="check" size={14} /><span>Fresh conversation. Your memories are kept.</span></div>}
+          {fresh && <div className="guarded ok" role="status"><Icon name="check" size={14} /><span>{fresh}</span></div>}
           {local ? (
             <>
               {!incognito && doc && (

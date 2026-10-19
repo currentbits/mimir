@@ -57,6 +57,11 @@ impl Tg {
         Ok(v["result"].clone())
     }
 
+    /// A new topic in a private chat (Bot API 9.3): its thread id.
+    pub(crate) async fn new_topic(&self, chat: &str, name: &str) -> Result<i64> {
+        self.call("createForumTopic", json!({"chat_id": chat, "name": name})).await?["message_thread_id"].as_i64().context("telegram createForumTopic: no topic id")
+    }
+
     /// A file the bot sends: a photo (shown inline) or a document.
     pub(crate) async fn upload(&self, chat: &str, name: &str, bytes: Vec<u8>) -> Result<()> {
         let (method, field) = if crate::is_photo(name) { ("sendPhoto", "photo") } else { ("sendDocument", "document") };
@@ -202,6 +207,7 @@ impl Tg {
             {"command": "routines", "description": tr("What I do on a schedule")},
             {"command": "why", "description": tr("What my last reply used")},
             {"command": "new", "description": tr("Start a fresh conversation (memories kept)")},
+            {"command": "branch", "description": tr("Branch off a new conversation from here (reply to a message to branch from it)")},
             {"command": "stop", "description": tr("Stop the reply I'm writing")}
         ]);
         let _ = self.call("setMyCommands", json!({"commands": base})).await;
