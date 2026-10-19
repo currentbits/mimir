@@ -19,6 +19,7 @@ function approvalRisk(a: Approval): { icon: string; label: string; tone: string;
   if (a.kind === 'bot') return { icon: 'user', label: 'Makes a new bot with this role, on the same AI account. Each new bot asks you, until you choose Always.', tone: 'rule', always: true }
   if (a.kind === 'plan') return { icon: 'check', label: 'One OK for the whole plan: these steps won\'t ask again during this reply.', tone: 'rule', always: true }
   if (a.kind === 'unasked') return { icon: 'shield', label: 'Asking because this doesn’t look like what you asked for (who or what it acts on wasn’t in your message).', tone: 'guarded', always: true }
+  if (a.kind === 'drift') return { icon: 'shield', label: 'Asking because this routine is doing it differently from its earlier runs (why comes first). Allowed, it counts as usual from now on.', tone: 'guarded', always: false }
   if (a.kind === 'loop') return { icon: 'retry', label: 'The bot keeps making this same call. Allow lets it carry on; Deny tells it to stop and say where it got stuck.', tone: 'rule', always: true }
   if (a.kind === 'guest') return { icon: 'user', label: 'Asked in a guest\'s chat. Allow is for this once; Always changes your rules in every chat.', tone: 'rule', always: true }
   if (a.kind === 'sensitive') return { icon: 'shield', label: 'Asking because this run read from something you marked sensitive (named first). After that, everything that goes out asks.', tone: 'guarded', always: true }

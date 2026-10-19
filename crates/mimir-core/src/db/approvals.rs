@@ -125,6 +125,11 @@ impl Db {
         Ok(())
     }
 
+    /// The routine whose run asked (a parked call's).
+    pub fn approval_routine(&self, id: i64) -> Result<Option<i64>> {
+        Ok(self.c().query_row("SELECT r.routine_id FROM approvals a JOIN runs r ON r.id = a.run_id WHERE a.id=?1", [id], |r| r.get(0)).optional()?.flatten())
+    }
+
     /// "Allow all like this": the approval's tool (and site) needs no more OKs for the rest of its run. Call it
     /// before approving, so the plan is in place when the waiting tool goes on. Only for a pending plain ask from a
     /// run that's still going, in `chat` if given; returns false otherwise (and nothing changes).
