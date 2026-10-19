@@ -407,7 +407,7 @@ pub(crate) fn offers_all(a: &Approval) -> bool {
 /// …and "Always" on every card with something to allow, like the app. Not in a guest's chat (of any kind): the guest
 /// answers there, and Always would change your rules for every chat.
 pub(crate) fn offers_always(a: &Approval) -> bool {
-    !matches!(a.kind.as_str(), "signin" | "takeover" | "guest") && !a.guest
+    !matches!(a.kind.as_str(), "signin" | "takeover" | "guest" | "drift") && !a.guest
 }
 
 /// Allowed the same plain ask a few times already: the card offers to stop asking.
@@ -1117,6 +1117,7 @@ impl Core {
             let draft = follower.finish().await;
             let (reply, files) = crate::files::split_sent(&reply);
             core.say(&chan, &ext, chat, draft, if reply.trim().is_empty() && !files.is_empty() { "📎" } else { &reply }, &rows, &files, None).await;
+            crate::hooks::fire(&core.db, core.bot, chat, crate::hooks::Event::Reply { text: &reply });
         });
     }
 
@@ -1573,8 +1574,11 @@ impl Core {
     /// What's still in the outbox (left by a crash, an update or a restart, or a send that failed): sent now.
     async fn resend(&self, chans: &[Chan]) -> Result<()> {
         for o in self.db.outbox_take(self.bot, crate::db::now())? {
-            // Its channel isn't set up any more: it waits (and is cleared out after a few days).
-            if let Some(c) = chans.iter().find(|c| c.kind() == o.kind) {
+            // Webhooks out go to their address; a message whose channel isn't set up any more waits (and is cleared
+            // out after a few days).
+            if o.kind == "webhook" {
+                crate::hooks::send(&self.db, &o).await;
+            } else if let Some(c) = chans.iter().find(|c| c.kind() == o.kind) {
                 self.send_out(c, &o).await;
             }
         }
@@ -1697,6 +1701,10 @@ impl Core {
                     self.db.routine_events_clear(r.id, upto)?;
                 }
                 self.db.routine_done(&r, true)?;
+                // A quiet check that found nothing to say isn't news.
+                if !text.trim().is_empty() {
+                    crate::hooks::fire(&self.db, self.bot, r.chat_id, crate::hooks::Event::RoutineFinished { routine: r.id, text: &text });
+                }
                 text
             }
             Err(e) => {
@@ -1754,6 +1762,7 @@ impl Core {
                 }
                 self.db.routine_done(&r, false)?;
                 let text = format!("Routine #{}: {}", r.id, crate::friendly_error(&e));
+                crate::hooks::fire(&self.db, self.bot, r.chat_id, crate::hooks::Event::RoutineFailed { routine: r.id, error: &text });
                 // A failed digest-lane routine (incl. one held for quiet hours) says so in the digest.
                 if r.delivery == "digest" {
                     self.db.digest_add(self.bot, r.chat_id, r.id, &text, false)?;

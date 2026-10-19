@@ -10,6 +10,10 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
   browser, so it works on a server too. Bots use Mimir's tools directly and get photos at full size. If xAI doesn't
   offer its API to your plan, the bot says so; the Grok (Grok Build) account still works. See
   [docs/ai-accounts.md](docs/ai-accounts.md#signing-in).
+- **Webhooks out:** **Settings → Webhooks out** posts a small signed JSON to an address of yours when a routine
+  finishes or fails, an approval is waiting, or a reply was sent. You can use it with Home Assistant, ntfy or n8n.
+  Message text is only included if you ask for it. A failed send is tried again. See
+  [docs/routines.md](docs/routines.md#webhooks-out).
 - **Scanned PDFs read on your computer:** set a local document model in **Settings → Scanned PDFs** (an
   [Ollama](https://ollama.com) model such as dots.ocr, or any vision model) and a scan's pages reach the bot as text,
   tables included, instead of photos: less of your plan per page, and the scan stays here. Off until you set one.
