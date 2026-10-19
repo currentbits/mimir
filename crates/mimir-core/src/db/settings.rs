@@ -43,7 +43,15 @@ impl Db {
         Ok(())
     }
 
-    /// Save a transcribed meeting; returns its id. Lines are (unix time, "you"|"others", text).
+    /// Add one to a counting setting (missing counts as 0), in one step so two processes don't lose a count.
+    pub fn bump_setting(&self, key: &str) -> Result<()> {
+        self.c().execute(
+            "INSERT INTO settings(key, value) VALUES (?1, '1') ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1",
+            [key],
+        )?;
+        Ok(())
+    }
+
     pub fn set_setting(&self, key: &str, value: &str) -> Result<()> {
         self.c().execute(
             "INSERT INTO settings(key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value",

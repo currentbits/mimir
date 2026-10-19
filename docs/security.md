@@ -66,6 +66,12 @@ kind of approval, until you press "Always" on one; never "all like this". An ema
 approve (recipient first), at most 20 a day from a chat, with addresses checked so nothing can add a hidden
 recipient. A new bot gets at most the tools of the bot that made it, and can't make bots itself.
 
+**Asking for it isn't approving it.** A card still appears when your message plainly asked for that exact action
+("add dentist Tuesday 3pm"). This is on purpose (#165): which tools ask is decided in code, and "plainly asked" would
+be the model's call, the very judgement a prompt injection aims at. Your own message isn't always your words either: a
+photo you send and a Signal forward count as yours (see [What's left](#whats-left)). The check that compares an action
+with your request only ever adds a card, never skips one. To ask less, press "Always" on a tool.
+
 **Private data stays in private chats.** Email, calendar and meeting tools exist only in a chat with you alone, never
 in a group (where the reply goes to everyone) or incognito (where nothing may be kept).
 
