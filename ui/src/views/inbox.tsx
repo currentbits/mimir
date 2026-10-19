@@ -228,7 +228,7 @@ export function SignInForm({ onClose }: { onClose: () => void }) {
 /** One item per usage limit: every bot on that AI login waits for the same reset. */
 const holdGroups = (hs: Hold[]) => Object.values(hs.reduce<Record<string, Hold[]>>((g, h) => { const k = h.cap || h.routine_id ? h.key : `limit:${h.until}`; (g[k] ??= []).push(h); return g }, {}))
 
-export const inboxCount = (i: Inbox | null) => i ? (i.server_update ? 1 : 0) + (i.damage ? 1 : 0) + i.approvals.length + i.missed.length + i.failed.length + holdGroups(i.holds ?? []).length + (i.goals ?? []).length + i.suggestions.reduce((n, s) => n + s.count, 0) + (i.unconfirmed ?? []).reduce((n, s) => n + s.count, 0) : 0
+export const inboxCount = (i: Inbox | null) => i ? (i.server_update ? 1 : 0) + (i.damage ? 1 : 0) + i.approvals.length + i.missed.length + i.failed.length + holdGroups(i.holds ?? []).length + (i.goals ?? []).length + i.suggestions.reduce((n, s) => n + s.count, 0) + (i.unconfirmed ?? []).reduce((n, s) => n + s.count, 0) + (i.rule_hints ?? []).length : 0
 
 /** A failed run in plain words, with the fix that most likely helps. */
 export function failure(error: string | null, status?: Run['status'], delivered?: string | null): { title: string; fix: 'bot' | 'chat' | 'routines' | null; fixLabel?: string } {
@@ -309,6 +309,27 @@ export function InboxView({ data, troubled, reload, chats, chatName, openBot, op
             <button className="btn btn-sm" onClick={() => openChat(s.chat_id, 'memory')}>Review</button>
           </Row>
         ))}</div>
+      </>}
+      {(data.rule_hints ?? []).length > 0 && <>
+        <div className="section-title"><h2>Stop asking?</h2></div>
+        <div className="group">{data.rule_hints!.map(h => {
+          const b = botOf(h.bot_id), key = `${h.tool}:${h.site ?? ''}`
+          const accept = () => (h.site ? invoke('set_site_rule', { tool: h.tool, host: h.site, action: 'allow' }) : invoke('set_rule', { tool: h.tool, action: 'allow' }))
+          const dismiss = () => invoke('rule_hint_dismiss', { tool: h.tool, site: h.site })
+          return (
+            <div key={key} className="inbox-row">
+              <Avatar id={b.id} name={b.name} size={28} still />
+              <div className="inbox-main">
+                <div className="inbox-title">You allowed “{toolLabel(h.tool)}”{h.site ? ` on ${h.site}` : ''} {h.times} times. Always allow it?</div>
+                <div className="inbox-desc">Last asked by {b.name}, never denied in 30 days. For every bot; it still asks after a bot reads outside content. Change it in Settings → Permissions.</div>
+              </div>
+              <div className="row-ctl">
+                <button className="btn btn-sm" onClick={() => accept().then(reload, e => tell(`Couldn't change the rule: ${e}`))}>Always allow</button>
+                <button className="btn btn-sm btn-ghost" onClick={() => dismiss().then(reload, e => tell(`Couldn't dismiss it: ${e}`))}>Dismiss</button>
+              </div>
+            </div>
+          )
+        })}</div>
       </>}
       {(data.unconfirmed ?? []).length > 0 && <>
         <div className="section-title"><h2>Memories to confirm</h2></div>

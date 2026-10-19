@@ -979,6 +979,27 @@ pub fn always_allow(db: &Db, a: &crate::db::Approval) -> Result<()> {
     }
 }
 
+fn hint_off_key(tool: &str, site: Option<&str>) -> String {
+    format!("rule_hint_off:{tool}:{}", site.unwrap_or(""))
+}
+
+/// For Needs you: what you allowed 5 times in 30 days and never denied, while the rules still ask before it ("always
+/// allow it?"). Accepting is a plain allow (it still asks after outside content); dismissing stops it for that pair.
+pub fn rule_hints(db: &Db) -> Result<Vec<Value>> {
+    let since = crate::db::now() - 30 * 86400;
+    Ok(db
+        .approvals_allowed_often(since, 5)?
+        .into_iter()
+        .filter(|(tool, site, ..)| db.setting(&hint_off_key(tool, site.as_deref())).ok().flatten().is_none())
+        .filter(|(tool, site, ..)| gate(db, tool, site.as_deref(), false).is_ok_and(|(a, _)| a == "ask"))
+        .map(|(tool, site, times, bot)| json!({"tool": tool, "site": site, "times": times, "bot_id": bot}))
+        .collect())
+}
+
+pub fn rule_hint_dismiss(db: &Db, tool: &str, site: Option<&str>) -> Result<()> {
+    db.set_setting(&hint_off_key(tool, site), "1")
+}
+
 /// The person pressed Always on a card that asked for more than its rule: this tool (on this site) never asks again.
 pub(crate) fn trusted(db: &Db, tool: &str, site: Option<&str>) -> bool {
     let by_site = site.and_then(|h| db.site_rule(tool, h).ok().flatten());

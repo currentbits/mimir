@@ -1463,6 +1463,8 @@ impl Host {
                     "goals": self.db.goals_waiting()?,
                     // The daily check found the database damaged: restore a backup.
                     "damage": self.db.setting(crate::backup::DAMAGE)?,
+                    // Plain asks you keep allowing: stop asking?
+                    "rule_hints": tools::rule_hints(&self.db)?,
                     "unconfirmed": self.db.unconfirmed_counts()?.into_iter().map(|(chat, n)| json!({"chat_id": chat, "count": n})).collect::<Vec<_>>(),
                     // A newer release than this server runs (looked up by the bots' loops twice a day).
                     "server_update": is_server().then(|| self.db.setting("update_latest").ok().flatten()).flatten()
@@ -1542,6 +1544,7 @@ impl Host {
             // The AI plan's usage windows, where the AI reports them (Claude Code does).
             "ai_windows" => ok(crate::provider::windows(&self.db)),
             "inbox_dismiss" => ok(self.db.inbox_dismiss(&arg::<String>(a, "kind")?, arg(a, "id")?)?),
+            "rule_hint_dismiss" => ok(tools::rule_hint_dismiss(&self.db, &arg::<String>(a, "tool")?, arg::<Option<String>>(a, "site")?.as_deref())?),
             "site_rules" => ok(self.db.site_rules()?.into_iter().map(|(tool, host, action)| json!({"tool": tool, "host": host, "action": action})).collect::<Vec<_>>()),
             "set_site_rule" => ok(self.db.set_site_rule(&arg::<String>(a, "tool")?, &arg::<String>(a, "host")?, &arg::<String>(a, "action")?)?),
             "rules" => ok(tools::all_specs(&self.db)
