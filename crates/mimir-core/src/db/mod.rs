@@ -1511,12 +1511,13 @@ mod tests {
         assert_eq!(d.suggestion_recur(sc, &add, t0).unwrap(), None);
         assert_eq!(d.suggestion_recur(sc, &add, t0).unwrap(), None);
         assert!(d.suggestions(sc).unwrap().is_empty());
-        // A later tidy-up, in other words: shown, saying it came up before; and only once.
+        // A later tidy-up, in other words: shown, saying it came up before; and only once. (Started an hour on: a slow
+        // machine can tick past a second while the rows above are written.)
         let again = Suggestion { title: "Brief replies".into(), body: "Keep replies to three short sentences".into(), ..add.clone() };
-        let id = d.suggestion_recur(sc, &again, t0 + 1).unwrap().unwrap();
+        let id = d.suggestion_recur(sc, &again, t0 + 3600).unwrap().unwrap();
         assert!(d.suggestions(sc).unwrap()[0].reason.contains("came up in an earlier conversation too"));
         d.suggestion_decide(sc, id, false).unwrap();
-        assert_eq!(d.suggestion_recur(sc, &add, t0 + 2).unwrap(), None, "the waiting ones were used up");
+        assert_eq!(d.suggestion_recur(sc, &add, t0 + 7200).unwrap(), None, "the waiting ones were used up");
 
         // A pair: keep the one it would forget, by forgetting the other.
         let (a, b) = (d.store(sc, "knowledge", "Diet", "Vegetarian", "", None).unwrap(), d.store(sc, "knowledge", "Favourite dish", "Steak", "", None).unwrap());
