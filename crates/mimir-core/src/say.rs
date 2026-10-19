@@ -206,6 +206,7 @@ static NL: &[(&str, &str)] = &[
     ("I couldn't reach my AI.", "Ik kon mijn AI niet bereiken."),
     ("If it's a local model, check it's running; otherwise try again in a minute.", "Is het een lokaal model, kijk dan of het draait; probeer het anders over een minuut opnieuw."),
     ("I don't have a model chosen.", "Er is geen model voor mij gekozen."),
+    ("(The model {model} isn't offered any more, so I used the default. Pick another on my page in Mimir.)", "(Het model {model} wordt niet meer aangeboden, dus ik heb het standaardmodel gebruikt. Kies een ander op mijn pagina in Mimir.)"),
     ("Open my page in Mimir and pick one.", "Open mijn pagina in Mimir en kies er een."),
     ("That took too long, so I stopped.", "Dat duurde te lang, dus ik ben gestopt."),
     ("Try again, maybe with a smaller ask.", "Probeer het opnieuw, misschien met een kleinere vraag."),
