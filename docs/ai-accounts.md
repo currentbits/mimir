@@ -9,7 +9,7 @@ Mimir has no model of its own. Each bot uses an AI account you choose, on the bo
 | **Codex CLI** | Runs the official `codex` CLI (`codex exec`) with your ChatGPT login | Your plan |
 | **Grok** | Runs Grok Build (`grok -p`) on your X Subscription plan (or an older SuperGrok or X Premium+ plan) | Your plan |
 | **OpenRouter** | One key for hundreds of models (only ones that can use tools are offered) | What OpenRouter charges |
-| **xAI API** | A per-token key from console.x.ai | Per token |
+| **xAI API** | Grok models on xAI's API: sign in with your Grok plan (nothing to install), or a per-token key from console.x.ai | Your plan, or per token |
 | **Local model** | Ollama (`localhost:11434`) or LM Studio (`localhost:1234`); nothing leaves your computer | Free |
 | **OpenAI-compatible** | OpenAI or any compatible service, with a key and base URL | Per token |
 
@@ -45,6 +45,13 @@ set up Brave Search or your own SearXNG once in Settings → Web search, and eve
   Premium, Super, Ultra). Any of them can sign in, but Free and Plus allow little use; Premium ($30 a month, with
   SuperGrok's and X Premium+'s benefits) or higher suits bots that run all day. SuperGrok and X Premium+ plans you
   already have keep working.
+- **Grok plan on xAI's API**: Settings → AI keys → *Sign in with your Grok plan* (a device code: confirm it at x.ai,
+  from any browser, so it works on a server too). Bots on the **xAI API** account then run on your plan through xAI's
+  API, with nothing to install: they use Mimir's tools directly, photos go along at full size, and each bot's
+  conversation is its own. A saved xAI key wins over the sign-in; remove the key to use the plan. xAI decides which
+  plans may be used this way (the same sign-in xAI [set up for other apps](https://x.ai/news/grok-opencode)): if
+  yours isn't one, the bot says so, and the **Grok** account above still works. *Sign out* in the same place makes
+  Mimir forget the sign-in.
 - **OpenRouter**: *Connect OpenRouter* signs you in through the browser and saves the key (OAuth PKCE with a one-off
   localhost callback). Or paste a key.
 - **Keys** (OpenAI-compatible, xAI) go to the OS keychain (or the server's private database).

@@ -510,6 +510,26 @@ impl Host {
                 self.restart_all();
                 ok(json!({"account": account}))
             }
+            // Sign in with your Grok plan (xAI's API on the plan, no Grok Build). Returns the address and code to confirm
+            // there; the sign-in finishes in the background, and `accounts` (xai) shows when it's done or why it stopped.
+            // The app then says `grok_plan_signed_in`, so the bots pick it up.
+            "grok_plan_sign_in" => {
+                let (url, code) = crate::grok_plan::start().await?;
+                ok(json!({"url": url, "code": code}))
+            }
+            "grok_plan_signed_in" => {
+                self.restart_all();
+                ok(())
+            }
+            "grok_plan_sign_in_cancel" => {
+                crate::grok_plan::cancel();
+                ok(())
+            }
+            "grok_plan_sign_out" => {
+                crate::grok_plan::sign_out()?;
+                self.restart_all();
+                ok(())
+            }
             "chatgpt_sign_in_cancel" => {
                 crate::chatgpt::cancel();
                 ok(())
