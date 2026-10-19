@@ -2,7 +2,7 @@
 
     python3 scripts/fake-ai.py 8899 &
     MIMIR_HOME=/tmp/flow-home MIMIR_ADMIN_TOKEN=testtoken-abcdefghijklmnop MIMIR_CHATGPT_AUTH=http://127.0.0.1:8899 \
-        MIMIR_CHATGPT_API=http://127.0.0.1:8899/v1 mimir server --listen 127.0.0.1:8789 &
+        MIMIR_CHATGPT_API=http://127.0.0.1:8899/v1 MIMIR_XAI_AUTH=http://127.0.0.1:8899 MIMIR_XAI_API=http://127.0.0.1:8899/v1 mimir server --listen 127.0.0.1:8789 &
     python3 scripts/e2e-flows.py
 
 Sets up the bots itself (Ada and Search on the fake AI) in a fresh MIMIR_HOME; checks the database after each step.
@@ -206,6 +206,38 @@ else:
     api("chatgpt_sign_out")
     check("chatgpt: signed out", not api("accounts")["chatgpt"]["signed_in"])
     api("delete_bot", {"id": gpt})
+
+# Sign in with your Grok plan (xAI's device code), against the fake one (MIMIR_XAI_AUTH / MIMIR_XAI_API: see fake-ai.py)
+had_xai_key = api("api_keys").get("xai")
+try:
+    start = api("grok_plan_sign_in")
+except (RuntimeError, urllib.error.HTTPError):
+    start = {"url": ""}
+if not start["url"].startswith(f"{AI}/") or had_xai_key:
+    print(f"SKIP Sign in with your Grok plan: start the server with MIMIR_XAI_AUTH={AI} MIMIR_XAI_API={AI}/v1, and no xAI key")
+    api("grok_plan_sign_in_cancel")
+else:
+    check("grok plan: a code to confirm", start["code"] == "ABCD-1234" and "user_code=ABCD-1234" in start["url"], start)
+    for _ in range(20):
+        if api("accounts")["xai"].get("account"):
+            break
+        time.sleep(0.5)
+    acc = api("accounts")["xai"]
+    check("grok plan: signed in once the code is confirmed", acc.get("account") == "grok@example.com" and acc["signed_in"] and not acc["key"], acc)
+    api("grok_plan_signed_in")
+    gp = api("save_bot", {"bot": {"id": 0, "name": "Groky", "persona": "", "provider": "xai", "model": "grok-fake", "base_url": "https://elsewhere.example/v1", "tools": "", "look": ""}})
+    r = send(gp, "hello grok")
+    check("grok plan: a reply, from xAI's API (not the bot's own address)", "OK: " in json.dumps(r) and "hello grok" in json.dumps(r), r)
+    r = send(gp, "REMEMBER my dentist please")
+    check("grok plan: a tool call goes round", "DONE memory_store" in json.dumps(r), r)
+    try:
+        r = send(gp, "NOPLAN")
+    except urllib.error.HTTPError as e:
+        r = e.read().decode()
+    check("grok plan: a plan xAI won't serve is said plainly", "doesn't let this Grok plan" in json.dumps(r), r)
+    api("grok_plan_sign_out")
+    check("grok plan: signed out", not api("accounts")["xai"]["signed_in"])
+    api("delete_bot", {"id": gp})
 
 print("ALL PASS" if ok_all else "SOME FAILED")
 raise SystemExit(0 if ok_all else 1)

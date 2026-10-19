@@ -1056,7 +1056,7 @@ mod tests {
         let _ = std::fs::remove_file(&p);
         let db = Db::open(&p).unwrap();
         // An account no one answers on: any call errors, so "it tried" is an Err and "it waited" is Ok.
-        let provider = Provider::OpenAi { base: "http://127.0.0.1:9".into(), key: "k".into(), model: "m".into() };
+        let provider = Provider::OpenAi { base: "http://127.0.0.1:9".into(), key: crate::provider::Key::Fixed("k".into()), model: "m".into() };
         db.log(1, 5, "user", "plan my Lisbon trip", None).unwrap();
         assert!(catch_up(&db, &provider, 1, 5).await.is_ok(), "one message: nothing yet");
         db.log(1, 5, "assistant", "sure", None).unwrap();

@@ -68,6 +68,7 @@ pub fn random_hex(bytes: usize) -> anyhow::Result<String> {
 }
 pub mod ext;
 pub mod fmt;
+pub mod grok_plan;
 pub mod hooks;
 pub mod host;
 pub mod imports;
