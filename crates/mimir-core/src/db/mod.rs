@@ -13,6 +13,7 @@ use std::time::Duration;
 mod approvals;
 mod bots;
 mod cards;
+mod tool_cards;
 mod chats;
 mod goals;
 mod meetings;
@@ -28,6 +29,7 @@ mod suggestions;
 pub use approvals::*;
 pub use bots::*;
 pub use cards::*;
+pub use tool_cards::*;
 pub use chats::*;
 pub use goals::*;
 pub use memory::*;
@@ -53,7 +55,7 @@ PRAGMA secure_delete=ON;
 
 /// The schema version this build writes (`PRAGMA user_version`). A schema change bumps it and adds a step to
 /// `migrate`; each step runs once per database.
-pub(crate) const VERSION: i64 = 13;
+pub(crate) const VERSION: i64 = 14;
 
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS entries(
@@ -227,6 +229,9 @@ fn migrate(c: &Connection) -> Result<()> {
     }
     if v < 13 {
         migrate_v13(c)?;
+    }
+    if v < 14 {
+        migrate_v14(c)?;
     }
     c.execute(
         "INSERT INTO settings(key, value) VALUES ('schema_written_by', ?1) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -521,6 +526,17 @@ fn migrate_v13(c: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Version 14: a tool server's interactive card (MCP Apps, #161): its page, the CSP it asked for, and the call it shows.
+/// `key` is the page's unguessable address (/card/<key>).
+fn migrate_v14(c: &Connection) -> Result<()> {
+    c.execute_batch(
+        "CREATE TABLE IF NOT EXISTS tool_cards(id INTEGER PRIMARY KEY, key TEXT NOT NULL UNIQUE, run_id INTEGER NOT NULL, chat_id INTEGER NOT NULL,
+           bot_id INTEGER NOT NULL, tool TEXT NOT NULL, html TEXT NOT NULL, csp TEXT NOT NULL, input TEXT NOT NULL, result TEXT NOT NULL, ts INTEGER NOT NULL);
+         CREATE INDEX IF NOT EXISTS tool_cards_run ON tool_cards(run_id);",
+    )?;
+    Ok(())
+}
+
 impl Db {
     /// Opens the database, migrating it first if an older Mimir wrote it. An up-to-date database only reads its
     /// version: the tools process opens it on every turn, and mustn't compete with the app for the write lock.
@@ -665,24 +681,27 @@ mod tests {
         assert_eq!(n, 2);
         drop(d);
 
-        // Version 10 → 13: the goals (11), an approval's draft and reason (12), cache writes and what a session holds (13).
+        // Version 10 → 14: the goals (11), an approval's draft and reason (12), cache writes and what a session holds (13),
+        // tool servers' cards (14).
         Connection::open(&p)
             .unwrap()
             .execute_batch(
                 "DROP TABLE goals; ALTER TABLE routines DROP COLUMN goal_id; ALTER TABLE delegations DROP COLUMN goal_id; ALTER TABLE runs DROP COLUMN goal_id;
                  ALTER TABLE approvals DROP COLUMN draft; ALTER TABLE approvals DROP COLUMN reason;
-                 ALTER TABLE runs DROP COLUMN cache_write; ALTER TABLE sessions DROP COLUMN sent; ALTER TABLE sessions DROP COLUMN prompt; PRAGMA user_version = 10",
+                 ALTER TABLE runs DROP COLUMN cache_write; ALTER TABLE sessions DROP COLUMN sent; ALTER TABLE sessions DROP COLUMN prompt;
+                 DROP TABLE tool_cards; PRAGMA user_version = 10",
             )
             .unwrap();
         let d = Db::open(&p).unwrap();
-        assert_eq!(user_version(&d.c()).unwrap(), 13);
+        assert_eq!(user_version(&d.c()).unwrap(), 14);
         assert!(d.c().prepare("SELECT goal_id FROM runs").is_ok() && d.c().prepare("SELECT id FROM goals").is_ok(), "v11 ran");
         assert!(d.c().prepare("SELECT draft, reason FROM approvals").is_ok(), "v12 ran");
         assert!(d.c().prepare("SELECT cache_write FROM runs").is_ok() && d.c().prepare("SELECT sent, prompt FROM sessions").is_ok(), "v13 ran");
+        assert!(d.c().prepare("SELECT key, html, csp FROM tool_cards").is_ok(), "v14 ran");
         drop(d);
         // A new database starts at the latest.
         let fresh = dir.join("fresh.db");
-        assert_eq!(user_version(&Db::open(&fresh).unwrap().c()).unwrap(), 13);
+        assert_eq!(user_version(&Db::open(&fresh).unwrap().c()).unwrap(), VERSION);
 
         // Written by a newer Mimir: refused, untouched.
         Connection::open(&p).unwrap().execute_batch("PRAGMA user_version = 99; UPDATE settings SET value='9.9.9' WHERE key='schema_written_by'").unwrap();

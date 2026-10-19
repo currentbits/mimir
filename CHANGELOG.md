@@ -5,6 +5,9 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 ## Unreleased
 
 ### Talking to your bots
+- **Tool servers' interactive cards:** when a tool server answers with a card (MCP Apps: Figma, Notion, Canva…), the app
+  and the web UI show it under the reply, in a sandboxed frame. A button in it that changes something asks first, like
+  any other write. Chat apps keep the text answer. See [Tool servers](docs/tools-and-safety.md#tool-servers-mcp).
 - **X search:** bots can search recent X (Twitter) posts (`x_search`) with your own X API bearer token
   (**Settings → Web search → X**). Good for a morning routine of fresh posts. See
   [docs/connect.md](docs/connect.md#x-search) for getting a token.

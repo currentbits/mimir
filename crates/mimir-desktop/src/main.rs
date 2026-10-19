@@ -721,10 +721,12 @@ fn main() {
         // part of Mimir). Links open in the browser through open_url instead.
         .plugin(
             tauri::plugin::Builder::<tauri::Wry>::new("stay-home")
+                // Tool servers' cards (in their sandboxed frames): this app's mimir-card:, or a connected server's /card/<key>.
                 .on_navigation(|_, url| {
-                    matches!(url.scheme(), "tauri" | "asset" | "ipc")
-                        || matches!(url.host_str(), Some("tauri.localhost" | "localhost" | "127.0.0.1" | "ipc.localhost"))
+                    matches!(url.scheme(), "tauri" | "asset" | "ipc" | "mimir-card")
+                        || matches!(url.host_str(), Some("tauri.localhost" | "localhost" | "127.0.0.1" | "ipc.localhost" | "mimir-card.localhost"))
                         || url.as_str() == "about:blank"
+                        || url.path().strip_prefix("/card/").is_some_and(|k| k.len() == 32 && k.bytes().all(|b| b.is_ascii_hexdigit()))
                 })
                 .build(),
         )
@@ -749,6 +751,15 @@ fn main() {
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, None))
         .manage(host)
         .invoke_handler(tauri::generate_handler![api])
+        // A tool server's card (MCP Apps), served with its own CSP: off the app's origin, and its CSP isn't the app's.
+        .register_uri_scheme_protocol("mimir-card", |ctx, req| {
+            let key = req.uri().path().trim_start_matches('/');
+            match mimir_core::ext::card_page(&ctx.app_handle().state::<Host>().db, key) {
+                Some((html, csp)) => tauri::http::Response::builder().header("Content-Type", "text/html; charset=utf-8").header("Content-Security-Policy", csp).body(html.into_bytes()),
+                None => tauri::http::Response::builder().status(404).body(vec![]),
+            }
+            .unwrap_or_default()
+        })
         .setup(|app| {
             tauri::async_runtime::spawn(notifier(app.handle().clone()));
             update::start(app.handle());

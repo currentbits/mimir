@@ -108,7 +108,7 @@ impl Db {
         }
         // Its conversations and what it did go with it (memories are the person's, shared by all bots: they stay).
         self.c().execute_batch(&format!(
-            "DELETE FROM tool_calls WHERE run_id IN (SELECT id FROM runs WHERE bot_id={id});
+            "DELETE FROM tool_calls WHERE run_id IN (SELECT id FROM runs WHERE bot_id={id}); DELETE FROM tool_cards WHERE bot_id={id};
              DELETE FROM runs WHERE bot_id={id}; DELETE FROM messages WHERE bot_id={id};
              DELETE FROM signals WHERE bot_id={id}; DELETE FROM cases WHERE bot_id={id}; DELETE FROM digest_items WHERE bot_id={id}; DELETE FROM cards WHERE bot_id={id};
              DELETE FROM routines WHERE bot_id={id}; DELETE FROM sessions WHERE bot_id={id}; DELETE FROM conv_taint WHERE bot_id={id};
@@ -158,6 +158,7 @@ impl Db {
         let n = tx.execute("DELETE FROM messages WHERE chat_id=?1", [chat])?;
         for sql in [
             "DELETE FROM tool_calls WHERE chat_id=?1",
+            "DELETE FROM tool_cards WHERE chat_id=?1",
             "DELETE FROM runs WHERE chat_id=?1 AND status != 'running'",
             "DELETE FROM signals WHERE chat_id=?1",
             "DELETE FROM cases WHERE chat_id=?1",
@@ -216,6 +217,7 @@ impl Db {
         let before = now() - 180 * 86400;
         let c = self.c();
         c.execute("DELETE FROM tool_calls WHERE ts < ?1", [before])?;
+        c.execute("DELETE FROM tool_cards WHERE ts < ?1", [before])?;
         c.execute("DELETE FROM cases WHERE ts < ?1", [before])?;
         c.execute("DELETE FROM signals WHERE ts < ?1", [before])?;
         c.execute("DELETE FROM digest_items WHERE sent_at IS NOT NULL AND sent_at < ?1", [before])?;
