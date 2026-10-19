@@ -201,12 +201,12 @@ Discord's voice messages) are transcribed with your OpenAI-compatible key
 server, an installed `whisper-cli`), and echoed back ("🎙️ I heard: …"). Telegram's and Discord's voice notes need
 nothing else; Slack's audio clips need `ffmpeg` installed for whisper.cpp.
 
-Send a **PDF**, a **Word** or **Excel** file (`.docx`, `.xlsx`) or a text file (`.txt`, `.md`, `.csv`, `.json`) on any of the apps, or drop or paste one into the app's
+Send a **PDF**, a **Word**, **Excel** or **PowerPoint** file (`.docx`, `.xlsx`, `.pptx`) or a text file (`.txt`, `.md`, `.csv`, `.json`) on any of the apps, or drop or paste one into the app's
 chat (up to 20 MB), and the bot reads its text; the
 chat shows your message with the file's name. A file's text is outside content, like a web page: the bot won't follow
 instructions written in it, and anything that changes data asks you first for the rest of that conversation
 ([Tools and safety](tools-and-safety.md#outside-content-taint)). Excel files arrive sheet by sheet, a row per line;
-dates show as Excel's day numbers. A scanned PDF has no text, so its pages go to the bot as photos instead (the first
+dates show as Excel's day numbers. PowerPoint files arrive slide by slide, with each slide's speaker notes. A scanned PDF has no text, so its pages go to the bot as photos instead (the first
 10; a page stored as a JPEG or plain grey/colour pixels, which is how scanners and scanning apps save them). Slack needs the `files:read` scope for this (see the hint when you add Slack). In a channel or server,
 only the files of the person who paired it are fetched.
 

@@ -55,7 +55,8 @@ to the services you connected.
 
 - **Usage stats**: once a day, a count goes to Meterbird, the analytics service we use, so we know how many people use
   Mimir and on what: a random id made for this install, the Mimir version, the OS, its version and the processor type,
-  whether it's the app or a server, how many bots you have and each bot's AI provider and model. Never names,
+  whether it's the app or a server, how many bots you have, each bot's AI provider and model, and on a server how
+  many pages its browser opened and how many of those a site blocked. Never names,
   messages, memories, files, keys or the addresses your bots use. Meterbird sees your IP address to look up a country
   and doesn't keep it. Settings → Your data → *Send anonymous usage stats* shows exactly what's sent and switches it
   off; on a server, `MIMIR_USAGE_STATS=off` does too.
