@@ -52,7 +52,7 @@ export type Pause = { bot_id: number | null; until: number }
 
 export type Skill = {
   id: number; bot_id: number; name: string; description: string; body: string; run_id: number | null; status: 'proposed' | 'active'; created_at: number
-  kind: 'learned' | 'patch' | 'merge' | 'retire' | 'taught' | 'saved'; reason: string; replaces: number[]; uses: number; last_used: number | null
+  kind: 'learned' | 'patch' | 'merge' | 'retire' | 'taught' | 'saved' | 'library'; reason: string; replaces: number[]; uses: number; last_used: number | null
 }
 
 export type LibrarySkill = { slug: string; category: string; name: string; description: string; body: string; needs: string[]; added: number[]; missing: Record<string, string[]>; schedule: { cron: string; label: string; prompt: string } | null }

@@ -819,6 +819,8 @@ impl Host {
                 ok(crate::tidy::check_memory(&self.db, &provider, bot, arg(a, "chat_id")?, arg(a, "id")?).await?)
             }
             "decide_suggestion" => ok(self.db.suggestion_decide(&scope(a)?, arg(a, "id")?, arg(a, "accept")?)?),
+            // Keep the other one of a pair (duplicate, contradiction), or forget a stale memory rather than move it.
+            "forget_for_suggestion" => ok(self.db.suggestion_forget(&scope(a)?, arg(a, "id")?, arg(a, "entry_id")?)?),
             // Run the tidy-up now (the UI's "Tidy up now"); returns how many suggestions were queued.
             "tidy" => {
                 let bot = crate::tidy::memory_bot(&self.db).context("no bots")?;

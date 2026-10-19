@@ -5,7 +5,7 @@ import { Markdown } from '../markdown'
 import { ask, tell, Empty, Icon, Segmented } from '../ui'
 import { useLeave } from './inbox'
 import { useLoad, HOUSEHOLD, Bots } from '../shared'
-import type { Kind } from '../types'
+import type { Kind, Skill } from '../types'
 
 type EntryRow = {
   id: number; kind: Kind; title: string; body: string; source: string; created_at: number
@@ -31,7 +31,7 @@ export function MemoryView({ chatId, onChange }: { chatId: number; onChange: () 
   const standing = useLoad(() => invoke<{ used: number; budget: number; count: number }>('standing_memory', { chatId }), [chatId, rows.data?.map(r => `${r.id}:${r.status}:${r.pinned}:${r.background}`).join()])
   const [query, setQuery] = useState('')
   const [found, setFound] = useState<number[] | null>(null)
-  const [history, setHistory] = useState<'now' | 'all'>('now')
+  const [history, setHistory] = useState<'now' | 'all' | 'timeline'>('now')
   const [adding, setAdding] = useState<'one' | 'import' | null>(null)
   const [err, setErr] = useState<string | null>(null)
 
@@ -67,7 +67,7 @@ export function MemoryView({ chatId, onChange }: { chatId: number; onChange: () 
       <div className="searchbar">
         <label className="search"><Icon name="search" size={15} /><input className="input" placeholder="Search memory" aria-label="Search memory" value={query} onChange={e => setQuery(e.target.value)} /></label>
         <Segmented size="sm" label="Which memories" value={history} onChange={setHistory}
-          options={[{ id: 'now', label: 'Current' }, { id: 'all', label: `History${inactive ? ` · ${inactive}` : ''}` }]} />
+          options={[{ id: 'now', label: 'Current' }, { id: 'all', label: `History${inactive ? ` · ${inactive}` : ''}` }, { id: 'timeline', label: 'Timeline' }]} />
         {/* The tidy-up reads a chat's conversations; the household has none. */}
         {chatId !== HOUSEHOLD && <TidyButton chatId={chatId} onDone={refresh} />}
         <button className="btn btn-ghost" onClick={() => setAdding(a => a === 'import' ? null : 'import')} title="Bring in what another assistant remembers about you">Import</button>
@@ -94,6 +94,8 @@ export function MemoryView({ chatId, onChange }: { chatId: number; onChange: () 
           {hits.length ? <div className="mem-list">{hits.map(id => byId.get(id)).filter((r): r is EntryRow => !!r).map(r => card(r, true))}</div>
             : <Empty icon="search" title="Nothing matches">Search matches whole words and the start of words.</Empty>}
         </>
+      ) : history === 'timeline' ? (
+        <Timeline chatId={chatId} entries={all} card={card} />
       ) : visible.length === 0 ? (
         <Empty icon="memory" title="Nothing remembered yet">
           Tell a bot something about yourself, like “my dentist is Dr. Lee”. It’s saved here with where it was learned, and you can correct or forget it anytime.
@@ -145,6 +147,9 @@ function ConfirmAll({ chatId, entries, onDone }: { chatId: number; entries: Entr
 
 const ACTION: Record<Suggestion['action'], [string, string]> = { add: ['Remember', 'live'], update: ['Update', 'pending'], forget: ['Forget', 'danger'], demote: ['Background', 'pending'] }
 
+/** The other memory of a duplicate or a contradiction ("Duplicate of #N", "Contradicts #N"): the one the card keeps. */
+const pairedId = (reason: string) => { const m = /^(?:Duplicate of|Contradicts) #(\d+)/.exec(reason); return m ? Number(m[1]) : null }
+
 /** Proposed changes from the tidy-up. Nothing changes until accepted. */
 function Suggestions({ chatId, entries, onChange }: { chatId: number; entries: EntryRow[]; onChange: () => void }) {
   const list = useLoad(() => invoke<Suggestion[]>('suggestions', { chatId }), [chatId], 10000)
@@ -161,9 +166,13 @@ function Suggestions({ chatId, entries, onChange }: { chatId: number; entries: E
   }
   const decide = (id: number, accept: boolean) =>
     leave(id, () => invoke('decide_suggestion', { chatId, id, accept }).then(() => { setErr(null); return list.reload().then(onChange) }, e => setErr(String(e))))
+  const forgetFor = (id: number, entryId: number) =>
+    leave(id, () => invoke('forget_for_suggestion', { chatId, id, entryId }).then(() => { setErr(null); return list.reload().then(onChange) }, e => setErr(String(e))))
+  // Which side of a contradiction is right is yours to say: Accept all leaves them.
+  const clash = (s: Suggestion) => s.reason.startsWith('Contradicts #')
   const all = async (accept: boolean) => {
     if (!accept && !await ask(`Dismiss all ${items.length} suggestions?`, 'Dismiss all', true)) return
-    for (const s of items) await invoke('decide_suggestion', { chatId, id: s.id, accept }).catch(e => setErr(String(e)))
+    for (const s of items.filter(s => !accept || !clash(s))) await invoke('decide_suggestion', { chatId, id: s.id, accept }).catch(e => setErr(String(e)))
     list.reload().then(onChange)
   }
   return (
@@ -172,11 +181,26 @@ function Suggestions({ chatId, entries, onChange }: { chatId: number; entries: E
         {/* All at once. Ones drawn from outside content stay marked unconfirmed after accepting, as one by one. */}
         {items.length > 1 && <span className="suggest-all">
           <button className="btn btn-sm btn-ghost" onClick={() => all(false)}>Dismiss all</button>
-          <button className="btn btn-sm" onClick={() => all(true)} title={items.some(s => s.tainted) ? 'The ones drawn from outside content stay marked unconfirmed until you say they look right' : undefined}>Accept all</button>
+          <button className="btn btn-sm" onClick={() => all(true)} title={[items.some(s => s.tainted) && 'The ones drawn from outside content stay marked unconfirmed until you say they look right.', items.some(clash) && 'Contradictions wait for you to pick which to keep.'].filter(Boolean).join(' ') || undefined}>Accept all</button>
         </span>}</div>
       {items.map(s => {
         const t = target(s.entry_id)
         const [label, tone] = ACTION[s.action]
+        const other = s.action === 'forget' ? target(pairedId(s.reason)) : undefined
+        // A pair: both memories side by side, and you keep either one (or both).
+        if (other) return (
+          <div className={'sugg' + (leaving.has(s.id) ? ' leaving' : '')} key={s.id}>
+            <span className={'badge ' + (clash(s) ? 'danger' : 'pending')}>{clash(s) ? 'Conflict' : 'Duplicate'}</span>
+            <div className="what selectable">
+              {[{ e: t, keep: () => forgetFor(s.id, other.id) }, { e: other, keep: () => decide(s.id, true) }].map(({ e, keep }, i) => (
+                <div className="either" key={i}><span><b>{e?.title ?? s.title}</b>{e?.body ?? s.body}</span>
+                  <button className="btn btn-sm btn-ghost" onClick={keep}>Keep this one</button></div>
+              ))}
+              <div className="why">{s.reason.replace(/^(?:Duplicate of|Contradicts) #\d+ \("[^"]*"\)\.?\s*/, '') || 'They say the same thing.'} The other one is forgotten (it stays in History).</div>
+            </div>
+            <div className="choices"><button className="btn btn-sm btn-ghost" onClick={() => decide(s.id, false)}>Keep both</button></div>
+          </div>
+        )
         return (
           <div className={'sugg ' + s.action + (leaving.has(s.id) ? ' leaving' : '')} key={s.id}>
             <span className={'badge ' + tone}>{label}</span>
@@ -193,8 +217,10 @@ function Suggestions({ chatId, entries, onChange }: { chatId: number; entries: E
               {(s.action === 'add' || s.action === 'update') && !s.check && !checking.has(s.id) && (
                 <button className="btn btn-sm btn-ghost" onClick={() => check(s.id)} title="Re-answer past corrections with this change and see if it would have helped. Uses your AI account for a few short replies.">Check</button>
               )}
-              <button className="btn btn-sm btn-ghost" onClick={() => decide(s.id, false)}>Dismiss</button>
-              <button className="btn btn-sm" onClick={() => decide(s.id, true)}>Accept</button>
+              {/* Unused for months: keep it, move it out of mind, or let it go. */}
+              {s.action === 'demote' && s.entry_id !== null && <button className="btn btn-sm btn-ghost btn-danger" onClick={() => forgetFor(s.id, s.entry_id!)}>Forget</button>}
+              <button className="btn btn-sm btn-ghost" onClick={() => decide(s.id, false)}>{s.action === 'demote' ? 'Keep' : 'Dismiss'}</button>
+              <button className="btn btn-sm" onClick={() => decide(s.id, true)}>{s.action === 'demote' ? 'Background' : 'Accept'}</button>
             </div>
           </div>
         )
@@ -256,6 +282,47 @@ function Learned({ chatId, entries, onChange }: { chatId: number; entries: Entry
       {trend.length > 0 && <p className="weekly-trend">This week: {trend.join(' · ')}</p>}
       {err && <p className="error" style={{ padding: '0 14px' }}>{err}</p>}
     </section>
+  )
+}
+
+/** What your bots learned, by day: memories saved without you typing them and the skills you accepted, newest first. */
+function Timeline({ chatId, entries, card }: { chatId: number; entries: EntryRow[]; card: (r: EntryRow, showKind?: boolean) => React.ReactNode }) {
+  const skills = useLoad(() => invoke<Skill[]>('skills', { chatId }), [chatId])
+  const [err, setErr] = useState<string | null>(null)
+  const botOf = useContext(Bots)
+  // Library skills are ones you added, not learned.
+  const items = [
+    ...entries.filter(r => r.status === 'active' && r.origin && r.origin !== 'you').map(r => ({ at: r.created_at, node: card(r, true) })),
+    ...(skills.data ?? []).filter(k => k.status === 'active' && k.kind !== 'library').map(k => ({
+      at: k.created_at, node: (
+        <article className="mem" key={`s${k.id}`}>
+          <div className="mem-actions">
+            <button className="btn btn-ghost btn-danger btn-sm icon-btn" title="Remove" aria-label={`Remove ${k.name}`}
+              onClick={() => invoke('remove_skill', { chatId, id: k.id }).then(() => { setErr(null); return skills.reload() }, e => setErr(String(e)))}><Icon name="trash" size={14} /></button>
+          </div>
+          <div className="mem-title"><Icon name="bolt" size={12} />{k.name}</div>
+          <p className="mem-body">{k.description}</p>
+          <div className="mem-meta"><span>Skill</span><span>{k.bot_id ? `for ${botOf(k.bot_id).name}` : 'for all bots'}</span><span>{ago(k.created_at)}</span></div>
+        </article>
+      ),
+    })),
+  ].sort((a, b) => b.at - a.at)
+  if (!items.length) return <Empty icon="memory" title="Nothing learned yet">What your bots pick up from conversations, and skills you accept, show here by the day they were learned.</Empty>
+  const days = new Map<string, typeof items>()
+  for (const i of items) {
+    const d = new Date(i.at * 1000).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })
+    days.set(d, [...(days.get(d) ?? []), i])
+  }
+  return (
+    <>
+      {err && <p className="error">{err}</p>}
+      {[...days].map(([d, list]) => (
+        <section key={d}>
+          <div className="section-title"><h2>{d}</h2><span className="count">{list.length}</span></div>
+          <div className="mem-list">{list.map(i => i.node)}</div>
+        </section>
+      ))}
+    </>
   )
 }
 
