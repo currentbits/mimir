@@ -2,19 +2,19 @@
 
 What changed for people using Mimir. The newest release is at the top; "Unreleased" is what the next one brings.
 
-## Unreleased
+## 0.5.0
 
 ### Talking to your bots
+- **WhatsApp:** a bot on a [server](docs/self-hosting.md) can be on WhatsApp, with a business number of its own,
+  through Meta's official Cloud API. Text, photos, voice notes and files both ways, typing, pairing, and approval cards
+  and questions as buttons. It can only write within 24 hours of your last message there: a routine's result after
+  that isn't delivered, and shows as not sent in its run. Setup is under [Connect](docs/connect.md#whatsapp).
 - **X search:** bots can search recent X (Twitter) posts (`x_search`) with your own X API bearer token
   (**Settings → Web search → X**). Good for a morning routine of fresh posts. See
   [docs/connect.md](docs/connect.md#x-search) for getting a token.
 - **Telegram guest mode:** type `@yourbot` in any chat, even one it isn't in, and it replies there. Only to you, and
   as in a group: none of your email, calendar, meetings, computer or saved logins, and the message you replied to is
   outside content. A reminder it sets comes to your private chat.
-- **WhatsApp:** a bot on a [server](docs/self-hosting.md) can be on WhatsApp, with a business number of its own,
-  through Meta's official Cloud API. Text, photos, voice notes and files both ways, typing, pairing, and approval cards
-  and questions as buttons. It can only write within 24 hours of your last message there: a routine's result after
-  that isn't delivered, and shows as not sent in its run. Setup is under [Connect](docs/connect.md#whatsapp).
 - **Hand a task to a bot's own chat:** "Hatoba Marketer, write and show your marketing plan" now has that bot do it in
   its own chat: the task and its whole answer stay in its history, files it writes go to its own folder, and the bot you
   asked replies with a one-line confirmation and a link. Works from the app and your own private messaging chats.
