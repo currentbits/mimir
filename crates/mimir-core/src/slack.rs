@@ -198,11 +198,19 @@ impl Slack {
 
     /// A streamed draft gets only what's new; any other message (a fallback draft, a card) is edited whole.
     pub(crate) async fn draft_edit(&self, channel: &str, ts: &str, text: &str) {
-        let more = match self.streams.lock().unwrap().get_mut(ts) {
-            Some(sent) => match grown(sent, text) {
-                Some(m) => Some(m),
-                None => return,
-            },
+        let grew = self.streams.lock().unwrap().get_mut(ts).map(|sent| grown(sent, text));
+        let more = match grew {
+            Some(Some(m)) if m.is_empty() => return,
+            Some(Some(m)) => Some(m),
+            // Not an addition (a checklist step ticked, a change of course): the stream is closed, and from then on the
+            // message is edited whole.
+            Some(None) => {
+                self.streams.lock().unwrap().remove(ts);
+                if let Err(e) = self.api("chat.stopStream", &self.bot_token, json!({"channel": channel, "ts": ts})).await {
+                    eprintln!("slack stop stream: {e:#}");
+                }
+                None
+            }
             None => None,
         };
         let _ = match more {
@@ -477,15 +485,14 @@ impl Slack {
     }
 }
 
-/// Slack's message ts ("1712345678.123456") as microseconds, to order messages.
-/// What a stream's draft gained since `sent` (which becomes `text`); none if it didn't grow.
-// ponytail: a draft rewritten rather than extended isn't shown until the final reply replaces it
+/// What a stream's draft gained since `sent` (which becomes `text`), maybe nothing; none if it was rewritten instead.
 fn grown(sent: &mut String, text: &str) -> Option<String> {
-    let more = text.strip_prefix(sent.as_str()).filter(|m| !m.is_empty())?.to_string();
+    let more = text.strip_prefix(sent.as_str())?.to_string();
     *sent = text.to_string();
     Some(more)
 }
 
+/// Slack's message ts ("1712345678.123456") as microseconds, to order messages.
 fn ts_key(ts: &str) -> Option<u128> {
     let (secs, micros) = ts.split_once('.')?;
     Some(secs.parse::<u128>().ok()? * 1_000_000 + micros.parse::<u128>().ok()?)
@@ -602,8 +609,8 @@ mod tests {
         let mut sent = "Hello".to_string();
         assert_eq!(grown(&mut sent, "Hello, wor").as_deref(), Some(", wor"));
         assert_eq!(grown(&mut sent, "Hello, world").as_deref(), Some("ld"));
-        assert_eq!(grown(&mut sent, "Hello, world"), None, "unchanged");
-        assert_eq!(grown(&mut sent, "Hi there"), None, "rewritten: left for the final reply");
+        assert_eq!(grown(&mut sent, "Hello, world").as_deref(), Some(""), "unchanged");
+        assert_eq!(grown(&mut sent, "☑ Look\n\nHello, world"), None, "rewritten: no longer a stream");
         assert_eq!(sent, "Hello, world");
     }
 }

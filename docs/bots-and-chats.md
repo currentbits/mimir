@@ -165,9 +165,14 @@ that run stops and starts over with your new message added (anything it already 
 A message that arrives while a routine runs there, or with a photo or file, waits instead: typing at once, and after a
 few seconds one note: "Finishing a routine first…" or "Finishing my last reply first…". Its reply follows.
 
-Chat commands: `/memory`, `/why` (what the last reply used: memories, skills, pages), `/routines`, `/new`, `/stop` (a bare "stop" works too while it's writing), `/undo <n>`
+Chat commands: `/memory`, `/why` (what the last reply used: memories, skills, pages), `/routines`, `/new`, `/branch`, `/stop` (a bare "stop" works too while it's writing), `/undo <n>`
 (take back something it learned; see [Memory](memory.md#learned-this-week)), and `/<skill>` for each of the bot's
 skills (see [Skills](skills.md)). Everything else is plain language.
+
+**Branch from here:** to try another direction without re-explaining, send `/branch` as a reply to a message (in Slack,
+`branch`). A new conversation starts with a short "where we left off" up to that message, the same one a chat gets
+after a quiet spell. With Telegram topics on, it's a new topic and the old one carries on; elsewhere the chat itself
+starts afresh. In the app, hover a reply and click the branch icon next to Copy.
 
 **Telegram topics** (opt-in): with topics turned on in your private chat with the bot, switch on "Each topic is its
 own conversation" under Telegram on the bot's page. Each topic then has its own conversation, its own "read outside
@@ -196,13 +201,16 @@ Discord's voice messages) are transcribed with your OpenAI-compatible key
 server, an installed `whisper-cli`), and echoed back ("🎙️ I heard: …"). Telegram's and Discord's voice notes need
 nothing else; Slack's audio clips need `ffmpeg` installed for whisper.cpp.
 
-Send a **PDF**, a **Word** or **Excel** file (`.docx`, `.xlsx`) or a text file (`.txt`, `.md`, `.csv`, `.json`) on any of the apps, or drop or paste one into the app's
+Send a **PDF**, a **Word**, **Excel** or **PowerPoint** file (`.docx`, `.xlsx`, `.pptx`) or a text file (`.txt`, `.md`, `.csv`, `.json`) on any of the apps, or drop or paste one into the app's
 chat (up to 20 MB), and the bot reads its text; the
 chat shows your message with the file's name. A file's text is outside content, like a web page: the bot won't follow
 instructions written in it, and anything that changes data asks you first for the rest of that conversation
 ([Tools and safety](tools-and-safety.md#outside-content-taint)). Excel files arrive sheet by sheet, a row per line;
-dates show as Excel's day numbers. A scanned PDF has no text, so its pages go to the bot as photos instead (the first
-10; a page stored as a JPEG or plain grey/colour pixels, which is how scanners and scanning apps save them). Slack needs the `files:read` scope for this (see the hint when you add Slack). In a channel or server,
+dates show as Excel's day numbers. PowerPoint files arrive slide by slide, with each slide's speaker notes. A scanned PDF has no text, so its pages go to the bot as photos instead (the first
+10; a page stored as a JPEG or plain grey/colour pixels, which is how scanners and scanning apps save them). To keep scans on your computer and off your AI plan, set a
+local document model under **Settings → Scanned PDFs**: any [Ollama](https://ollama.com) model that reads pages, such
+as a build of [dots.ocr](https://github.com/studio-dots-ai/dots.ocr) or a vision model you've pulled. Mimir sends it the
+pages first and the bot gets their text, tables included; a page it can't read still goes as a photo. Slack needs the `files:read` scope for this (see the hint when you add Slack). In a channel or server,
 only the files of the person who paired it are fetched.
 
 Bots send files back too, with `send_file`: a file from the chat's workspace, or a screenshot of the bots' computer

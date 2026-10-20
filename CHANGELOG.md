@@ -9,12 +9,43 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
   through Meta's official Cloud API. Text, photos, voice notes and files both ways, typing, pairing, and approval cards
   and questions as buttons. It can only write within 24 hours of your last message there: a routine's result after
   that isn't delivered, and shows as not sent in its run. Setup is under [Connect](docs/connect.md#whatsapp).
+- **Grok without Grok Build:** *Sign in with your Grok plan* (Settings → AI keys) runs bots on the xAI API account
+  on your X Subscription, SuperGrok or X Premium+ plan, with no CLI and no API key. Confirm a code at x.ai from any
+  browser, so it works on a server too. Bots use Mimir's tools directly and get photos at full size. If xAI doesn't
+  offer its API to your plan, the bot says so; the Grok (Grok Build) account still works. See
+  [docs/ai-accounts.md](docs/ai-accounts.md#signing-in).
 - **X search:** bots can search recent X (Twitter) posts (`x_search`) with your own X API bearer token
   (**Settings → Web search → X**). Good for a morning routine of fresh posts. See
   [docs/connect.md](docs/connect.md#x-search) for getting a token.
 - **Telegram guest mode:** type `@yourbot` in any chat, even one it isn't in, and it replies there. Only to you, and
   as in a group: none of your email, calendar, meetings, computer or saved logins, and the message you replied to is
   outside content. A reminder it sets comes to your private chat.
+- **Branch from here:** a new conversation that picks up from a message, with a short "where we left off", to try
+  another direction without re-explaining. The branch icon on a reply in the app, or `/branch` as a reply in your
+  messaging app; with Telegram topics on it opens a new topic. See [Bots and chats](docs/bots-and-chats.md).
+- **Chat titles and a catch-up line:** after a chat's first exchange, and again every ten messages, the model in
+  **Model for routines** names it in 3–6 words and writes a line on where it's got to. The title shows under the bot
+  in the sidebar; the line shows at the top of the chat when you come back to it. Not for incognito chats; **Start
+  fresh** and deleting a chat's history remove them.
+- **A checklist for long runs:** on a task with several steps (research, a booking, a form) a bot keeps a checklist
+  (`progress_set`) that it ticks as it goes. It shows above the reply being written, in the app and in the Telegram,
+  Slack and Discord draft, and goes when the reply arrives. A reply that ends with steps still open gets one more turn
+  to finish them or say what blocks them, so it doesn't stop at "I'll now do X".
+- **Tool servers' interactive cards:** when a tool server answers with a card (MCP Apps: Figma, Notion, Canva…), the app
+  and the web UI show it under the reply, in a sandboxed frame. A button in it that changes something asks first, like
+  any other write. Chat apps keep the text answer. See [Tool servers](docs/tools-and-safety.md#tool-servers-mcp).
+- **Webhooks out:** **Settings → Webhooks out** posts a small signed JSON to an address of yours when a routine
+  finishes or fails, an approval is waiting, or a reply was sent. You can use it with Home Assistant, ntfy or n8n.
+  Message text is only included if you ask for it. A failed send is tried again. See
+  [docs/routines.md](docs/routines.md#webhooks-out).
+- **Scanned PDFs read on your computer:** set a local document model in **Settings → Scanned PDFs** (an
+  [Ollama](https://ollama.com) model such as dots.ocr, or any vision model) and a scan's pages reach the bot as text,
+  tables included, instead of photos: less of your plan per page, and the scan stays here. Off until you set one.
+- **PowerPoint files:** a `.pptx` someone sends, or you drop into the app's chat, is read like a Word or Excel file:
+  each slide's text and speaker notes, hidden slides marked.
+- **At the usage limit, answer later:** when a reply hits your AI plan's limit, the message says when the plan resets
+  and offers **Answer at 15:00**, which reruns your message then. With a fallback account there's also **Answer now
+  with** that account.
 - **Hand a task to a bot's own chat:** "Hatoba Marketer, write and show your marketing plan" now has that bot do it in
   its own chat: the task and its whole answer stay in its history, files it writes go to its own folder, and the bot you
   asked replies with a one-line confirmation and a link. Works from the app and your own private messaging chats.
@@ -26,7 +57,18 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
   page or a sensitive source now offer it too. On those it means *never ask*, not even after outside content: the app
   confirms first for those guards, Settings → Permissions shows such tools as *Always*, and the health check lists them.
 
+### Routines
+- **Quiet checks can watch a page's data:** pages that build themselves in the browser (booking calendars, prices, stock)
+  gave a quiet check nothing to compare. While you take over the bots' computer or show it something, Mimir notes the
+  JSON the page loads, and the routine form offers **Watch this instead**: no browser, and no AI until a value
+  changes. The check uses the bot's own cookies for that site, kept in the secret store and never shown to the AI.
+
 ### Memory
+- **Suggests only what keeps coming up:** the tidy-up no longer proposes a memory after one conversation unless you said
+  it yourself; it waits until a later conversation brings it up too. It also flags two memories that contradict each
+  other and lets you pick which to keep, and a memory unused for 90 days offers **Forget / Keep / Background**.
+- **Timeline:** a new tab on Memory lists, by day, what your bots learned and the skills you accepted, with Correct,
+  Forget and Remove.
 - **Ongoing Claude and Grok chats see memory changes:** a resumed conversation kept the instructions from its first
   message, so a memory you added or forgot, a new role or skill, and the time of day never reached it (the built-in
   chat never starts over, so it stayed that way). Now the next message carries the changed instructions once, and
@@ -41,6 +83,13 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
   registry** finds it in the official registry, showing the domain each one runs on.
 
 ### Safety
+- **A routine that acts unlike before asks once:** a routine allowed to order or send (even under Always) stops and asks
+  when this run looks different from its earlier ones: a new recipient, a new unit or currency, or a size more than three
+  times the largest before. The card says why ("items: usually 1–3, this time 14"). Approve it and it becomes usual.
+- **Quotes checked against the pages read:** when a reply quotes eight or more words and its run read web pages, a quote
+  that isn't on any of them gets a note under the reply: *Not found on the pages read*. The reply itself isn't changed.
+- **Stop asking?** If you've allowed the same tool (on the same site) five times in 30 days with no denials, Needs you
+  offers to always allow it. Asks after outside content, emails, new bots and saved logins are never suggested.
 - **A one-off cut off mid-run waits for you:** if Mimir stops in the middle of a one-off, it no longer runs it again by
   itself an hour later (repeating what it already did, an email say). It waits in Needs you as interrupted, with
   **Run again**. A one-off that fails for any other reason waits there too, instead of being deleted.
@@ -60,6 +109,14 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
   Cyrillic "о") is now flagged too, and the card says so plainly while you edit an email as well.
 - **The bots' computer outside Docker:** `mimir doctor`'s warning now also says that other accounts on the machine
   can type and click on its screen, not only use its browser's DevTools.
+- **Usage stats on a server** now also count how many pages the bots' browser opened and how many of those a site
+  blocked (a "verify you are human" page, say). Two numbers, never the pages; **See what's sent** shows them.
+
+### Fixes
+- **Retired Codex models:** a bot saved with a model Codex no longer offers (gpt-5.5 left ChatGPT sign-in on October 14)
+  answers on the default model, with a note asking you to pick another.
+- **Claude sign-out:** a revoked Claude login now says "sign in again" instead of an unknown error.
+- **Discord:** a file over 20 MB gets a clear message instead of failing to upload.
 
 ## 0.4.0
 

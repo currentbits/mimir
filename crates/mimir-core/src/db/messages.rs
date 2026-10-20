@@ -16,6 +16,9 @@ pub struct Message {
     /// Replies: what the reply drew on ("2 memories · 1 skill · read 3 pages").
     #[serde(skip_serializing_if = "Option::is_none")]
     pub used: Option<Used>,
+    /// Replies: tool servers' interactive cards (MCP Apps) from the run.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub cards: Vec<ToolCard>,
 }
 
 /// What one run drew on: the memories recalled for it, the skills it read, the pages it opened.
@@ -148,13 +151,19 @@ impl Db {
     }
 
     pub fn recent(&self, bot: i64, chat: i64, n: usize) -> Result<Vec<(String, String)>> {
+        self.recent_until(bot, chat, None, n)
+    }
+
+    /// `recent`, or with `until`, the messages up to and including that one (where a conversation was branched from),
+    /// even from before the conversation last started afresh.
+    pub fn recent_until(&self, bot: i64, chat: i64, until: Option<i64>, n: usize) -> Result<Vec<(String, String)>> {
         let c = self.c();
         let mut st = c.prepare(
-            "SELECT role, content FROM messages WHERE bot_id=?1 AND chat_id=?2
-               AND id > coalesce((SELECT CAST(value AS INTEGER) FROM settings WHERE key='fresh:' || ?1 || ':' || ?2), 0)
+            "SELECT role, content FROM messages WHERE bot_id=?1 AND chat_id=?2 AND id <= coalesce(?4, id)
+               AND (?4 IS NOT NULL OR id > coalesce((SELECT CAST(value AS INTEGER) FROM settings WHERE key='fresh:' || ?1 || ':' || ?2), 0))
              ORDER BY id DESC LIMIT ?3",
         )?;
-        let mut v: Vec<(String, String)> = st.query_map(params![bot, chat, n as i64], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<Result<_, _>>()?;
+        let mut v: Vec<(String, String)> = st.query_map(params![bot, chat, n as i64, until], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<Result<_, _>>()?;
         v.reverse();
         Ok(v)
     }
@@ -162,6 +171,16 @@ impl Db {
     /// When a bot and a chat last said anything to each other.
     pub fn last_said(&self, bot: i64, chat: i64) -> Result<Option<i64>> {
         Ok(self.c().query_row("SELECT max(ts) FROM messages WHERE bot_id=?1 AND chat_id=?2", [bot, chat], |r| r.get(0))?)
+    }
+
+    /// How many messages a conversation has after message `id` (since it last started fresh), and its newest id.
+    pub fn messages_after(&self, bot: i64, chat: i64, id: i64) -> Result<(i64, i64)> {
+        Ok(self.c().query_row(
+            "SELECT count(*), coalesce(max(id), 0) FROM messages WHERE bot_id=?1 AND chat_id=?2 AND id > ?3
+               AND id > coalesce((SELECT CAST(value AS INTEGER) FROM settings WHERE key='fresh:' || ?1 || ':' || ?2), 0)",
+            [bot, chat, id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?)
     }
 
     /// All bots' messages with a chat, oldest first (UI).
@@ -217,7 +236,7 @@ impl Db {
                AND (?4 IS NULL OR id < ?4) AND id >= ?5 ORDER BY id DESC LIMIT ?2",
         )?;
         let mut v: Vec<(Message, Option<i64>)> = st
-            .query_map(params![chat, n as i64, bot, before, from], |r| Ok((Message { id: r.get(5)?, bot_id: r.get(0)?, role: r.get(1)?, content: r.get(2)?, ts: r.get(3)?, actions: vec![], run_id: None, used: None }, r.get(4)?)))?
+            .query_map(params![chat, n as i64, bot, before, from], |r| Ok((Message { id: r.get(5)?, bot_id: r.get(0)?, role: r.get(1)?, content: r.get(2)?, ts: r.get(3)?, actions: vec![], run_id: None, used: None, cards: vec![] }, r.get(4)?)))?
             .collect::<Result<_, _>>()?;
         v.reverse();
         // One query for every reply's actions.
@@ -244,6 +263,7 @@ impl Db {
         for (m, _) in v.iter_mut() {
             if let Some(run) = m.run_id {
                 m.used = Some(self.run_used(run)?).filter(|u| !u.is_empty());
+                m.cards = self.tool_cards(run)?;
             }
         }
         Ok(v.into_iter().map(|(m, _)| m).collect())

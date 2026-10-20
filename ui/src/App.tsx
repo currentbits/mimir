@@ -31,7 +31,7 @@ const troubleOf = (s?: Status): string | null =>
 /** A bot at work, as its face: the step a reply is on, else what kind of work it is. */
 const busyMood = (w: Busy): Mood => w.step ? moodOf(w.step, '') : w.trigger === 'tidy' || w.trigger === 'import' || w.trigger === 'know_me' ? 'remembering' : w.trigger === 'teach' ? 'writing' : 'thinking'
 
-const BUSY_KIND: Record<string, string> = { routine: 'Running a routine', delegated: 'On a task for another bot', reported: 'Reporting back on a task', tidy: 'Tidying memory', check: 'Checking a preference', import: 'Importing memories', know_me: 'Getting to know you', teach: 'Writing a skill' }
+const BUSY_KIND: Record<string, string> = { routine: 'Running a routine', delegated: 'On a task for another bot', reported: 'Reporting back on a task', tidy: 'Tidying memory', check: 'Checking a preference', import: 'Importing memories', know_me: 'Getting to know you', teach: 'Writing a skill', catch_up: 'Naming the chat' }
 
 const busyLabel = (w: Busy) => w.step ? `${w.step}…` : BUSY_KIND[w.trigger] ?? 'Replying…'
 
@@ -92,6 +92,8 @@ const TABS: { id: Tab; label: string; icon: string; hint: string }[] = [
 function Main() {
   const bots = useLoad(() => invoke<Bot[]>('bots'), [])
   const statuses = useLoad(() => invoke<Status[]>('statuses'), [], 2000)
+  // What each bot's chat on this computer is about (written by the routine model after a reply).
+  const titles = useLoad(() => invoke<{ bot_id: number; title: string }[]>('chat_titles'), [], 10000)
   // A bot another bot just made shows up in the statuses first: then the list reloads.
   useEffect(() => {
     if (bots.data && statuses.data?.some(s => !bots.data!.some(b => b.id === s.bot_id))) bots.reload()
@@ -113,9 +115,9 @@ function Main() {
   // Incognito ends when you go to another chat.
   useEffect(() => setIncognito(false), [chatId])
   // A link to the live computer (a bot asking you to take over) opens it: #computer. "Edit in Mimir" on a chat app's
-  // card opens Needs you, where the card is: #approval-<id>. A sign-in card's opens the sign-in form: #signin. A task
+  // card opens Needs you, where the card is: #approval-<id> (a webhook out's link: #inbox). A sign-in card's opens the sign-in form: #signin. A task
   // a bot did in its own chat for another bot links to that bot's chat: #bot-<id>.
-  const linked = (): View | null => location.hash === '#computer' ? 'computer' : location.hash.startsWith('#approval-') ? 'inbox' : null
+  const linked = (): View | null => location.hash === '#computer' ? 'computer' : location.hash === '#inbox' || location.hash.startsWith('#approval-') ? 'inbox' : null
   const [view, setView] = useState<View>(() => linked() ?? 'chat')
   const [signIn, setSignIn] = useState(false)
   useEffect(() => {
@@ -307,11 +309,13 @@ function Main() {
                   // Waiting on you beats working: the reply (or routine) can't go on until you answer.
                   const asks = approvals.some(a => a.bot_id === b.id)
                   const w: Busy | undefined = asks ? { bot_id: b.id, chat_id: 0, trigger: 'ask', step: 'Waiting for your OK' } : busy.data?.find(x => x.bot_id === b.id)
+                  const title = titles.data?.find(t => t.bot_id === b.id)?.title
                   return <>
                     <Avatar id={b.id} name={b.name} presence={p} mood={w ? busyMood(w) : undefined} />
                     <span className="ri-text"><span className="ri-name">{b.name}</span>
                       <span className={'ri-sub' + (w ? ' busy' : '')}>{w ? busyLabel(w)
                         : pausedOf(b.id) !== undefined ? pausedText(pausedOf(b.id)!)
+                        : title && p !== 'err' && p !== 'wait' ? title
                         : on.length ? on.map(c => CHANNEL[c.kind].name).join(' · ') : p === 'err' ? 'Needs attention' : p === 'wait' ? 'Connecting…' : `${LOCAL_NAME} only`}</span></span>
                   </>
                 })()}

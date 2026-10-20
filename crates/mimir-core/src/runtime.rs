@@ -126,8 +126,9 @@ impl Chan {
         }
     }
 
-    /// Stream a reply into one message: post the draft once text arrives, then edit it as it grows.
-    fn follow(&self, bot: i64, chat_id: i64, ext: &str) -> Follower {
+    /// Stream a reply into one message: post the draft once text arrives, then edit it as it grows. The run's checklist
+    /// (progress_set) goes above the text, so the reply replacing the draft clears it too.
+    fn follow(&self, db: Db, bot: i64, chat_id: i64, ext: &str) -> Follower {
         let (chan, ext, stop) = (self.clone(), ext.to_string(), Arc::new(Notify::new()));
         let stopped = stop.clone();
         let task = tokio::spawn(async move {
@@ -137,7 +138,12 @@ impl Chan {
                     _ = tokio::time::sleep(EDIT_EVERY) => {}
                     _ = stopped.notified() => return id,
                 }
-                let Some(draft) = crate::live::get(bot, chat_id).filter(|d| !d.trim().is_empty()) else { continue };
+                let steps = crate::tools::checklist(&crate::tools::progress(&db, bot, chat_id));
+                let text = crate::live::get(bot, chat_id).unwrap_or_default();
+                let draft = [steps, text].into_iter().filter(|s| !s.trim().is_empty()).collect::<Vec<_>>().join("\n\n");
+                if draft.is_empty() {
+                    continue;
+                }
                 // A long reply's draft stops growing at DRAFT_MAX; the final message has all of it.
                 let head: String = draft.chars().take(DRAFT_MAX).collect();
                 // No cursor on Slack: a draft there may be a stream, which is only appended to, so one would stay in the text.
@@ -284,6 +290,8 @@ pub(crate) enum Command<'a> {
     Why,
     Routines,
     New,
+    /// "/branch", maybe as a reply to the message to branch from.
+    Branch,
     /// "/stop", or a bare "stop" while a reply is being written.
     Stop(bool),
     /// "/undo N": take back the Nth memory the weekly review listed.
@@ -351,7 +359,8 @@ fn why(used: Option<crate::db::Used>) -> String {
 
 /// Pairing works as "/pair CODE" or "pair CODE" (Slack reserves leading slashes).
 pub(crate) fn parse_command(text: &str) -> Command<'_> {
-    let t = text.trim();
+    // A command sent as a reply (`/branch` under the message to branch from) is still that command.
+    let t = crate::own_part(text).trim();
     let lower = t.to_ascii_lowercase();
     if lower.starts_with("/pair") || lower.starts_with("pair ") {
         return Command::Pair(t.trim_start_matches('/')[4..].trim());
@@ -369,10 +378,24 @@ pub(crate) fn parse_command(text: &str) -> Command<'_> {
         "/why" => Command::Why,
         "/routines" => Command::Routines,
         "/new" => Command::New,
+        "/branch" | "branch" => Command::Branch,
         "/stop" => Command::Stop(true),
         "stop" => Command::Stop(false),
         _ => Command::Chat,
     }
+}
+
+/// The message a `/branch` sent as a reply is under: the newest in the conversation holding the quote's start, and its
+/// text. None (not a reply, or not found): branch from the latest. ponytail: compared on letters and digits only, as
+/// the app shows the bot's Markdown rendered; a message older than the last 200 isn't found.
+fn branch_point(db: &Db, bot: i64, conv: i64, text: &str) -> Option<(i64, String)> {
+    let quote = text.strip_prefix("<replying_to_")?.split_once('>')?.1.split_once("</replying_to_")?.0;
+    let key = |s: &str| s.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect::<String>();
+    let want: String = key(quote).chars().take(40).collect();
+    if want.is_empty() {
+        return None;
+    }
+    db.messages_of(conv, Some(bot), None, 0, 200).ok()?.into_iter().rev().find(|m| key(&m.content).contains(&want)).map(|m| (m.id, m.content))
 }
 
 /// Button payload "ap:<id>:y|n|a" → (approval id, approve, all like this for the rest of the reply).
@@ -407,7 +430,7 @@ pub(crate) fn offers_all(a: &Approval) -> bool {
 /// …and "Always" on every card with something to allow, like the app. Not in a guest's chat (of any kind): the guest
 /// answers there, and Always would change your rules for every chat.
 pub(crate) fn offers_always(a: &Approval) -> bool {
-    !matches!(a.kind.as_str(), "signin" | "takeover" | "guest") && !a.guest
+    !matches!(a.kind.as_str(), "signin" | "takeover" | "guest" | "drift") && !a.guest
 }
 
 /// Allowed the same plain ask a few times already: the card offers to stop asking.
@@ -466,6 +489,8 @@ enum TapFor {
     Remind { prompt: String, due: i64, tainted: bool },
     /// A routine's result: 👍, 👎, Less like this, Pause, For tomorrow…
     Routine { id: i64, prompt: String, said: String, outside: bool },
+    /// A message that hit the plan's usage limit: Answer at <reset>, and Answer now with <fallback account> if set.
+    Later { asked: String, reset: i64, tainted: bool, with: Option<String> },
 }
 
 /// The buttons for `what`, kept so a tap can be told apart (empty when that can't be saved: the message goes without).
@@ -474,6 +499,11 @@ fn tap_rows(db: &Db, bot: i64, chat: i64, what: TapFor) -> Vec<Row> {
         TapFor::Choice { options, .. } => options.iter().map(|o| vec![o.clone()]).chain([vec![tr("Something else").into()]]).collect(),
         TapFor::Remind { .. } => vec![vec![tr("Done").into(), tr("Snooze 1h").into(), tr("Tomorrow").into()]],
         TapFor::Routine { .. } => vec![vec!["👍".into(), "👎".into(), tr("Less like this").into()], vec![tr("Pause").into(), tr("For tomorrow…").into()]],
+        TapFor::Later { reset, with, .. } => vec![
+            std::iter::once(trf("Answer at {at}", &[("at", &when(*reset, crate::db::now()))]))
+                .chain(with.iter().map(|w| trf("Answer now with {account}", &[("account", w)])))
+                .collect(),
+        ],
     };
     let Ok(token) = crate::random_hex(4) else { return vec![] };
     let tap = Tap { bot, chat, at: crate::db::now(), what };
@@ -506,6 +536,23 @@ fn next_day(due: i64, now: i64) -> i64 {
 
 fn clock(t: i64) -> String {
     chrono::TimeZone::timestamp_opt(&chrono::Local, t, 0).single().map(|d| d.format("%H:%M").to_string()).unwrap_or_default()
+}
+
+/// A time that may be days off (a weekly limit's reset): the day too when it's past tomorrow morning.
+fn when(t: i64, now: i64) -> String {
+    chrono::TimeZone::timestamp_opt(&chrono::Local, t, 0).single().map(|d| d.format(if t - now < 18 * 3600 { "%H:%M" } else { "%a %-d %b %H:%M" }).to_string()).unwrap_or_default()
+}
+
+/// A fallback account, for a button: its model if one is set, else the account.
+fn account_label(kind: &str, model: &str) -> String {
+    match (kind, model.trim()) {
+        (_, m) if !m.is_empty() => m.to_string(),
+        ("claude", _) => "Claude".into(),
+        ("codex", _) => "Codex".into(),
+        ("chatgpt", _) => "ChatGPT".into(),
+        ("grok", _) => "Grok".into(),
+        (k, _) => k.to_string(),
+    }
 }
 
 /// The latest digest time (setting digest_time, "HH:MM", default 08:00) at or before `now`: today's, or yesterday's
@@ -681,16 +728,18 @@ impl Core {
                 chan.send(ext, &format!("I {e}. Could you send it another way, or paste the part you need?")).await;
                 Ok(())
             }
-            // A scan: its pages go to the bot as photos.
+            // A scan: its pages go to the bot as photos, or as text where a local model read them.
             Some(Ok(t)) if t.split_whitespace().count() < 5 => {
                 let pages = if crate::is_pdf(name, mime) { crate::read_pdf_pages(bytes.to_vec()).await } else { vec![] };
                 if pages.is_empty() {
                     chan.send(ext, tr("That file has no text I can read (a scanned PDF?). Send photos of the pages instead.")).await;
                     return Ok(());
                 }
+                let (read, pages) = crate::ocr::read_pages(&self.db, pages).await;
                 let saved = pages.iter().map(|p| self.save_media(p, "jpg")).collect::<Result<Vec<_>>>()?;
                 self.db.conv_taint(self.bot, self.conv(chan, ext, chat)?)?;
-                self.incoming_with(chan, ext, from, "", &crate::with_scan(said, name, saved.len()), saved, sent).await
+                let msg = if read.is_empty() { crate::with_scan(said, name, saved.len()) } else { crate::with_document(said, name, &read) };
+                self.incoming_with(chan, ext, from, "", &msg, saved, sent).await
             }
             Some(Ok(t)) => {
                 self.db.conv_taint(self.bot, self.conv(chan, ext, chat)?)?;
@@ -965,7 +1014,7 @@ impl Core {
             command = Command::Chat;
         }
         match command {
-            Command::Start => chan.send(ext, tr("Hi! Just talk to me. /memory shows what I remember, /routines lists schedules, /why shows what my last reply used, /new starts a fresh conversation, /stop cuts off a reply I'm writing, /undo N takes back something from my weekly list of what I learned.")).await,
+            Command::Start => chan.send(ext, tr("Hi! Just talk to me. /memory shows what I remember, /routines lists schedules, /why shows what my last reply used, /new starts a fresh conversation, /branch (as a reply to a message) starts a new one from there, /stop cuts off a reply I'm writing, /undo N takes back something from my weekly list of what I learned.")).await,
             Command::Memory => {
                 // What bots keep in mind, then what's waiting for you to confirm (bots don't keep those in mind).
                 let scope = format!("chat:{chat}");
@@ -988,6 +1037,25 @@ impl Core {
                 self.db.set_session(self.bot, conv, None)?;
                 chan.send(ext, tr("Fresh conversation started (memories kept).")).await;
             }
+            Command::Branch => {
+                let from = branch_point(&self.db, self.bot, conv, text);
+                // Telegram with topics on: the branch is a new topic, and this one carries on. Elsewhere it's this
+                // conversation, afresh. ponytail: Slack and Discord threads aren't conversations of their own yet.
+                let name = from.as_ref().map_or_else(|| tr("Branch").to_string(), |(_, said)| format!("↳ {}", crate::tools::truncate(said.lines().next().unwrap_or(""), 60)));
+                let topic = match chan {
+                    Chan::Telegram(tg) if self.topics() && chat > 0 => tg.new_topic(&chat.to_string(), &name).await.inspect_err(|e| eprintln!("telegram topic: {e:#}")).ok(),
+                    _ => None,
+                };
+                let (to, there) = match topic {
+                    Some(t) => (self.db.topic_conv(chat, t)?, format!("{chat}:{t}")),
+                    None => (conv, ext.to_string()),
+                };
+                crate::branch(&self.db, &self.provider, self.bot, conv, to, from.map(|(id, _)| id))?;
+                if to != conv {
+                    chan.send(ext, tr("Branched into a new topic; this one carries on as it was.")).await;
+                }
+                chan.send(&there, tr("New conversation, picking up from there (memories kept). Where shall we take it?")).await;
+            }
             Command::Undo(n) => chan.send(ext, &crate::tidy::undo_learned(&self.db, chat, n)?).await,
             Command::Stop(_) => unreachable!("handled above"),
             Command::Pair(_) | Command::Chat => {
@@ -1008,75 +1076,107 @@ impl Core {
                 if images.is_empty() && crate::live::steer(self.bot, chat, &text) {
                     return Ok(());
                 }
-                let (core, chan, ext) = (self.clone(), chan.clone(), ext.to_string());
-                tokio::spawn(async move {
-                    // Typing at once, even when this chat is still busy; a wait past a few seconds says why, once.
-                    let typing = chan.typing(&ext);
-                    let wait = core.chat_lock(chat).lock_owned();
-                    tokio::pin!(wait);
-                    let _g = tokio::select! {
-                        g = &mut wait => g,
-                        _ = tokio::time::sleep(BUSY_NOTE_AFTER) => {
-                            let busy = TURNS.lock().unwrap().contains_key(&(core.bot, chat));
-                            chan.send(&ext, if busy { "_Finishing my last reply first…_" } else { "_Finishing a routine first…_" }).await;
-                            wait.await
-                        }
-                    };
-                    // The reply shows up as it's written: one message, edited as it grows, then formatted.
-                    let follower = chan.follow(core.bot, chat, &ext);
-                    let mut ctx = ToolCtx::new(core.db.clone(), core.bot, chat);
-                    ctx.conv = conv;
-                    ctx.images = images;
-                    let (provider, asked) = (core.provider.clone(), text.clone());
-                    let task = tokio::spawn(async move { turn(&provider, &ctx, Trigger::Message(&asked)).await });
-                    TURNS.lock().unwrap().insert((core.bot, chat), task.abort_handle());
-                    let out = task.await;
-                    TURNS.lock().unwrap().remove(&(core.bot, chat));
-                    if let Some(t) = typing {
-                        t.abort();
-                    }
-                    let choice = core.take_choice(chat);
-                    let mut rows = vec![];
-                    let reply = match out {
-                        // ask_choice: the question and its buttons under the reply.
-                        Ok(Ok(text)) => match choice {
-                            Some((q, r)) => {
-                                rows = r;
-                                format!("{}\n\n**{q}**", text.trim_end()).trim_start().to_string()
-                            }
-                            None => text,
-                        },
-                        Ok(Err(e)) => crate::friendly_error(&format!("{e:#}")),
-                        Err(e) if !e.is_cancelled() => crate::friendly_error(&e.to_string()),
-                        // /stop: keep what was asked and written so far, like Stop in the app.
-                        Err(_) => {
-                            let partial = crate::live::get(core.bot, chat).unwrap_or_default();
-                            let steered = crate::live::steered(core.bot, chat);
-                            crate::live::end(core.bot, chat);
-                            let note = if partial.trim().is_empty() { tr("_Stopped before replying._").to_string() } else { format!("{}\n\n{}", partial.trim_end(), tr("_Stopped._")) };
-                            let logged = core
-                                .db
-                                .run_stop(core.bot, chat, &text)
-                                .and_then(|_| std::iter::once(&text).chain(&steered).try_for_each(|t| core.db.log(core.bot, conv, "user", t, None)))
-                                .and_then(|_| core.db.log(core.bot, conv, "assistant", &note, None));
-                            if let Err(e) = logged {
-                                eprintln!("stop: {e:#}");
-                            }
-                            note
-                        }
-                    };
-                    // Written while this computer was asleep or the app was closed: own up to the wait.
-                    let reply = match late {
-                        Some(note) => format!("_{note}_\n\n{reply}"),
-                        None => reply,
-                    };
-                    let draft = follower.finish().await;
-                    let (reply, files) = crate::files::split_sent(&reply);
-                    core.say(&chan, &ext, chat, draft, if reply.trim().is_empty() && !files.is_empty() { "📎" } else { &reply }, &rows, &files, None).await;
-                });
+                self.clone().answer(chan.clone(), ext.to_string(), chat, conv, text, images, late, self.provider.clone());
             }
         }
         Ok(())
+    }
+
+    /// Write the reply to a message in its own task, on `provider` (the bot's own account, or its fallback).
+    #[allow(clippy::too_many_arguments)]
+    fn answer(self: Arc<Self>, chan: Chan, ext: String, chat: i64, conv: i64, text: String, images: Vec<std::path::PathBuf>, late: Option<String>, provider: Arc<Provider>) {
+        let core = self;
+        tokio::spawn(async move {
+            // Typing at once, even when this chat is still busy; a wait past a few seconds says why, once.
+            let typing = chan.typing(&ext);
+            let wait = core.chat_lock(chat).lock_owned();
+            tokio::pin!(wait);
+            let _g = tokio::select! {
+                g = &mut wait => g,
+                _ = tokio::time::sleep(BUSY_NOTE_AFTER) => {
+                    let busy = TURNS.lock().unwrap().contains_key(&(core.bot, chat));
+                    chan.send(&ext, if busy { "_Finishing my last reply first…_" } else { "_Finishing a routine first…_" }).await;
+                    wait.await
+                }
+            };
+            // The reply shows up as it's written: one message, edited as it grows, then formatted.
+            let follower = chan.follow(core.db.clone(), core.bot, chat, &ext);
+            let mut ctx = ToolCtx::new(core.db.clone(), core.bot, chat);
+            ctx.conv = conv;
+            ctx.images = images;
+            let own = Arc::ptr_eq(&provider, &core.provider);
+            let kind = provider.kind();
+            let asked = text.clone();
+            let task = tokio::spawn(async move { turn(&provider, &ctx, Trigger::Message(&asked)).await });
+            TURNS.lock().unwrap().insert((core.bot, chat), task.abort_handle());
+            let out = task.await;
+            TURNS.lock().unwrap().remove(&(core.bot, chat));
+            if let Some(t) = typing {
+                t.abort();
+            }
+            let choice = core.take_choice(chat);
+            let mut rows = vec![];
+            let reply = match out {
+                // ask_choice: the question and its buttons under the reply.
+                Ok(Ok(text)) => match choice {
+                    Some((q, r)) => {
+                        rows = r;
+                        format!("{}\n\n**{q}**", text.trim_end()).trim_start().to_string()
+                    }
+                    None => text,
+                },
+                // The plan's usage limit: when it resets, and buttons to answer then (or now, on the fallback account).
+                Ok(Err(e)) if crate::cause(&format!("{e:#}")) == crate::Cause::Quota => {
+                    let e = format!("{e:#}");
+                    let (reply, r) = core.at_limit(chat, conv, kind, own, &text, &e);
+                    rows = r;
+                    reply
+                }
+                Ok(Err(e)) => crate::friendly_error(&format!("{e:#}")),
+                Err(e) if !e.is_cancelled() => crate::friendly_error(&e.to_string()),
+                // /stop: keep what was asked and written so far, like Stop in the app.
+                Err(_) => {
+                    let partial = crate::live::get(core.bot, chat).unwrap_or_default();
+                    let steered = crate::live::steered(core.bot, chat);
+                    crate::live::end(core.bot, chat);
+                    let note = if partial.trim().is_empty() { tr("_Stopped before replying._").to_string() } else { format!("{}\n\n{}", partial.trim_end(), tr("_Stopped._")) };
+                    let logged = core
+                        .db
+                        .run_stop(core.bot, chat, &text)
+                        .and_then(|_| std::iter::once(&text).chain(&steered).try_for_each(|t| core.db.log(core.bot, conv, "user", t, None)))
+                        .and_then(|_| core.db.log(core.bot, conv, "assistant", &note, None));
+                    if let Err(e) = logged {
+                        eprintln!("stop: {e:#}");
+                    }
+                    note
+                }
+            };
+            // Written while this computer was asleep or the app was closed: own up to the wait.
+            let reply = match late {
+                Some(note) => format!("_{note}_\n\n{reply}"),
+                None => reply,
+            };
+            let draft = follower.finish().await;
+            let (reply, files) = crate::files::split_sent(&reply);
+            core.say(&chan, &ext, chat, draft, if reply.trim().is_empty() && !files.is_empty() { "📎" } else { &reply }, &rows, &files, None).await;
+            crate::hooks::fire(&core.db, core.bot, chat, crate::hooks::Event::Reply { text: &reply });
+        });
+    }
+
+    /// A reply that hit the plan's usage limit: the usual message, when the plan resets, and buttons to answer `asked`
+    /// then, or now on the bot's fallback account (not when that's the one at its limit).
+    fn at_limit(&self, chat: i64, conv: i64, kind: &str, own: bool, asked: &str, e: &str) -> (String, Vec<Row>) {
+        let now = crate::db::now();
+        let known = crate::provider::quota_reset(&self.db, kind, e, now);
+        // ponytail: an hour when the AI didn't say, like routines; a run then finds out again (and waits, as a routine)
+        let at = known.unwrap_or(now + 3600).min(now + 8 * 86400) + 60;
+        let mut reply = crate::friendly_error(e);
+        if known.is_some() {
+            reply = format!("{reply}\n\n{}", trf("The plan resets at {at}.", &[("at", &when(at, now))]));
+        }
+        let with = self.db.fallback(self.bot).ok().flatten().filter(|_| own).map(|(k, m)| account_label(&k, &m));
+        let tainted = self.db.conv_tainted(self.bot, conv).unwrap_or(true);
+        (reply, tap_rows(&self.db, self.bot, chat, TapFor::Later { asked: asked.to_string(), reset: at, tainted, with }))
     }
 
     /// Telegram guest mode (someone typed @bot in a chat the bot isn't in): the private chat of the person who paired
@@ -1237,6 +1337,24 @@ impl Core {
                     self.db.routine_taint(r.id)?;
                 }
                 if n == 1 { trf("⏰ I'll remind you again today at {at}.", &[("at", &clock(at))]) } else { trf("⏰ I'll remind you again tomorrow at {at}.", &[("at", &clock(at))]) }
+            }
+            TapFor::Later { asked, reset, tainted, .. } if n == 0 => {
+                // ponytail: the reset time as it was when the message failed; at that time a routine still waits if it's moved
+                let at = reset.max(now + 60);
+                let prompt = format!("Earlier you couldn't answer my message because the AI plan was at its usage limit. Answer it now:\n\n{asked}");
+                let r = self.db.routine_once(self.bot, chat, at, &prompt, false)?;
+                if tainted {
+                    self.db.routine_taint(r.id)?;
+                }
+                trf("⏰ I'll answer at {at}.", &[("at", &when(at, now))])
+            }
+            TapFor::Later { asked, with, .. } => {
+                // The fallback as it's set now (it may have changed since the message).
+                let Some((kind, model)) = self.db.fallback(self.bot)? else { return Ok(Some(tr("This bot has no fallback account any more.").into())) };
+                let provider = Provider::new(&kind, Some(model.clone()), None, crate::host::api_key(&kind), crate::data_dir()?)?;
+                let conv = self.conv(chan, ext, chat)?;
+                self.clone().answer(chan.clone(), ext.to_string(), chat, conv, asked, vec![], None, Arc::new(provider));
+                trf("Answering with {account}…", &[("account", &with.unwrap_or_else(|| account_label(&kind, &model)))])
             }
             TapFor::Routine { id, prompt, said, outside } => {
                 // Feedback is evidence for the tidy-up, which proposes changes for the person to accept; nothing is edited here.
@@ -1498,8 +1616,11 @@ impl Core {
     /// What's still in the outbox (left by a crash, an update or a restart, or a send that failed): sent now.
     async fn resend(&self, chans: &[Chan]) -> Result<()> {
         for o in self.db.outbox_take(self.bot, crate::db::now())? {
-            // Its channel isn't set up any more: it waits (and is cleared out after a few days).
-            if let Some(c) = chans.iter().find(|c| c.kind() == o.kind) {
+            // Webhooks out go to their address; a message whose channel isn't set up any more waits (and is cleared
+            // out after a few days).
+            if o.kind == "webhook" {
+                crate::hooks::send(&self.db, &o).await;
+            } else if let Some(c) = chans.iter().find(|c| c.kind() == o.kind) {
                 self.send_out(c, &o).await;
             }
         }
@@ -1622,12 +1743,16 @@ impl Core {
                     self.db.routine_events_clear(r.id, upto)?;
                 }
                 self.db.routine_done(&r, true)?;
+                // A quiet check that found nothing to say isn't news.
+                if !text.trim().is_empty() {
+                    crate::hooks::fire(&self.db, self.bot, r.chat_id, crate::hooks::Event::RoutineFinished { routine: r.id, text: &text });
+                }
                 text
             }
             Err(e) => {
                 let e = format!("{e:#}");
                 let now = crate::db::now();
-                let clock = |t: i64| chrono::TimeZone::timestamp_opt(&chrono::Local, t, 0).single().map(|d| d.format(if t - now < 18 * 3600 { "%H:%M" } else { "%a %-d %b %H:%M" }).to_string()).unwrap_or_default();
+                let clock = |t: i64| when(t, now);
                 let again = match crate::cause(&e) {
                     // The fallback is at its limit too: back to waiting for the bot's own account.
                     crate::Cause::Quota if let Some((_, until)) = fallback => {
@@ -1679,6 +1804,7 @@ impl Core {
                 }
                 self.db.routine_done(&r, false)?;
                 let text = format!("Routine #{}: {}", r.id, crate::friendly_error(&e));
+                crate::hooks::fire(&self.db, self.bot, r.chat_id, crate::hooks::Event::RoutineFailed { routine: r.id, error: &text });
                 // A failed digest-lane routine (incl. one held for quiet hours) says so in the digest.
                 if r.delivery == "digest" {
                     self.db.digest_add(self.bot, r.chat_id, r.id, &text, false)?;
@@ -2288,6 +2414,11 @@ mod tests {
 
     /// A pretend AI that answers "Seen." and keeps what each request asked.
     async fn recording_ai() -> (String, Arc<std::sync::Mutex<Vec<String>>>) {
+        scripted_ai(&[r#"{"choices":[{"message":{"role":"assistant","content":"Seen."}}],"usage":{"prompt_tokens":3,"completion_tokens":2}}"#]).await
+    }
+
+    /// A pretend AI service answering with these bodies in turn (the last one from then on), keeping every request.
+    async fn scripted_ai(bodies: &'static [&'static str]) -> (String, Arc<std::sync::Mutex<Vec<String>>>) {
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let (addr, seen) = (l.local_addr().unwrap(), Arc::new(std::sync::Mutex::new(vec![])));
         let keep = seen.clone();
@@ -2305,12 +2436,40 @@ mod tests {
                         break;
                     }
                 }
-                keep.lock().unwrap().push(String::from_utf8_lossy(&req).to_string());
-                let body = r#"{"choices":[{"message":{"role":"assistant","content":"Seen."}}],"usage":{"prompt_tokens":3,"completion_tokens":2}}"#;
+                let n = {
+                    let mut k = keep.lock().unwrap();
+                    k.push(String::from_utf8_lossy(&req).to_string());
+                    k.len()
+                };
+                let body = bodies[n.min(bodies.len()) - 1];
                 let _ = s.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await;
             }
         });
         (format!("http://{addr}/v1"), seen)
+    }
+
+    /// #154: a reply that ends with steps on its checklist still open gets one more turn, told which; then the
+    /// checklist is gone.
+    #[tokio::test]
+    async fn open_steps_get_one_more_turn() {
+        let p = std::env::temp_dir().join(format!("mimir-open-steps-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = Db::open(&p).unwrap();
+        let (base, asked) = scripted_ai(&[
+            r#"{"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[{"id":"c1","type":"function","function":{"name":"progress_set","arguments":"{\"steps\":[{\"step\":\"Find flights\",\"done\":true},{\"step\":\"Book the cheapest\",\"done\":false}]}"}}]}}]}"#,
+            r#"{"choices":[{"message":{"role":"assistant","content":"Found three. I'll now book the cheapest."}}]}"#,
+            r#"{"choices":[{"message":{"role":"assistant","content":"I can't book it: the airline needs your login."}}]}"#,
+        ])
+        .await;
+        let provider = Provider::new("openai", Some("m".into()), Some(base), Some("k".into()), std::env::temp_dir()).unwrap();
+        let ctx = ToolCtx::new(db.clone(), 1, 0);
+        let reply = crate::turn(&provider, &ctx, crate::Trigger::Message("Book me a flight to Lisbon")).await.unwrap();
+        assert_eq!(reply, "Found three. I'll now book the cheapest.\n\nI can't book it: the airline needs your login.");
+        let asked = asked.lock().unwrap().clone();
+        assert_eq!(asked.len(), 3, "one more turn, not more");
+        assert!(asked[2].contains("still open: Book the cheapest.") && asked[2].contains("I'll now book the cheapest."), "{}", asked[2]);
+        assert!(crate::tools::progress(&db, 1, 0).is_empty(), "the checklist ends with its run");
+        assert_eq!(crate::tools::checklist(&[("Find flights".into(), true), ("Book".into(), false)]), "☑ Find flights\n☐ Book");
     }
 
     #[tokio::test]
@@ -2862,6 +3021,21 @@ mod tests {
         assert_eq!((q.as_str(), labels(&rows)), ("Which day?", vec!["Thu".to_string(), "Fri".into(), "Something else".into()]));
         assert!(core.take_choice(chat).is_none(), "one reply's question only");
 
+        // A reply at the usage limit: when the plan resets, Answer at then (and Answer now on a fallback, if set) (#151).
+        let reset = now + 7200;
+        let (said, rows) = core.at_limit(chat, chat, "api", true, "what's on today?", &format!("usage limit|{reset}"));
+        assert!(said.contains("usage limit") && said.contains(&format!("resets at {}", when(reset + 60, now))), "{said}");
+        assert_eq!(labels(&rows), [format!("Answer at {}", clock(reset + 60))]);
+        db.set_fallback(1, "local", "m").unwrap();
+        assert_eq!(labels(&core.at_limit(chat, chat, "api", true, "x", "usage limit").1), [format!("Answer at {}|Answer now with m", clock(now + 3660))]);
+        assert_eq!(labels(&core.at_limit(chat, chat, "local", false, "x", "usage limit").1).concat().matches('|').count(), 0, "not when the fallback is the one at its limit");
+        db.set_fallback(1, "", "").unwrap();
+        let out = core.tap(&chan, "C1", me, &rows[0][0].1).await.unwrap().unwrap();
+        assert!(out.contains("I'll answer at"), "{out}");
+        let later = db.routines(chat).unwrap().into_iter().find(|r| r.once && r.prompt.ends_with("what's on today?")).expect("booked");
+        assert_eq!(later.next_fire, reset + 60);
+        db.routine_delete(chat, later.id).unwrap();
+
         // A reminder: Snooze makes it again in an hour; the message's other buttons are then used up.
         let once = db.routine_once(1, chat, now + 60, "call mum", false).unwrap();
         let rows = core.result_rows(&once, "Call mum!");
@@ -2972,6 +3146,24 @@ mod tests {
         let g = ask("memory_forget", "guest", None);
         crate::tools::always_allow(&db, &g).unwrap();
         assert_eq!(db.rule("memory_forget").unwrap().as_deref(), Some("allow"));
+    }
+
+    #[test]
+    fn branch_from_a_reply() {
+        let p = std::env::temp_dir().join(format!("mimir-branch-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = Db::open(&p).unwrap();
+        for (role, said) in [("user", "plan a trip"), ("assistant", "**Option A:** Lisbon in May, <cheap> flights"), ("user", "tell me more"), ("assistant", "Lisbon has trams")] {
+            db.log(1, 42, role, said, None).unwrap();
+        }
+        let ids: Vec<i64> = db.messages_of(42, Some(1), None, 0, 10).unwrap().iter().map(|m| m.id).collect();
+        // Telegram quotes the message as shown: Markdown rendered, whitespace folded.
+        let asked = crate::with_reply("/branch", "Option A: Lisbon in  May, ‹cheap› flights");
+        assert!(matches!(parse_command(&asked), Command::Branch));
+        assert_eq!(branch_point(&db, 1, 42, &asked).map(|(id, _)| id), Some(ids[1]));
+        assert_eq!(branch_point(&db, 1, 42, "/branch"), None, "not a reply: from the latest");
+        assert_eq!(branch_point(&db, 1, 42, &crate::with_reply("/branch", "never said")), None);
+        let _ = std::fs::remove_file(&p);
     }
 
     #[test]

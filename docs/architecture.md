@@ -21,6 +21,7 @@ For contributors: how the pieces fit together.
 | `telegram`, `slack`, `discord`, `signal`, `whatsapp` | The messaging apps (outbound connections, streaming replies; WhatsApp's messages come in on the server's `/whatsapp` webhook) |
 | `provider` | AI accounts: starts `claude -p` / `codex exec` / `grok -p`, or calls an OpenAI-compatible API; streams replies |
 | `chatgpt` | Sign in with ChatGPT: OAuth (PKCE, dynamic registration), the plan's tokens, and replies on the Responses API |
+| `grok_plan` | Sign in with your Grok plan: xAI's device-code sign-in, the plan's rotating tokens, used as the `xai` account's key |
 | `oauth` | OAuth sign-in with PKCE for tool servers and Outlook: the browser's return trip (or a pasted address), tokens in the secret store, refreshing |
 | `lib.rs` (`turn`) | One run: builds the instructions (role, standing memory, skills), calls the provider, records the run; `/skill` commands (`skill_command`) |
 | `tools` | `mod.rs`: `ToolCtx`, `call` (every tool call), taint, shared helpers; `specs.rs`: tool definitions; `gate.rs`: the allow / ask / deny gate, plans, loops, parked calls; `builtin.rs`: the built-in tools' code |
@@ -31,6 +32,7 @@ For contributors: how the pieces fit together.
 | `tidy` | The daily memory tidy-up (on `tidy_model` if set): corrections, skills from good runs, fixes for skills that went wrong, weekly upkeep (retire / merge / move to background), the weekly review; teaching a skill from a source or a SKILL.md |
 | `computer` | The bots' computer (Xvfb, xdotool, scrot, Chromium), self-hosted Linux only; recording a showing for teach by showing (page details through Chromium's DevTools port); typing a sign-in into the page on screen (`sign_in`, from a sign-in card's form, `signin_submit` in `host`) |
 | `transcribe` | Speech to text (whisper.cpp built in, or `whisper-cli`, or an API), voice activity, speaker separation |
+| `ocr` | A scanned PDF's pages read by a local document model through Ollama's `/api/chat` (setting `ocr_model`, `ocr_url`); unread pages stay photos |
 | `calendar` | iCal links: parsing, recurrence (`rrule`), the meeting on now, events between dates (`calendar_list`) |
 | `email` | The mailbox list; IMAP (async-imap, mail-parser): search, read, drafts by APPEND, all EXAMINE/PEEK; SMTP sending (lettre); app passwords or Outlook's XOAUTH2; every operation within 60 s |
 | `files` | The per-chat file workspace: path checks, versions under `.history/`, outside-content marks keyed by canonical name and modification time |

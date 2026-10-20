@@ -141,7 +141,7 @@ pub type DigestItem = (i64, i64, Option<i64>, String, bool);
 /// A new routine starts with nothing from a deleted one that had its id (one that never ran gives its id out again):
 /// no sensitive mark, whichever way that one went (a one-off done, its bot deleted).
 fn fresh_id(c: &rusqlite::Connection, id: i64) -> Result<()> {
-    c.execute("DELETE FROM settings WHERE key=?1", [crate::tools::routine_private_key(id)])?;
+    c.execute("DELETE FROM settings WHERE key IN (?1, ?2)", [crate::tools::routine_private_key(id), crate::tools::drift_key(id)])?;
     Ok(())
 }
 const NEW_ID: &str = "(SELECT max(coalesce((SELECT max(id) FROM routines), 0), coalesce((SELECT max(routine_id) FROM runs), 0)) + 1)";
@@ -432,7 +432,7 @@ impl Db {
         if r.once || ended {
             c.execute("DELETE FROM routines WHERE id=?1", [r.id])?;
             c.execute("DELETE FROM routine_events WHERE routine_id=?1", [r.id])?;
-            c.execute("DELETE FROM settings WHERE key IN (?1, ?2)", [format!("webhook:{}", r.id), crate::tools::routine_private_key(r.id)])?;
+            c.execute("DELETE FROM settings WHERE key IN (?1, ?2, ?3)", [format!("webhook:{}", r.id), crate::tools::routine_private_key(r.id), crate::tools::drift_key(r.id)])?;
         } else {
             c.execute("UPDATE routines SET retries=0 WHERE id=?1", [r.id])?;
         }
@@ -719,7 +719,7 @@ impl Db {
     pub fn routine_delete(&self, chat: i64, id: i64) -> Result<bool> {
         let gone = self.c().execute("DELETE FROM routines WHERE id=?1 AND chat_id=?2", params![id, chat])? > 0;
         if gone {
-            self.c().execute("DELETE FROM settings WHERE key IN (?1, ?2, ?3, ?4)", [format!("hold:routine:{id}"), format!("webhook:{id}"), format!("webhook-seen:{id}"), format!("routine-private:{id}")])?;
+            self.c().execute("DELETE FROM settings WHERE key IN (?1, ?2, ?3, ?4, ?5)", [format!("hold:routine:{id}"), format!("webhook:{id}"), format!("webhook-seen:{id}"), format!("routine-private:{id}"), crate::tools::drift_key(id)])?;
             self.c().execute("DELETE FROM routine_events WHERE routine_id=?1", [id])?;
         }
         Ok(gone)

@@ -165,6 +165,7 @@ pub fn step_label(tool: &str) -> String {
         "plan_propose" => "Waiting for your OK on a plan".into(),
         "ask_bot" => "Asking another bot".into(),
         "ask_choice" => "Asking you a question".into(),
+        "progress_set" => "Ticking off a step".into(),
         "bot_create" => "Creating a bot".into(),
         "WebSearch" | "web_search" => "Searching the web".into(),
         "x_search" => "Searching X".into(),

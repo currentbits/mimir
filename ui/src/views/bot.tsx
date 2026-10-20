@@ -19,7 +19,7 @@ const PROVIDERS = [
   { id: 'codex', name: 'Codex CLI', hint: 'Your ChatGPT login, through the Codex CLI' },
   { id: 'grok', name: 'Grok', hint: 'Your SuperGrok login (Grok Build)' },
   { id: 'openrouter', name: 'OpenRouter', hint: 'Hundreds of models, one key' },
-  { id: 'xai', name: 'xAI API', hint: 'Grok, billed per token' },
+  { id: 'xai', name: 'xAI API', hint: 'Grok: your plan, or a key' },
   { id: 'local', name: 'Local model', hint: 'Ollama or LM Studio, free' },
   { id: 'openai', name: 'API key', hint: 'OpenAI or any compatible API' },
 ]
@@ -30,7 +30,7 @@ const PROVIDER_NOTE: Record<string, React.ReactNode> = {
   openrouter: 'Uses your OpenRouter key from Settings. OpenRouter bills per message; the run log shows the cost.',
   local: "Runs on this computer (Ollama by default; set the endpoint for LM Studio, http://localhost:1234/v1). Chats and memories don't leave it.",
   grok: <>Runs <code>grok -p</code> on your SuperGrok or X Premium+ subscription. Sign in under Settings → AI keys.</>,
-  xai: 'Uses your xAI key from Settings. xAI bills per token.',
+  xai: 'Uses your xAI key from Settings (xAI bills per token), or, without one, your Grok plan signed in under Settings → AI keys.',
   openai: 'Uses the API key from Settings.',
 }
 

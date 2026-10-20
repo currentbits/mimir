@@ -510,6 +510,26 @@ impl Host {
                 self.restart_all();
                 ok(json!({"account": account}))
             }
+            // Sign in with your Grok plan (xAI's API on the plan, no Grok Build). Returns the address and code to confirm
+            // there; the sign-in finishes in the background, and `accounts` (xai) shows when it's done or why it stopped.
+            // The app then says `grok_plan_signed_in`, so the bots pick it up.
+            "grok_plan_sign_in" => {
+                let (url, code) = crate::grok_plan::start().await?;
+                ok(json!({"url": url, "code": code}))
+            }
+            "grok_plan_signed_in" => {
+                self.restart_all();
+                ok(())
+            }
+            "grok_plan_sign_in_cancel" => {
+                crate::grok_plan::cancel();
+                ok(())
+            }
+            "grok_plan_sign_out" => {
+                crate::grok_plan::sign_out()?;
+                self.restart_all();
+                ok(())
+            }
             "chatgpt_sign_in_cancel" => {
                 crate::chatgpt::cancel();
                 ok(())
@@ -580,6 +600,32 @@ impl Host {
                 }
                 ok(self.db.setting("email_tasks")?.as_deref() == Some("on"))
             }
+            // Webhooks out: the address, which events go to it, and whether the text goes too. The secret the bodies
+            // are signed with is made (in the keychain) the first time an address is saved, or anew with `rotate`.
+            "webhook_out" => {
+                if let Some(url) = arg::<Option<String>>(a, "url")? {
+                    let url = url.trim();
+                    if !url.is_empty() && url::Url::parse(url).map_or(true, |u| !["http", "https"].contains(&u.scheme())) {
+                        bail!("not a web address (http:// or https://)");
+                    }
+                    let events: Vec<String> = arg::<Option<Vec<String>>>(a, "events")?.unwrap_or_default().into_iter().filter(|e| crate::hooks::EVENTS.contains(&e.as_str())).collect();
+                    self.db.set_setting("webhook_out_url", url)?;
+                    self.db.set_setting("webhook_out_events", &events.join(","))?;
+                    self.db.set_setting("webhook_out_text", if arg::<Option<bool>>(a, "text")?.unwrap_or(false) { "on" } else { "off" })?;
+                    if !url.is_empty() && (self.secrets.get(crate::hooks::SECRET).is_none() || arg::<Option<bool>>(a, "rotate")?.unwrap_or(false)) {
+                        self.secrets.set(crate::hooks::SECRET, &crate::random_hex(24)?)?;
+                    }
+                }
+                let (url, events, text) = crate::hooks::settings(&self.db);
+                ok(json!({"url": url, "events": events, "text": text, "secret": self.secrets.get(crate::hooks::SECRET)}))
+            }
+            // A test body to the saved address, sent now (not through the outbox): says what went wrong.
+            "webhook_out_test" => {
+                let url = crate::hooks::settings(&self.db).0.context("save an address first")?;
+                let body = json!({"event": "test", "at": crate::db::now(), "summary": "A test from Mimir"}).to_string();
+                crate::hooks::post(&url, &body).await?;
+                ok(())
+            }
             // Adding events to your calendar (calendar_create) over CalDAV: the server, the login and which calendar.
             // Saving signs in and lists the calendars; no password given keeps the saved one (or the email's, same login).
             "caldav_settings" => {
@@ -621,6 +667,20 @@ impl Host {
                 }
                 ok(json!({"brave": api_key("brave").is_some(), "x": api_key("x").is_some(), "searxng_url": self.db.setting("searxng_url")?.unwrap_or_default()}))
             }
+            // Scanned PDFs read by a local model behind Ollama (ocr.rs): its name (empty: off) and Ollama's address.
+            "ocr_settings" => {
+                if let Some(model) = arg::<Option<String>>(a, "model")? {
+                    self.db.set_setting("ocr_model", model.trim())?;
+                }
+                if let Some(url) = arg::<Option<String>>(a, "url")? {
+                    let url = url.trim().trim_end_matches('/').to_string();
+                    if !(url.is_empty() || url.starts_with("http://") || url.starts_with("https://")) {
+                        bail!("Ollama's address starts with http:// or https://");
+                    }
+                    self.db.set_setting("ocr_url", &url)?;
+                }
+                ok(json!({"model": self.db.setting("ocr_model")?.unwrap_or_default(), "url": self.db.setting("ocr_url")?.unwrap_or_default(), "default_url": crate::ocr::DEFAULT_URL}))
+            }
             "chats" => ok(self.db.chats()?),
             // Each topic in a private Telegram chat its own conversation (read per message, so no restart).
             "telegram_topics" => ok(self.db.setting(&format!("telegram_topics:{}", arg::<i64>(a, "bot_id")?))?.as_deref() == Some("on")),
@@ -641,13 +701,35 @@ impl Host {
             "set_ask_check" => ok(self.db.set_setting("ask_check", if arg(a, "on")? { "on" } else { "off" })?),
             "set_telegram_topics" => ok(self.db.set_setting(&format!("telegram_topics:{}", arg::<i64>(a, "bot_id")?), if arg(a, "on")? { "on" } else { "off" })?),
             // Has this conversation read untrusted content (so changes ask first)? And: start a fresh one.
-            "conversation" => ok(json!({"tainted": self.db.conv_tainted(arg(a, "bot_id")?, arg(a, "chat_id")?)?})),
+            // Whether it read outside content, and its title and "so far" line (tidy::catch_up), if it has them yet.
+            "conversation" => {
+                let (bot, chat): (i64, i64) = (arg(a, "bot_id")?, arg(a, "chat_id")?);
+                let c: Value = self.db.setting(&crate::tidy::catch_up_key(bot, chat))?.and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default();
+                ok(json!({"tainted": self.db.conv_tainted(bot, chat)?, "title": c["title"], "so_far": c["so_far"]}))
+            }
+            // Each bot's title for its chat on this computer, for the sidebar.
+            "chat_titles" => ok(self
+                .db
+                .bots()?
+                .into_iter()
+                .filter_map(|b| {
+                    let c: Value = serde_json::from_str(&self.db.setting(&crate::tidy::catch_up_key(b.id, LOCAL_CHAT)).ok()??).ok()?;
+                    Some(json!({"bot_id": b.id, "title": c["title"].as_str()?}))
+                })
+                .collect::<Vec<_>>()),
             "new_conversation" => {
                 let (bot, chat): (i64, i64) = (arg(a, "bot_id")?, arg(a, "chat_id")?);
+                // A fresh start gets a title of its own once its first exchange is in.
+                self.db.setting_take(&crate::tidy::catch_up_key(bot, chat))?;
                 if let (Some(s), Ok(p)) = (self.db.session(bot, chat)?, self.provider(bot)) {
                     p.forget_session(&s);
                 }
                 ok(self.db.set_session(bot, chat, None)?)
+            }
+            // Branch from a message: a fresh conversation that opens with the chat up to it.
+            "branch" => {
+                let (bot, chat): (i64, i64) = (arg(a, "bot_id")?, arg(a, "chat_id")?);
+                ok(crate::branch(&self.db, &self.provider(bot)?, bot, chat, chat, Some(arg(a, "message_id")?))?)
             }
             // Delete a chat's history (conversation, run log, corrections, the AI CLIs' copies); memories stay.
             "clear_history" => {
@@ -747,6 +829,8 @@ impl Host {
             "decide_skill" => ok(self.db.skill_decide(&scope(a)?, arg(a, "id")?, arg(a, "accept")?)?),
             "remove_skill" => ok(self.db.skill_remove(&scope(a)?, arg(a, "id")?)?),
             "undo_memory" => ok(self.db.undo(&scope(a)?, arg(a, "id")?)?),
+            // A button in a tool server's card (MCP Apps): its tool, through the tool gate.
+            "card_call" => ok(crate::ext::card_call(&self.db, &arg::<String>(a, "key")?, &arg::<String>(a, "name")?, &a["arguments"]).await?),
             // The weekly look back: how the last four weeks went, and when you last reviewed what was learned.
             "learning" => {
                 let chat: i64 = arg(a, "chat_id")?;
@@ -819,6 +903,8 @@ impl Host {
                 ok(crate::tidy::check_memory(&self.db, &provider, bot, arg(a, "chat_id")?, arg(a, "id")?).await?)
             }
             "decide_suggestion" => ok(self.db.suggestion_decide(&scope(a)?, arg(a, "id")?, arg(a, "accept")?)?),
+            // Keep the other one of a pair (duplicate, contradiction), or forget a stale memory rather than move it.
+            "forget_for_suggestion" => ok(self.db.suggestion_forget(&scope(a)?, arg(a, "id")?, arg(a, "entry_id")?)?),
             // Run the tidy-up now (the UI's "Tidy up now"); returns how many suggestions were queued.
             "tidy" => {
                 let bot = crate::tidy::memory_bot(&self.db).context("no bots")?;
@@ -960,6 +1046,7 @@ impl Host {
                     }
                     self.db.computer_lease("you", "you", crate::computer::TEACH_SECS as i64)?;
                     crate::computer::teach_start();
+                    crate::computer::sniff(&self.home, crate::computer::TEACH_SECS);
                     ok(true)
                 }
                 "stop" => {
@@ -990,6 +1077,7 @@ impl Host {
                 // Taking over: bots pause until a minute after your last input (or Give back); while showing, until it ends.
                 let secs = if crate::computer::teaching().is_some() { crate::computer::TEACH_SECS as i64 } else { 60 };
                 self.db.computer_lease("you", "you", secs)?;
+                crate::computer::sniff(&self.home, secs as u64);
                 crate::computer::teach_note(&self.home, a).await;
                 let a = a.clone();
                 tokio::task::spawn_blocking(move || -> Result<()> {
@@ -1061,14 +1149,16 @@ impl Host {
             }
             // The reply being written right now (streams while send_local is running).
             "draft" => ok(crate::live::get(arg(a, "bot_id")?, arg(a, "chat_id")?)),
-            // A reply in progress: the text so far, what it's doing now, and the steps it has finished.
+            // A reply in progress: the text so far, what it's doing now, the steps it has finished, and its checklist.
             "live" => {
                 let (bot, chat): (i64, i64) = (arg(a, "bot_id")?, arg(a, "chat_id")?);
                 let done = match self.db.running_run(bot, chat)? {
-                    Some(run) => self.db.tool_calls(run)?.into_iter().map(|c| json!({"summary": c.summary, "ok": c.ok, "decision": c.decision})).collect(),
+                    // Ticking the checklist shows as the checklist itself.
+                    Some(run) => self.db.tool_calls(run)?.into_iter().filter(|c| c.tool != "progress_set").map(|c| json!({"summary": c.summary, "ok": c.ok, "decision": c.decision})).collect(),
                     None => vec![],
                 };
-                ok(json!({"draft": crate::live::get(bot, chat), "step": crate::live::step(bot, chat), "done": done}))
+                let checklist: Vec<Value> = crate::tools::progress(&self.db, bot, chat).into_iter().map(|(step, done)| json!({"step": step, "done": done})).collect();
+                ok(json!({"draft": crate::live::get(bot, chat), "step": crate::live::step(bot, chat), "done": done, "checklist": checklist}))
             }
             // Stop from the Runs list: a reply in a messaging app (it records itself as stopped and says so there), or
             // one in the app (below).
@@ -1207,6 +1297,11 @@ impl Host {
                 if pages.is_empty() {
                     return ok(crate::with_document(&said, &name, &text));
                 }
+                // Read by a local model where one is set; what it couldn't read still goes as photos.
+                let (read, pages) = crate::ocr::read_pages(&self.db, pages).await;
+                if pages.is_empty() {
+                    return ok(crate::with_document(&said, &name, &read));
+                }
                 let dir = self.home.join("media");
                 std::fs::create_dir_all(&dir)?;
                 let mut images = vec![];
@@ -1215,7 +1310,8 @@ impl Host {
                     std::fs::write(&path, p)?;
                     images.push(path.display().to_string());
                 }
-                ok(json!({"text": crate::with_scan(&said, &name, images.len()), "images": images}))
+                let text = if read.is_empty() { crate::with_scan(&said, &name, images.len()) } else { crate::with_document(&said, &name, &read) };
+                ok(json!({"text": text, "images": images}))
             }
             "save_media" => {
                 use base64::Engine;
@@ -1235,6 +1331,11 @@ impl Host {
             }
             "reset_watch_noise" => ok(self.db.routine_reset_noise(arg(a, "chat_id")?, arg(a, "id")?)?),
             "set_watch" => ok(self.db.routine_set_watch(arg(a, "chat_id")?, arg(a, "id")?, &arg::<String>(a, "watch")?)?),
+            // The data a watched page loaded on the bots' computer while you were in control, to watch instead.
+            "watch_offer" => {
+                let offers = crate::computer::page_data(arg(a, "bot_id")?, &arg::<String>(a, "url")?);
+                ok(offers.into_iter().map(|(url, holds)| json!({"url": url, "holds": holds})).collect::<Vec<_>>())
+            }
             // Only the person sets this (no bot tool does): what the bot read can't widen what comes through.
             "set_ends" => ok(self.db.routine_set_ends(arg(a, "chat_id")?, arg(a, "id")?, arg(a, "ends")?)?),
             "set_urgent" => ok(self.db.routine_set_urgent(arg(a, "chat_id")?, arg(a, "id")?, &arg::<String>(a, "rule")?)?),
@@ -1436,6 +1537,8 @@ impl Host {
                     "goals": self.db.goals_waiting()?,
                     // The daily check found the database damaged: restore a backup.
                     "damage": self.db.setting(crate::backup::DAMAGE)?,
+                    // Plain asks you keep allowing: stop asking?
+                    "rule_hints": tools::rule_hints(&self.db)?,
                     "unconfirmed": self.db.unconfirmed_counts()?.into_iter().map(|(chat, n)| json!({"chat_id": chat, "count": n})).collect::<Vec<_>>(),
                     // A newer release than this server runs (looked up by the bots' loops twice a day).
                     "server_update": is_server().then(|| self.db.setting("update_latest").ok().flatten()).flatten()
@@ -1515,6 +1618,7 @@ impl Host {
             // The AI plan's usage windows, where the AI reports them (Claude Code does).
             "ai_windows" => ok(crate::provider::windows(&self.db)),
             "inbox_dismiss" => ok(self.db.inbox_dismiss(&arg::<String>(a, "kind")?, arg(a, "id")?)?),
+            "rule_hint_dismiss" => ok(tools::rule_hint_dismiss(&self.db, &arg::<String>(a, "tool")?, arg::<Option<String>>(a, "site")?.as_deref())?),
             "site_rules" => ok(self.db.site_rules()?.into_iter().map(|(tool, host, action)| json!({"tool": tool, "host": host, "action": action})).collect::<Vec<_>>()),
             "set_site_rule" => ok(self.db.set_site_rule(&arg::<String>(a, "tool")?, &arg::<String>(a, "host")?, &arg::<String>(a, "action")?)?),
             "rules" => ok(tools::all_specs(&self.db)

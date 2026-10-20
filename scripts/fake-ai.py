@@ -12,6 +12,7 @@ replies "DONE <tool>: <the tool's result>":
     ASK SEARCH → ask_bot    MAKE BOT → bot_create    ROUTINE → routine_create    REMEMBER → memory_store
     FORGET <n> → memory_forget(n)    CHOOSE → ask_choice    FILE → file_write    LIST FILES → file_list    DELETE ROUTINE <n> → routine_delete(n)
     SEND FILE → send_file(notes/trip.md)    CARD → card_write(Shopping: oat milk, eggs)
+    SHOW CARD → demo__show(Cape Town), the interactive card of scripts/fake-mcp-app.py
 
 A routine asked to say URGENT when the person's rule holds, about something DELAYED, says so.
 Anything else gets "OK: <your message>". A message with SLOW in it is answered after 3 seconds (any bot), for
@@ -22,6 +23,10 @@ MIMIR_CHATGPT_AUTH=http://127.0.0.1:8899 MIMIR_CHATGPT_API=http://127.0.0.1:8899
 "nonce:<the nonce from the sign-in address>". Requests that break the route's rules (stored items, tools outside a
 namespace, forbidden fields) get the 400 the real one would; web search is "not offered", and LIMIT in a message
 answers with the plan's usage limit.
+
+And for xAI's device-code sign-in ("Sign in with your Grok plan"): start the server with MIMIR_XAI_AUTH=http://127.0.0.1:8899
+MIMIR_XAI_API=http://127.0.0.1:8899/v1. The code counts as confirmed on the second time Mimir asks; NOPLAN in a message
+answers with the 403 xAI gives a plan it won't serve.
 """
 import base64, json, re, sys, time, urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -39,6 +44,7 @@ SCRIPT = [
     ("CHOOSE", "ask_choice", lambda m: {"question": "Which day?", "options": ["Thursday", "Friday"]}),
     ("LIST FILES", "file_list", lambda m: {}),
     ("SEND FILE", "send_file", lambda m: {"path": "notes/trip.md"}),
+    ("SHOW CARD", "demo__show", lambda m: {"city": "Cape Town"}),
     ("CARD", "card_write", lambda m: {"title": "Shopping", "body": "- [ ] oat milk\n- [ ] eggs"}),
     ("FILE", "file_write", lambda m: {"path": "notes/trip.md", "content": "- passport\n", "mode": "create"}),
 ]
@@ -69,6 +75,8 @@ class H(BaseHTTPRequestHandler):
         raw = self.rfile.read(int(self.headers.get("content-length") or 0))
         if self.path.startswith("/api/accounts/oauth/"):
             return self.oauth(dict(urllib.parse.parse_qsl(raw.decode())))
+        if self.path.startswith("/oauth2/"):
+            return self.xai_oauth(dict(urllib.parse.parse_qsl(raw.decode())))
         req = json.loads(raw or b"{}")
         if self.path.endswith("/responses"):
             return self.respond_api(req)
@@ -79,6 +87,8 @@ class H(BaseHTTPRequestHandler):
         last_user = users[-1] if users else ""
         last = msgs[-1] if msgs else {}
         print(f"[{bot}] last={last.get('role')} user={last_user[-80:]!r}", flush=True)
+        if self.headers.get("authorization") == "Bearer grok-access" and "NOPLAN" in last_user:
+            return self.send_json(403, {"code": "The caller does not have permission to execute the specified operation", "error": "no API on this plan"})
         if "SLOW" in last_user and last.get("role") == "user":
             time.sleep(int((re.search(r"SLOW (\d+)", last_user) or [0, 3])[1]))
         if bot == "Search":
@@ -116,6 +126,30 @@ class H(BaseHTTPRequestHandler):
         claims = {"iss": f"http://127.0.0.1:{PORT}", "aud": form["client_id"], "nonce": code[6:], "exp": int(time.time()) + 3600, "email": "you@example.com", "sub": "u1"}
         print(f"[chatgpt] signed in, client {form['client_id']}", flush=True)
         self.send_json(200, {"access_token": "fake-access", "refresh_token": "r1", "id_token": f"e30.{b64(claims)}.sig", "expires_in": 3600, "token_type": "Bearer"})
+
+    # ---- Sign in with your Grok plan (xAI's device code) ----
+
+    polls = 0
+
+    def xai_oauth(self, form):
+        if form.get("client_id") != "b1a00492-073a-47ea-816f-4c329264a828":
+            return self.send_json(401, {"error": "invalid_client"})
+        if self.path == "/oauth2/device/code":
+            H.polls = 0
+            if "api:access" not in form.get("scope", ""):
+                return self.send_json(400, {"error": "invalid_scope"})
+            return self.send_json(200, {"device_code": "dev1", "user_code": "ABCD-1234", "verification_uri": f"http://127.0.0.1:{PORT}/device",
+                                        "verification_uri_complete": f"http://127.0.0.1:{PORT}/device?user_code=ABCD-1234", "expires_in": 600, "interval": 1})
+        if form.get("grant_type") == "urn:ietf:params:oauth:grant-type:device_code" and form.get("device_code") == "dev1":
+            H.polls += 1
+            if H.polls < 2:
+                return self.send_json(400, {"error": "authorization_pending"})
+            b64 = lambda v: base64.urlsafe_b64encode(json.dumps(v).encode()).decode().rstrip("=")
+            print("[xai] signed in with a Grok plan", flush=True)
+            return self.send_json(200, {"access_token": "grok-access", "refresh_token": "gr1", "id_token": f"e30.{b64({'email': 'grok@example.com'})}.sig", "expires_in": 900})
+        if form.get("grant_type") == "refresh_token" and form.get("refresh_token", "").startswith("gr"):
+            return self.send_json(200, {"access_token": "grok-access", "refresh_token": "gr2", "expires_in": 900})
+        self.send_json(400, {"error": "invalid_grant"})
 
     def respond_api(self, req):
         if self.headers.get("authorization") != "Bearer fake-access":

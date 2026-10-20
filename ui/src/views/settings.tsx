@@ -18,6 +18,7 @@ const SETTING_WORDS: Record<string, string> = {
   'Email': 'mail imap smtp gmail icloud fastmail inbox app password send draft',
   'Calendar': 'caldav icloud fastmail nextcloud events schedule',
   'Web search': 'brave searxng google internet search engine x twitter tweets posts bearer token',
+  'Scanned PDFs': 'ocr scan local model ollama dots.ocr vision photos pages private',
   'Daily digest': 'quiet hours notifications summary weekly review do not disturb',
   'Limits': 'cap budget tokens cost usage limit plan subscription quota five hour weekly cheaper model haiku',
   'Permissions': 'allow ask deny approve rules tools safety always',
@@ -26,6 +27,7 @@ const SETTING_WORDS: Record<string, string> = {
   'Sensitive sources': 'bank banking health medical private finance money leak',
   'Your data': 'export backup download delete privacy doctor check health troubleshoot problem usage stats telemetry analytics',
   'Chat API': 'openai token shortcuts siri home assistant integration v1 completions',
+  'Webhooks out': 'home assistant ntfy n8n zapier notify notification push phone light hmac signed events integration',
 }
 
 /** Shows only the settings that match, live as you type: whole groups whose title or note matches, else the rows that do. */
@@ -99,6 +101,7 @@ export function SettingsView({ onComputer, find = '' }: { onComputer: () => void
       <LimitsSettings />
       <ApiKeySettings />
       <WebSearchSettings />
+      <ScanSettings />
       <EmailSettings />
       <CalendarSettings />
       <KnowMeSettings />
@@ -107,6 +110,7 @@ export function SettingsView({ onComputer, find = '' }: { onComputer: () => void
       <ToolServerSettings onChange={toolsChanged} />
       <SensitiveSettings key={'s' + tools} />
       <Permissions key={tools} />
+      <WebhooksOutSettings />
       <DataSettings />
       {(!inDesktop || remoteServer()) && <ChatApiSettings />}
       <ServerSettings />
@@ -141,7 +145,7 @@ function UsageStatsRow() {
   if (!s) return null
   return <>
     <Row icon={<Icon name="activity" size={15} />} title="Send anonymous usage stats"
-      desc={<>Once a day: a random id for this install, the version and OS, and each bot’s AI provider and model. Never names, messages, memories or keys. <button type="button" className="linkish" onClick={() => setShow(!show)}>{show ? 'Hide' : 'See what’s sent'}</button></>}>
+      desc={<>Once a day: a random id for this install, the version and OS, each bot’s AI provider and model, and on a server how many pages its browser opened and how many a site blocked. Never names, messages, memories or keys. <button type="button" className="linkish" onClick={() => setShow(!show)}>{show ? 'Hide' : 'See what’s sent'}</button></>}>
       <Switch label="Send anonymous usage stats" checked={s.on} onChange={on => invoke('usage_stats', { on }).then(st.reload, e => tell(String(e)))} />
     </Row>
     {show && <div className="row-block"><pre className="mono" style={{ margin: 0, whiteSpace: 'pre-wrap', fontSize: 12 }}>{JSON.stringify(s.sample, null, 1)}</pre></div>}
@@ -194,6 +198,45 @@ function DoctorRow() {
     : 'AI sign-ins, each bot’s Telegram, Slack and Discord connection, email, the bots’ computer, disk space, the database and its backups. Nothing is spent or sent.')}>
     <button type="button" className="btn btn-sm" disabled={busy} onClick={run}>{busy ? 'Checking…' : 'Check'}</button>
   </Row>
+}
+
+type WebhookOut = { url: string | null; events: string[]; text: boolean; secret: string | null }
+
+const HOOK_EVENTS: [string, string][] = [['routine_finished', 'A routine finished'], ['routine_failed', 'A routine failed'], ['approval_waiting', 'An approval is waiting'], ['reply_sent', 'A reply was sent']]
+
+/** A signed JSON to one address when something happens: flash a light, push a phone notification, start an n8n flow. */
+function WebhooksOutSettings() {
+  const [d, setD] = useState<WebhookOut | null>(null)
+  const [msg, setMsg] = useState<ReactNode>(null)
+  const fail = (e: unknown) => setMsg(<span className="error">{String(e)}</span>)
+  useEffect(() => { invoke<WebhookOut>('webhook_out', {}).then(setD, fail) }, [])
+  if (!d) return null
+  const save = (v: WebhookOut, rotate = false) => invoke<WebhookOut>('webhook_out', { url: v.url ?? '', events: v.events, text: v.text, rotate }).then(r => { setD(r); setMsg(null) }, fail)
+  const test = () => invoke('webhook_out_test').then(() => setMsg('Sent a test. Check that it arrived.'), fail)
+  const rotate = async () => { if (await ask('Make a new signing secret? Whatever checks the old one refuses these calls until you give it the new one.', 'New secret', true)) void save(d, true) }
+  return (
+    <Group title="Webhooks out" note={msg ?? <>When something happens, Mimir posts a small JSON (the event, bot, chat, routine, a short summary and a link to Needs you) to this address, signed in <code>X-Hub-Signature-256</code> the way GitHub signs. A failed send is tried again a few times. Message text is left out unless you include it.</>}>
+      <form className="row-block" onSubmit={e => { e.preventDefault(); void save(d) }}>
+        <div className="editor" style={{ margin: 0 }}><div className="er">
+          <input className="input" type="url" placeholder="https://ntfy.sh/…, or a Home Assistant or n8n webhook" aria-label="Webhook address" value={d.url ?? ''} onChange={e => setD({ ...d, url: e.target.value })} />
+          <button className="btn">Save</button>
+          {d.url && <button type="button" className="btn btn-ghost" onClick={test}>Send a test</button>}
+        </div></div>
+      </form>
+      {HOOK_EVENTS.map(([id, label]) => (
+        <Row key={id} title={label}>
+          <Switch label={label} checked={d.events.includes(id)} onChange={on => save({ ...d, events: on ? [...d.events, id] : d.events.filter(e => e !== id) })} />
+        </Row>
+      ))}
+      <Row title="Include the text" desc="The routine's result or error, the reply, or what the approval is for. It leaves Mimir for that address.">
+        <Switch label="Include the text" checked={d.text} onChange={text => save({ ...d, text })} />
+      </Row>
+      {d.secret && <Row icon={<Icon name="key" size={15} />} title="Signing secret" desc={<code className="selectable">{d.secret}</code>}>
+        <button type="button" className="btn btn-sm" onClick={() => navigator.clipboard.writeText(d.secret!).catch(() => {})}><Icon name="copy" size={13} />Copy</button>
+        <button type="button" className="btn btn-sm btn-ghost" onClick={rotate}>New</button>
+      </Row>}
+    </Group>
+  )
 }
 
 /** Server only: tokens for an OpenAI-compatible chat API, each reaching one bot (Shortcuts, Home Assistant). */
@@ -460,7 +503,8 @@ function ApiKeySettings() {
   const [has, setHas] = useState<Record<string, boolean>>({})
   const [grok, setGrok] = useState<Account | null>(null)
   const [chatgpt, setChatgpt] = useState<Account | null>(null)
-  const loadGrok = () => invoke<Record<string, Account>>('accounts').then(a => { setGrok(a?.grok ?? null); setChatgpt(a?.chatgpt ?? null) }, () => {})
+  const [xai, setXai] = useState<Account | null>(null)
+  const loadGrok = () => invoke<Record<string, Account>>('accounts').then(a => { setGrok(a?.grok ?? null); setChatgpt(a?.chatgpt ?? null); setXai(a?.xai ?? null) }, () => {})
   useEffect(() => { loadGrok() }, [])
   const [open, setOpen] = useState<string | null>(null)
   const [key, setKey] = useState('')
@@ -468,7 +512,7 @@ function ApiKeySettings() {
   const [err, setErr] = useState<string | null>(null)
   const load = () => invoke<Record<string, boolean>>('api_keys').then(h => setHas(h ?? {}), e => setErr(String(e)))
   useEffect(() => { load() }, [])
-  const save = (kind: string, k: string) => invoke('set_api_key', { kind, key: k }).then(load)
+  const save = (kind: string, k: string) => invoke('set_api_key', { kind, key: k }).then(() => { load(); loadGrok() })
     .then(() => { setKey(''); setOpen(null); setErr(null); setMsg({ ...msg, [kind]: k ? 'Key saved' : 'Key removed' }) }, e => setErr(String(e)))
   return (
     <Group title="AI keys" note={err ? <span className="error">{err}</span> : `Shared by all your bots on that account. Stored in ${SECRETS_AT}.`}>
@@ -485,6 +529,11 @@ function ApiKeySettings() {
       <Row icon={<Icon name="user" size={15} />} title="Grok subscription"
         desc={!grok ? 'Checking…' : !grok.installed ? 'Install Grok Build to use your SuperGrok or X Premium+ plan' : grok.signed_in ? 'Signed in for Mimir' : 'Not signed in'}>
         {grok?.installed && !grok.signed_in && <SignInGrok onDone={loadGrok} />}
+      </Row>
+      <Row icon={<Icon name="user" size={15} />} title="Grok plan on xAI’s API"
+        desc={!xai ? 'Checking…' : xai.account ? `Signed in (${xai.account}). Bots on the xAI account use your plan${xai.key ? ' once the xAI key below is removed' : ''}.` : 'Sign in to run bots on the xAI account with your X Subscription, SuperGrok or X Premium+ plan. Nothing to install'}>
+        {xai?.account ? <button className="btn btn-sm btn-ghost btn-danger" onClick={() => invoke('grok_plan_sign_out').then(loadGrok, e => setErr(String(e)))}>Sign out</button>
+          : xai && <SignInGrok plan onDone={loadGrok} />}
       </Row>
       {KEY_ROWS.map(r => (
         <Fragment key={r.kind}>
@@ -694,6 +743,29 @@ function WebSearchSettings() {
         {' '}4. In the App's <b>Keys and tokens</b>, generate the <b>Bearer Token</b>, copy it (it's shown once) and paste it above.
         {' '}You don't need the other keys. <a href="https://github.com/currentbits/mimir/blob/master/docs/connect.md#x-search" onClick={openLink}>Step by step</a>
       </p>}
+    </Group>
+  )
+}
+
+/** Scanned PDFs read on this computer: a document model in Ollama turns the pages into text before the bot sees them. */
+function ScanSettings() {
+  const st = useLoad(() => invoke<{ model: string; url: string; default_url: string }>('ocr_settings', {}), [])
+  const [model, setModel] = useState<string | null>(null)
+  const [url, setUrl] = useState<string | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+  const save = (a: { model?: string; url?: string }) => invoke('ocr_settings', a).then(() => { setModel(null); setUrl(null); setErr(null); return st.reload() }, e => setErr(String(e)))
+  const s = st.data
+  return (
+    <Group title="Scanned PDFs" note={err ? <span className="error">{err}</span> : 'Without a model, a scan’s pages go to the bot’s AI as photos: more of your plan per page, and the scan leaves this computer. With one, they’re read here first; a page it can’t read still goes as a photo.'}>
+      <Row icon={<Icon name="file" size={15} />} title="Read scans with a local model"
+        desc={<>An <a href="https://ollama.com" onClick={openLink}>Ollama</a> model that reads pages, e.g. a build of <a href="https://github.com/studio-dots-ai/dots.ocr" onClick={openLink}>dots.ocr</a> or any vision model you’ve pulled. Empty: off.</>}>
+        <input className="input" style={{ width: 200 }} placeholder="Model name" aria-label="Local document model" disabled={!s}
+          value={model ?? s?.model ?? ''} onChange={e => setModel(e.target.value)} onBlur={() => model !== null && save({ model })} />
+      </Row>
+      {!!s?.model && <Row icon={<Icon name="server" size={15} />} title="Ollama's address" desc="Where Ollama runs; usually this computer.">
+        <input className="input" style={{ width: 230 }} placeholder={s.default_url} aria-label="Ollama address"
+          value={url ?? s.url} onChange={e => setUrl(e.target.value)} onBlur={() => url !== null && save({ url })} />
+      </Row>}
     </Group>
   )
 }
@@ -1061,7 +1133,7 @@ export const TOOL_LABEL: Record<string, string> = {
   memory_store: 'Remember things', memory_search: 'Look up memories', memory_forget: 'Forget a memory',
   routine_create: 'Create routines', routine_list: 'List routines', routine_delete: 'Delete a routine', web_fetch: 'Read web pages',
   chat_search: 'Search earlier conversations', meeting_search: 'Search your meetings', meeting_read: 'Read a meeting transcript', ask_bot: 'Hand tasks to other bots', skill_view: 'Read its skills', plan_propose: 'Propose a plan to approve once',
-  ask_choice: 'Ask with buttons', bot_create: 'Make new bots', calendar_add: 'Give calendar links',
+  ask_choice: 'Ask with buttons', progress_set: 'Keep a checklist', bot_create: 'Make new bots', calendar_add: 'Give calendar links',
   calendar_create: 'Add calendar events', calendar_list: 'Look at your calendar', card_write: 'Update pinned cards',
   computer_click: 'Click on the computer', computer_handoff: 'Ask you to take over the computer',
   computer_key: 'Press keys on the computer', computer_open: 'Open sites on the computer',

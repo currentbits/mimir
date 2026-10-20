@@ -104,6 +104,9 @@ bar or a browser dialog is never kept. With several tabs open, each step is read
 Pick which bot and chat the skill is for and press **Done, draft a skill**. The bot writes it up in the usual
 [skill shape](skills.md), with what you typed turned into inputs. It arrives on the Skills tab as a proposal
 you read and accept, like a skill taught from a link. **Discard** throws the recording away. Bots wait while you show.
+When something you clicked came from the page's own data (a price, a free slot), the draft names that address too
+(`GET …/slots?date=…`), so a [quiet check](routines.md) can watch it without a browser. Addresses that look like they
+carry a key or session are left out.
 
 How it reads the page: just before each click, Mimir asks Chromium (through its DevTools port) what's under the
 pointer, and which field has focus when you type. The page's address is kept without its query string, which can hold
