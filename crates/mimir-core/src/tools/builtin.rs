@@ -514,8 +514,24 @@ pub(super) async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<Stri
             let a = crate::email::find(&ctx.db, args["account"].as_str())?;
             let reply_to = args["reply_to"].as_i64().map(u32::try_from).transpose()?;
             let to = s(args, "to")?;
-            let copy = crate::email::send(&a, &crate::email::Draft { to, cc: args["cc"].as_str().unwrap_or(""), subject: s(args, "subject")?, body: s(args, "body")?, reply_to }).await?;
+            let disclose = ctx.db.setting("email_disclose")?;
+            let copy = crate::email::send(&a, &crate::email::Draft { to, cc: args["cc"].as_str().unwrap_or(""), subject: s(args, "subject")?, body: s(args, "body")?, reply_to }, disclose.as_deref()).await?;
             format!("Sent to {to}.{copy}")
+        }
+        "email_hand_over" => {
+            let line = |k: &str| s(args, k).map(|v| truncate(v.trim(), 200));
+            let h = crate::email::HandedOver {
+                id: 0,
+                bot_id: ctx.bot_id,
+                chat_id: ctx.chat_id,
+                account: crate::email::find(&ctx.db, args["account"].as_str())?.user,
+                from: line("from")?,
+                subject: line("subject")?,
+                summary: line("summary")?,
+                at: crate::db::now(),
+            };
+            crate::email::hand_over(&ctx.db, h)?;
+            "It's in the user's Needs you now. Don't answer it or draft a reply; tell them in one line.".into()
         }
         "email_draft" => {
             let a = crate::email::find(&ctx.db, args["account"].as_str())?;

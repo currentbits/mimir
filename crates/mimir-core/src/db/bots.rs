@@ -43,6 +43,10 @@ impl Bot {
         if tool == "routine_update" || tool.starts_with("goal_") {
             return self.allows("routine_create");
         }
+        // One that reads your email may hand a reply to you instead of answering it.
+        if tool == "email_hand_over" {
+            return self.allows("email_read");
+        }
         self.tools.trim().is_empty()
             || self.tools.split(',').map(str::trim).any(|t| t == tool || t.strip_suffix('*').is_some_and(|p| !p.is_empty() && tool.starts_with(p)))
     }

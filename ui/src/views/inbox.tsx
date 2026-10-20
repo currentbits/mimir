@@ -229,7 +229,7 @@ export function SignInForm({ onClose }: { onClose: () => void }) {
 /** One item per usage limit: every bot on that AI login waits for the same reset. */
 const holdGroups = (hs: Hold[]) => Object.values(hs.reduce<Record<string, Hold[]>>((g, h) => { const k = h.cap || h.routine_id ? h.key : `limit:${h.until}`; (g[k] ??= []).push(h); return g }, {}))
 
-export const inboxCount = (i: Inbox | null) => i ? (i.server_update ? 1 : 0) + (i.damage ? 1 : 0) + i.approvals.length + i.missed.length + i.failed.length + holdGroups(i.holds ?? []).length + (i.goals ?? []).length + i.suggestions.reduce((n, s) => n + s.count, 0) + (i.unconfirmed ?? []).reduce((n, s) => n + s.count, 0) + (i.rule_hints ?? []).length : 0
+export const inboxCount = (i: Inbox | null) => i ? (i.server_update ? 1 : 0) + (i.damage ? 1 : 0) + i.approvals.length + i.missed.length + i.failed.length + holdGroups(i.holds ?? []).length + (i.goals ?? []).length + (i.mail ?? []).length + i.suggestions.reduce((n, s) => n + s.count, 0) + (i.unconfirmed ?? []).reduce((n, s) => n + s.count, 0) + (i.rule_hints ?? []).length : 0
 
 /** A failed run in plain words, with the fix that most likely helps. */
 export function failure(error: string | null, status?: Run['status'], delivered?: string | null): { title: string; fix: 'bot' | 'chat' | 'routines' | null; fixLabel?: string } {
@@ -252,7 +252,7 @@ export function InboxView({ data, troubled, reload, chats, chatName, openBot, op
   const { err, leaving, decide } = useDecide(reload)
   const gone = useLeave()
   const where = (id: number) => { const c = chats.find(x => x.chat_id === id); return id === INCOGNITO ? 'Incognito chat' : c ? chatName(c) : `chat ${id}` }
-  const dismiss = (kind: 'run' | 'approval', id: number) => gone.leave(id, () => invoke('inbox_dismiss', { kind, id }).then(reload, e => { reload(); return tell(`Couldn't dismiss it: ${e}`) }))
+  const dismiss = (kind: 'run' | 'approval' | 'mail', id: number) => gone.leave(id, () => invoke('inbox_dismiss', { kind, id }).then(reload, e => { reload(); return tell(`Couldn't dismiss it: ${e}`) }))
   if (!data) return null
   if (!inboxCount(data) && !troubled.length) return (
     <Empty icon="check" title="All clear">Nothing needs you right now. Approvals, runs that didn't work, bots that can't connect, memory suggestions and memories to confirm show up here.</Empty>
@@ -371,6 +371,26 @@ export function InboxView({ data, troubled, reload, chats, chatName, openBot, op
               <div className="row-ctl">
                 <button className="btn btn-sm" title={h.cap ? 'Let it go over the cap for the rest of today' : 'If you raised the limit or switched account'} onClick={() => Promise.all(hs.map(x => invoke('hold_clear', { key: x.key }))).then(reload, e => tell(`Couldn't let it go on: ${e}`))}>{h.cap ? 'Let it go on today' : 'Run now'}</button>
                 {!h.cap && <button className="btn btn-sm btn-ghost" onClick={() => openBot(h.bot_id)}>Use another account</button>}
+              </div>
+            </div>
+          )
+        })}</div>
+      </>}
+      {(data.mail ?? []).length > 0 && <>
+        <div className="section-title"><h2>Replies for you</h2><span className="count">{data.mail!.length}</span></div>
+        <div className="group">{data.mail!.map(m => {
+          const b = botOf(m.bot_id)
+          return (
+            <div key={m.id} className={'inbox-row' + (gone.leaving.has(m.id) ? ' leaving' : '')}>
+              <Avatar id={b.id} name={b.name} size={28} still />
+              <div className="inbox-main">
+                <div className="inbox-title selectable">{m.from}: “{m.subject}”</div>
+                <div className="inbox-desc selectable">{m.summary}</div>
+                <div className="inbox-desc">{b.name} didn’t answer it: it’s yours. In {m.account} · {ago(m.at)}</div>
+              </div>
+              <div className="row-ctl">
+                <button className="btn btn-sm btn-ghost" onClick={() => openChat(m.chat_id, 'chat')}>Open the chat</button>
+                <button className="btn btn-sm btn-ghost" onClick={() => dismiss('mail', m.id)}>Done</button>
               </div>
             </div>
           )

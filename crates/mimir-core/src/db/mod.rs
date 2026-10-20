@@ -233,6 +233,10 @@ fn migrate(c: &Connection) -> Result<()> {
     if v < 14 {
         migrate_v14(c)?;
     }
+    // New installs only: emails a bot sends to someone new say they're from an assistant (an update keeps its mail as it was).
+    if v == 0 {
+        c.execute("INSERT OR IGNORE INTO settings(key, value) VALUES ('email_disclose', ?1)", [crate::email::DISCLOSE])?;
+    }
     c.execute(
         "INSERT INTO settings(key, value) VALUES ('schema_written_by', ?1) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
         [env!("CARGO_PKG_VERSION")],
