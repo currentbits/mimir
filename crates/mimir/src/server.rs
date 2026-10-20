@@ -137,11 +137,14 @@ async fn models(State(app): State<App>, Extension(ChatBot(bot)): Extension<ChatB
 }
 
 /// A routine's webhook (Routines → When called). No admin token: its own secret, as the bearer token or an HMAC of the
-/// body in X-Hub-Signature-256 (how GitHub signs; X-Signature-256 too).
+/// body in X-Hub-Signature-256 (how GitHub signs; X-Signature-256 too). A `github:` routine takes only its events
+/// (X-GitHub-Event); others get 200 without a run, so GitHub doesn't show them as failed.
 async fn hook(State(app): State<App>, Path(id): Path<i64>, headers: HeaderMap, body: axum::body::Bytes) -> Response {
     let sig = ["x-hub-signature-256", "x-signature-256"].iter().find_map(|h| headers.get(*h)).and_then(|v| v.to_str().ok());
-    match mimir_core::events::webhook(&app.host.db, id, bearer(&headers), sig, &body) {
-        Ok(()) => (StatusCode::ACCEPTED, Json(json!({"ok": true}))).into_response(),
+    let event = headers.get("x-github-event").and_then(|v| v.to_str().ok());
+    match mimir_core::events::webhook(&app.host.db, id, bearer(&headers), sig, event, &body) {
+        Ok(true) => (StatusCode::ACCEPTED, Json(json!({"ok": true}))).into_response(),
+        Ok(false) => (StatusCode::OK, Json(json!({"ok": true, "ignored": "not an event this routine waits for"}))).into_response(),
         Err(mimir_core::events::Refused::Paused) => (StatusCode::CONFLICT, Json(json!({"error": "this routine is paused"}))).into_response(),
         Err(mimir_core::events::Refused::Repeat) => (StatusCode::CONFLICT, Json(json!({"error": "this call was already received"}))).into_response(),
         Err(mimir_core::events::Refused::Secret) => (StatusCode::UNAUTHORIZED, Json(json!({"error": "wrong or missing secret"}))).into_response(),

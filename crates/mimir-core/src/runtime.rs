@@ -841,6 +841,15 @@ impl Core {
         true
     }
 
+    /// Does a `slack:` routine of this bot wait for a channel message? Then `slack_said` with each one.
+    pub(crate) fn slack_waits(&self) -> bool {
+        crate::events::slack_waits(&self.db, self.bot)
+    }
+
+    pub(crate) fn slack_said(&self, channel: &[String], from: &[String], text: &str) {
+        crate::events::slack_said(&self.db, self.bot, channel, from, text)
+    }
+
     /// Is this the person this paired chat answers? (For bookkeeping that should only follow them, like which message
     /// to reply under.)
     pub(crate) fn is_owner(&self, chan: &Chan, ext: &str, from: &str) -> bool {
