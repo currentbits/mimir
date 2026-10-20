@@ -2,6 +2,14 @@
 
 What changed for people using Mimir. The newest release is at the top; "Unreleased" is what the next one brings.
 
+## Unreleased
+
+- **A second look:** a ready-made quiet check in the Routines tab, off until you add it. On each email that looks like
+  a confirmation, quote, invoice or booking, it compares the dates, amounts, names and quantities with the earlier
+  emails, your calendar and memory, and speaks up only when they differ ("Hotel confirmation says 12–14 Nov; your
+  calendar says 13–15"). It only reads; it never replies. Mail rules take `a|b` for either word. See
+  [Quiet checks](docs/routines.md#quiet-checks).
+
 ## 0.5.0
 
 ### Talking to your bots
