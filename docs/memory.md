@@ -44,6 +44,10 @@ commitment).
   on its own becomes a *suggestion* you accept or dismiss.
 - **No secrets.** Memory refuses passwords and API keys; use saved logins for those
   ([Tools and safety](tools-and-safety.md#the-browser-and-saved-logins)).
+- **Sensitive topics stay out.** The tidy-up, imports and *Get to know me* don't suggest memories about your health,
+  religion or beliefs, politics, sexuality or finances (account numbers, balances, debts, income), unless you said
+  "remember that…" yourself. **Settings → Memory → Remember sensitive topics** lets them in. A bot still saves what
+  you ask it to.
 - **Where it came from.** Mimir records who wrote each memory (you; which bot, in which run; a tidy-up; an import)
   and never trusts the model's own claim. A memory a bot saved after reading web pages or tool results is marked
   *after reading outside content*, and your bots treat it as unconfirmed, so a planted instruction doesn't read like
@@ -74,13 +78,13 @@ it belongs to the chat, so a group chat can't read your private chat's files.
 - **Move to background** takes it out of standing memory without deleting it (search still finds it).
 - **Forget** hides it but keeps it under *History*; **Erase** (in History) deletes it and its earlier versions for good.
 - **Import** takes text pasted from another assistant ("List everything you remember about me") and turns it into
-  suggestions, skipping what you already have and anything that looks like a key or password. When Claude Code, Hermes
-  or OpenClaw is set up where Mimir runs, **Import** also offers **From Claude Code** (etc.): one click reads its
-  memory files (`~/.claude/CLAUDE.md` and Claude Code's per-project memory; Hermes' `USER.md` and `MEMORY.md`;
-  OpenClaw's workspace `USER.md`, `MEMORY.md` and `memory/`) into suggestions. That agent wrote them, often after
+  suggestions, skipping what you already have and anything that looks like a key or password. When Claude Code, Codex,
+  Hermes or OpenClaw is set up where Mimir runs, **Import** also offers **From Claude Code** (etc.): one click reads its
+  memory files (`~/.claude/CLAUDE.md` and Claude Code's per-project memory; Codex's `~/.codex/AGENTS.md`; Hermes'
+  `USER.md` and `MEMORY.md`; OpenClaw's workspace `USER.md`, `MEMORY.md` and `memory/`) into suggestions. That agent wrote them, often after
   reading repos, pages or mail, so they count as outside content: new memories only (never a change to one you have),
   *unconfirmed* even after you accept them, until you mark one **Looks right**. Its own `SKILL.md` files go
-  into skill proposals (Hermes' bundled skills are left out), and its cron jobs into routines that start **paused**:
+  into skill proposals (Codex's and Hermes' bundled skills are left out), and its cron jobs into routines that start **paused**:
   resume one to accept it. Imported routines get no extra tools and count as outside content, like a routine a bot made
   after reading a web page. Only cron schedules come over (not one-offs or intervals), on Mimir's clock.
 

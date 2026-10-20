@@ -2,6 +2,18 @@
 
 What changed for people using Mimir. The newest release is at the top; "Unreleased" is what the next one brings.
 
+## Unreleased
+
+- **Sensitive topics stay out of memory:** the tidy-up, imports and *Get to know me* no longer suggest memories about
+  your health, religion or beliefs, politics, sexuality or finances (account numbers too), unless you say "remember
+  that…" yourself. Turn on **Settings → Memory → Remember sensitive topics** to let them in. See
+  [Memory](docs/memory.md#you-stay-in-charge).
+- **Import from Codex:** **Memory → Import → From Codex** brings in `~/.codex/AGENTS.md` as memory suggestions and
+  your own Codex skills as proposals, under the same rules as Claude Code, Hermes and OpenClaw: outside content,
+  nothing active until you accept it.
+- **Mimir on your phone's home screen:** the server's web app can be added to a phone's home screen and opens full
+  screen with its own icon. See [Self-hosting](docs/self-hosting.md#3-open-it-in-your-browser).
+
 ## 0.5.0
 
 ### Talking to your bots

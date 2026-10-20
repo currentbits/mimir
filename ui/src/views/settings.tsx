@@ -105,6 +105,7 @@ export function SettingsView({ onComputer, find = '' }: { onComputer: () => void
       <EmailSettings />
       <CalendarSettings />
       <KnowMeSettings />
+      <MemorySettings />
       <ComputerSettings onChange={() => { onComputer(); toolsChanged() }} />
       <BrowserSettings onChange={toolsChanged} />
       <ToolServerSettings onChange={toolsChanged} />
@@ -699,6 +700,20 @@ function KnowMeSettings() {
       <Row icon={<Icon name="memory" size={15} />} title={state.found !== undefined ? (state.found ? `Found ${state.found} thing${state.found === 1 ? '' : 's'} to suggest` : 'Nothing worth suggesting') : 'Let your bots get to know you'}
         desc={state.found !== undefined ? (state.found ? 'Accept or dismiss each in Memory (built-in chat).' : 'Tell a bot about yourself instead.') : 'Uses your connected email and calendar link'}>
         {state.found === undefined && <button className="btn btn-sm" disabled={state.busy} onClick={go}>{state.busy ? 'Looking…' : 'Get to know me'}</button>}
+      </Row>
+    </Group>
+  )
+}
+
+/** Whether the tidy-up and imports may suggest memories about health, beliefs, money and the like. */
+function MemorySettings() {
+  const [on, setOn] = useState<boolean | null>(null)
+  useEffect(() => { invoke<boolean>('remember_sensitive').then(setOn, () => {}) }, [])
+  return (
+    <Group title="Memory">
+      <Row icon={<Icon name="memory" size={15} />} title="Remember sensitive topics"
+        desc={on ? 'The tidy-up and imports may suggest memories about your health, beliefs, politics, sexuality and finances.' : 'The tidy-up and imports leave out your health, beliefs, politics, sexuality and finances (account numbers too), unless you say “remember that…” yourself.'}>
+        {on !== null && <Switch label="Remember sensitive topics" checked={on} onChange={v => { setOn(v); invoke<boolean>('remember_sensitive', { on: v }).then(setOn, () => setOn(!v)) }} />}
       </Row>
     </Group>
   )

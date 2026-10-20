@@ -846,7 +846,7 @@ impl Host {
                 let bot = crate::tidy::memory_bot(&self.db).context("no bots")?;
                 ok(crate::tidy::import(&self.db, &self.provider(bot)?, bot, arg(a, "chat_id")?, &arg::<String>(a, "text")?).await?)
             }
-            // Other agents on this computer (Claude Code, Hermes, OpenClaw) and what they have; `import_agent` brings
+            // Other agents on this computer (Claude Code, Codex, Hermes, OpenClaw) and what they have; `import_agent` brings
             // one in as suggestions, skill proposals and paused routines.
             "import_sources" => ok(crate::imports::sources()),
             "import_agent" => {
@@ -1451,6 +1451,13 @@ impl Host {
                     self.db.set_setting("weekly_review", if on { "on" } else { "off" })?;
                 }
                 ok(self.db.setting("weekly_review")?.as_deref() != Some("off"))
+            }
+            // Health, beliefs, money and the like in proposed memories: off unless switched on (get without `on`).
+            "remember_sensitive" => {
+                if let Some(on) = arg::<Option<bool>>(a, "on")? {
+                    self.db.set_setting(crate::tidy::SENSITIVE, if on { "on" } else { "off" })?;
+                }
+                ok(self.db.setting(crate::tidy::SENSITIVE)?.as_deref() == Some("on"))
             }
             "update_routine" => {
                 let (chat, id, cron): (i64, i64, String) = (arg(a, "chat_id")?, arg(a, "id")?, arg(a, "cron")?);
