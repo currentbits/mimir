@@ -85,8 +85,18 @@ pub struct Hold {
     pub waive: Option<String>,
 }
 
-/// Daily token caps (none when unset): each routine, each bot, all bots together.
-pub const CAPS: [&str; 3] = ["cap_routine", "cap_bot", "cap_day"];
+/// Daily token caps (none when unset): each routine, each bot, all bots together, and each person other than you (their
+/// replies, see `Db::allowance_person`).
+pub const CAPS: [&str; 4] = ["cap_routine", "cap_bot", "cap_day", "cap_person"];
+
+fn k(n: i64) -> String {
+    if n >= 10_000 { format!("{}k", n / 1000) } else { n.to_string() }
+}
+
+/// When today ends: a daily cap's hold lasts until then.
+fn midnight() -> i64 {
+    (Local::now().date_naive() + chrono::Duration::days(1)).and_hms_opt(0, 0, 0).and_then(|t| Local.from_local_datetime(&t).earliest()).map_or(now() + 86400, |t| t.timestamp())
+}
 
 /// A calendar routine's next_fire while no matching event is coming up (2100-01-01): the scheduler sets the real one.
 pub const IDLE: i64 = 4_102_444_800;
@@ -582,6 +592,10 @@ impl Db {
                 if let Some(bot) = bot {
                     out.push((k, bot, Some(id), h));
                 }
+            } else if let Some(person) = rest.strip_prefix("person:").and_then(|i| i.parse::<i64>().ok()) {
+                // A person over their allowance: shown with the bot they last talked to.
+                let bot: Option<i64> = self.c().query_row("SELECT bot_id FROM runs WHERE person=?1 ORDER BY id DESC LIMIT 1", [person], |r| r.get(0)).optional()?;
+                out.push((k, bot.unwrap_or(0), None, h));
             } else if let Ok(bot) = rest.parse() {
                 out.push((k, bot, None, h));
             }
@@ -589,10 +603,26 @@ impl Db {
         Ok(out)
     }
 
-    /// The daily caps in tokens: each routine, each bot, all bots (None: no cap).
-    pub fn caps(&self) -> Result<[Option<i64>; 3]> {
+    /// The daily caps in tokens: each routine, each bot, all bots, each person (None: no cap).
+    pub fn caps(&self) -> Result<[Option<i64>; 4]> {
         let get = |k: &str| -> Result<Option<i64>> { Ok(self.setting(k)?.and_then(|v| v.parse().ok()).filter(|n: &i64| *n > 0)) };
-        Ok([get(CAPS[0])?, get(CAPS[1])?, get(CAPS[2])?])
+        Ok([get(CAPS[0])?, get(CAPS[1])?, get(CAPS[2])?, get(CAPS[3])?])
+    }
+
+    /// A person's replies today went over their daily allowance (#171): the hold for Needs you ("hold:person:<their
+    /// chat>"), whose Allow more today lets them go over it for the rest of the day. None: under it, no cap, or allowed.
+    pub fn over_allowance(&self, person: i64, day_start: i64) -> Result<Option<(String, Hold)>> {
+        let Some(cap) = self.caps()?[3] else { return Ok(None) };
+        let waive = format!("cap_waived:person:{person}");
+        if self.setting(&waive)? == Some(Local::now().format("%Y-%m-%d").to_string()) {
+            return Ok(None);
+        }
+        let used: i64 = self.c().query_row(&format!("SELECT coalesce(sum({WEIGHED}), 0) FROM runs WHERE started_at >= ?1 AND person = ?2"), params![day_start, person], |r| r.get(0))?;
+        if used < cap {
+            return Ok(None);
+        }
+        let why = format!("{} reached the daily allowance of {} tokens ({} used today)", self.chat_title(person)?, k(cap), k(used));
+        Ok(Some((format!("hold:person:{person}"), Hold { until: midnight(), why, waive: Some(waive) })))
     }
 
     /// The first daily cap a run of this routine would go over, counting tokens since `day_start`: (the hold's key, the
@@ -602,8 +632,7 @@ impl Db {
         let tokens = |sql: &str, p: i64| -> Result<i64> {
             Ok(self.c().query_row(&format!("SELECT coalesce(sum({WEIGHED}), 0) FROM runs WHERE started_at >= ?1 AND {sql}"), params![day_start, p], |r| r.get(0))?)
         };
-        let [per_routine, per_bot, per_day] = self.caps()?;
-        let k = |n: i64| if n >= 10_000 { format!("{}k", n / 1000) } else { n.to_string() };
+        let [per_routine, per_bot, per_day, _] = self.caps()?;
         let checks = [
             (per_routine, format!("cap_waived:routine:{}", r.id), format!("hold:routine:{}", r.id), tokens("routine_id = ?2", r.id)?, "this routine"),
             (per_bot, format!("cap_waived:bot:{}", r.bot_id), format!("hold:{}", r.bot_id), tokens("bot_id = ?2", r.bot_id)?, "this bot"),
@@ -615,8 +644,7 @@ impl Db {
                 continue;
             }
             let why = format!("{who} reached the daily cap of {} tokens ({} used today)", k(cap), k(used));
-            let until = (Local::now().date_naive() + chrono::Duration::days(1)).and_hms_opt(0, 0, 0).and_then(|t| Local.from_local_datetime(&t).earliest()).map_or(now() + 86400, |t| t.timestamp());
-            return Ok(Some((key, Hold { until, why, waive: Some(waive) })));
+            return Ok(Some((key, Hold { until: midnight(), why, waive: Some(waive) })));
         }
         Ok(None)
     }
