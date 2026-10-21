@@ -1289,7 +1289,7 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
     );
     // Standing memory and this automatic recall hold only confirmed memories (a word in common with an unconfirmed one
     // shouldn't mark the whole reply); the bot can still look one up with memory_search, which marks it then.
-    let recall: Vec<_> = ctx.db.search(&scope, ctx.bot_id, &text, 6)?.into_iter().filter(|e| !e.tainted).collect();
+    let recall: Vec<_> = ctx.db.recall(&scope, ctx.bot_id, &text, 6)?;
     tools::mark_sensitive_memory(ctx, &scope, &recall);
     if let Some(run) = ctx.run_id {
         ctx.db.run_recalled(run, &recall.iter().map(|e| e.id).collect::<Vec<_>>())?;

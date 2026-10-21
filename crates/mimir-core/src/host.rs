@@ -182,6 +182,14 @@ fn ok<T: Serialize>(v: T) -> Result<Value> {
     Ok(serde_json::to_value(v)?)
 }
 
+/// Every future `Host::call` awaits goes through here: `make` builds it on this function's stack and it's boxed, so
+/// the call's poll frame holds a pointer. Debug builds give each future awaited in place a slot of its own in that
+/// frame, one per command, and those add up to more than a test thread's 2 MB stack (Windows CI). Boxing in place
+/// (`Box::pin(f)`) doesn't help: `f` is built in the frame first.
+fn boxed<'a, F: std::future::Future + Send + 'a>(make: impl FnOnce() -> F) -> futures_util::future::BoxFuture<'a, F::Output> {
+    Box::pin(make())
+}
+
 /// A token for the server's chat API (`/v1/chat/completions`): it reaches one bot and nothing else. Only its hash is
 /// kept, so the token is shown once.
 #[derive(Serialize, serde::Deserialize)]
@@ -396,16 +404,19 @@ impl Host {
             "accounts" => {
                 use crate::provider::detect;
                 let h = &self.home;
-                let (c, x, gr, r, g, l, k, cg) = tokio::join!(
-                    detect("claude", h),
-                    detect("codex", h),
-                    detect("grok", h),
-                    detect("openrouter", h),
-                    detect("xai", h),
-                    detect("local", h),
-                    detect("openai", h),
-                    detect("chatgpt", h)
-                );
+                let (c, x, gr, r, g, l, k, cg) = boxed(|| async {
+                    tokio::join!(
+                        detect("claude", h),
+                        detect("codex", h),
+                        detect("grok", h),
+                        detect("openrouter", h),
+                        detect("xai", h),
+                        detect("local", h),
+                        detect("openai", h),
+                        detect("chatgpt", h)
+                    )
+                })
+                .await;
                 ok(json!({"claude": c, "codex": x, "grok": gr, "openrouter": r, "xai": g, "local": l, "openai": k, "chatgpt": cg}))
             }
             // Sign in to Grok for Mimir: returns the device-code URL to open; `accounts` shows when it's done.
@@ -418,19 +429,20 @@ impl Host {
                 ok(())
             }
             "grok_login" => {
-                let (url, code) = crate::provider::grok_login(&self.home).await?;
+                let (url, code) = boxed(|| crate::provider::grok_login(&self.home)).await?;
                 ok(json!({"url": url, "code": code}))
             }
             // Model ids for the picker (API accounts; [] for the CLI ones).
             "models" => {
                 let kind: String = arg(a, "provider")?;
-                ok(crate::provider::models(&kind, arg::<Option<String>>(a, "base_url")?.as_deref(), api_key(&kind).as_deref()).await?)
+                let (base_url, key) = (arg::<Option<String>>(a, "base_url")?, api_key(&kind));
+                ok(boxed(|| crate::provider::models(&kind, base_url.as_deref(), key.as_deref())).await?)
             }
             // A real round-trip with an account + model before saving it.
             "test_account" => {
                 let kind: String = arg(a, "provider")?;
                 let p = Provider::new(&kind, arg(a, "model")?, arg(a, "base_url")?, api_key(&kind), self.home.clone())?;
-                let (reply, secs) = p.check(&self.db).await?;
+                let (reply, secs) = boxed(|| p.check(&self.db)).await?;
                 ok(json!({"reply": crate::tools::truncate(&reply, 200), "seconds": (secs * 10.0).round() / 10.0, "provider": p.name()}))
             }
             "statuses" => {
@@ -536,10 +548,10 @@ impl Host {
                 if self.mode == "server" {
                     bail!("connecting works in the desktop app; paste a key from openrouter.ai/keys instead");
                 }
-                ok(json!({"url": crate::openrouter::start().await?}))
+                ok(json!({"url": boxed(crate::openrouter::start).await?}))
             }
             "openrouter_connect_wait" => {
-                let key = crate::openrouter::finish().await?;
+                let key = boxed(crate::openrouter::finish).await?;
                 self.secrets.set(OPENROUTER_KEY, &key)?;
                 self.restart_all();
                 ok(())
@@ -549,10 +561,15 @@ impl Host {
             // (it comes back to your own computer), so you paste the address you ended up on: `chatgpt_sign_in_paste`.
             "chatgpt_sign_in" => {
                 let paste = self.mode == "server";
-                ok(json!({"url": crate::chatgpt::start(&self.db, !paste).await?, "paste": paste}))
+                ok(json!({"url": boxed(|| crate::chatgpt::start(&self.db, !paste)).await?, "paste": paste}))
             }
             "chatgpt_sign_in_wait" | "chatgpt_sign_in_paste" => {
-                let account = if cmd == "chatgpt_sign_in_wait" { crate::chatgpt::finish().await? } else { crate::chatgpt::paste(&arg::<String>(a, "url")?).await? };
+                let account = if cmd == "chatgpt_sign_in_wait" {
+                    boxed(crate::chatgpt::finish).await?
+                } else {
+                    let url: String = arg(a, "url")?;
+                    boxed(|| crate::chatgpt::paste(&url)).await?
+                };
                 self.restart_all();
                 ok(json!({"account": account}))
             }
@@ -560,7 +577,7 @@ impl Host {
             // there; the sign-in finishes in the background, and `accounts` (xai) shows when it's done or why it stopped.
             // The app then says `grok_plan_signed_in`, so the bots pick it up.
             "grok_plan_sign_in" => {
-                let (url, code) = crate::grok_plan::start().await?;
+                let (url, code) = boxed(crate::grok_plan::start).await?;
                 ok(json!({"url": url, "code": code}))
             }
             "grok_plan_signed_in" => {
@@ -581,7 +598,7 @@ impl Host {
                 ok(())
             }
             "chatgpt_sign_out" => {
-                crate::chatgpt::sign_out().await?;
+                boxed(crate::chatgpt::sign_out).await?;
                 self.restart_all();
                 ok(())
             }
@@ -608,7 +625,7 @@ impl Host {
                     acc.smtp_host = smtp.trim().into();
                 }
                 acc.smtp_port = smtp_port;
-                let n = crate::email::add(&self.db, &acc, &smtp, smtp_port).await?;
+                let n = boxed(|| crate::email::add(&self.db, &acc, &smtp, smtp_port)).await?;
                 ok(json!({"user": acc.user, "messages": n}))
             }
             "email_account_remove" => ok(crate::email::remove(&self.db, &arg::<String>(a, "user")?)?),
@@ -617,7 +634,7 @@ impl Host {
             "outlook_sign_in" => {
                 let (client_id, tenant): (String, String) = (arg(a, "client_id")?, arg::<Option<String>>(a, "tenant")?.unwrap_or_default());
                 let paste = self.mode == "server";
-                let url = crate::email::outlook_sign_in(&client_id, &tenant, !paste).await?;
+                let url = boxed(|| crate::email::outlook_sign_in(&client_id, &tenant, !paste)).await?;
                 self.db.set_setting("outlook_client_id", client_id.trim())?;
                 self.db.set_setting("outlook_tenant", tenant.trim())?;
                 ok(json!({"url": url, "paste": paste}))
@@ -626,8 +643,13 @@ impl Host {
                 if !crate::email::outlook_signing_in() {
                     bail!("no Outlook sign-in in progress; start again");
                 }
-                let answer = if cmd == "outlook_sign_in_wait" { crate::oauth::finish().await? } else { crate::oauth::paste(&arg::<String>(a, "url")?).await? };
-                let (user, n) = crate::email::outlook_signed_in(&self.db, &answer).await?;
+                let answer = if cmd == "outlook_sign_in_wait" {
+                    boxed(crate::oauth::finish).await?
+                } else {
+                    let url: String = arg(a, "url")?;
+                    boxed(|| crate::oauth::paste(&url)).await?
+                };
+                let (user, n) = boxed(|| crate::email::outlook_signed_in(&self.db, &answer)).await?;
                 ok(json!({"user": user, "messages": n}))
             }
             // Stop whichever sign-in (Outlook, a tool server) is waiting for the browser.
@@ -678,7 +700,7 @@ impl Host {
             "webhook_out_test" => {
                 let url = crate::hooks::settings(&self.db).0.context("save an address first")?;
                 let body = json!({"event": "test", "at": crate::db::now(), "summary": "A test from Mimir"}).to_string();
-                crate::hooks::post(&url, &body).await?;
+                boxed(|| crate::hooks::post(&url, &body)).await?;
                 ok(())
             }
             // Adding events to your calendar (calendar_create) over CalDAV: the server, the login and which calendar.
@@ -693,7 +715,7 @@ impl Host {
                     let user = arg::<String>(a, "user")?.trim().to_string();
                     let given = arg::<Option<String>>(a, "password")?.unwrap_or_default();
                     let pass = if given.is_empty() { crate::caldav::password(&self.db, &user).context("the app password for this calendar")? } else { given.clone() };
-                    let cals = crate::caldav::discover(&server, &user, &pass).await?;
+                    let cals = boxed(|| crate::caldav::discover(&server, &user, &pass)).await?;
                     let pick = arg::<Option<String>>(a, "calendar")?;
                     let (url, name) = cals.iter().find(|c| pick.as_deref() == Some(c.0.as_str())).unwrap_or(&cals[0]).clone();
                     for (k, v) in [("caldav_server", server.trim()), ("caldav_url", &url), ("caldav_user", &user), ("caldav_name", &name)] {
@@ -802,7 +824,7 @@ impl Host {
             // bots without their tokens).
             "export_all" => ok(self.db.export_all()?),
             // Daily copies of the database (backups/ in the data folder), and putting one back.
-            "doctor" => ok(crate::doctor::run(&self.home).await),
+            "doctor" => ok(boxed(|| crate::doctor::run(&self.home)).await),
             "backups" => ok(json!({"dir": crate::backup::dir(&self.db), "list": crate::backup::list(&self.db)})),
             "backup_now" => ok(crate::backup::snapshot(&self.db, "")?),
             "backup_restore" => {
@@ -871,7 +893,8 @@ impl Host {
             // Teach a bot a skill from a link or pasted text: a proposal to read and accept.
             "teach_skill" => {
                 let bot: i64 = arg(a, "bot_id")?;
-                ok(crate::tidy::teach(&self.db, &self.provider(bot)?, bot, arg(a, "chat_id")?, &arg::<String>(a, "source")?).await?)
+                let (p, chat, source): (_, i64, String) = (self.provider(bot)?, arg(a, "chat_id")?, arg(a, "source")?);
+                ok(boxed(|| crate::tidy::teach(&self.db, &p, bot, chat, &source)).await?)
             }
             // A skill as a SKILL.md, to share or use in another agent.
             "export_skill" => {
@@ -901,14 +924,16 @@ impl Host {
             // Memories pasted from another assistant become suggestions to accept or dismiss.
             "import_memory" => {
                 let bot = crate::tidy::memory_bot(&self.db).context("no bots")?;
-                ok(crate::tidy::import(&self.db, &self.provider(bot)?, bot, arg(a, "chat_id")?, &arg::<String>(a, "text")?).await?)
+                let (p, chat, text): (_, i64, String) = (self.provider(bot)?, arg(a, "chat_id")?, arg(a, "text")?);
+                ok(boxed(|| crate::tidy::import(&self.db, &p, bot, chat, &text)).await?)
             }
             // Other agents on this computer (Claude Code, Codex, Hermes, OpenClaw) and what they have; `import_agent` brings
             // one in as suggestions, skill proposals and paused routines.
             "import_sources" => ok(crate::imports::sources()),
             "import_agent" => {
                 let bot = crate::tidy::memory_bot(&self.db).context("no bots")?;
-                ok(crate::imports::run(&self.db, &self.provider(bot)?, bot, arg(a, "chat_id")?, &arg::<String>(a, "source")?).await?)
+                let (p, chat, source): (_, i64, String) = (self.provider(bot)?, arg(a, "chat_id")?, arg(a, "source")?);
+                ok(boxed(|| crate::imports::run(&self.db, &p, bot, chat, &source)).await?)
             }
             // A bot as one file (no secrets, memories or chats); reading one back shows what it would add, and only
             // `import_bot` adds it: in the built-in chat, skills as proposals, routines paused.
@@ -936,13 +961,14 @@ impl Host {
                 "edited in app",
                 arg(a, "supersedes")?,
                 &crate::db::Prov::by("you"),
-            )?),
+            )?.0),
             "suggestions" => ok(self.db.suggestions(&scope(a)?)?),
             // The one-time "get to know me" pass: whether it can run (email or calendar connected) and has; `run` starts it.
             "know_me" => {
                 if arg::<Option<bool>>(a, "run")?.unwrap_or(false) {
                     let bot = crate::tidy::memory_bot(&self.db).context("no bots")?;
-                    return ok(crate::tidy::get_to_know(&self.db, &self.provider(bot)?, bot, arg(a, "chat_id")?).await?);
+                    let (p, chat): (_, i64) = (self.provider(bot)?, arg(a, "chat_id")?);
+                    return ok(boxed(|| crate::tidy::get_to_know(&self.db, &p, bot, chat)).await?);
                 }
                 let ready = crate::email::account(&self.db).is_some() || secret_get(crate::calendar::SECRET).is_some();
                 ok(json!({"ready": ready, "done": self.db.setting(crate::tidy::KNOW_ME)?.is_some()}))
@@ -951,13 +977,15 @@ impl Host {
             "check_suggestion" => {
                 let bot = crate::tidy::memory_bot(&self.db).context("no bots")?;
                 let provider = self.provider(bot)?;
-                ok(crate::tidy::check(&self.db, &provider, bot, arg(a, "chat_id")?, arg(a, "id")?).await?)
+                let (chat, id): (i64, i64) = (arg(a, "chat_id")?, arg(a, "id")?);
+                ok(boxed(|| crate::tidy::check(&self.db, &provider, bot, chat, id)).await?)
             }
             // The same replay for a preference already accepted, on the memory bot's own model (after switching models).
             "check_memory" => {
                 let bot = crate::tidy::memory_bot(&self.db).context("no bots")?;
                 let provider = self.provider(bot)?;
-                ok(crate::tidy::check_memory(&self.db, &provider, bot, arg(a, "chat_id")?, arg(a, "id")?).await?)
+                let (chat, id): (i64, i64) = (arg(a, "chat_id")?, arg(a, "id")?);
+                ok(boxed(|| crate::tidy::check_memory(&self.db, &provider, bot, chat, id)).await?)
             }
             "decide_suggestion" => ok(self.db.suggestion_decide(&scope(a)?, arg(a, "id")?, arg(a, "accept")?)?),
             // Keep the other one of a pair (duplicate, contradiction), or forget a stale memory rather than move it.
@@ -965,7 +993,8 @@ impl Host {
             // Run the tidy-up now (the UI's "Tidy up now"); returns how many suggestions were queued.
             "tidy" => {
                 let bot = crate::tidy::memory_bot(&self.db).context("no bots")?;
-                ok(crate::tidy::run(&self.db, &self.provider(bot)?, bot, arg(a, "chat_id")?).await?)
+                let (p, chat): (_, i64) = (self.provider(bot)?, arg(a, "chat_id")?);
+                ok(boxed(|| crate::tidy::run(&self.db, &p, bot, chat)).await?)
             }
             // ---- external tools & saved logins ----
             // Configured servers with their tool counts. Env and headers show names only; values stay in the secret store.
@@ -975,17 +1004,26 @@ impl Host {
                 let mut servers: Vec<Value> = vec![];
                 for s in ext::servers(&self.db) {
                     let keys = |m: std::collections::HashMap<String, String>| m.into_keys().collect::<std::collections::BTreeSet<_>>();
-                    let update = if s.preset.is_none() { ext::update_for(&self.db, &s).await } else { None };
+                    let update = if s.preset.is_none() { boxed(|| ext::update_for(&self.db, &s)).await } else { None };
                     servers.push(json!({"name": s.name, "preset": s.preset, "command": s.command, "args": s.args, "url": s.url, "env": keys(s.env), "headers": keys(s.headers), "tools": ext::cached_tools(&self.db, &s.name).len(), "signed_in": ext::signed_in(&s.name), "sensitive": sensitive.contains(&s.name), "suggest_sensitive": tools::looks_sensitive(&s.name), "update": update, "unconfirmed": ext::claimed_tools(&self.db, &s.name).iter().filter(|t| t.read_only).count() - ext::cached_tools(&self.db, &s.name).iter().filter(|t| t.read_only).count()}));
                 }
                 ok(json!({"servers": servers, "tools": ext::all_tools(&self.db).len()}))
             }
             // Add or replace one server: {name, command, args, env} or {name, url, headers}. Its package is pinned to a
             // release (see ext::pin). Starts it once; returns its tool count.
-            "tool_server_save" => ok(ext::save_server(&self.db, arg(a, "server")?).await?),
+            "tool_server_save" => {
+                let server = arg(a, "server")?;
+                ok(boxed(|| ext::save_server(&self.db, server)).await?)
+            }
             // Hosted servers in the official MCP registry, on their publisher's own domain (see ext::registry_pick).
-            "tool_server_registry" => ok(ext::registry_search(&arg::<String>(a, "q")?).await?),
-            "tool_server_update" => ok(ext::update_server(&self.db, &arg::<String>(a, "name")?).await?),
+            "tool_server_registry" => {
+                let q: String = arg(a, "q")?;
+                ok(boxed(|| ext::registry_search(&q)).await?)
+            }
+            "tool_server_update" => {
+                let name: String = arg(a, "name")?;
+                ok(boxed(|| ext::update_server(&self.db, &name)).await?)
+            }
             // Sensitive sources: once a run has read one, everything that goes out asks. Only you set them.
             "sensitive" => ok(tools::sensitive_list(&self.db)),
             "set_sensitive" => {
@@ -1019,14 +1057,20 @@ impl Host {
             // `_paste` (a server: the address the browser ended up on) finishes it and saves the server. Returns its tool count.
             "tool_server_sign_in" => {
                 let paste = self.mode == "server";
-                ok(json!({"url": ext::sign_in(arg(a, "server")?, !paste).await?, "paste": paste}))
+                let server = arg(a, "server")?;
+                ok(json!({"url": boxed(|| ext::sign_in(server, !paste)).await?, "paste": paste}))
             }
             "tool_server_sign_in_wait" | "tool_server_sign_in_paste" => {
                 if !ext::signing_in() {
                     bail!("no tool server sign-in in progress; start again");
                 }
-                if cmd == "tool_server_sign_in_wait" { crate::oauth::finish().await? } else { crate::oauth::paste(&arg::<String>(a, "url")?).await? };
-                ok(ext::signed_in_save(&self.db).await?)
+                if cmd == "tool_server_sign_in_wait" {
+                    boxed(crate::oauth::finish).await?
+                } else {
+                    let url: String = arg(a, "url")?;
+                    boxed(|| crate::oauth::paste(&url)).await?
+                };
+                ok(boxed(|| ext::signed_in_save(&self.db)).await?)
             }
             // The browser = Playwright's MCP server (needs Node). Enabling starts it once to list its tools.
             "browser_enable" => {
@@ -1036,10 +1080,10 @@ impl Host {
                 if on {
                     // With the bots' computer on, the browser is its Chromium: nothing to download.
                     if !crate::computer::usable(&self.db) {
-                        ext::install_browser().await?;
+                        boxed(ext::install_browser).await?;
                     }
                     let conf = ext::ServerConf { name: ext::BROWSER.into(), preset: Some("playwright".into()), ..Default::default() };
-                    let n = ext::refresh(&self.db, &conf).await.context("couldn't start the browser (is Node.js installed?)")?;
+                    let n = boxed(|| ext::refresh(&self.db, &conf)).await.context("couldn't start the browser (is Node.js installed?)")?;
                     list.push(conf);
                     ext::set_servers(&self.db, &list)?;
                     return ok(n);
@@ -1114,7 +1158,8 @@ impl Host {
                         bail!("nothing was recorded: click into the screen and do the task, then press Done");
                     }
                     let bot: i64 = arg(a, "bot_id")?;
-                    ok(crate::tidy::teach_shown(&self.db, &self.provider(bot)?, bot, arg(a, "chat_id")?, shown).await?)
+                    let (p, chat): (_, i64) = (self.provider(bot)?, arg(a, "chat_id")?);
+                    ok(boxed(|| crate::tidy::teach_shown(&self.db, &p, bot, chat, shown)).await?)
                 }
                 _ => {
                     if let Some(s) = crate::computer::teach_stop(0) {
@@ -1135,7 +1180,7 @@ impl Host {
                 let secs = if crate::computer::teaching().is_some() { crate::computer::TEACH_SECS as i64 } else { 60 };
                 self.db.computer_lease("you", "you", secs)?;
                 crate::computer::sniff(&self.home, secs as u64);
-                crate::computer::teach_note(&self.home, a).await;
+                boxed(|| crate::computer::teach_note(&self.home, a)).await;
                 let a = a.clone();
                 tokio::task::spawn_blocking(move || -> Result<()> {
                     let n = |k: &str| a.get(k).and_then(Value::as_i64).unwrap_or(0);
@@ -1178,7 +1223,9 @@ impl Host {
                 let ap = self.db.approval_claim(arg(a, "id")?)?.context("this sign-in has been used or has run out; ask the bot again")?;
                 let site = ap.site.clone().unwrap_or_default();
                 let login = crate::computer::Login { user, password, code, totp };
-                let out = match tokio::time::timeout(std::time::Duration::from_secs(60), crate::computer::sign_in(&self.db.dir(), ap.bot_id, &login, std::slice::from_ref(&site))).await {
+                let dir = self.db.dir();
+                let signing_in = boxed(|| crate::computer::sign_in(&dir, ap.bot_id, &login, std::slice::from_ref(&site)));
+                let out = match tokio::time::timeout(std::time::Duration::from_secs(60), signing_in).await {
                     Ok(r) => r,
                     Err(_) => Err(anyhow::anyhow!("the page didn't answer in time")),
                 };
@@ -1276,7 +1323,8 @@ impl Host {
                 let mut r = self.db.routines(chat)?.into_iter().find(|r| r.id == id).context("no such routine")?;
                 r.delivery = "now".into();
                 let provider = self.provider(r.bot_id)?;
-                let reply = turn(&provider, &ToolCtx::new(self.db.clone(), r.bot_id, chat), Trigger::Routine(&r)).await?;
+                let ctx = ToolCtx::new(self.db.clone(), r.bot_id, chat);
+                let reply = boxed(|| turn(&provider, &ctx, Trigger::Routine(&r))).await?;
                 ok(if reply.trim().is_empty() { "Nothing needed your attention.".to_string() } else { reply })
             }
             // A rehearsal of a routine or a skill: it runs for real, except that anything that would change or send
@@ -1320,7 +1368,7 @@ impl Host {
                 let provider = self.provider(r.bot_id)?;
                 let mut ctx = ToolCtx::new(self.db.clone(), r.bot_id, chat);
                 ctx.rehearsal = true;
-                let reply = turn(&provider, &ctx, Trigger::Routine(&r)).await?;
+                let reply = boxed(|| turn(&provider, &ctx, Trigger::Routine(&r))).await?;
                 let run = self.db.runs(Some(chat), 20)?.into_iter().find(|x| x.trigger == "rehearsal" && x.bot_id == r.bot_id).map(|x| x.id);
                 let (would, looked) = match run {
                     Some(run) => self.db.rehearsal_steps(run)?,
@@ -1340,11 +1388,11 @@ impl Host {
                     bail!("that file is over 20 MB");
                 }
                 let said = arg::<String>(a, "text").unwrap_or_default();
-                let text = match crate::read_document_text(&name, "", bytes.clone()).await {
+                let text = match boxed(|| crate::read_document_text(&name, "", bytes.clone())).await {
                     None => bail!("I can read PDFs, Word and Excel files and text files, not this kind of file yet"),
                     Some(r) => r?,
                 };
-                let pages = if text.split_whitespace().count() < 5 && crate::is_pdf(&name, "") { crate::read_pdf_pages(bytes).await } else { vec![] };
+                let pages = if text.split_whitespace().count() < 5 && crate::is_pdf(&name, "") { boxed(|| crate::read_pdf_pages(bytes)).await } else { vec![] };
                 if text.split_whitespace().count() < 5 && pages.is_empty() {
                     bail!("that file has no text I can read (a scanned PDF?); send photos of the pages instead");
                 }
@@ -1355,7 +1403,7 @@ impl Host {
                     return ok(crate::with_document(&said, &name, &text));
                 }
                 // Read by a local model where one is set; what it couldn't read still goes as photos.
-                let (read, pages) = crate::ocr::read_pages(&self.db, pages).await;
+                let (read, pages) = boxed(|| crate::ocr::read_pages(&self.db, pages)).await;
                 if pages.is_empty() {
                     return ok(crate::with_document(&said, &name, &read));
                 }
@@ -1719,7 +1767,7 @@ impl Host {
                     self.db.incognito_reset(bot)?;
                 }
                 let db = self.db.clone();
-                let task = tokio::spawn(async move { crate::incognito_turn(&provider, &ToolCtx::new(db, bot, crate::INCOGNITO_CHAT), &history, &text).await });
+                let task = tokio::spawn(boxed(move || async move { crate::incognito_turn(&provider, &ToolCtx::new(db, bot, crate::INCOGNITO_CHAT), &history, &text).await }));
                 let me = task.id();
                 self.running.lock().unwrap().insert((bot, crate::INCOGNITO_CHAT), (task.abort_handle(), String::new()));
                 let out = task.await;
@@ -1753,11 +1801,11 @@ impl Host {
                     .collect();
                 // Run as a task so Stop can cancel it (dropping it kills the CLI process too).
                 let (db, asked) = (self.db.clone(), text.clone());
-                let task = tokio::spawn(async move {
+                let task = tokio::spawn(boxed(move || async move {
                     let mut ctx = ToolCtx::new(db, bot, chat);
                     ctx.images = images;
                     turn(&provider, &ctx, Trigger::Message(&text)).await
-                });
+                }));
                 let me = task.id();
                 self.running.lock().unwrap().insert((bot, chat), (task.abort_handle(), asked));
                 let out = task.await;

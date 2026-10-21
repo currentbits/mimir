@@ -95,12 +95,13 @@ impl Db {
     // ---------- memory ----------
 
     pub fn store(&self, scope: &str, kind: &str, title: &str, body: &str, source: &str, supersedes: Option<i64>) -> Result<i64> {
-        self.store_by(scope, kind, title, body, source, supersedes, &Prov::default())
+        Ok(self.store_by(scope, kind, title, body, source, supersedes, &Prov::default())?.0)
     }
 
-    /// `store`, recording who wrote it.
+    /// `store`, recording who wrote it. Also says whether a row was created (false: the same text was already kept,
+    /// and that one's id comes back).
     #[allow(clippy::too_many_arguments)]
-    pub fn store_by(&self, scope: &str, kind: &str, title: &str, body: &str, source: &str, supersedes: Option<i64>, prov: &Prov) -> Result<i64> {
+    pub fn store_by(&self, scope: &str, kind: &str, title: &str, body: &str, source: &str, supersedes: Option<i64>, prov: &Prov) -> Result<(i64, bool)> {
         if !TYPES.contains(&kind) {
             bail!("type must be one of {TYPES:?}");
         }
@@ -109,15 +110,21 @@ impl Db {
         }
         let mut c = self.c();
         let tx = c.transaction()?;
+        // A bot only matches (and only replaces) what it can see: shared memories and its own.
         let dup: Option<i64> = tx
             .query_row(
-                "SELECT id FROM entries WHERE scope=?1 AND title=?2 AND body=?3 AND superseded_by IS NULL AND invalid=0",
-                params![scope, title, body],
+                "SELECT id FROM entries WHERE scope=?1 AND title=?2 AND body=?3 AND superseded_by IS NULL AND invalid=0 AND (?4 IS NULL OR for_bot IN (0, ?4))",
+                params![scope, title, body, prov.bot],
                 |r| r.get(0),
             )
             .optional()?;
         if let Some(id) = dup {
-            return Ok(id);
+            // The same text written clean (the person's own words) confirms one saved after outside content.
+            if !prov.tainted {
+                tx.execute("UPDATE entries SET tainted=0 WHERE id=?1", [id])?;
+                tx.commit()?;
+            }
+            return Ok((id, false));
         }
         tx.execute(
             "INSERT INTO entries(scope,type,title,body,source,importance,created_at,origin,bot_id,run_id,tainted) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
@@ -127,8 +134,8 @@ impl Db {
         if let Some(old) = supersedes {
             let n = tx.execute(
                 // id != ?1: the row just inserted can't be the one it replaces (an unknown id could match it).
-                "UPDATE entries SET superseded_by=?1 WHERE id=?2 AND id != ?1 AND scope=?3 AND superseded_by IS NULL",
-                params![id, old, scope],
+                "UPDATE entries SET superseded_by=?1 WHERE id=?2 AND id != ?1 AND scope=?3 AND superseded_by IS NULL AND (?4 IS NULL OR for_bot IN (0, ?4))",
+                params![id, old, scope, prov.bot],
             )?;
             if n == 0 {
                 bail!("entry #{old} not found or already superseded");
@@ -141,7 +148,7 @@ impl Db {
             )?;
         }
         tx.commit()?;
-        Ok(id)
+        Ok((id, true))
     }
 
     pub fn forget(&self, scope: &str, id: i64) -> Result<bool> {
@@ -228,31 +235,48 @@ impl Db {
         Ok(n)
     }
 
-    /// bm25 × importance × recency decay (0.995/day, floor 0.05); drops hits under 20% of the top score.
+    /// bm25 (titles ×3) × importance; drops hits under 20% of the top score, then orders the rest by recency decay
+    /// (0.995/day, floor 0.05; preferences don't decay), so an old exact match isn't cut by a fresh partial one.
     /// `bot`: leave out the memories other bots keep to themselves (0: all of them).
     pub fn search(&self, scope: &str, bot: i64, query: &str, limit: usize) -> Result<Vec<Entry>> {
+        self.ranked(scope, bot, query, limit, false)
+    }
+
+    /// `search` for the automatic recall before each turn: confirmed memories only (so unconfirmed ones don't take
+    /// its slots), and ended or background ones at half weight.
+    pub fn recall(&self, scope: &str, bot: i64, query: &str, limit: usize) -> Result<Vec<Entry>> {
+        self.ranked(scope, bot, query, limit, true)
+    }
+
+    fn ranked(&self, scope: &str, bot: i64, query: &str, limit: usize, turn: bool) -> Result<Vec<Entry>> {
         let Some(q) = fts_query(query) else { return Ok(vec![]) };
         let c = self.c();
         let mut st = c.prepare(
-            "SELECT e.id, e.type, e.title, e.body, e.source, e.importance, e.created_at, bm25(entries_fts), e.tainted, e.valid_until
+            "SELECT e.id, e.type, e.title, e.body, e.source, e.importance, e.created_at, bm25(entries_fts, 3.0, 1.0), e.tainted, e.valid_until, e.background
              FROM entries_fts JOIN entries e ON e.id = entries_fts.rowid
              WHERE entries_fts MATCH ?1 AND e.scope = ?2 AND e.superseded_by IS NULL AND e.invalid = 0 AND (?3 = 0 OR e.for_bot IN (0, ?3))
-             ORDER BY bm25(entries_fts) LIMIT 50",
+               AND (?4 = 0 OR e.tainted = 0)
+             ORDER BY bm25(entries_fts, 3.0, 1.0) LIMIT 50",
         )?;
         let t = now();
-        let mut hits: Vec<(f64, Entry)> = st
-            .query_map(params![q, scope, bot], |r| {
+        // (relevance, relevance × decay, entry)
+        let mut hits: Vec<(f64, f64, Entry)> = st
+            .query_map(params![q, scope, bot, turn], |r| {
                 let imp: i64 = r.get(5)?;
                 let created: i64 = r.get(6)?;
                 let bm25: f64 = r.get(7)?;
+                let e = Entry { id: r.get(0)?, kind: r.get(1)?, title: r.get(2)?, body: r.get(3)?, source: r.get(4)?, tainted: r.get(8)?, created_at: created, valid_until: r.get(9)? };
+                let faded = turn && (r.get::<_, bool>(10)? || e.valid_until.is_some_and(|u| u <= t));
+                let score = -bm25 * (imp as f64 / 3.0) * if faded { 0.5 } else { 1.0 };
                 let days = ((t - created).max(0) as f64) / 86400.0;
-                let score = -bm25 * (imp as f64 / 3.0) * 0.995f64.powf(days).max(0.05);
-                Ok((score, Entry { id: r.get(0)?, kind: r.get(1)?, title: r.get(2)?, body: r.get(3)?, source: r.get(4)?, tainted: r.get(8)?, created_at: created, valid_until: r.get(9)? }))
+                let decay = if e.kind == "convention" { 1.0 } else { 0.995f64.powf(days).max(0.05) };
+                Ok((score, score * decay, e))
             })?
             .collect::<Result<_, _>>()?;
-        hits.sort_by(|a, b| b.0.total_cmp(&a.0));
-        let top = hits.first().map(|h| h.0).unwrap_or(0.0);
-        let out: Vec<Entry> = hits.into_iter().filter(|h| h.0 >= top * 0.2).take(limit).map(|h| h.1).collect();
+        let top = hits.iter().map(|h| h.0).fold(0.0, f64::max);
+        hits.retain(|h| h.0 >= top * 0.2);
+        hits.sort_by(|a, b| b.1.total_cmp(&a.1));
+        let out: Vec<Entry> = hits.into_iter().take(limit).map(|h| h.2).collect();
         for e in &out {
             c.execute("UPDATE entries SET access_count = access_count + 1, last_recalled = ?2 WHERE id=?1", params![e.id, now()])?;
         }

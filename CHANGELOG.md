@@ -11,6 +11,10 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
   answered: it comes to you in **Needs you** with a one-line summary.
 
 ### Memory
+- **Better recall:** an old memory that matches your message exactly is no longer pushed out by a newer one that
+  only shares a word, preferences don't fade with age, a match in a memory's title counts for more than one in its
+  text, and long messages are searched on their key words rather than their first sixteen. Unconfirmed memories no
+  longer take recall's six places, and ended or background memories rank lower in it.
 - **Sensitive topics stay out of memory:** the tidy-up, imports and *Get to know me* no longer suggest memories about
   your health, religion or beliefs, politics, sexuality or finances (account numbers too), unless you say "remember
   that…" yourself. Turn on **Settings → Memory → Remember sensitive topics** to let them in. See

@@ -231,8 +231,8 @@ impl Db {
             // until they confirm it ("Looks right" in Memory).
             prov.tainted = s.tainted;
             match s.action.as_str() {
-                "add" => self.store_by(scope, &s.kind, &s.title, &s.body, src, None, &prov).map(|n| format!("added #{n}")),
-                "update" => self.store_by(scope, &s.kind, &s.title, &s.body, src, s.entry_id, &prov).map(|n| format!("#{} replaced by #{n}", s.entry_id.unwrap_or(0))),
+                "add" => self.store_by(scope, &s.kind, &s.title, &s.body, src, None, &prov).map(|(n, _)| format!("added #{n}")),
+                "update" => self.store_by(scope, &s.kind, &s.title, &s.body, src, s.entry_id, &prov).map(|(n, _)| format!("#{} replaced by #{n}", s.entry_id.unwrap_or(0))),
                 // The target may have changed since (pinned, corrected, forgotten): then nothing happens and the
                 // suggestion is dismissed. A pin is the person's call, so a demote never undoes one.
                 "demote" => {
