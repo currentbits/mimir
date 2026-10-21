@@ -592,7 +592,7 @@ pub(crate) struct File {
 }
 
 /// The most a file may be for the bot to fetch it (Telegram's cap for bots, used for every app).
-const MAX_FILE: u64 = 20_000_000;
+pub(crate) const MAX_FILE: u64 = 20_000_000;
 
 /// Messages sent while Mimir was away are fetched on reconnect if they're at most this old.
 pub(crate) const CATCH_UP_SECS: i64 = 86_400;

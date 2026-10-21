@@ -36,6 +36,11 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 - **Quiet checks stay off your network:** a watched page that redirects to a name pointing at this computer or the
   local network (a home router, a cloud server's metadata) is no longer fetched; before, only addresses written as
   numbers were refused. Quiet checks and `web_fetch` also read at most 2 MB of a page.
+- **Signal:** photos, voice notes and files people send the bot are deleted from signal-cli once Mimir has them, and
+  ones it ignores (a stranger's, a group's, one too big) are deleted too; before, they stayed in signal-cli's storage
+  for good. A download stops at 20 MB whatever size the sender claims, and a `user:password@` in signal-cli-rest-api's
+  address no longer shows in errors or the bot's status. [Connect](docs/connect.md#signal) now warns that web pages
+  on the same computer may reach signal-cli-rest-api.
 
 ### Fixes
 - **Signal and WhatsApp:** replying to an approval card with a number now works after Mimir restarts. Before, the
