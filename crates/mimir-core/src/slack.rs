@@ -3,7 +3,8 @@
 //! chat:write, im:history, app_mentions:read, files:read, files:write (+ channels:history, groups:history to catch up channel
 //! mentions sent while Mimir was off); subscribe to message.im and app_mention events (+ message.channels and
 //! message.groups, so the bot follows a thread it was mentioned in without another @-mention);
-//! enable Interactivity (for Approve/Deny buttons).
+//! enable Interactivity (for Approve/Deny buttons). Routines started by a channel message (`slack:#channel`) need
+//! message.channels (message.groups for private ones), and channels:read, users:read to go by names instead of ids.
 
 use crate::db::Approval;
 use crate::runtime::{Chan, Core, File, Row, Sender, Slot, card_text, parse_decision, verdict_for};
@@ -26,6 +27,8 @@ pub(crate) struct Slack {
     asked: Arc<Mutex<HashMap<String, (String, String)>>>,
     /// A draft being streamed (chat.startStream) → the text sent into it so far, since appends are only the new part.
     streams: Arc<Mutex<HashMap<String, String>>>,
+    /// A channel's or person's id → the names they go by, for `slack:` routines.
+    names: Arc<Mutex<HashMap<String, Vec<String>>>>,
 }
 
 /// How long a mention's thread stays the place to answer (later posts, e.g. routines, go to the channel).
@@ -69,6 +72,7 @@ impl Slack {
             threads: Default::default(),
             asked: Default::default(),
             streams: Default::default(),
+            names: Default::default(),
         })
     }
 
@@ -88,6 +92,49 @@ impl Slack {
             bail!("{}", v["error"].as_str().unwrap_or("unknown error"));
         }
         Ok(v)
+    }
+
+    /// The names a channel (C…, G…) or person (U…, W…) goes by, starting with its id. Only the id if Slack won't say
+    /// (no channels:read or users:read).
+    // ponytail: kept until restart, so a rename or a scope added later shows after one
+    async fn names(&self, id: &str) -> Vec<String> {
+        if let Some(n) = self.names.lock().unwrap().get(id) {
+            return n.clone();
+        }
+        let mut out = vec![id.to_string()];
+        let found = match id.chars().next() {
+            Some('U' | 'W') => self.get("users.info", &[("user", id)]).await.map(|v| vec![v["user"]["name"].clone(), v["user"]["profile"]["display_name"].clone(), v["user"]["real_name"].clone()]),
+            _ => self.get("conversations.info", &[("channel", id)]).await.map(|v| vec![v["channel"]["name"].clone()]),
+        };
+        match found {
+            Ok(n) => out.extend(n.iter().filter_map(|n| n.as_str()).filter(|n| !n.is_empty()).map(String::from)),
+            Err(e) => eprintln!("slack names of {id}: {e:#}"),
+        }
+        self.names.lock().unwrap().insert(id.to_string(), out.clone());
+        out
+    }
+
+    /// A message in a channel, for the bot's `slack:` routines: people's and other apps' (a CI bot's "deploy failed"),
+    /// not its own, and not edits or joins.
+    async fn said(&self, core: &Arc<Core>, ev: &Value, my_user: &str) {
+        let plain = ev["subtype"].is_null() || matches!(ev["subtype"].as_str(), Some("file_share" | "bot_message"));
+        if ev["type"] != "message" || ev["channel_type"] == "im" || !plain || ev["user"].as_str() == Some(my_user) || !core.slack_waits() {
+            return;
+        }
+        let Some(ch) = ev["channel"].as_str() else { return };
+        let mut from = match ev["user"].as_str() {
+            Some(u) => self.names(u).await,
+            None => vec![],
+        };
+        from.extend([&ev["bot_id"], &ev["username"]].into_iter().filter_map(|v| v.as_str()).map(String::from));
+        // An app's message often says it in attachments.
+        let mut text = ev["text"].as_str().unwrap_or("").to_string();
+        for a in ev["attachments"].as_array().into_iter().flatten() {
+            if let Some(t) = a["text"].as_str().or(a["fallback"].as_str()) {
+                text.push_str(&format!("\n{t}"));
+            }
+        }
+        core.slack_said(&self.names(ch).await, &from, &text);
     }
 
     /// The message that started the thread this one is in (none for a message that isn't in a thread, or starts one).
@@ -320,6 +367,7 @@ impl Slack {
     /// A message event (live, or fetched on reconnect): text, or files with it.
     async fn on_message(&self, me: &Chan, core: &Arc<Core>, ev: &Value, my_user: &str) -> Result<()> {
         let ch = ev["channel"].as_str().unwrap_or("");
+        self.said(core, ev, my_user).await;
         // A reply in a card's thread, in a channel too (no mention needed): no, and why. Who may answer is checked there.
         if let Some((thread, said)) = card_reply(ev, my_user) {
             let from = Sender { id: ev["user"].as_str().unwrap_or(""), dm: ev["channel_type"] == "im" };

@@ -80,16 +80,31 @@ A routine can start when something comes in instead of at a time. In the Routine
   looks at new mail every 2 minutes itself and only a matching email starts a run, so mail that doesn't match costs
   nothing. Mail from before the routine was made doesn't count. The run is told each matching email (who, when, the
   subject and the start of the text). It watches the first mailbox in Settings → Email, and works only in your own private chat.
+- **On a Slack message**: a rule like `#deploys from:@sam failed` (the channel, by name or id, then optionally `from:` a
+  person, by their name, display name or id, and any words or "a phrase" the message must contain). It works for a bot
+  on Slack, in a channel that bot is in. Messages from people and from other apps count (a CI bot's "deploy failed"),
+  but not the bot's own messages. Mimir checks each message itself, so one that doesn't match costs nothing. The
+  Slack app needs the `message.channels` event (`message.groups` for private channels), and `channels:read` and
+  `users:read` to go by names; without those, write the ids (`#C0123ABCD`, `from:U0456`). Messages sent while Mimir was off don't count. The
+  run is told the message and who sent it. Works only in your own private chat.
 - **When called** (on [`mimir server`](self-hosting.md) only): the routine gets its own address,
   `https://<your server>/hook/<id>`, and a secret (**Show its address and secret**). A caller sends the secret as
   `Authorization: Bearer <secret>`, or signs the body with it as `X-Hub-Signature-256: sha256=<HMAC-SHA256 hex>`
   (how GitHub signs, so a GitHub webhook's secret field works as is). A wrong secret, or an unknown address, gets
   401; a paused routine 409, and so does a signed body sent a second time (a captured call can't be replayed). The body (up to 256 KB; the run sees the first 4,000 characters) is passed to the run.
+- **On GitHub** (on `mimir server` only): a *When called* routine for a GitHub webhook, with a filter: events like
+  `issues.opened`, `pull_request` (any action) or `push`, several with commas, and `repo:owner/name`
+  (`github:issues.opened,pull_request.opened repo:acme/app`). No events listed means any. Point the repository's
+  webhook (*application/json*) at the routine's address and put its secret in GitHub's secret field. Events it doesn't
+  wait for (GitHub's ping, too) get 200 and no run. The run is told the event in short: what happened where and by
+  whom, the issue, pull request, comment, review, release or workflow run's title, state, link and text, or a push's
+  branch and commit messages.
 
 What came is someone else's words: the run counts as having read outside content. Several emails or calls that come
 before the run starts go to one run together (up to 20). In chat, "tell me when the invoice from Acme arrives" makes a
-mail one (`cron` is `mail:<rule>`); it ends after the first match unless you say "every time". **Only the first one**
-does the same in the Routines tab. Bots can't make webhooks: the secret is yours to hand out.
+mail one (`cron` is `mail:<rule>`, or `slack:<rule>` for "tell me when someone says it's deployed in #releases"); it
+ends after the first match unless you say "every time". **Only the first one** does the same in the Routines tab. Bots
+can't make webhooks or GitHub routines: the secret is yours to hand out.
 
 ### Webhooks out
 

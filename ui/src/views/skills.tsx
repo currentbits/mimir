@@ -159,6 +159,7 @@ function Skills({ chatId }: { chatId: number }) {
                     ? <div className="skill-steps skill-diff">{lineChanges(current.body, k.body).map((c, i) => <div key={i} className={c.add ? 'add' : 'del'}>{c.add ? '+ ' : '− '}{c.l}</div>)}</div>
                     : k.kind === 'retire' ? null : <div className="skill-steps"><Markdown text={k.body} /></div>}
                   {k.kind === 'merge' && merging.length > 0 && <div className="why">Replaces {merging.map(m => `“${m.name}”`).join(' and ')}</div>}
+                  {current && !['merge', 'retire', 'patch'].includes(k.kind) && <div className="why">Replaces your skill “{current.name}”{current.bot_id === 0 ? ', which all bots use' : ''}</div>}
                   {k.reason && <div className="why">{k.reason}</div>}
                   <div className="why">For {who(k.bot_id)}{k.run_id ? `, learned from run #${k.run_id}` : ''}</div></div>
                 <div className="choices">
