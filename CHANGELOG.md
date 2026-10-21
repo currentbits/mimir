@@ -2,6 +2,14 @@
 
 What changed for people using Mimir. The newest release is at the top; "Unreleased" is what the next one brings.
 
+## Unreleased
+
+### Talking to your bots
+- **iMessage, in the Mac app:** a bot can answer in one Messages conversation you choose, a note to yourself or a
+  chat with a second Apple ID, and never reads any other. Text, photos and voice messages in; replies as plain text,
+  with approval cards and questions as numbered lists, as on Signal. Needs Full Disk Access and permission to control
+  Messages, and works only while the Mac is awake. Setup is under [Connect](docs/connect.md#imessage).
+
 ## 0.5.0
 
 ### Talking to your bots

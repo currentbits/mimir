@@ -90,6 +90,8 @@ does the same with the bot's own file: an export, then an import on this compute
 - **WhatsApp**, through Meta's Cloud API and a business number of the bot's own, on a server only (Meta calls Mimir's
   webhook): direct chats, with buttons, and it can only write within 24 hours of your last message there. Setup:
   [Connect](connect.md#whatsapp).
+- **iMessage**, in the Mac app only: one Messages conversation you choose (a note to yourself, or a chat with a second
+  Apple ID), read on this Mac while it's awake, with numbered lists as on Signal. Setup: [Connect](connect.md#imessage).
 
 ### What a reply did, from the log
 

@@ -1,6 +1,6 @@
-# Connect your email, calendar, web search, Signal and WhatsApp
+# Connect your email, calendar, web search, Signal, WhatsApp and iMessage
 
-Bots work with what you connect: your email, your calendar and a web search service, and you can reach them on Signal and WhatsApp.
+Bots work with what you connect: your email, your calendar and a web search service, and you can reach them on Signal, WhatsApp and iMessage.
 Each is optional and takes a few minutes. This page is the setup, service by service; what bots then do (and what always asks you first) is at the end
 of each part.
 
@@ -263,6 +263,33 @@ after that isn't delivered: it shows as not sent in the run (Runs), where you ca
 Messages sent while Mimir was down are delivered when Meta retries, if they're less than a day old. Not for
 `mimir serve`, which has no webhook.
 
+## iMessage
+
+On a Mac, the desktop app can answer in **one Messages conversation you choose**, and never reads any other. Pick
+either:
+
+- **A note to yourself**: the conversation with your own number or email. Everything in it is yours; the bot's
+  messages end with an invisible character so Mimir can tell them from yours.
+- **A chat with a second Apple ID** signed in to Messages on this Mac: you write to it from your iPhone, and it
+  answers as that Apple ID.
+
+1. **Have the conversation in Messages on this Mac**: send one message in it if it's new.
+2. **Give Mimir Full Disk Access**: System Settings → Privacy & Security → Full Disk Access → add Mimir (from
+   Applications), then quit and reopen it. Mimir reads `~/Library/Messages/chat.db` every two seconds, only the
+   conversation you chose. macOS has no prompt for this; until it's on, the bot's page says it can't read Messages.
+3. **Add it in Mimir**: the bot's page → Messaging apps → **iMessage** → **Set up**: the conversation's number with
+   its country code (`+31…`) or its email, as Messages shows it. Save; it shows *Connected · …*.
+4. **Allow Mimir to control Messages** when macOS asks, the first time the bot answers (System Settings → Privacy &
+   Security → Automation → Mimir → Messages, if you said no).
+5. **Pair**: send `pair` and the code on the bot's page in that conversation.
+
+Text, photos and voice messages (transcribed) come in; the bot's replies are plain text, whole (no streaming, no
+typing indicator). It can't send files there yet: it says so instead. Approval cards and a bot's questions come as
+numbered lists you answer with a number, as on Signal; to answer an older card, reply to it with the number.
+
+It works only while the Mac is awake, Mimir is open and Messages is signed in. Messages that arrive while it's closed
+aren't answered later. Not on a server, and not in the app connected to one.
+
 ## Files
 
 Nothing to set up: each chat has a small workspace of text files bots keep there (notes, lists, drafts), under
@@ -276,4 +303,6 @@ Nothing to set up: each chat has a small workspace of text files bots keep there
 - **Web search**: Settings → Web search → **Remove** the key, or clear the SearXNG address.
 - **Signal**: the bot's page → Signal → **Disconnect**, and remove *mimir* under Linked devices on the bot's phone.
 - **WhatsApp**: the bot's page → WhatsApp → **Disconnect**, and remove the webhook (or the app) in Meta's dashboard.
+- **iMessage**: the bot's page → iMessage → **Disconnect**, and take Mimir off Full Disk Access if nothing else needs
+  it.
 - **One tool for one bot**: the bot's page → its tools. **One tool for all bots**: Settings → Permissions → *deny*.
