@@ -4,10 +4,56 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 
 ## Unreleased
 
+### Talking to your bots
+- **Telegram groups:** a bot in a group (not a family group) answers only when you @-mention it, reply to one of its
+  messages or send a `/command`. Before, with privacy mode off, it answered every message.
+
+### Moving in
+- **Moving from OpenClaw or Hermes:** **Memory → Import → From OpenClaw** now finds a workspace set in
+  `openclaw.json` or `OPENCLAW_WORKSPACE_DIR`, and brings in every profile (`~/.openclaw-<name>`,
+  `~/.hermes/profiles/<name>`) too. Its `SOUL.md` is offered as the bot's role (one click) instead of becoming
+  memories, imported memories say which agent they came from, and a cron job set for another time zone says so on
+  its paused routine. See [Getting started](docs/getting-started.md#moving-from-openclaw-or-hermes).
+
+### Routines
+- **Claude on your monthly API credits:** Max and Team plans include monthly API credits. Save an Anthropic API key
+  from your linked Console organisation (Settings → AI keys), and a Claude bot can go on with it when the plan says
+  no, in the same conversation, or run its routines on it from the start. The credits stop when they run out: nothing
+  is billed. See [docs/ai-accounts.md](docs/ai-accounts.md#claude-your-plans-monthly-api-credits).
+- **Started by a Slack message:** `slack:#deploys from:@sam failed` starts a routine when a message in a channel the
+  bot is in matches, from a person or another app (a CI bot). Mimir does the matching, so other messages cost nothing.
+  "Tell me when someone says it's deployed in #releases" works in chat. See
+  [docs/routines.md](docs/routines.md#started-by-something-happening).
+- **Started by GitHub:** *On GitHub* in the Routines tab (on a server) gives a routine a webhook for GitHub with an
+  event filter, like `issues.opened repo:acme/app`. Other events get no run, and the run gets a short summary of the
+  event instead of GitHub's raw payload.
+
+### Memory
 - **Memory as files:** **Settings → Memory** can keep your memories as Markdown files too, in a folder you pick: one
   file per memory, a folder per chat, with frontmatter (type, chat, bot, dates). Open it in Obsidian, grep it, keep it
   in git. What you edit, add or delete there waits in Needs you as a suggestion; nothing changes until you accept it.
   Guests' and incognito chats stay out, and files already in the folder are left alone.
+
+### Safety
+- **Chat API tokens can't read your email:** an app using a [chat API](docs/self-hosting.md) token now talks to the bot
+  in a chat of the token's own ("Chat API: Home Assistant"), not your built-in chat. It isn't private, so no email,
+  calendar, meetings or computer there, and a rule said through it is a suggestion for you to accept. Whoever holds the
+  token, or talks to the speaker that uses it, isn't necessarily you.
+- **Quiet checks stay off your network:** a watched page that redirects to a name pointing at this computer or the
+  local network (a home router, a cloud server's metadata) is no longer fetched; before, only addresses written as
+  numbers were refused. Quiet checks and `web_fetch` also read at most 2 MB of a page.
+- **Signal:** photos, voice notes and files people send the bot are deleted from signal-cli once Mimir has them, and
+  ones it ignores (a stranger's, a group's, one too big) are deleted too; before, they stayed in signal-cli's storage
+  for good. A download stops at 20 MB whatever size the sender claims, and a `user:password@` in signal-cli-rest-api's
+  address no longer shows in errors or the bot's status. [Connect](docs/connect.md#signal) now warns that web pages
+  on the same computer may reach signal-cli-rest-api.
+
+### Fixes
+- **Signal and WhatsApp:** replying to an approval card with a number now works after Mimir restarts. Before, the
+  number was taken as a "no" with the number as the reason.
+- **Skill imports:** a skill imported from another agent or a bot file with the name of one you already have (perhaps
+  one all bots share) comes in as "‹name› (imported)" instead of replacing it when you accept. A taught skill that
+  would replace one says so on its card.
 
 ## 0.5.0
 

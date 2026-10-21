@@ -184,7 +184,9 @@ pub fn specs() -> Vec<(&'static str, &'static str, Value)> {
              For \"tell me when X arrives\" by email, cron can be mail:<rule> instead: from:<address or domain>, \
              subject:<word or \"phrase\">, and any other words the email must contain, e.g. 'mail:from:acme.com subject:invoice'. \
              Mimir checks new mail every 2 minutes itself and runs you only for a match, with that email. It ends after the \
-             first match unless keep=true (\"every time…\"). \
+             first match unless keep=true (\"every time…\"). For a message in a Slack channel you're in, cron can be \
+             slack:#<channel> with optional from:@<person> and words the message must contain, e.g. 'slack:#deploys failed'; \
+             it works the same way (each run is told the message). \
              prompt is what you will be asked to do each time it fires; the result is sent to this chat. \
              Set quiet=true for watches/check-ins (\"keep an eye on…\", \"only tell me if…\"): it runs read-only and \
              messages the user only when something needs their attention. A quiet check about one web page or feed, or \
@@ -197,7 +199,7 @@ pub fn specs() -> Vec<(&'static str, &'static str, Value)> {
              When you tell the person you'll check back on something yourself (\"I'll check Friday whether they replied\"), \
              book it: at, with followup=true, and prompt as what to check and tell them. Say in your reply when, and that \
              they can cancel it. It counts like any routine.",
-            json!({"type":"object","properties":{"until":{"type":"string","description":"YYYY-MM-DD (through that day) or YYYY-MM-DD HH:MM: when a repeating routine ends"},"followup":{"type":"boolean","description":"with at: a check-back you booked on your own, not one the person asked for"},"cron":{"type":"string"},"at":{"type":"string","description":"YYYY-MM-DD HH:MM, for a one-off instead of cron"},"prompt":{"type":"string"},"quiet":{"type":"boolean"},"watch":{"type":"string","description":"quiet checks only: a page or feed URL, or \"mail\""},"keep":{"type":"boolean","description":"mail:<rule> only: run for every match, not just the first"},"for":{"type":"string","description":"a household member's name, to send it to their chat instead of this one"}},"required":["prompt"]}),
+            json!({"type":"object","properties":{"until":{"type":"string","description":"YYYY-MM-DD (through that day) or YYYY-MM-DD HH:MM: when a repeating routine ends"},"followup":{"type":"boolean","description":"with at: a check-back you booked on your own, not one the person asked for"},"cron":{"type":"string"},"at":{"type":"string","description":"YYYY-MM-DD HH:MM, for a one-off instead of cron"},"prompt":{"type":"string"},"quiet":{"type":"boolean"},"watch":{"type":"string","description":"quiet checks only: a page or feed URL, or \"mail\""},"keep":{"type":"boolean","description":"mail: and slack: only: run for every match, not just the first"},"for":{"type":"string","description":"a household member's name, to send it to their chat instead of this one"}},"required":["prompt"]}),
         ),
         ("routine_list", "List this chat's routines.", json!({"type":"object","properties":{}})),
         (

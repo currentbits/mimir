@@ -54,13 +54,31 @@ set up Brave Search or your own SearXNG once in Settings → Web search, and eve
   Mimir forget the sign-in.
 - **OpenRouter**: *Connect OpenRouter* signs you in through the browser and saves the key (OAuth PKCE with a one-off
   localhost callback). Or paste a key.
-- **Keys** (OpenAI-compatible, xAI) go to the OS keychain (or the server's private database).
+- **Keys** (OpenAI-compatible, xAI, Anthropic) go to the OS keychain (or the server's private database).
 
 ## A fallback for usage limits
 
 A bot's page can name a second account for its routines while its own is at a usage limit, until the limit resets
 ([how it works](routines.md#when-a-run-doesnt-work)). It's another kind of account, not a second login of the same
 kind: Mimir uses one Claude, ChatGPT or Grok sign-in for all bots.
+
+### Claude: your plan's monthly API credits
+
+Max and Team plans come with monthly API credits: $100 a month on Max 5x, $200 on Max 20x, and $20 or $100 per Team
+seat, pooled up to $500 ([Anthropic's page](https://support.claude.com/en/articles/17154008-monthly-api-credits-for-max-and-team-plans)).
+They cover `claude -p` run with an API key from the Claude Console organisation linked to your plan. When they run
+out, requests stop: nothing is charged to the plan or your card.
+
+To use them, create a key in that organisation ([console.anthropic.com](https://console.anthropic.com/settings/keys))
+and save it under Settings → AI keys → *Anthropic API key*. Then, on a Claude bot's page, under *When it hits a
+usage limit*, pick:
+
+- **When the plan says no**: a reply or routine that hits the plan's usage limit goes on there on the key, in the
+  same conversation with the same tools, instead of waiting.
+- **For routines, and when the plan says no**: routines run on the key from the start, which keeps them off your
+  5-hour window while the credits last. Chats still start on the plan.
+
+If one side is out, the other is tried once. The run log shows "on your Anthropic API key" next to the model.
 
 On The X Subscription, Grok's allowance is one weekly pool shared by everything on that plan: the Grok apps, Grok
 Bot and Cursor. Coding in Cursor or chatting in Grok uses up the same allowance your bots run on, so a fallback

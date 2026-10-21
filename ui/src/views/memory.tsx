@@ -5,7 +5,7 @@ import { Markdown } from '../markdown'
 import { ask, tell, Empty, Icon, Segmented } from '../ui'
 import { useLeave } from './inbox'
 import { useLoad, HOUSEHOLD, Bots } from '../shared'
-import type { Kind, Skill } from '../types'
+import type { Bot, Kind, Skill } from '../types'
 
 type EntryRow = {
   id: number; kind: Kind; title: string; body: string; source: string; created_at: number
@@ -362,6 +362,9 @@ type AgentSource = { id: string; label: string; memories: number; skills: number
 function ImportMemory({ chatId, onDone }: { chatId: number; onDone: () => void }) {
   const [text, setText] = useState('')
   const [state, setState] = useState<{ busy?: boolean; err?: string; note?: string }>({})
+  // Another agent's persona (SOUL.md): offered as the bot's role, set only on a click.
+  const [role, setRole] = useState<{ text: string; flags: string[]; bot: number; from: string } | null>(null)
+  const botOf = useContext(Bots)
   const go = () => {
     setState({ busy: true })
     invoke<number>('import_memory', { chatId, text }).then(
@@ -373,12 +376,21 @@ function ImportMemory({ chatId, onDone }: { chatId: number; onDone: () => void }
   const many = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`
   const bring = (a: AgentSource) => {
     setState({ busy: true })
-    invoke<{ memories: number; skills: number; routines: number }>('import_agent', { chatId, source: a.id }).then(
+    invoke<{ memories: number; skills: number; routines: number; role: string | null; role_flags: string[]; bot: number }>('import_agent', { chatId, source: a.id }).then(
       r => {
+        setRole(r.role ? { text: r.role, flags: r.role_flags, bot: r.bot, from: a.label } : null)
         const got = [r.memories && `${many(r.memories, 'suggested memory')} below`, r.skills && `${many(r.skills, 'skill')} to review in Skills`, r.routines && `${many(r.routines, 'routine')} paused in Routines (resume one to start it)`].filter(Boolean)
         setState({ note: got.length ? `From ${a.label}: ${got.join(', ')}.` : `Nothing new from ${a.label}: you already have all of it.` })
         if (r.memories) onDone()
       },
+      e => setState({ err: String(e) }))
+  }
+  const takeRole = async () => {
+    if (!role) return
+    const b = (await invoke<Bot[]>('bots')).find(b => b.id === role.bot)
+    if (!b || (b.persona.trim() && !await ask(`Replace ${b.name}'s role with ${role.from}'s persona?\n\n${role.text.slice(0, 600)}`, 'Replace'))) return
+    invoke('save_bot', { bot: { ...b, persona: role.text }, secrets: {} }).then(
+      () => { setRole(null); setState({ note: `${b.name}'s role is now ${role.from}'s persona. Change it on ${b.name}'s page.` }) },
       e => setState({ err: String(e) }))
   }
   return (
@@ -387,6 +399,10 @@ function ImportMemory({ chatId, onDone }: { chatId: number; onDone: () => void }
         <span className="grow hint">Other agents found where Mimir runs:</span>
         {agents.map(a => <button key={a.id} className="btn btn-ghost" disabled={state.busy} onClick={() => bring(a)}
           title={[many(a.memories, 'memory file'), many(a.skills, 'skill'), many(a.routines, 'scheduled job')].join(', ')}>From {a.label}</button>)}
+      </div>}
+      {role && <div className="er">
+        <span className="grow hint" title={role.text}>{role.from} has a persona{role.flags.length ? ` (it ${role.flags.join(', ')})` : ''}.</span>
+        <button className="btn btn-ghost" disabled={state.busy} onClick={takeRole}>Use as {botOf(role.bot).name}'s role</button>
       </div>}
       <p className="hint" style={{ margin: 0 }}>Paste what another assistant remembers about you. In ChatGPT: Settings → Personalization → Manage memories; or ask any assistant “List everything you remember about me.”</p>
       <textarea className="textarea" rows={7} aria-label="Memories to import" placeholder={'- Lives in Cape Town\n- Prefers short answers\n- Training for a half marathon in March'} value={text} onChange={e => setText(e.target.value)} autoFocus />

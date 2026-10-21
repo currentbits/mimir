@@ -255,7 +255,7 @@ function ChatApiSettings() {
     if (await ask(`Delete the token for “${n}”? Whatever uses it stops working.`, 'Delete', true)) invoke('chat_token_delete', { id }).then(tokens.reload, e => setErr(String(e)))
   }
   return (
-    <Group title="Chat API" note={err ? <span className="error">{err}</span> : <>For apps that speak OpenAI’s chat API. Base URL <code className="selectable">{base}</code>; each token reaches one bot, which answers in its built-in chat, and nothing else. Approvals still come here.</>}>
+    <Group title="Chat API" note={err ? <span className="error">{err}</span> : <>For apps that speak OpenAI’s chat API. Base URL <code className="selectable">{base}</code>; each token reaches one bot, in a chat of its own (no email, calendar, meetings or computer there), and nothing else. Approvals still come here.</>}>
       {(tokens.data ?? []).map(t => (
         <Row key={t.id} icon={<Icon name="key" size={15} />} title={t.name} desc={bots.find(b => b.id === t.bot_id)?.name}>
           <button type="button" className="btn btn-ghost btn-danger btn-sm" aria-label={`Delete ${t.name}`} onClick={() => remove(t.id, t.name)}><Icon name="trash" size={13} /></button>
@@ -497,6 +497,7 @@ function UpdateSettings() {
 const KEY_ROWS = [
   { kind: 'openrouter', title: 'OpenRouter', placeholder: 'sk-or-…', hint: <>Create one at <a href="https://openrouter.ai/keys" onClick={openLink}>openrouter.ai/keys</a>.</> },
   { kind: 'xai', title: 'xAI (Grok)', placeholder: 'xai-…', hint: <>Create one at <a href="https://console.x.ai" onClick={openLink}>console.x.ai</a>.</> },
+  { kind: 'anthropic', title: 'Anthropic API key', placeholder: 'sk-ant-…', hint: <>For Claude bots when the plan says no (set on each bot’s page). Create one in the Console organisation linked to your Max or Team plan, at <a href="https://console.anthropic.com/settings/keys" onClick={openLink}>console.anthropic.com</a>, to spend its monthly API credits.</> },
   { kind: 'openai', title: 'OpenAI-compatible API key', placeholder: 'sk-…', hint: 'For bots on the “API key” account: OpenAI, or the service at the bot’s endpoint.' },
 ]
 

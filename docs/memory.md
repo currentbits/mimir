@@ -82,7 +82,9 @@ it belongs to the chat, so a group chat can't read your private chat's files.
   *unconfirmed* even after you accept them, until you mark one **Looks right**. Its own `SKILL.md` files go
   into skill proposals (Hermes' bundled skills are left out), and its cron jobs into routines that start **paused**:
   resume one to accept it. Imported routines get no extra tools and count as outside content, like a routine a bot made
-  after reading a web page. Only cron schedules come over (not one-offs or intervals), on Mimir's clock.
+  after reading a web page. Only cron schedules come over (not one-offs or intervals), on Mimir's clock; one set for
+  another time zone says so. OpenClaw's and Hermes' profiles come in with the same click, and a `SOUL.md` is offered
+  as the bot's role instead of becoming memories.
 
 ## Suggestions from your email and calendar
 
