@@ -497,6 +497,7 @@ function UpdateSettings() {
 const KEY_ROWS = [
   { kind: 'openrouter', title: 'OpenRouter', placeholder: 'sk-or-…', hint: <>Create one at <a href="https://openrouter.ai/keys" onClick={openLink}>openrouter.ai/keys</a>.</> },
   { kind: 'xai', title: 'xAI (Grok)', placeholder: 'xai-…', hint: <>Create one at <a href="https://console.x.ai" onClick={openLink}>console.x.ai</a>.</> },
+  { kind: 'anthropic', title: 'Anthropic API key', placeholder: 'sk-ant-…', hint: <>For Claude bots when the plan says no (set on each bot’s page). Create one in the Console organisation linked to your Max or Team plan, at <a href="https://console.anthropic.com/settings/keys" onClick={openLink}>console.anthropic.com</a>, to spend its monthly API credits.</> },
   { kind: 'openai', title: 'OpenAI-compatible API key', placeholder: 'sk-…', hint: 'For bots on the “API key” account: OpenAI, or the service at the bot’s endpoint.' },
 ]
 
