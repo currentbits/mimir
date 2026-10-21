@@ -78,6 +78,9 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 - **Skill imports:** a skill imported from another agent or a bot file with the name of one you already have (perhaps
   one all bots share) comes in as "‹name› (imported)" instead of replacing it when you accept. A taught skill that
   would replace one says so on its card.
+- **Grok and Claude bots:** on Grok Build 1.0.62 and later, a reply no longer waits on grok's background work for
+  longer than a turn may take. Claude Code's fork subagents, on by default since 2.1.302, stay off for bots, so a
+  reply is one process and its usage is that turn's.
 
 ## 0.5.0
 
