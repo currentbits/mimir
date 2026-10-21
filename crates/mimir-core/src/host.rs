@@ -1243,7 +1243,7 @@ impl Host {
             // A webhook routine's address (on this server) and the secret its caller signs with.
             "webhook" => {
                 let (chat, id): (i64, i64) = (arg(a, "chat_id")?, arg(a, "id")?);
-                self.db.routines(chat)?.into_iter().find(|r| r.id == id && r.cron == "webhook").context("no such webhook routine")?;
+                self.db.routines(chat)?.into_iter().find(|r| r.id == id && crate::events::is_hook(&r.cron)).context("no such webhook routine")?;
                 ok(json!({"path": format!("/hook/{id}"), "secret": crate::events::webhook_secret(&self.db, id)?}))
             }
             // Run a routine now, as a test: the result lands in the chat whatever its delivery setting.

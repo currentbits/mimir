@@ -233,7 +233,7 @@ pub(super) fn calendar_linked(ctx: &ToolCtx, cron: &str) -> Result<()> {
     if crate::calendar::trigger(cron)?.is_some() && crate::host::secret_get(crate::calendar::SECRET).is_none() {
         bail!("no calendar is linked yet: the person adds its link in Mimir's Meetings → Calendar first");
     }
-    if crate::events::on(cron)? == Some(crate::events::On::Webhook) {
+    if crate::events::is_hook(cron) {
         bail!("only the person can set up a webhook, in Mimir's Routines tab (When called)");
     }
     crate::events::ready(&ctx.db, ctx.chat_id, cron)

@@ -20,6 +20,13 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
   from your linked Console organisation (Settings → AI keys), and a Claude bot can go on with it when the plan says
   no, in the same conversation, or run its routines on it from the start. The credits stop when they run out: nothing
   is billed. See [docs/ai-accounts.md](docs/ai-accounts.md#claude-your-plans-monthly-api-credits).
+- **Started by a Slack message:** `slack:#deploys from:@sam failed` starts a routine when a message in a channel the
+  bot is in matches, from a person or another app (a CI bot). Mimir does the matching, so other messages cost nothing.
+  "Tell me when someone says it's deployed in #releases" works in chat. See
+  [docs/routines.md](docs/routines.md#started-by-something-happening).
+- **Started by GitHub:** *On GitHub* in the Routines tab (on a server) gives a routine a webhook for GitHub with an
+  event filter, like `issues.opened repo:acme/app`. Other events get no run, and the run gets a short summary of the
+  event instead of GitHub's raw payload.
 
 ### Safety
 - **Chat API tokens can't read your email:** an app using a [chat API](docs/self-hosting.md) token now talks to the bot
