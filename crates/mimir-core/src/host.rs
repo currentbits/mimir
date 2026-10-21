@@ -346,6 +346,20 @@ impl Host {
         }
     }
 
+    /// "" off, "limit" once the plan says no, "routines" that and its routines from the start (get without `mode`).
+    // ponytail: out of `call`, whose one stack frame holds every arm's locals and is at Windows' limit in debug tests
+    fn api_credits(&self, a: &Value) -> Result<Value> {
+        let key = format!("api_credits:{}", arg::<i64>(a, "bot_id")?);
+        match arg::<Option<String>>(a, "mode")?.as_deref() {
+            None => {}
+            Some("") => self.db.set_setting(&key, "")?,
+            Some(m @ ("limit" | "routines")) if api_key("anthropic").is_some() => self.db.set_setting(&key, m)?,
+            Some("limit" | "routines") => bail!("add your Anthropic API key in Settings → AI keys first"),
+            Some(m) => bail!("unknown mode '{m}'"),
+        }
+        ok(self.db.setting(&key)?.unwrap_or_default())
+    }
+
     pub async fn call(&self, cmd: &str, a: &Value) -> Result<Value> {
         let scope = |a: &Value| -> Result<String> { Ok(format!("chat:{}", arg::<i64>(a, "chat_id")?)) };
         match cmd {
@@ -699,19 +713,8 @@ impl Host {
                 }
                 ok(self.db.fallback(bot)?.map(|(provider, model)| json!({"provider": provider, "model": model})))
             }
-            // A Claude bot on the Anthropic API key (the monthly API credits): "" off, "limit" once the plan says no,
-            // "routines" that and its routines from the start (get without `mode`).
-            "api_credits" => {
-                let key = format!("api_credits:{}", arg::<i64>(a, "bot_id")?);
-                match arg::<Option<String>>(a, "mode")?.as_deref() {
-                    None => {}
-                    Some("") => self.db.set_setting(&key, "")?,
-                    Some(m @ ("limit" | "routines")) if api_key("anthropic").is_some() => self.db.set_setting(&key, m)?,
-                    Some("limit" | "routines") => bail!("add your Anthropic API key in Settings → AI keys first"),
-                    Some(m) => bail!("unknown mode '{m}'"),
-                }
-                ok(self.db.setting(&key)?.unwrap_or_default())
-            }
+            // A Claude bot on the Anthropic API key (the monthly API credits): see api_credits.
+            "api_credits" => self.api_credits(a),
             // The request-match check: off until false asks are measured (scripts/e2e-flows.py turns it on).
             "set_ask_check" => ok(self.db.set_setting("ask_check", if arg(a, "on")? { "on" } else { "off" })?),
             "set_telegram_topics" => ok(self.db.set_setting(&format!("telegram_topics:{}", arg::<i64>(a, "bot_id")?), if arg(a, "on")? { "on" } else { "off" })?),

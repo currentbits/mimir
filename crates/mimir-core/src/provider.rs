@@ -206,26 +206,30 @@ impl Provider {
                 // Claude on the Anthropic API key (the monthly API credits of a Max or Team plan), when the bot's page says
                 // so: once the plan says no, or from the start for a routine set to run on the credits. Either way the
                 // other one is tried once when the first is out (same session, tools and instructions).
-                if let (Provider::Claude { .. }, Some((key, key_first))) = (self, api_credits(ctx)) {
-                    let mut on_key = key_first;
-                    let r = match go(session.as_deref(), on_key.then_some(key.as_str())).await {
-                        Err(e) if spent(&e) => {
-                            on_key = !on_key;
-                            let then = if on_key { "on your Anthropic API key" } else { "on the plan" };
-                            go(session.as_deref(), on_key.then_some(key.as_str())).await.map_err(|e2| anyhow!("{e:#}; then {then}: {e2:#}"))
-                        }
-                        r => r,
-                    };
-                    // The run log shows it next to the model.
-                    return r.map(|mut r| {
-                        if on_key {
-                            r.usage.model = Some(format!("{} on your Anthropic API key", r.usage.model.as_deref().unwrap_or("Claude")));
-                        }
-                        r
-                    });
-                }
+                let credits = if matches!(self, Provider::Claude { .. }) { api_credits(ctx) } else { None };
+                let mut on_key = credits.as_ref().is_some_and(|c| c.1);
+                let mut first: Option<anyhow::Error> = None;
                 // A session that can't be reopened is the caller's to retry: it has the chat to start the new one with.
-                let r = go(session.as_deref(), None).await;
+                // One call site: in a debug build each one is a whole CLI future on the stack (Windows' tests overflowed).
+                let mut r = loop {
+                    match go(session.as_deref(), credits.as_ref().filter(|_| on_key).map(|c| c.0.as_str())).await {
+                        Err(e) if credits.is_some() && first.is_none() && spent(&e) => {
+                            on_key = !on_key;
+                            first = Some(e);
+                        }
+                        r => {
+                            let then = if on_key { "on your Anthropic API key" } else { "on the plan" };
+                            break r.map_err(|e2| match first {
+                                Some(e) => anyhow!("{e:#}; then {then}: {e2:#}"),
+                                None => e2,
+                            });
+                        }
+                    }
+                };
+                // The run log shows it next to the model.
+                if let (true, Ok(r)) = (on_key, &mut r) {
+                    r.usage.model = Some(format!("{} on your Anthropic API key", r.usage.model.as_deref().unwrap_or("Claude")));
+                }
                 // A saved model ChatGPT has retired (gpt-5.5 on 2026-10-14): once more on the default, and say so.
                 if let (Provider::Codex { .. }, Some(m), Err(e)) = (self, model, &r)
                     && model_gone(&format!("{e:#}"))
