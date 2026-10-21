@@ -8,6 +8,13 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 - **An allowance per person:** Settings → Limits → *Each person* caps what replies to one guest or family member may
   use in a day, in their own chat and a family group together. Over it, they get a short note instead of an answer,
   and Needs you offers **Allow more today**. Your own chats are never capped.
+- **Telegram groups:** a bot in a group (not a family group) answers only when you @-mention it, reply to one of its
+  messages or send a `/command`. Before, with privacy mode off, it answered every message.
+
+### Safety
+- **Quiet checks stay off your network:** a watched page that redirects to a name pointing at this computer or the
+  local network (a home router, a cloud server's metadata) is no longer fetched; before, only addresses written as
+  numbers were refused. Quiet checks and `web_fetch` also read at most 2 MB of a page.
 
 ### Fixes
 - **Signal and WhatsApp:** replying to an approval card with a number now works after Mimir restarts. Before, the

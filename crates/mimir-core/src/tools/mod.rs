@@ -485,6 +485,21 @@ pub(crate) fn public_redirects() -> reqwest::redirect::Policy {
     reqwest::redirect::Policy::custom(|a| if a.previous().len() >= 10 || is_private_host(a.url().as_str()) { a.stop() } else { a.follow() })
 }
 
+/// The most of a fetched page that's read: the rest isn't downloaded, so an endless page can't fill memory.
+pub(crate) const PAGE_MAX: usize = 2_000_000;
+
+/// A response's body as text, its first `max` bytes only. ponytail: decoded as UTF-8 (lossy), not by its charset.
+pub(crate) async fn capped_text(mut res: reqwest::Response, max: usize) -> Result<String> {
+    let mut bytes = vec![];
+    while bytes.len() < max
+        && let Some(chunk) = res.chunk().await?
+    {
+        bytes.extend_from_slice(&chunk);
+    }
+    bytes.truncate(max);
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
 pub fn fmt_ts(t: i64) -> String {
     use chrono::TimeZone;
     chrono::Local.timestamp_opt(t, 0).single().map(|d| d.format("%a %Y-%m-%d %H:%M").to_string()).unwrap_or_default()
