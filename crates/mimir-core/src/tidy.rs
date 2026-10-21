@@ -112,9 +112,10 @@ pub async fn import(db: &Db, provider: &Provider, bot: i64, chat: i64, text: &st
 
 /// The same for memory files another agent wrote (Claude Code, Hermes, OpenClaw), often after reading repos, pages or
 /// mail: outside content, so only new memories, kept unconfirmed even once accepted.
-pub async fn import_outside(db: &Db, provider: &Provider, bot: i64, chat: i64, text: &str) -> Result<usize> {
+/// `origin` ("Imported from OpenClaw") starts each reason and becomes the memory's source once accepted.
+pub async fn import_outside(db: &Db, provider: &Provider, bot: i64, chat: i64, text: &str, origin: &str) -> Result<usize> {
     let user = format!("<pasted>\n{}\n</pasted>", truncate(text, 20_000));
-    propose_from(db, provider, bot, chat, "import", IMPORT_SYSTEM, &user, "Imported", true).await
+    propose_from(db, provider, bot, chat, "import", IMPORT_SYSTEM, &user, origin, true).await
 }
 
 /// One tool-less model call whose reply is a JSON array of memory proposals, queued as suggestions (never applied):
@@ -1502,11 +1503,11 @@ mod tests {
             db.store_by(&format!("chat:{chat}"), "knowledge", "Home", "Lives in Utrecht", "edited in app", None, &crate::db::Prov::by("you")).unwrap();
         }
 
-        assert_eq!(import_outside(&db, &provider, 1, 1, "notes").await.unwrap(), 1, "the update is dropped");
+        assert_eq!(import_outside(&db, &provider, 1, 1, "notes", "Imported from Hermes").await.unwrap(), 1, "the update is dropped");
         let s = db.suggestions("chat:1").unwrap();
         assert_eq!((s[0].action.as_str(), s[0].tainted), ("add", true));
         db.suggestion_decide("chat:1", s[0].id, true).unwrap();
-        assert!(db.entries("chat:1").unwrap().iter().any(|e| e.title == "Invoices" && e.tainted), "accepted, but not confirmed");
+        assert!(db.entries("chat:1").unwrap().iter().any(|e| e.title == "Invoices" && e.tainted && e.source == "imported from Hermes, approved by you"), "accepted, but not confirmed, and from where");
 
         assert_eq!(import(&db, &provider, 1, 2, "notes").await.unwrap(), 2, "pasted text may still update");
         assert!(db.suggestions("chat:2").unwrap().iter().all(|s| !s.tainted));
