@@ -16,6 +16,17 @@ use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio_util::either::Either;
 
+/// The line a new install adds to emails a bot sends to someone you haven't written to (Settings → Email changes it).
+pub const DISCLOSE: &str = "Sent by my assistant";
+
+/// What a reply in a thread a bot started tells the bot reading it.
+pub const BOT_THREAD: &str = "[This is a reply to an email a bot sent for the user. If it's personal, off-topic, or asks the user to \
+commit to something (a meeting, money, a contract), don't answer it or draft a reply: call email_hand_over with a one-line summary, \
+and the user handles it.]";
+
+/// The end of the Message-ID of every email Mimir writes: replies that carry it are in a thread a bot started.
+const OURS: &str = "@mimir.local";
+
 /// Where the one mailbox of older versions kept its app password (moved on first read, see `accounts`).
 const OLD_SECRET: &str = "email_password";
 
@@ -359,12 +370,13 @@ async fn read_now(a: &Account, folder: &str, uid: u32) -> Result<String> {
     let attachments: Vec<String> = m.attachments().filter_map(|p| p.attachment_name().map(String::from)).collect();
     let to = m.to().map(|t| t.iter().filter_map(|a| a.address()).collect::<Vec<_>>().join(", ")).unwrap_or_default();
     Ok(format!(
-        "From: {}\nTo: {to}\nDate: {}\nSubject: {}\n\n{}{}",
+        "From: {}\nTo: {to}\nDate: {}\nSubject: {}\n\n{}{}{}",
         who(m.from()),
         date(&m),
         m.subject().unwrap_or("(no subject)"),
         crate::tools::truncate(text.trim(), 15_000),
-        if attachments.is_empty() { String::new() } else { format!("\n\nAttachments: {}", attachments.join(", ")) }
+        if attachments.is_empty() { String::new() } else { format!("\n\nAttachments: {}", attachments.join(", ")) },
+        if bot_thread(&m) { format!("\n\n{BOT_THREAD}") } else { String::new() }
     ))
 }
 
@@ -445,7 +457,7 @@ async fn compose(a: &Account, s: &mut Session<Stream>, d: &Draft<'_>) -> Result<
         }
     }
     let body = d.body.replace("\r\n", "\n").replace('\n', "\r\n");
-    let id = format!("{}@mimir.local", crate::random_hex(12)?);
+    let id = format!("{}{OURS}", crate::random_hex(12)?);
     let msg = format!(
         "From: {}\r\nTo: {to}\r\n{}Subject: {subject}\r\nDate: {}\r\nMessage-ID: <{id}>\r\n{threading}MIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n{body}\r\n",
         a.user,
@@ -486,11 +498,41 @@ async fn file_sent(s: &mut Session<Stream>, id: &str, msg: &str, wait: Duration)
     Ok(Some(folder))
 }
 
+/// A reply in a thread a bot started: its In-Reply-To or References name an email Mimir wrote.
+pub(crate) fn bot_thread(m: &mail_parser::Message) -> bool {
+    [m.in_reply_to(), m.references()].iter().any(|h| h.as_text_list().is_some_and(|l| l.iter().any(|id| id.trim_end_matches('>').ends_with(OURS))))
+}
+
+/// Someone you haven't written to yourself: Sent holds no mail to them (To or Cc) but what a bot sent. No Sent folder,
+/// or a search that fails: counts as new, so the line goes on.
+async fn new_to_you(s: &mut Session<Stream>, me: &str, rcpt: &[String]) -> bool {
+    let known = async {
+        let Some(sent) = special(s, async_imap::types::NameAttribute::Sent).await? else { return Ok(false) };
+        s.examine(&sent).await?;
+        for r in rcpt.iter().filter(|r| !r.eq_ignore_ascii_case(me)) {
+            let q = format!("OR TO {0} CC {0} NOT HEADER Message-ID {1}", quoted(r)?, quoted(OURS)?);
+            if s.uid_search(q).await?.is_empty() {
+                return Ok(false);
+            }
+        }
+        anyhow::Ok(true)
+    };
+    !known.await.unwrap_or(false)
+}
+
 /// Send an email as the person, over their outgoing server (TLS from the start on 465, STARTTLS on 587; plain only to
-/// this computer). The caller has had it approved. Keeps the mail session open for filing the copy.
-async fn deliver(a: &Account, d: &Draft<'_>) -> Result<(Session<Stream>, String, String)> {
+/// this computer). The caller has had it approved. With `disclose`, an email to someone new ends with that line.
+/// Keeps the mail session open for filing the copy. Returns whether the line went on too.
+async fn deliver(a: &Account, d: &Draft<'_>, disclose: Option<&str>) -> Result<(Session<Stream>, String, String, bool)> {
     use lettre::{AsyncSmtpTransport, AsyncTransport, Tokio1Executor, address::Envelope, transport::smtp::authentication::Credentials};
     let mut s = session(a).await?;
+    let everyone: Vec<String> = [addresses(d.to)?, addresses(d.cc)?].iter().flat_map(|l| l.split(", ")).filter(|x| !x.is_empty()).map(String::from).collect();
+    let line = match disclose.map(str::trim).filter(|l| !l.is_empty()) {
+        Some(l) if new_to_you(&mut s, &a.user, &everyone).await => Some(l),
+        _ => None,
+    };
+    let body = line.map(|l| format!("{}\n\n-- \n{l}", d.body.trim_end()));
+    let d = &Draft { body: body.as_deref().unwrap_or(d.body), ..*d };
     let (rcpt, msg, id) = compose(a, &mut s, d).await?;
     let from: lettre::Address = a.user.parse().context("your email address doesn't look like one")?;
     let to: Vec<lettre::Address> = rcpt.iter().map(|r| r.parse()).collect::<Result<_, _>>().context("a recipient isn't an address")?;
@@ -509,7 +551,7 @@ async fn deliver(a: &Account, d: &Draft<'_>) -> Result<(Session<Stream>, String,
     };
     let mailer = builder.credentials(creds).authentication(mechanisms).build();
     mailer.send_raw(&envelope, msg.as_bytes()).await.map_err(|e| anyhow::anyhow!("couldn't send through {}: {e}", a.smtp_host))?;
-    Ok((s, id, msg))
+    Ok((s, id, msg, line.is_some()))
 }
 
 /// Every mail operation, start to end (greeting, sign-in, the commands), within this: a stalled server can't hang a reply.
@@ -527,11 +569,13 @@ pub async fn read(a: &Account, folder: &str, uid: u32) -> Result<String> {
     bounded(read_now(a, folder, uid)).await
 }
 
-/// Sends, then files a copy in Sent (above), and says where (empty when the server keeps its own). Once it's sent,
-/// nothing turns that into an error: the bot would say it failed, or send it again.
-pub async fn send(a: &Account, d: &Draft<'_>) -> Result<String> {
-    let (mut s, id, msg) = bounded(deliver(a, d)).await?;
-    let note = match tokio::time::timeout(Duration::from_secs(20), file_sent(&mut s, &id, &msg, Duration::from_secs(3))).await {
+/// Sends, then files a copy in Sent (above), and says where (empty when the server keeps its own) and whether the
+/// `disclose` line went on. Once it's sent, nothing turns that into an error: the bot would say it failed, or send it again.
+pub async fn send(a: &Account, d: &Draft<'_>, disclose: Option<&str>) -> Result<String> {
+    // Boxed: with the Sent lookup this future is big, and the tool call that awaits it sits on Host::call's stack.
+    let (mut s, id, msg, disclosed) = bounded(Box::pin(deliver(a, d, disclose))).await?;
+    let said = if disclosed { format!(" It ends with “{}”, as it's to someone the user hasn't written to.", disclose.unwrap_or_default().trim()) } else { String::new() };
+    let note = said + &match tokio::time::timeout(Duration::from_secs(20), file_sent(&mut s, &id, &msg, Duration::from_secs(3))).await {
         Ok(Ok(Some(folder))) => format!(" A copy is in {folder}."),
         Ok(Ok(None)) => String::new(),
         Ok(Err(e)) => format!(" (No copy was saved to Sent: {e}.)"),
@@ -547,6 +591,56 @@ pub async fn draft(a: &Account, d: &Draft<'_>) -> Result<String> {
 
 pub async fn check(a: &Account) -> Result<u32> {
     bounded(check_now(a)).await
+}
+
+/// A reply a bot handed to you instead of answering it (Needs you): which email, and the bot's one line on it.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct HandedOver {
+    pub id: i64,
+    pub bot_id: i64,
+    pub chat_id: i64,
+    pub account: String,
+    pub from: String,
+    pub subject: String,
+    pub summary: String,
+    pub at: i64,
+}
+
+const HANDED: &str = "email_handed_over";
+// ponytail: a list in one setting, behind one lock; a table if people keep hundreds there.
+static HANDING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+pub fn handed_over(db: &crate::db::Db) -> Vec<HandedOver> {
+    db.setting(HANDED).ok().flatten().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+}
+
+/// Into Needs you (its id is given here); the newest first.
+pub fn hand_over(db: &crate::db::Db, mut h: HandedOver) -> Result<()> {
+    let _g = HANDING.lock().unwrap_or_else(|e| e.into_inner());
+    let mut list = handed_over(db);
+    h.id = list.iter().map(|x| x.id).max().unwrap_or(0) + 1;
+    list.insert(0, h);
+    db.set_setting(HANDED, &serde_json::to_string(&list)?)
+}
+
+/// The line added to emails a bot sends to someone you haven't written to ("" = none): set it with `line`, and read it.
+pub fn disclose(db: &crate::db::Db, line: Option<String>) -> Result<String> {
+    if let Some(line) = line {
+        let line = line.trim();
+        if line.chars().count() > 200 || line.contains(['\r', '\n']) {
+            bail!("one line, up to 200 characters");
+        }
+        db.set_setting("email_disclose", line)?;
+    }
+    Ok(db.setting("email_disclose")?.unwrap_or_default())
+}
+
+/// Dealt with: out of Needs you.
+pub fn handed_done(db: &crate::db::Db, id: i64) -> Result<()> {
+    let _g = HANDING.lock().unwrap_or_else(|e| e.into_inner());
+    let mut list = handed_over(db);
+    list.retain(|x| x.id != id);
+    db.set_setting(HANDED, &serde_json::to_string(&list)?)
 }
 
 /// Mail tasks (Settings → Email): the folder you file mail in for your bot. Mail sent to your +mimir address works
@@ -726,7 +820,7 @@ mod tests {
         let mut a = super::Account::new("127.0.0.1", 1143, "me@example.com", "pw");
         (a.smtp_host, a.smtp_port) = ("127.0.0.1".into(), 1025);
         let d = super::Draft { to: "sam@example.com", cc: "", subject: "Invoice 4411", body: "Paid on Friday.", reply_to: Some(1) };
-        let note = super::send(&a, &d).await.unwrap();
+        let note = super::send(&a, &d, None).await.unwrap();
         if mode == "gmail" {
             assert_eq!(note, "", "the server filed it, so no copy");
         } else {
@@ -754,7 +848,7 @@ mod tests {
         let a = super::find(&db, Some("ME@outlook.com")).unwrap();
         assert!(a.oauth.is_some() && a.pass.is_empty());
         let d = super::Draft { to: "sam@example.com", cc: "", subject: "Hi", body: "From Outlook.", reply_to: None };
-        super::send(&a, &d).await.unwrap();
+        super::send(&a, &d, None).await.unwrap();
         let smtp = std::fs::read_to_string("/tmp/fake-mail/smtp.txt").unwrap();
         assert!(smtp.contains("AUTH XOAUTH2"), "{smtp}");
         // A token the server refuses (revoked): the error says to sign in again.
@@ -821,6 +915,27 @@ mod tests {
         let t = super::task(msg(pass, "me@example.com", "me+mimir@example.com", "").replace("Fwd: Invoice 4411", "call the dentist tomorrow").as_bytes(), me, "x");
         assert_eq!(t, Task::Run { text: "[By email, x.] call the dentist tomorrow".into(), outside: false });
         assert_eq!(super::split_note("Thanks!\n\nOn Mon, Sam wrote:\n> hello"), ("Thanks!", "On Mon, Sam wrote:\n> hello"));
+    }
+
+    /// A reply in a thread a bot started is told apart (by the Message-ID Mimir gave it), and a hand-over sits in
+    /// Needs you until it's done.
+    #[test]
+    fn bot_threads_and_hand_overs() {
+        let parse = |h: &str| mail_parser::MessageParser::default().parse(&format!("From: sam@x.com\r\nSubject: Re: Invoice\r\n{h}\r\nhi\r\n")).unwrap().into_owned();
+        assert!(super::bot_thread(&parse("In-Reply-To: <a1b2@mimir.local>\r\n")));
+        assert!(super::bot_thread(&parse("References: <x@gmail.com> <a1b2@mimir.local>\r\nIn-Reply-To: <x@gmail.com>\r\n")));
+        assert!(!super::bot_thread(&parse("In-Reply-To: <x@gmail.com>\r\n")) && !super::bot_thread(&parse("")));
+        let p = std::env::temp_dir().join(format!("mimir-handed-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = crate::db::Db::open(&p).unwrap();
+        assert_eq!(db.setting("email_disclose").unwrap().as_deref(), Some(super::DISCLOSE), "on for a new install");
+        let h = |s: &str| super::HandedOver { id: 0, bot_id: 1, chat_id: 2, account: "me@x.com".into(), from: "sam@x.com".into(), subject: "Re: Invoice".into(), summary: s.into(), at: 0 };
+        super::hand_over(&db, h("asks you out for coffee")).unwrap();
+        super::hand_over(&db, h("wants a contract signed")).unwrap();
+        let list = super::handed_over(&db);
+        assert_eq!(list.iter().map(|x| (x.id, x.summary.as_str())).collect::<Vec<_>>(), [(2, "wants a contract signed"), (1, "asks you out for coffee")]);
+        super::handed_done(&db, 2).unwrap();
+        assert_eq!(super::handed_over(&db).len(), 1);
     }
 
     #[test]

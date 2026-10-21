@@ -567,6 +567,9 @@ type Mailbox = { user: string; host: string; smtp: string; smtp_port: number; ou
 function EmailSettings() {
   const st = useLoad(() => invoke<{ accounts: Mailbox[]; outlook_client_id: string; outlook_tenant: string }>('email_accounts'), [])
   const tasks = useLoad(() => invoke<boolean>('email_tasks', {}), [])
+  const disclose = useLoad(() => invoke<string>('email_disclose', {}), [])
+  const [line, setLine] = useState<string | null>(null)
+  const setDisclose = (l: string) => invoke('email_disclose', { line: l }).then(() => { setLine(null); return disclose.reload() }, e => setErr(String(e)))
   const empty = { host: '', port: '993', user: '', password: '', smtp: '', smtpPort: '' }
   const [d, setD] = useState(empty)
   const [adding, setAdding] = useState<'password' | 'outlook' | null>(null)
@@ -597,6 +600,12 @@ function EmailSettings() {
       {list.length > 0 && (
         <Row title="Tasks by email" desc={`Mail you send to ${list[0].user.replace('@', '+mimir@')}, or file in a folder called Mimir, goes to your bot as a message; it answers in your latest chat with it. Only mail from your own address that passes DKIM is taken. What you forward is outside content: your note on top is what the bot does.${list.length > 1 ? ' Uses your first mailbox.' : ''}`}>
           <Switch label="Tasks by email" checked={!!tasks.data} onChange={on => invoke('email_tasks', { on }).then(() => tasks.reload(), e => setErr(String(e)))} />
+        </Row>
+      )}
+      {list.length > 0 && (
+        <Row title="Say it's an assistant" desc="An email a bot sends to someone you haven't written to yourself ends with this line. A reply to a bot's email that's personal, off-topic or asks you to commit to something comes to you in Needs you, not to the bot.">
+          {!!disclose.data && <input className="input" style={{ width: 220 }} aria-label="The line added" value={line ?? disclose.data} onChange={e => setLine(e.target.value)} onBlur={() => line !== null && line.trim() && void setDisclose(line)} />}
+          <Switch label="Say it's an assistant" checked={!!disclose.data} onChange={on => void setDisclose(on ? 'Sent by my assistant' : '')} />
         </Row>
       )}
       {!mode && (
@@ -1175,7 +1184,7 @@ export const TOOL_LABEL: Record<string, string> = {
   computer_click: 'Click on the computer', computer_handoff: 'Ask you to take over the computer',
   computer_key: 'Press keys on the computer', computer_open: 'Open sites on the computer',
   computer_screenshot: "Look at the computer's screen", computer_scroll: 'Scroll on the computer',
-  computer_signin: 'Use saved logins', computer_type: 'Type on the computer', email_draft: 'Draft emails',
+  computer_signin: 'Use saved logins', computer_type: 'Type on the computer', email_draft: 'Draft emails', email_hand_over: 'Hand replies to you',
   email_read: 'Read your email', email_search: 'Search your email', email_send: 'Send emails',
   file_delete: 'Delete files', file_list: 'List files', file_read: 'Read files', file_write: 'Write files',
   goal_set: 'Set goals', goal_update: 'Update goals', routine_update: 'Change routines', send_file: 'Send files',
