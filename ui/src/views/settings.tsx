@@ -707,6 +707,18 @@ function KnowMeSettings() {
   )
 }
 
+/** Whether the tidy-up and imports may suggest memories about health, beliefs, money and the like. */
+function SensitiveRow() {
+  const [on, setOn] = useState<boolean | null>(null)
+  useEffect(() => { invoke<boolean>('remember_sensitive').then(setOn, () => {}) }, [])
+  return (
+    <Row icon={<Icon name="memory" size={15} />} title="Remember sensitive topics"
+      desc={on ? 'The tidy-up and imports may suggest memories about your health, beliefs, politics, sexuality and finances.' : 'The tidy-up and imports leave out your health, beliefs, politics, sexuality and finances (account numbers too), unless you say “remember that…” yourself.'}>
+      {on !== null && <Switch label="Remember sensitive topics" checked={on} onChange={v => { setOn(v); invoke<boolean>('remember_sensitive', { on: v }).then(setOn, () => setOn(!v)) }} />}
+    </Row>
+  )
+}
+
 /** Memories as Markdown files in a folder you pick (vault.rs): Obsidian, grep, git. What you change there is asked about. */
 function MemoryFolderSettings() {
   const st = useLoad(() => invoke<string>('memory_folder', {}), [])
@@ -724,6 +736,7 @@ function MemoryFolderSettings() {
           {st.data && <button type="button" className="btn btn-ghost" onClick={() => save('')}>Stop</button>}
         </div></div>
       </form>
+      <SensitiveRow />
     </Group>
   )
 }
