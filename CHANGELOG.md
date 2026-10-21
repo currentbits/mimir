@@ -2,6 +2,14 @@
 
 What changed for people using Mimir. The newest release is at the top; "Unreleased" is what the next one brings.
 
+## Unreleased
+
+### Email
+- **Bots say they're an assistant:** an email a bot sends to someone you haven't written to yourself ends with "Sent
+  by my assistant" (change the line, or turn it off, in **Settings → Email**). On for new installs. A reply to a
+  bot's email that's personal, off-topic, or asks you to commit to something (a meeting, money, a contract) isn't
+  answered: it comes to you in **Needs you** with a one-line summary.
+
 ## 0.5.0
 
 ### Talking to your bots

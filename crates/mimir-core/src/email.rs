@@ -904,6 +904,27 @@ mod tests {
         assert_eq!(super::split_note("Thanks!\n\nOn Mon, Sam wrote:\n> hello"), ("Thanks!", "On Mon, Sam wrote:\n> hello"));
     }
 
+    /// A reply in a thread a bot started is told apart (by the Message-ID Mimir gave it), and a hand-over sits in
+    /// Needs you until it's done.
+    #[test]
+    fn bot_threads_and_hand_overs() {
+        let parse = |h: &str| mail_parser::MessageParser::default().parse(format!("From: sam@x.com\r\nSubject: Re: Invoice\r\n{h}\r\nhi\r\n").into_bytes()).unwrap().into_owned();
+        assert!(super::bot_thread(&parse("In-Reply-To: <a1b2@mimir.local>\r\n")));
+        assert!(super::bot_thread(&parse("References: <x@gmail.com> <a1b2@mimir.local>\r\nIn-Reply-To: <x@gmail.com>\r\n")));
+        assert!(!super::bot_thread(&parse("In-Reply-To: <x@gmail.com>\r\n")) && !super::bot_thread(&parse("")));
+        let p = std::env::temp_dir().join(format!("mimir-handed-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = crate::db::Db::open(&p).unwrap();
+        assert_eq!(db.setting("email_disclose").unwrap().as_deref(), Some(super::DISCLOSE), "on for a new install");
+        let h = |s: &str| super::HandedOver { id: 0, bot_id: 1, chat_id: 2, account: "me@x.com".into(), from: "sam@x.com".into(), subject: "Re: Invoice".into(), summary: s.into(), at: 0 };
+        super::hand_over(&db, h("asks you out for coffee")).unwrap();
+        super::hand_over(&db, h("wants a contract signed")).unwrap();
+        let list = super::handed_over(&db);
+        assert_eq!(list.iter().map(|x| (x.id, x.summary.as_str())).collect::<Vec<_>>(), [(2, "wants a contract signed"), (1, "asks you out for coffee")]);
+        super::handed_done(&db, 2).unwrap();
+        assert_eq!(super::handed_over(&db).len(), 1);
+    }
+
     #[test]
     fn draft_headers_cant_be_smuggled() {
         assert_eq!(super::addresses("sam@x.com, priya@y.org").unwrap(), "sam@x.com, priya@y.org");
