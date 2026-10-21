@@ -298,7 +298,7 @@ impl Db {
         let mut steps = vec![];
         for id in ids.into_iter().rev() {
             for c in self.tool_calls(id)? {
-                let bookkeeping = c.tool.starts_with("memory_") || c.tool.starts_with("skill_") || c.tool.ends_with("_search") || c.tool == "plan_propose" || c.tool == "ask_choice";
+                let bookkeeping = c.tool.starts_with("memory_") || c.tool.starts_with("skill_") || c.tool.ends_with("_search") || c.tool == "plan_propose" || c.tool == "ask_choice" || c.tool == "progress_set";
                 if c.ok && c.decision != "deny" && !bookkeeping {
                     steps.push(c.summary);
                 }

@@ -1,10 +1,10 @@
-//! The always-on runtime for one bot: channel listeners (Telegram, Slack, Discord, Signal, WhatsApp) + routine
+//! The always-on runtime for one bot: channel listeners (Telegram, Slack, Discord, Signal, WhatsApp, iMessage) + routine
 //! scheduler + approval cards. Shared by the CLI (`mimir serve`) and the desktop app, which
 //! aborts/respawns it on settings change.
 
 use crate::db::{Approval, Db};
 use crate::say::{tr, trf};
-use crate::{Trigger, discord::Discord, provider::Provider, signal::Signal, slack::Slack, telegram::Tg, tools::ToolCtx, turn, whatsapp::WhatsApp};
+use crate::{Trigger, discord::Discord, imessage::IMessage, provider::Provider, signal::Signal, slack::Slack, telegram::Tg, tools::ToolCtx, turn, whatsapp::WhatsApp};
 use anyhow::Result;
 use serde::Serialize;
 use serde_json::json;
@@ -44,6 +44,8 @@ pub struct Channels {
     pub signal: Option<(String, String)>,
     /// (the bot's phone number id, access token, the Meta app's secret)
     pub whatsapp: Option<(String, String, String)>,
+    /// The one iMessage conversation it answers in (a phone number or email), on this Mac.
+    pub imessage: Option<String>,
 }
 
 /// A connected messaging channel. Enum dispatch keeps the adapters plain structs.
@@ -54,6 +56,7 @@ pub(crate) enum Chan {
     Discord(Discord),
     Signal(Signal),
     WhatsApp(WhatsApp),
+    IMessage(IMessage),
 }
 
 /// Telegram allows about one edit per second per chat, Discord five per five seconds: 1.5s suits all.
@@ -83,6 +86,7 @@ impl Chan {
             Chan::Discord(_) => "discord",
             Chan::Signal(_) => "signal",
             Chan::WhatsApp(_) => "whatsapp",
+            Chan::IMessage(_) => "imessage",
         }
     }
 
@@ -102,6 +106,7 @@ impl Chan {
             Chan::Discord(c) => c.finish(ext, draft, text, rows).await,
             Chan::Signal(c) => c.finish(ext, draft, text, rows).await,
             Chan::WhatsApp(c) => c.finish(ext, draft, text, rows).await,
+            Chan::IMessage(c) => c.finish(ext, draft, text, rows).await,
         }
     }
 
@@ -115,7 +120,8 @@ impl Chan {
                     Chan::Slack(c) => c.upload(ext, &name, bytes).await,
                     Chan::Discord(c) => c.upload(ext, &name, bytes).await,
                     Chan::Signal(c) => c.upload(ext, &name, bytes).await,
-            Chan::WhatsApp(c) => c.upload(ext, &name, bytes).await,
+                    Chan::WhatsApp(c) => c.upload(ext, &name, bytes).await,
+                    Chan::IMessage(c) => c.upload(ext, &name, bytes).await,
                 },
                 Err(e) => Err(e.into()),
             };
@@ -126,8 +132,9 @@ impl Chan {
         }
     }
 
-    /// Stream a reply into one message: post the draft once text arrives, then edit it as it grows.
-    fn follow(&self, bot: i64, chat_id: i64, ext: &str) -> Follower {
+    /// Stream a reply into one message: post the draft once text arrives, then edit it as it grows. The run's checklist
+    /// (progress_set) goes above the text, so the reply replacing the draft clears it too.
+    fn follow(&self, db: Db, bot: i64, chat_id: i64, ext: &str) -> Follower {
         let (chan, ext, stop) = (self.clone(), ext.to_string(), Arc::new(Notify::new()));
         let stopped = stop.clone();
         let task = tokio::spawn(async move {
@@ -137,7 +144,12 @@ impl Chan {
                     _ = tokio::time::sleep(EDIT_EVERY) => {}
                     _ = stopped.notified() => return id,
                 }
-                let Some(draft) = crate::live::get(bot, chat_id).filter(|d| !d.trim().is_empty()) else { continue };
+                let steps = crate::tools::checklist(&crate::tools::progress(&db, bot, chat_id));
+                let text = crate::live::get(bot, chat_id).unwrap_or_default();
+                let draft = [steps, text].into_iter().filter(|s| !s.trim().is_empty()).collect::<Vec<_>>().join("\n\n");
+                if draft.is_empty() {
+                    continue;
+                }
                 // A long reply's draft stops growing at DRAFT_MAX; the final message has all of it.
                 let head: String = draft.chars().take(DRAFT_MAX).collect();
                 // No cursor on Slack: a draft there may be a stream, which is only appended to, so one would stay in the text.
@@ -166,6 +178,7 @@ impl Chan {
             Chan::Discord(c) => c.draft_post(ext, text).await,
             Chan::Signal(c) => c.draft_post(ext, text).await,
             Chan::WhatsApp(c) => c.draft_post(ext, text).await,
+            Chan::IMessage(c) => c.draft_post(ext, text).await,
         }
     }
 
@@ -176,6 +189,7 @@ impl Chan {
             Chan::Discord(c) => c.draft_edit(ext, id, text).await,
             Chan::Signal(c) => c.draft_edit(ext, id, text).await,
             Chan::WhatsApp(c) => c.draft_edit(ext, id, text).await,
+            Chan::IMessage(c) => c.draft_edit(ext, id, text).await,
         }
     }
 
@@ -187,6 +201,7 @@ impl Chan {
             Chan::Signal(c) => Some(c.typing(ext)),
             Chan::WhatsApp(c) => Some(c.typing(ext)),
             Chan::Slack(c) => c.typing(ext),
+            Chan::IMessage(c) => c.typing(ext),
         }
     }
 
@@ -197,6 +212,7 @@ impl Chan {
             Chan::Discord(c) => c.card(ext, a).await,
             Chan::Signal(c) => c.card(ext, a).await,
             Chan::WhatsApp(c) => c.card(ext, a).await,
+            Chan::IMessage(c) => c.card(ext, a).await,
         }
     }
 
@@ -207,6 +223,7 @@ impl Chan {
             Chan::Discord(c) => c.listen(self, core, slot).await,
             Chan::Signal(c) => c.listen(self, core, slot).await,
             Chan::WhatsApp(c) => c.listen(self, core, slot).await,
+            Chan::IMessage(c) => c.listen(self, core, slot).await,
         }
     }
 }
@@ -575,7 +592,7 @@ pub fn quiet_now(db: &Db, now: chrono::DateTime<chrono::Local>) -> bool {
     if from <= to { (from..to).contains(&t) } else { t >= from || t < to }
 }
 
-/// A file attached to a Slack, Discord, Signal or WhatsApp message, as the app describes it; `url` is "" when it can't be fetched.
+/// A file attached to a Slack, Discord, Signal, WhatsApp or iMessage message, as the app describes it; `url` is "" when it can't be fetched.
 pub(crate) struct File {
     pub name: String,
     pub mime: String,
@@ -586,7 +603,7 @@ pub(crate) struct File {
 }
 
 /// The most a file may be for the bot to fetch it (Telegram's cap for bots, used for every app).
-const MAX_FILE: u64 = 20_000_000;
+pub(crate) const MAX_FILE: u64 = 20_000_000;
 
 /// Messages sent while Mimir was away are fetched on reconnect if they're at most this old.
 pub(crate) const CATCH_UP_SECS: i64 = 86_400;
@@ -835,6 +852,15 @@ impl Core {
         true
     }
 
+    /// Does a `slack:` routine of this bot wait for a channel message? Then `slack_said` with each one.
+    pub(crate) fn slack_waits(&self) -> bool {
+        crate::events::slack_waits(&self.db, self.bot)
+    }
+
+    pub(crate) fn slack_said(&self, channel: &[String], from: &[String], text: &str) {
+        crate::events::slack_said(&self.db, self.bot, channel, from, text)
+    }
+
     /// Is this the person this paired chat answers? (For bookkeeping that should only follow them, like which message
     /// to reply under.)
     pub(crate) fn is_owner(&self, chan: &Chan, ext: &str, from: &str) -> bool {
@@ -856,6 +882,11 @@ impl Core {
 
     pub(crate) fn is_paired(&self, chan: &Chan, ext: &str) -> Result<bool> {
         Ok(self.db.chat_lookup(chan.kind(), ext)?.is_some())
+    }
+
+    /// A family group: everyone there talks to the bot, so it hears every message, not just the ones addressed to it.
+    pub(crate) fn is_family(&self, chan: &Chan, ext: &str) -> bool {
+        self.db.chat_lookup(chan.kind(), ext).ok().flatten().is_some_and(|chat| self.db.chat_family(chat))
     }
 
     /// Keep a file the person sent, under <home>/media (the only folder the AI may read files from). Startup deletes
@@ -1094,7 +1125,7 @@ impl Core {
                 }
             };
             // The reply shows up as it's written: one message, edited as it grows, then formatted.
-            let follower = chan.follow(core.bot, chat, &ext);
+            let follower = chan.follow(core.db.clone(), core.bot, chat, &ext);
             let mut ctx = ToolCtx::new(core.db.clone(), core.bot, chat);
             ctx.conv = conv;
             ctx.images = images;
@@ -1251,6 +1282,15 @@ impl Core {
             }
             None => Ok(None),
         }
+    }
+
+    /// A number replying to a pending card whose numbers this process never saw (Mimir restarted since it went out):
+    /// the button it names, numbered as `signal::numbered` did. Without this, the "1" would deny the card as its reason.
+    pub(crate) fn card_pick(&self, chan: &Chan, ext: &str, card: &str, said: &str) -> Result<Option<String>> {
+        let Some(n) = crate::signal::pick(said) else { return Ok(None) };
+        let Some(chat) = self.db.chat_lookup(chan.kind(), ext)? else { return Ok(None) };
+        let Some(a) = self.db.approval_by_card(chat, card)?.map(|id| self.db.approval(id)).transpose()?.flatten() else { return Ok(None) };
+        Ok(card_buttons(&a).into_iter().flatten().map(|(_, d)| d).filter(|d| !d.starts_with("https://")).nth(n - 1))
     }
 
     /// A text reply to a pending card: no, and this is why (the bot is told, in the person's words). True if it was
@@ -1987,6 +2027,15 @@ impl Core {
                     eprintln!("mail tasks: {e:#}");
                 }
             }
+            // The memory folder, kept in step by the memory bot (no AI involved, so while paused too).
+            if crate::tidy::memory_bot(&self.db) == Some(self.bot) && crate::vault::folder(&self.db).is_some() {
+                let db = self.db.clone();
+                match tokio::task::spawn_blocking(move || crate::vault::sync(&db)).await {
+                    Ok(Err(e)) => eprintln!("memory folder: {e:#}"),
+                    Err(e) => eprintln!("memory folder: {e}"),
+                    Ok(Ok(_)) => {}
+                }
+            }
             // Paused by you: nothing runs on its own (routines, digest, weekly review, tidy-up) until it ends.
             if self.db.paused(self.bot, now).unwrap_or_else(|e| { eprintln!("pause: {e:#}"); None }).is_some() {
                 tokio::time::sleep(Duration::from_secs(30)).await;
@@ -2164,6 +2213,9 @@ pub async fn serve(db: Db, bot: i64, provider: Arc<Provider>, channels: Channels
     }
     if let Some((id, token, secret)) = channels.whatsapp {
         chans.push(Chan::WhatsApp(WhatsApp::new(&id, &token, &secret)?));
+    }
+    if let Some(handle) = channels.imessage {
+        chans.push(Chan::IMessage(IMessage::new(&handle)?));
     }
     // Started again after a crash: what happened stays on show.
     let crashed = status.lock().unwrap_or_else(|e| e.into_inner()).error.take();
@@ -2408,6 +2460,11 @@ mod tests {
 
     /// A pretend AI that answers "Seen." and keeps what each request asked.
     async fn recording_ai() -> (String, Arc<std::sync::Mutex<Vec<String>>>) {
+        scripted_ai(&[r#"{"choices":[{"message":{"role":"assistant","content":"Seen."}}],"usage":{"prompt_tokens":3,"completion_tokens":2}}"#]).await
+    }
+
+    /// A pretend AI service answering with these bodies in turn (the last one from then on), keeping every request.
+    async fn scripted_ai(bodies: &'static [&'static str]) -> (String, Arc<std::sync::Mutex<Vec<String>>>) {
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let (addr, seen) = (l.local_addr().unwrap(), Arc::new(std::sync::Mutex::new(vec![])));
         let keep = seen.clone();
@@ -2425,12 +2482,40 @@ mod tests {
                         break;
                     }
                 }
-                keep.lock().unwrap().push(String::from_utf8_lossy(&req).to_string());
-                let body = r#"{"choices":[{"message":{"role":"assistant","content":"Seen."}}],"usage":{"prompt_tokens":3,"completion_tokens":2}}"#;
+                let n = {
+                    let mut k = keep.lock().unwrap();
+                    k.push(String::from_utf8_lossy(&req).to_string());
+                    k.len()
+                };
+                let body = bodies[n.min(bodies.len()) - 1];
                 let _ = s.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await;
             }
         });
         (format!("http://{addr}/v1"), seen)
+    }
+
+    /// #154: a reply that ends with steps on its checklist still open gets one more turn, told which; then the
+    /// checklist is gone.
+    #[tokio::test]
+    async fn open_steps_get_one_more_turn() {
+        let p = std::env::temp_dir().join(format!("mimir-open-steps-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = Db::open(&p).unwrap();
+        let (base, asked) = scripted_ai(&[
+            r#"{"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[{"id":"c1","type":"function","function":{"name":"progress_set","arguments":"{\"steps\":[{\"step\":\"Find flights\",\"done\":true},{\"step\":\"Book the cheapest\",\"done\":false}]}"}}]}}]}"#,
+            r#"{"choices":[{"message":{"role":"assistant","content":"Found three. I'll now book the cheapest."}}]}"#,
+            r#"{"choices":[{"message":{"role":"assistant","content":"I can't book it: the airline needs your login."}}]}"#,
+        ])
+        .await;
+        let provider = Provider::new("openai", Some("m".into()), Some(base), Some("k".into()), std::env::temp_dir()).unwrap();
+        let ctx = ToolCtx::new(db.clone(), 1, 0);
+        let reply = crate::turn(&provider, &ctx, crate::Trigger::Message("Book me a flight to Lisbon")).await.unwrap();
+        assert_eq!(reply, "Found three. I'll now book the cheapest.\n\nI can't book it: the airline needs your login.");
+        let asked = asked.lock().unwrap().clone();
+        assert_eq!(asked.len(), 3, "one more turn, not more");
+        assert!(asked[2].contains("still open: Book the cheapest.") && asked[2].contains("I'll now book the cheapest."), "{}", asked[2]);
+        assert!(crate::tools::progress(&db, 1, 0).is_empty(), "the checklist ends with its run");
+        assert_eq!(crate::tools::checklist(&[("Find flights".into(), true), ("Book".into(), false)]), "☑ Find flights\n☐ Book");
     }
 
     #[tokio::test]
@@ -2883,6 +2968,12 @@ mod tests {
         // A text reply to a card: no, and why. Only that card, in its own chat, from the person who pairs it.
         let card = ask(5, false);
         db.approval_mark_notified(card, Some("c9")).unwrap();
+        // A number replying to it after a restart (Signal's numbers lost) still picks that button, not a denial.
+        let first = card_buttons(&db.approval(card).unwrap().unwrap())[0][0].1.clone();
+        assert_eq!(core.card_pick(&tg, "5", "c9", "1.").unwrap(), Some(first));
+        assert_eq!(core.card_pick(&tg, "5", "c9", "99").unwrap(), None, "out of range");
+        assert_eq!(core.card_pick(&tg, "5", "c9", "not now").unwrap(), None, "not a number");
+        assert_eq!(core.card_pick(&tg, "5", "c8", "1").unwrap(), None, "another message");
         assert!(!core.deny_by_reply(&tg, "42", me, "c9", "not now").unwrap(), "another chat");
         assert!(!core.deny_by_reply(&tg, "5", Sender { id: "9", dm: false }, "c9", "not now").unwrap(), "someone else");
         assert!(!core.deny_by_reply(&tg, "5", me, "c8", "not now").unwrap(), "another message");
@@ -2952,8 +3043,10 @@ mod tests {
         let other = Chan::Slack(crate::slack::Slack::new("xoxb-1", "xapp-1").unwrap());
         db.pair_external("slack", "C1", "c1").unwrap();
         assert!(core.mark_seen(&other, "C1", 3));
+        db.outbox_add(1, chat, "discord", "C1", None, "still to send", "[]", "[]", None).unwrap();
         db.unpair(chat).unwrap();
         assert_eq!((core.seen(&chan, "C1"), core.seen(&other, "C1")), (None, Some(3)));
+        assert!(db.outbox_take(1, crate::db::now() + 1000).unwrap().is_empty(), "nothing left to send to an unpaired chat");
     }
 
     #[tokio::test]

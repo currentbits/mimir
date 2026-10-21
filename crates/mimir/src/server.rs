@@ -65,9 +65,9 @@ async fn require_token(State(app): State<App>, req: axum::extract::Request, next
     next.run(req).await
 }
 
-/// The bot a chat API token reaches (set by `require_chat_token`).
+/// The bot a chat API token reaches, and the token's own chat (set by `require_chat_token`).
 #[derive(Clone, Copy)]
-struct ChatBot(i64);
+struct ChatBot(i64, i64);
 
 /// Errors the way OpenAI's API words them, so clients show the message.
 fn oai_error(status: StatusCode, message: &str) -> Response {
@@ -78,8 +78,8 @@ fn oai_error(status: StatusCode, message: &str) -> Response {
 /// is read, like the admin API.
 async fn require_chat_token(State(app): State<App>, mut req: Request, next: Next) -> Response {
     match bearer(req.headers()).and_then(|t| mimir_core::host::chat_token_bot(&app.host.db, t)) {
-        Some(bot) => {
-            req.extensions_mut().insert(ChatBot(bot));
+        Some((bot, chat)) => {
+            req.extensions_mut().insert(ChatBot(bot, chat));
             next.run(req).await
         }
         None => oai_error(StatusCode::UNAUTHORIZED, "wrong or missing token: make one under Settings, Chat API"),
@@ -96,9 +96,9 @@ fn last_user_text(req: &Value) -> String {
     }
 }
 
-/// OpenAI-compatible chat for Shortcuts, Home Assistant and the like: one bot, its built-in chat. Mimir keeps the
-/// conversation itself, so only the last user message is the turn; the rest of `messages` is ignored.
-async fn chat_completions(State(app): State<App>, Extension(ChatBot(bot)): Extension<ChatBot>, body: axum::body::Bytes) -> Response {
+/// OpenAI-compatible chat for Shortcuts, Home Assistant and the like: one bot, in the token's own chat. Mimir keeps
+/// the conversation itself, so only the last user message is the turn; the rest of `messages` is ignored.
+async fn chat_completions(State(app): State<App>, Extension(ChatBot(bot, chat)): Extension<ChatBot>, body: axum::body::Bytes) -> Response {
     let req: Value = match serde_json::from_slice(&body) {
         Ok(v) => v,
         Err(e) => return oai_error(StatusCode::BAD_REQUEST, &format!("bad request body: {e}")),
@@ -107,7 +107,7 @@ async fn chat_completions(State(app): State<App>, Extension(ChatBot(bot)): Exten
     if text.trim().is_empty() {
         return oai_error(StatusCode::BAD_REQUEST, "no user message to answer");
     }
-    let reply = match app.host.call("send_local", &json!({"bot_id": bot, "text": text})).await {
+    let reply = match app.host.call("send_local", &json!({"bot_id": bot, "chat_id": chat, "text": text})).await {
         Ok(Value::String(s)) => s,
         Ok(v) => v.to_string(),
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": {"message": format!("{e:#}"), "type": "server_error"}}))).into_response(),
@@ -131,20 +131,33 @@ async fn chat_completions(State(app): State<App>, Extension(ChatBot(bot)): Exten
 }
 
 /// The one "model" a token reaches: its bot. Clients ask for this to check the connection.
-async fn models(State(app): State<App>, Extension(ChatBot(bot)): Extension<ChatBot>) -> Response {
+async fn models(State(app): State<App>, Extension(ChatBot(bot, _)): Extension<ChatBot>) -> Response {
     let name = app.host.db.bot(bot).map(|b| b.name).unwrap_or_default();
     Json(json!({"object": "list", "data": [{"id": name, "object": "model", "created": 0, "owned_by": "mimir"}]})).into_response()
 }
 
 /// A routine's webhook (Routines → When called). No admin token: its own secret, as the bearer token or an HMAC of the
-/// body in X-Hub-Signature-256 (how GitHub signs; X-Signature-256 too).
+/// body in X-Hub-Signature-256 (how GitHub signs; X-Signature-256 too). A `github:` routine takes only its events
+/// (X-GitHub-Event); others get 200 without a run, so GitHub doesn't show them as failed.
 async fn hook(State(app): State<App>, Path(id): Path<i64>, headers: HeaderMap, body: axum::body::Bytes) -> Response {
     let sig = ["x-hub-signature-256", "x-signature-256"].iter().find_map(|h| headers.get(*h)).and_then(|v| v.to_str().ok());
-    match mimir_core::events::webhook(&app.host.db, id, bearer(&headers), sig, &body) {
-        Ok(()) => (StatusCode::ACCEPTED, Json(json!({"ok": true}))).into_response(),
+    let event = headers.get("x-github-event").and_then(|v| v.to_str().ok());
+    match mimir_core::events::webhook(&app.host.db, id, bearer(&headers), sig, event, &body) {
+        Ok(true) => (StatusCode::ACCEPTED, Json(json!({"ok": true}))).into_response(),
+        Ok(false) => (StatusCode::OK, Json(json!({"ok": true, "ignored": "not an event this routine waits for"}))).into_response(),
         Err(mimir_core::events::Refused::Paused) => (StatusCode::CONFLICT, Json(json!({"error": "this routine is paused"}))).into_response(),
         Err(mimir_core::events::Refused::Repeat) => (StatusCode::CONFLICT, Json(json!({"error": "this call was already received"}))).into_response(),
         Err(mimir_core::events::Refused::Secret) => (StatusCode::UNAUTHORIZED, Json(json!({"error": "wrong or missing secret"}))).into_response(),
+    }
+}
+
+async fn card(State(app): State<App>, Path(key): Path<String>) -> Response {
+    match mimir_core::ext::card_page(&app.host.db, &key) {
+        Some((html, csp)) => match HeaderValue::from_str(&csp) {
+            Ok(csp) => ([(header::CONTENT_TYPE, HeaderValue::from_static("text/html; charset=utf-8")), (header::CONTENT_SECURITY_POLICY, csp)], html).into_response(),
+            Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        },
+        None => StatusCode::NOT_FOUND.into_response(),
     }
 }
 
@@ -182,16 +195,20 @@ async fn api(State(app): State<App>, Path(cmd): Path<String>, body: axum::body::
 /// scripts, and browsers don't guess content types.
 async fn harden(req: Request, next: Next) -> Response {
     let asset = req.uri().path().starts_with("/assets/");
+    let card = req.uri().path().starts_with("/card/");
     let mut r = next.run(req).await;
     // Vite names each built file after its content, so a browser may keep one forever. Not a missing one, which the
     // fallback answers with index.html.
     let keep = asset && r.status().is_success() && r.headers().get(header::CONTENT_TYPE).is_none_or(|t| !t.as_bytes().starts_with(b"text/html"));
     let h = r.headers_mut();
-    h.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
-    h.insert(
-        header::CONTENT_SECURITY_POLICY,
-        HeaderValue::from_static("default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"),
-    );
+    // A card brings its own CSP (sandboxed, framed by the app only).
+    if !card {
+        h.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+        h.insert(
+            header::CONTENT_SECURITY_POLICY,
+            HeaderValue::from_static("default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"),
+        );
+    }
     h.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
     h.insert(header::REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
     // Anything else, nothing a browser or a proxy in between should keep: index.html updates with the server, and
@@ -230,6 +247,8 @@ pub async fn run(db: Db, home: PathBuf, listen: &str) -> Result<()> {
         .route("/v1/models", get(models).route_layer(axum::middleware::from_fn_with_state(state.clone(), require_chat_token)))
         .route("/hook/{id}", post(hook).layer(DefaultBodyLimit::max(256 * 1024)))
         .route("/whatsapp", get(whatsapp_verify).post(whatsapp).layer(DefaultBodyLimit::max(1024 * 1024)))
+        // A tool server's card (MCP Apps): no token (an iframe can't send one); its key is the lock.
+        .route("/card/{key}", get(card))
         .route("/healthz", get(|| async { "ok" }))
         // Token auth (no cookies), so any origin may call it: the desktop app in remote mode needs this.
         .layer(CorsLayer::new().allow_origin(Any).allow_methods([Method::GET, Method::POST]).allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]))

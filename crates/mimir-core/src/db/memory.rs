@@ -211,6 +211,12 @@ impl Db {
                 tx.execute("DELETE FROM suggestions WHERE scope=?1 AND lower(title)=lower(?2) AND body=?3", params![scope, title, body])?;
                 if body.len() >= 8 {
                     tx.execute("UPDATE tool_calls SET summary='(an erased memory)', result='' WHERE instr(summary, ?1) > 0 OR instr(result, ?1) > 0", [&body])?;
+                    // A tool server's card that holds it goes whole (its input and answer are kept as JSON: escaped).
+                    let escaped = serde_json::to_string(&body)?;
+                    tx.execute(
+                        "DELETE FROM tool_cards WHERE instr(input || result || html, ?1) > 0 OR instr(input || result, ?2) > 0",
+                        params![body, escaped.trim_matches('"')],
+                    )?;
                 }
             }
             n += tx.execute("DELETE FROM entries WHERE id=?1 AND scope=?2", params![i, scope])?;

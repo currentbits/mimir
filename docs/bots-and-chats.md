@@ -90,6 +90,8 @@ does the same with the bot's own file: an export, then an import on this compute
 - **WhatsApp**, through Meta's Cloud API and a business number of the bot's own, on a server only (Meta calls Mimir's
   webhook): direct chats, with buttons, and it can only write within 24 hours of your last message there. Setup:
   [Connect](connect.md#whatsapp).
+- **iMessage**, in the Mac app only: one Messages conversation you choose (a note to yourself, or a chat with a second
+  Apple ID), read on this Mac while it's awake, with numbered lists as on Signal. Setup: [Connect](connect.md#imessage).
 
 ### What a reply did, from the log
 
@@ -129,6 +131,9 @@ and only you can press Approve / Deny. Each message reaches the bot with who wro
 guest's chat whoever paired it (several people read it), so bots there get none of your email, calendar, meetings or
 logins. Your household is you plus each guest whose direct chat you added on the same app. (On Telegram, a bot
 in a group only sees every message if its privacy mode is off in @BotFather; otherwise talk to it with an @-mention.)
+
+In any other Telegram group, the bot answers only a message that @-mentions it, replies to one of its messages, or is
+a `/command`, even with privacy mode off. A family group's bot answers every message it sees.
 
 ### Pairing a messaging app
 

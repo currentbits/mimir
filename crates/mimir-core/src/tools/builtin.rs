@@ -7,6 +7,22 @@ pub(crate) fn choice_key(bot: i64, chat: i64) -> String {
     format!("choice:{bot}:{chat}")
 }
 
+/// Where progress_set keeps the checklist of the reply being written in this chat (cleared when the run ends).
+pub(crate) fn progress_key(bot: i64, chat: i64) -> String {
+    format!("progress:{bot}:{chat}")
+}
+
+/// The checklist of the reply being written in this chat, as (step, done).
+pub fn progress(db: &Db, bot: i64, chat: i64) -> Vec<(String, bool)> {
+    let v: Value = db.setting(&progress_key(bot, chat)).ok().flatten().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+    v.as_array().into_iter().flatten().map(|s| (s["step"].as_str().unwrap_or_default().to_string(), s["done"].as_bool().unwrap_or(false))).collect()
+}
+
+/// The checklist as lines, for a messaging app's draft: "☑ Find flights" / "☐ Book".
+pub(crate) fn checklist(steps: &[(String, bool)]) -> String {
+    steps.iter().map(|(s, done)| format!("{} {s}", if *done { "☑" } else { "☐" })).collect::<Vec<_>>().join("\n")
+}
+
 /// How long a bot waits for the person to take over its computer.
 const HANDOFF_SECS: i64 = 600;
 
@@ -217,7 +233,7 @@ pub(super) fn calendar_linked(ctx: &ToolCtx, cron: &str) -> Result<()> {
     if crate::calendar::trigger(cron)?.is_some() && crate::host::secret_get(crate::calendar::SECRET).is_none() {
         bail!("no calendar is linked yet: the person adds its link in Mimir's Meetings → Calendar first");
     }
-    if crate::events::on(cron)? == Some(crate::events::On::Webhook) {
+    if crate::events::is_hook(cron) {
         bail!("only the person can set up a webhook, in Mimir's Routines tab (When called)");
     }
     crate::events::ready(&ctx.db, ctx.chat_id, cron)
@@ -340,7 +356,8 @@ pub(super) async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<Stri
             // A convention steers every future reply: only the person's own words set one directly. One a bot
             // inferred (or picked up after reading outside content) waits for them to accept it.
             // The person's own message must state a rule, and be about this one (shares a word with it).
-            let asked = ctx.run_id.map(|r| ctx.db.asked(r)).transpose()?.flatten();
+            // A chat API token's chat says nothing in your words: anyone with the token (or at the speaker using it) types there.
+            let asked = ctx.run_id.filter(|_| !crate::host::is_api_chat(ctx.chat_id)).map(|r| ctx.db.asked(r)).transpose()?.flatten();
             let own_words = !ctx.is_tainted() && asked.as_deref().is_some_and(|t| crate::states_rule(t) && crate::shares_words(t, &format!("{title} {body}")));
             // What the person's message says in their own words is theirs, whatever else the conversation read (a page
             // can't put words in their message): it isn't marked unconfirmed for the conversation's outside content.
@@ -589,6 +606,22 @@ pub(super) async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<Stri
             ctx.db.set_setting(&choice_key(ctx.bot_id, ctx.chat_id), &json!({"question": question, "options": options}).to_string())?;
             "Shown under your reply as buttons. End your reply now; their answer comes as their next message.".into()
         }
+        "progress_set" => {
+            let steps: Vec<Value> = args["steps"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|s| json!({"step": truncate(s["step"].as_str().unwrap_or("").trim(), 100), "done": s["done"].as_bool().unwrap_or(false)}))
+                .filter(|s| s["step"] != "")
+                .collect();
+            if steps.is_empty() || steps.len() > 50 {
+                bail!("give 1 to 50 steps");
+            }
+            let open = steps.iter().filter(|s| s["done"] == false).count();
+            // The app and the chat's draft show it while the reply is written (runtime's Follower), whichever process this runs in.
+            ctx.db.set_setting(&progress_key(ctx.bot_id, ctx.chat_id), &Value::from(steps).to_string())?;
+            if open == 0 { "All steps ticked.".into() } else { format!("Saved; {open} still open.") }
+        }
         "computer_handoff" => {
             let reason = s(args, "reason")?.trim().to_string();
             // Their sign-in goes where this bot will look: its own browser profile.
@@ -825,7 +858,7 @@ pub(super) async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<Stri
                 bail!("refusing to fetch local/private addresses");
             }
             ctx.taint();
-            let body = ctx.http.get(url).send().await?.error_for_status()?.text().await?;
+            let body = super::capped_text(ctx.http.get(url).send().await?.error_for_status()?, super::PAGE_MAX).await?;
             truncate(&strip_html(&body), 15_000)
         }
         "bot_create" => {

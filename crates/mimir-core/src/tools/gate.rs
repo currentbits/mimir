@@ -17,9 +17,9 @@ pub(super) fn is_read_only(db: &Db, tool: &str) -> bool {
 /// What a bot may do in a guest's chat: their own memory, routines, files and skills, the web, and calendar links.
 /// Nothing of yours (email, calendar, meetings, saved logins and the browser, tool servers, the computer), and no new
 /// bots in your app.
-pub(super) const GUEST_TOOLS: [&str; 26] = [
+pub(super) const GUEST_TOOLS: [&str; 27] = [
     "memory_store", "memory_search", "memory_forget", "chat_search", "routine_create", "routine_update", "routine_list", "routine_delete", "goal_set", "goal_update", "web_fetch", "web_search", "x_search",
-    "file_list", "file_read", "file_write", "file_delete", "skill_view", "skill_save", "calendar_add", "plan_propose", "ask_bot", "ask_choice", "send_file", "card_read", "card_write",
+    "file_list", "file_read", "file_write", "file_delete", "skill_view", "skill_save", "calendar_add", "plan_propose", "ask_bot", "ask_choice", "send_file", "card_read", "card_write", "progress_set",
 ];
 
 pub(super) fn usable(ctx: &ToolCtx, tool: &str) -> bool {
@@ -111,8 +111,9 @@ pub(super) fn gate(db: &Db, tool: &str, site: Option<&str>, tainted: bool) -> Re
     let browser = crate::ext::split(tool).is_some_and(|(s, _)| s == crate::ext::BROWSER) || tool.starts_with("computer_");
     // plan_propose only ever asks (and refuses on its own after outside content), so asking first would be a double ask.
     // ask_choice only shows the person buttons; what they tap is theirs to pick. send_file goes to them, like the reply.
+    // progress_set only ticks the run's own checklist.
     // An ask after outside content is guarded too, so it never offers "always" (a page could be asking).
-    let exempt = is_read_only(db, tool) || matches!(tool, "plan_propose" | "skill_save" | "ask_choice" | "send_file");
+    let exempt = is_read_only(db, tool) || matches!(tool, "plan_propose" | "skill_save" | "ask_choice" | "send_file" | "progress_set");
     Ok(if tainted && !exempt && ((action == "allow" && !browser) || action == "ask") { ("ask".into(), "guarded") } else { (action, "rule") })
 }
 
@@ -525,6 +526,11 @@ pub(super) fn describe(ctx: &ToolCtx, name: &str, args: &Value) -> String {
         "routine_list" => "List routines".into(),
         "card_read" => "Read the pinned cards".into(),
         "card_write" => format!("Update the card \"{}\"", args["title"].as_str().unwrap_or("")),
+        "progress_set" => {
+            let steps = args["steps"].as_array().map_or(0, Vec::len);
+            let done = args["steps"].as_array().into_iter().flatten().filter(|s| s["done"] == true).count();
+            format!("Checklist: {done} of {steps} done")
+        }
         "ask_choice" => format!("Ask \"{}\" with buttons", truncate(args["question"].as_str().unwrap_or(""), 120)),
         "skill_view" => format!("Read skill \"{}\"", args["name"].as_str().unwrap_or("")),
         "skill_save" => format!("Save as a skill: {}", args["title"].as_str().unwrap_or("")),
@@ -864,6 +870,7 @@ pub(crate) fn describe_tool(name: &str) -> String {
         None => match name {
         "ask_bot" => "hand tasks to other bots",
         "ask_choice" => "ask with buttons",
+        "progress_set" => "keep a checklist",
         "bot_create" => "make new bots",
         "calendar_add" => "give calendar links",
         "calendar_create" => "add calendar events",

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { invoke } from '../api'
+import { inDesktop, invoke, platform, remoteServer } from '../api'
 import { pigment, schedule, type Look } from '../format'
 import { openLink } from '../markdown'
 import { ask, Avatar, Group, Icon, Row, Switch } from '../ui'
@@ -10,8 +10,11 @@ import type { Bot, Delivery, Routine, Status, ToolServer, ChannelStatus, Compute
 
 const parseLook = (s?: string): Look => { try { return s ? JSON.parse(s) : {} } catch { return {} } }
 
+// Messages is read on this Mac, so only the Mac app running its own bots can do it.
+const imessageHere = inDesktop && platform === 'mac' && !remoteServer()
+
 type Secrets = { telegram_token: string | null; slack_bot_token: string | null; slack_app_token: string | null; discord_token: string | null; signal_number: string | null; signal_api: string | null
-  whatsapp_number_id: string | null; whatsapp_token: string | null; whatsapp_app_secret: string | null }
+  whatsapp_number_id: string | null; whatsapp_token: string | null; whatsapp_app_secret: string | null; imessage_chat: string | null }
 
 const PROVIDERS = [
   { id: 'claude', name: 'Claude', hint: 'Your Claude login (Claude Code)' },
@@ -34,9 +37,9 @@ const PROVIDER_NOTE: Record<string, React.ReactNode> = {
   openai: 'Uses the API key from Settings.',
 }
 
-export const BLANK: Bot = { id: 0, name: '', persona: '', provider: 'claude', model: '', base_url: '', tools: '', has_telegram_token: false, has_slack: false, has_discord: false, has_signal: false, has_whatsapp: false }
+export const BLANK: Bot = { id: 0, name: '', persona: '', provider: 'claude', model: '', base_url: '', tools: '', has_telegram_token: false, has_slack: false, has_discord: false, has_signal: false, has_whatsapp: false, has_imessage: false }
 
-const NO_SECRETS: Secrets = { telegram_token: null, slack_bot_token: null, slack_app_token: null, discord_token: null, signal_number: null, signal_api: null, whatsapp_number_id: null, whatsapp_token: null, whatsapp_app_secret: null }
+const NO_SECRETS: Secrets = { telegram_token: null, slack_bot_token: null, slack_app_token: null, discord_token: null, signal_number: null, signal_api: null, whatsapp_number_id: null, whatsapp_token: null, whatsapp_app_secret: null, imessage_chat: null }
 
 /** A routine a template starts with. Edit the prompt or switch it off before creating the bot. */
 type StarterRoutine = { cron: string; prompt: string; quiet?: boolean; delivery?: Delivery; on: boolean }
@@ -165,8 +168,8 @@ export function BotPage({ bot, status, canDelete, onSaved, onDeleted, onChat, on
     edit({ tools: ALL.every(t => next.includes(t)) ? '' : next.join(',') })
   }
   // Which channels are connected comes from the saved bot (it changes on save), not this form's copy.
-  const has = (k: 'has_telegram_token' | 'has_slack' | 'has_discord' | 'has_signal' | 'has_whatsapp') => !!bot?.[k]
-  const form = (x: Bot) => JSON.stringify({ ...x, has_telegram_token: 0, has_slack: 0, has_discord: 0, has_signal: 0, has_whatsapp: 0 })
+  const has = (k: 'has_telegram_token' | 'has_slack' | 'has_discord' | 'has_signal' | 'has_whatsapp' | 'has_imessage') => !!bot?.[k]
+  const form = (x: Bot) => JSON.stringify({ ...x, has_telegram_token: 0, has_slack: 0, has_discord: 0, has_signal: 0, has_whatsapp: 0, has_imessage: 0 })
   const dirty = form(b) !== form(bot ?? { ...BLANK, look: b.look }) || Object.values(sec).some(v => v !== null)
   const save = (secrets: Secrets) =>
     invoke<number>('save_bot', { bot: b, secrets })
@@ -252,7 +255,7 @@ export function BotPage({ bot, status, canDelete, onSaved, onDeleted, onChat, on
 
       {bot && <Fallback bot={bot} onErr={e => { setErr(e); setMsg(null) }} />}
 
-      <Group title="Messaging apps" note={`Each bot is its own Telegram, Slack, Discord, Signal or WhatsApp bot. Tokens are stored in ${SECRETS_AT}.`}>
+      <Group title="Messaging apps" note={`Each bot is its own Telegram, Slack, Discord, Signal or WhatsApp bot{imessageHere ? ', or answers in one iMessage conversation' : ''}. Tokens are stored in ${SECRETS_AT}.`}>
         <ChannelRow icon="telegram" title="Telegram" st={chan('telegram')} has={has('has_telegram_token')} onRemove={() => save({ ...NO_SECRETS, telegram_token: '' })}
           hint="Message @BotFather, send /newbot, and paste the token it gives you.">
           <input className="input" type="password" aria-label="Telegram bot token" placeholder="123456:ABC…" value={typed('telegram_token')} onChange={e => type('telegram_token', e.target.value)} autoComplete="off" />
@@ -282,6 +285,12 @@ export function BotPage({ bot, status, canDelete, onSaved, onDeleted, onChat, on
           <input className="input" type="password" aria-label="WhatsApp access token" placeholder="Access token" value={typed('whatsapp_token')} onChange={e => type('whatsapp_token', e.target.value)} autoComplete="off" />
           <input className="input" type="password" aria-label="Meta app secret" placeholder="App secret (signs the webhook's calls)" value={typed('whatsapp_app_secret')} onChange={e => type('whatsapp_app_secret', e.target.value)} autoComplete="off" />
         </ChannelRow>
+        {imessageHere && (
+          <ChannelRow icon="imessage" title="iMessage" st={chan('imessage')} has={has('has_imessage')} onRemove={() => save({ ...NO_SECRETS, imessage_chat: '' })}
+            hint="Answers in one Messages conversation on this Mac and never reads any other: a note to yourself (your own number or email), or a chat with a second Apple ID. Give Mimir Full Disk Access (System Settings → Privacy & Security), and allow it to control Messages when asked. Only while this Mac is awake. Choices come as numbered lists.">
+            <input className="input" aria-label="iMessage conversation" placeholder="Their number (+31…) or email, or your own for a note to yourself" value={typed('imessage_chat')} onChange={e => type('imessage_chat', e.target.value)} autoComplete="off" />
+          </ChannelRow>
+        )}
       </Group>
 
       <Group title="What it can do" note="Permissions in Settings still decide which of these ask you first.">
@@ -330,6 +339,7 @@ function Fallback({ bot, onErr }: { bot: Bot; onErr: (e: string) => void }) {
     <Group title="When it hits a usage limit" note={PAID.includes(fb.provider)
       ? 'This account bills per token: routines that run on it while your plan is at its limit cost money. Daily caps in Settings → Limits still apply.'
       : 'Routines run on the fallback until your plan’s limit resets, then on the bot’s own account again. The run log says which ran there. Daily caps still apply.'}>
+      {bot.provider === 'claude' && <ApiCredits bot={bot} onErr={onErr} />}
       <div className="row-block">
         <div className="editor" style={{ margin: 0 }}>
           <div className="er" style={{ alignItems: 'flex-start' }}>
@@ -345,6 +355,23 @@ function Fallback({ bot, onErr }: { bot: Bot; onErr: (e: string) => void }) {
         </div>
       </div>
     </Group>
+  )
+}
+
+/** A Claude bot on the Anthropic API key from Settings → AI keys: a Max or Team plan's monthly API credits, which
+ *  stop when they run out rather than bill. The same run goes on there, with its tools and conversation. */
+function ApiCredits({ bot, onErr }: { bot: Bot; onErr: (e: string) => void }) {
+  const mode = useLoad(() => invoke<string>('api_credits', { botId: bot.id }), [bot.id])
+  const set = (m: string) => invoke('api_credits', { botId: bot.id, mode: m }).then(() => mode.reload(), e => onErr(String(e)))
+  return (
+    <Row icon={<Icon name="key" size={15} />} title="Anthropic API key"
+      desc="Your Max or Team plan’s monthly API credits, with the key from your linked Claude Console organisation (Settings → AI keys). When they run out, requests stop: nothing is billed.">
+      <select className="select" aria-label="Anthropic API key" value={mode.data ?? ''} disabled={mode.data === null} onChange={e => set(e.target.value)}>
+        <option value="">Don’t use it</option>
+        <option value="limit">When the plan says no</option>
+        <option value="routines">For routines, and when the plan says no</option>
+      </select>
+    </Row>
   )
 }
 

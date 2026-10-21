@@ -105,6 +105,7 @@ export function SettingsView({ onComputer, find = '' }: { onComputer: () => void
       <EmailSettings />
       <CalendarSettings />
       <KnowMeSettings />
+      <MemoryFolderSettings />
       <ComputerSettings onChange={() => { onComputer(); toolsChanged() }} />
       <BrowserSettings onChange={toolsChanged} />
       <ToolServerSettings onChange={toolsChanged} />
@@ -254,7 +255,7 @@ function ChatApiSettings() {
     if (await ask(`Delete the token for “${n}”? Whatever uses it stops working.`, 'Delete', true)) invoke('chat_token_delete', { id }).then(tokens.reload, e => setErr(String(e)))
   }
   return (
-    <Group title="Chat API" note={err ? <span className="error">{err}</span> : <>For apps that speak OpenAI’s chat API. Base URL <code className="selectable">{base}</code>; each token reaches one bot, which answers in its built-in chat, and nothing else. Approvals still come here.</>}>
+    <Group title="Chat API" note={err ? <span className="error">{err}</span> : <>For apps that speak OpenAI’s chat API. Base URL <code className="selectable">{base}</code>; each token reaches one bot, in a chat of its own (no email, calendar, meetings or computer there), and nothing else. Approvals still come here.</>}>
       {(tokens.data ?? []).map(t => (
         <Row key={t.id} icon={<Icon name="key" size={15} />} title={t.name} desc={bots.find(b => b.id === t.bot_id)?.name}>
           <button type="button" className="btn btn-ghost btn-danger btn-sm" aria-label={`Delete ${t.name}`} onClick={() => remove(t.id, t.name)}><Icon name="trash" size={13} /></button>
@@ -496,6 +497,7 @@ function UpdateSettings() {
 const KEY_ROWS = [
   { kind: 'openrouter', title: 'OpenRouter', placeholder: 'sk-or-…', hint: <>Create one at <a href="https://openrouter.ai/keys" onClick={openLink}>openrouter.ai/keys</a>.</> },
   { kind: 'xai', title: 'xAI (Grok)', placeholder: 'xai-…', hint: <>Create one at <a href="https://console.x.ai" onClick={openLink}>console.x.ai</a>.</> },
+  { kind: 'anthropic', title: 'Anthropic API key', placeholder: 'sk-ant-…', hint: <>For Claude bots when the plan says no (set on each bot’s page). Create one in the Console organisation linked to your Max or Team plan, at <a href="https://console.anthropic.com/settings/keys" onClick={openLink}>console.anthropic.com</a>, to spend its monthly API credits.</> },
   { kind: 'openai', title: 'OpenAI-compatible API key', placeholder: 'sk-…', hint: 'For bots on the “API key” account: OpenAI, or the service at the bot’s endpoint.' },
 ]
 
@@ -700,6 +702,40 @@ function KnowMeSettings() {
         desc={state.found !== undefined ? (state.found ? 'Accept or dismiss each in Memory (built-in chat).' : 'Tell a bot about yourself instead.') : 'Uses your connected email and calendar link'}>
         {state.found === undefined && <button className="btn btn-sm" disabled={state.busy} onClick={go}>{state.busy ? 'Looking…' : 'Get to know me'}</button>}
       </Row>
+    </Group>
+  )
+}
+
+/** Whether the tidy-up and imports may suggest memories about health, beliefs, money and the like. */
+function SensitiveRow() {
+  const [on, setOn] = useState<boolean | null>(null)
+  useEffect(() => { invoke<boolean>('remember_sensitive').then(setOn, () => {}) }, [])
+  return (
+    <Row icon={<Icon name="memory" size={15} />} title="Remember sensitive topics"
+      desc={on ? 'The tidy-up and imports may suggest memories about your health, beliefs, politics, sexuality and finances.' : 'The tidy-up and imports leave out your health, beliefs, politics, sexuality and finances (account numbers too), unless you say “remember that…” yourself.'}>
+      {on !== null && <Switch label="Remember sensitive topics" checked={on} onChange={v => { setOn(v); invoke<boolean>('remember_sensitive', { on: v }).then(setOn, () => setOn(!v)) }} />}
+    </Row>
+  )
+}
+
+/** Memories as Markdown files in a folder you pick (vault.rs): Obsidian, grep, git. What you change there is asked about. */
+function MemoryFolderSettings() {
+  const st = useLoad(() => invoke<string>('memory_folder', {}), [])
+  const [dir, setDir] = useState<string | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+  if (st.data == null) return null
+  const save = (d: string) => invoke<string>('memory_folder', { dir: d }).then(() => { setDir(null); setErr(null); st.reload() }, e => setErr(String(e)))
+  const value = dir ?? st.data
+  return (
+    <Group title="Memory" note={err ? <span className="error">{err}</span> : <>One Markdown file per memory, a folder per chat, kept up to date. Open it in Obsidian, search it, keep it in git. What you edit, add or delete there waits in Needs you as a suggestion: nothing changes until you accept it. Files already in the folder are left alone.{remoteServer() || !inDesktop ? ' The folder is on the server.' : ''}</>}>
+      <form className="row-block" onSubmit={e => { e.preventDefault(); void save(value) }}>
+        <div className="editor" style={{ margin: 0 }}><div className="er">
+          <input className="input mono" placeholder="Also keep as files: a folder's full path, e.g. /Users/you/Notes/Mimir" aria-label="Memory folder" value={value} onChange={e => setDir(e.target.value)} />
+          <button className="btn" disabled={value.trim() === st.data}>Save</button>
+          {st.data && <button type="button" className="btn btn-ghost" onClick={() => save('')}>Stop</button>}
+        </div></div>
+      </form>
+      <SensitiveRow />
     </Group>
   )
 }
@@ -1133,7 +1169,7 @@ export const TOOL_LABEL: Record<string, string> = {
   memory_store: 'Remember things', memory_search: 'Look up memories', memory_forget: 'Forget a memory',
   routine_create: 'Create routines', routine_list: 'List routines', routine_delete: 'Delete a routine', web_fetch: 'Read web pages',
   chat_search: 'Search earlier conversations', meeting_search: 'Search your meetings', meeting_read: 'Read a meeting transcript', ask_bot: 'Hand tasks to other bots', skill_view: 'Read its skills', plan_propose: 'Propose a plan to approve once',
-  ask_choice: 'Ask with buttons', bot_create: 'Make new bots', calendar_add: 'Give calendar links',
+  ask_choice: 'Ask with buttons', progress_set: 'Keep a checklist', bot_create: 'Make new bots', calendar_add: 'Give calendar links',
   calendar_create: 'Add calendar events', calendar_list: 'Look at your calendar', card_write: 'Update pinned cards',
   computer_click: 'Click on the computer', computer_handoff: 'Ask you to take over the computer',
   computer_key: 'Press keys on the computer', computer_open: 'Open sites on the computer',

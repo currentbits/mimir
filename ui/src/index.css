@@ -413,6 +413,9 @@ a { color: inherit; }
 .routine-card .rm { margin-top: 4px; font-size: 11.5px; color: var(--text-3); }
 .routine-card .rc-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .routine-card .rc-actions .typing { padding: 0; }
+.tool-card { margin-top: 8px; max-width: 560px; display: grid; gap: 4px; animation: unfold 340ms var(--spring) both; }
+.tool-card iframe { width: 100%; border: 0; border-radius: 12px; background: var(--surface); box-shadow: var(--shadow-sm); transition: height 200ms ease; }
+.tool-card small { font-size: 11px; color: var(--text-3); }
 .msg-action.more { background: none; color: var(--text-3); }
 .msg-used { display: inline-flex; align-items: center; gap: 4px; margin-top: 6px; padding: 0; border: 0; background: none; font: 11px var(--mono); color: var(--text-3); cursor: default; transition: color 140ms ease; }
 .msg-used:hover, .msg-used.on { color: var(--text-2); }
@@ -432,6 +435,9 @@ a { color: inherit; }
 .steps li .icon { flex: none; color: var(--live); }
 .steps li.failed .icon { color: var(--danger); }
 .steps li.now { color: var(--text-2); }
+.checklist { padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+.checklist li.open { color: var(--text-2); }
+.checklist li .box { flex: none; width: 9px; height: 9px; margin: 0 1px; border: 1.5px solid var(--text-3); border-radius: 3px; }
 .steps li.now .typing { padding: 0; transform: scale(.8); }
 .steps li { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .steps .shine { background: linear-gradient(90deg, var(--text-2) 0%, var(--text-2) 35%, var(--text-3) 50%, var(--text-2) 65%, var(--text-2) 100%); background-size: 200% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; overflow: hidden; text-overflow: ellipsis; }

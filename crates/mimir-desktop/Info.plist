@@ -7,5 +7,7 @@
   <string>Mimir transcribes meetings and calls you choose to record: your microphone is your side of the conversation.</string>
   <key>NSAudioCaptureUsageDescription</key>
   <string>Mimir transcribes meetings and calls you choose to record: the computer's sound is the other people on the call.</string>
+  <key>NSAppleEventsUsageDescription</key>
+  <string>Mimir sends a bot's replies in the one iMessage conversation you chose for it, through Messages.</string>
 </dict>
 </plist>

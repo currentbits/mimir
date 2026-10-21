@@ -126,8 +126,10 @@ their own, so a link could otherwise leak data unclicked).
 
 **The server.** The admin token is checked before a request's body is read, compared in constant time, and is at
 least 24 characters. The web UI can't be framed by another site, loads only its own scripts, and nothing is cached.
-The data folder is owner-only. Chat API tokens (for Shortcuts and the like) each reach one bot's built-in chat and
-nothing else, are checked before the body is read too, and only their SHA-256 is stored.
+The data folder is owner-only. Chat API tokens (for Shortcuts and the like) each reach one bot, in a chat of the token's
+own that isn't private: no email, calendar, meetings or computer, none of the built-in chat's conversation or memory,
+and what's said there sets no rule without you (anyone with the token, or at a voice speaker using it, types there).
+They open nothing else, are checked before the body is read too, and only their SHA-256 is stored.
 
 **The bots' computer** runs its browser without Mimir's environment or secrets, with its own home. With docker compose
 it's a separate container (its own user, no data folder, no published ports, a token on its control channel and its
@@ -163,7 +165,10 @@ half is built into the app); a tampered download is refused. It never restarts o
   photo would make later changes in that chat ask, and marking only image files would still miss phone screenshots,
   which Telegram sends as photos.
 
-- Signal doesn't mark forwards, so a message or voice note you forward there counts as your own words.
+- Signal doesn't mark forwards, so a message or voice note you forward there counts as your own words. Nor does
+  iMessage.
+- iMessage needs Full Disk Access, which lets the whole app read any file of yours, not just Messages. Mimir reads only
+  the one conversation you chose (its query is limited to that chat), but macOS can't hold it to that.
 
 - A message with a photo goes to Grok on its command line (it has no file form for that), where other accounts on the
   same computer could read it.

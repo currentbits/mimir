@@ -33,6 +33,7 @@ Bots act through **tools**. Every tool call is checked against your rules before
 | `skill_save` | Propose a skill from what the conversation did, when you ask; you press Save ([Skills](skills.md)) | allow |
 | `plan_propose` | Propose a plan you approve once (below) | allow |
 | `ask_choice` | Ask you one question with 2 to 4 answers to tap, plus "Something else". The buttons go under the reply, and your tap is your next message. Only in Telegram, Slack and Discord chats, never in routines or another bot's task. A tap is never an approval | allow |
+| `progress_set` | Keep a checklist of up to 50 steps for a long task. It shows above the reply while it's written: in the app, and in the Telegram, Slack and Discord draft, which the reply then replaces. If the reply ends with steps still open, the bot gets one more turn to do them or say what blocks them. | allow |
 | `computer_*` | Use the bots' computer, self-hosted only ([The bots' computer](computer.md)) | allow; `computer_open` **asks**, and `computer_signin` with a saved login |
 | `browser__*` | The headless browser, when switched on (below) | opening a page **asks** |
 | *tool servers* | Tools from MCP servers you added (below) | read-only (as you confirmed) allow, the rest **ask** |
@@ -206,6 +207,15 @@ password into Mimir. The tokens go to the keychain (server: the private database
 apps register themselves (GitHub's hosted one, for example) takes a token in a header instead: add
 `Authorization` with `Bearer <your token>`. A header always wins over a sign-in. On a self-hosted server you paste the
 address your browser ended up on, as with ChatGPT.
+
+**Interactive cards (MCP Apps).** Some servers answer with a card as well as text (Figma, Notion, Canva and others
+that support [MCP Apps](https://modelcontextprotocol.io/docs/extensions/apps)). In the app and the web UI the card shows
+under the reply. It runs in a sandboxed frame on its own address: it can't reach Mimir's data or your sign-in, can't
+open other pages in the window, and only connects to the sites the server named for it. Pressing a button in a card
+runs one of that server's tools through the same rules as the bot's own calls. The card counts as outside content, so
+anything except a read-only tool you confirmed asks first. A card that wants to send the bot a message puts it in the
+message box for you to send or not; a link it wants to open asks first. Telegram, Slack, Discord and the other chat
+apps get the text answer. Cards are kept with the chat's history and go with it (or after six months).
 
 ## The run log
 

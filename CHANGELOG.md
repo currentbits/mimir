@@ -4,19 +4,104 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 
 ## Unreleased
 
+### Memory
+- **Sensitive topics stay out of memory:** the tidy-up, imports and *Get to know me* no longer suggest memories about
+  your health, religion or beliefs, politics, sexuality or finances (account numbers too), unless you say "remember
+  that…" yourself. Turn on **Settings → Memory → Remember sensitive topics** to let them in. See
+  [Memory](docs/memory.md#you-stay-in-charge).
+- **Import from Codex:** **Memory → Import → From Codex** brings in `~/.codex/AGENTS.md` as memory suggestions and
+  your own Codex skills as proposals, under the same rules as Claude Code, Hermes and OpenClaw: outside content,
+  nothing active until you accept it.
+
 ### Talking to your bots
+- **iMessage, in the Mac app:** a bot can answer in one Messages conversation you choose, a note to yourself or a
+  chat with a second Apple ID, and never reads any other. Text, photos and voice messages in; replies as plain text,
+  with approval cards and questions as numbered lists, as on Signal. Needs Full Disk Access and permission to control
+  Messages, and works only while the Mac is awake. Setup is under [Connect](docs/connect.md#imessage).
+- **Mimir on your phone's home screen:** the server's web app can be added to a phone's home screen and opens full
+  screen with its own icon. See [Self-hosting](docs/self-hosting.md#3-open-it-in-your-browser).
+- **Telegram groups:** a bot in a group (not a family group) answers only when you @-mention it, reply to one of its
+  messages or send a `/command`. Before, with privacy mode off, it answered every message.
+
+### Moving in
+- **Moving from OpenClaw or Hermes:** **Memory → Import → From OpenClaw** now finds a workspace set in
+  `openclaw.json` or `OPENCLAW_WORKSPACE_DIR`, and brings in every profile (`~/.openclaw-<name>`,
+  `~/.hermes/profiles/<name>`) too. Its `SOUL.md` is offered as the bot's role (one click) instead of becoming
+  memories, imported memories say which agent they came from, and a cron job set for another time zone says so on
+  its paused routine. See [Getting started](docs/getting-started.md#moving-from-openclaw-or-hermes).
+
+### Routines
+- **Claude on your monthly API credits:** Max and Team plans include monthly API credits. Save an Anthropic API key
+  from your linked Console organisation (Settings → AI keys), and a Claude bot can go on with it when the plan says
+  no, in the same conversation, or run its routines on it from the start. The credits stop when they run out: nothing
+  is billed. See [docs/ai-accounts.md](docs/ai-accounts.md#claude-your-plans-monthly-api-credits).
+- **Started by a Slack message:** `slack:#deploys from:@sam failed` starts a routine when a message in a channel the
+  bot is in matches, from a person or another app (a CI bot). Mimir does the matching, so other messages cost nothing.
+  "Tell me when someone says it's deployed in #releases" works in chat. See
+  [docs/routines.md](docs/routines.md#started-by-something-happening).
+- **Started by GitHub:** *On GitHub* in the Routines tab (on a server) gives a routine a webhook for GitHub with an
+  event filter, like `issues.opened repo:acme/app`. Other events get no run, and the run gets a short summary of the
+  event instead of GitHub's raw payload.
+
+### Memory
+- **Memory as files:** **Settings → Memory** can keep your memories as Markdown files too, in a folder you pick: one
+  file per memory, a folder per chat, with frontmatter (type, chat, bot, dates). Open it in Obsidian, grep it, keep it
+  in git. What you edit, add or delete there waits in Needs you as a suggestion; nothing changes until you accept it.
+  Guests' and incognito chats stay out, and files already in the folder are left alone.
+
+### Safety
+- **Chat API tokens can't read your email:** an app using a [chat API](docs/self-hosting.md) token now talks to the bot
+  in a chat of the token's own ("Chat API: Home Assistant"), not your built-in chat. It isn't private, so no email,
+  calendar, meetings or computer there, and a rule said through it is a suggestion for you to accept. Whoever holds the
+  token, or talks to the speaker that uses it, isn't necessarily you.
+- **Quiet checks stay off your network:** a watched page that redirects to a name pointing at this computer or the
+  local network (a home router, a cloud server's metadata) is no longer fetched; before, only addresses written as
+  numbers were refused. Quiet checks and `web_fetch` also read at most 2 MB of a page.
+- **Signal:** photos, voice notes and files people send the bot are deleted from signal-cli once Mimir has them, and
+  ones it ignores (a stranger's, a group's, one too big) are deleted too; before, they stayed in signal-cli's storage
+  for good. A download stops at 20 MB whatever size the sender claims, and a `user:password@` in signal-cli-rest-api's
+  address no longer shows in errors or the bot's status. [Connect](docs/connect.md#signal) now warns that web pages
+  on the same computer may reach signal-cli-rest-api.
+
+### Fixes
+- **Signal and WhatsApp:** replying to an approval card with a number now works after Mimir restarts. Before, the
+  number was taken as a "no" with the number as the reason.
+- **Skill imports:** a skill imported from another agent or a bot file with the name of one you already have (perhaps
+  one all bots share) comes in as "‹name› (imported)" instead of replacing it when you accept. A taught skill that
+  would replace one says so on its card.
+
+## 0.5.0
+
+### Talking to your bots
+- **WhatsApp:** a bot on a [server](docs/self-hosting.md) can be on WhatsApp, with a business number of its own,
+  through Meta's official Cloud API. Text, photos, voice notes and files both ways, typing, pairing, and approval cards
+  and questions as buttons. It can only write within 24 hours of your last message there: a routine's result after
+  that isn't delivered, and shows as not sent in its run. Setup is under [Connect](docs/connect.md#whatsapp).
 - **Grok without Grok Build:** *Sign in with your Grok plan* (Settings → AI keys) runs bots on the xAI API account
   on your X Subscription, SuperGrok or X Premium+ plan, with no CLI and no API key. Confirm a code at x.ai from any
   browser, so it works on a server too. Bots use Mimir's tools directly and get photos at full size. If xAI doesn't
   offer its API to your plan, the bot says so; the Grok (Grok Build) account still works. See
   [docs/ai-accounts.md](docs/ai-accounts.md#signing-in).
+- **X search:** bots can search recent X (Twitter) posts (`x_search`) with your own X API bearer token
+  (**Settings → Web search → X**). Good for a morning routine of fresh posts. See
+  [docs/connect.md](docs/connect.md#x-search) for getting a token.
+- **Telegram guest mode:** type `@yourbot` in any chat, even one it isn't in, and it replies there. Only to you, and
+  as in a group: none of your email, calendar, meetings, computer or saved logins, and the message you replied to is
+  outside content. A reminder it sets comes to your private chat.
+- **Branch from here:** a new conversation that picks up from a message, with a short "where we left off", to try
+  another direction without re-explaining. The branch icon on a reply in the app, or `/branch` as a reply in your
+  messaging app; with Telegram topics on it opens a new topic. See [Bots and chats](docs/bots-and-chats.md).
 - **Chat titles and a catch-up line:** after a chat's first exchange, and again every ten messages, the model in
   **Model for routines** names it in 3–6 words and writes a line on where it's got to. The title shows under the bot
   in the sidebar; the line shows at the top of the chat when you come back to it. Not for incognito chats; **Start
   fresh** and deleting a chat's history remove them.
-- **Branch from here:** a new conversation that picks up from a message, with a short "where we left off", to try
-  another direction without re-explaining. The branch icon on a reply in the app, or `/branch` as a reply in your
-  messaging app; with Telegram topics on it opens a new topic. See [Bots and chats](docs/bots-and-chats.md).
+- **A checklist for long runs:** on a task with several steps (research, a booking, a form) a bot keeps a checklist
+  (`progress_set`) that it ticks as it goes. It shows above the reply being written, in the app and in the Telegram,
+  Slack and Discord draft, and goes when the reply arrives. A reply that ends with steps still open gets one more turn
+  to finish them or say what blocks them, so it doesn't stop at "I'll now do X".
+- **Tool servers' interactive cards:** when a tool server answers with a card (MCP Apps: Figma, Notion, Canva…), the app
+  and the web UI show it under the reply, in a sandboxed frame. A button in it that changes something asks first, like
+  any other write. Chat apps keep the text answer. See [Tool servers](docs/tools-and-safety.md#tool-servers-mcp).
 - **Webhooks out:** **Settings → Webhooks out** posts a small signed JSON to an address of yours when a routine
   finishes or fails, an approval is waiting, or a reply was sent. You can use it with Home Assistant, ntfy or n8n.
   Message text is only included if you ask for it. A failed send is tried again. See
@@ -24,16 +109,11 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 - **Scanned PDFs read on your computer:** set a local document model in **Settings → Scanned PDFs** (an
   [Ollama](https://ollama.com) model such as dots.ocr, or any vision model) and a scan's pages reach the bot as text,
   tables included, instead of photos: less of your plan per page, and the scan stays here. Off until you set one.
-- **X search:** bots can search recent X (Twitter) posts (`x_search`) with your own X API bearer token
-  (**Settings → Web search → X**). Good for a morning routine of fresh posts. See
-  [docs/connect.md](docs/connect.md#x-search) for getting a token.
-- **Telegram guest mode:** type `@yourbot` in any chat, even one it isn't in, and it replies there. Only to you, and
-  as in a group: none of your email, calendar, meetings, computer or saved logins, and the message you replied to is
-  outside content. A reminder it sets comes to your private chat.
-- **WhatsApp:** a bot on a [server](docs/self-hosting.md) can be on WhatsApp, with a business number of its own,
-  through Meta's official Cloud API. Text, photos, voice notes and files both ways, typing, pairing, and approval cards
-  and questions as buttons. It can only write within 24 hours of your last message there: a routine's result after
-  that isn't delivered, and shows as not sent in its run. Setup is under [Connect](docs/connect.md#whatsapp).
+- **PowerPoint files:** a `.pptx` someone sends, or you drop into the app's chat, is read like a Word or Excel file:
+  each slide's text and speaker notes, hidden slides marked.
+- **At the usage limit, answer later:** when a reply hits your AI plan's limit, the message says when the plan resets
+  and offers **Answer at 15:00**, which reruns your message then. With a fallback account there's also **Answer now
+  with** that account.
 - **Hand a task to a bot's own chat:** "Hatoba Marketer, write and show your marketing plan" now has that bot do it in
   its own chat: the task and its whole answer stay in its history, files it writes go to its own folder, and the bot you
   asked replies with a one-line confirmation and a link. Works from the app and your own private messaging chats.
@@ -45,7 +125,18 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
   page or a sensitive source now offer it too. On those it means *never ask*, not even after outside content: the app
   confirms first for those guards, Settings → Permissions shows such tools as *Always*, and the health check lists them.
 
+### Routines
+- **Quiet checks can watch a page's data:** pages that build themselves in the browser (booking calendars, prices, stock)
+  gave a quiet check nothing to compare. While you take over the bots' computer or show it something, Mimir notes the
+  JSON the page loads, and the routine form offers **Watch this instead**: no browser, and no AI until a value
+  changes. The check uses the bot's own cookies for that site, kept in the secret store and never shown to the AI.
+
 ### Memory
+- **Suggests only what keeps coming up:** the tidy-up no longer proposes a memory after one conversation unless you said
+  it yourself; it waits until a later conversation brings it up too. It also flags two memories that contradict each
+  other and lets you pick which to keep, and a memory unused for 90 days offers **Forget / Keep / Background**.
+- **Timeline:** a new tab on Memory lists, by day, what your bots learned and the skills you accepted, with Correct,
+  Forget and Remove.
 - **Ongoing Claude and Grok chats see memory changes:** a resumed conversation kept the instructions from its first
   message, so a memory you added or forgot, a new role or skill, and the time of day never reached it (the built-in
   chat never starts over, so it stayed that way). Now the next message carries the changed instructions once, and
@@ -60,6 +151,13 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
   registry** finds it in the official registry, showing the domain each one runs on.
 
 ### Safety
+- **A routine that acts unlike before asks once:** a routine allowed to order or send (even under Always) stops and asks
+  when this run looks different from its earlier ones: a new recipient, a new unit or currency, or a size more than three
+  times the largest before. The card says why ("items: usually 1–3, this time 14"). Approve it and it becomes usual.
+- **Quotes checked against the pages read:** when a reply quotes eight or more words and its run read web pages, a quote
+  that isn't on any of them gets a note under the reply: *Not found on the pages read*. The reply itself isn't changed.
+- **Stop asking?** If you've allowed the same tool (on the same site) five times in 30 days with no denials, Needs you
+  offers to always allow it. Asks after outside content, emails, new bots and saved logins are never suggested.
 - **A one-off cut off mid-run waits for you:** if Mimir stops in the middle of a one-off, it no longer runs it again by
   itself an hour later (repeating what it already did, an email say). It waits in Needs you as interrupted, with
   **Run again**. A one-off that fails for any other reason waits there too, instead of being deleted.
@@ -81,6 +179,12 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
   can type and click on its screen, not only use its browser's DevTools.
 - **Usage stats on a server** now also count how many pages the bots' browser opened and how many of those a site
   blocked (a "verify you are human" page, say). Two numbers, never the pages; **See what's sent** shows them.
+
+### Fixes
+- **Retired Codex models:** a bot saved with a model Codex no longer offers (gpt-5.5 left ChatGPT sign-in on October 14)
+  answers on the default model, with a note asking you to pick another.
+- **Claude sign-out:** a revoked Claude login now says "sign in again" instead of an unknown error.
+- **Discord:** a file over 20 MB gets a clear message instead of failing to upload.
 
 ## 0.4.0
 

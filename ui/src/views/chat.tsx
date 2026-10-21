@@ -4,6 +4,7 @@ import { moodOf, type Mood } from '../face'
 import { ago, ahead, dayLabel, fullTime, IDLE, pigment, schedule } from '../format'
 import { Markdown, SentFile, splitSent } from '../markdown'
 import { PinnedCards } from './cards'
+import { ToolCard, type ToolCardData } from './toolcard'
 import { ask, tell, Avatar, Empty, Icon, talkLabel, useHoldToTalk } from '../ui'
 import { failure } from './inbox'
 import { Editor } from './memory'
@@ -19,7 +20,7 @@ type UsedMemory = { id: number; kind: Kind; title: string; body: string; status:
 
 type Used = { memories: UsedMemory[]; skills: [number, string][]; pages: string[] }
 
-type Message = { id: number; bot_id: number; role: string; content: string; ts: number; actions?: Action[]; run_id?: number; used?: Used }
+type Message = { id: number; bot_id: number; role: string; content: string; ts: number; actions?: Action[]; run_id?: number; used?: Used; cards?: ToolCardData[] }
 
 /** What a reply did, in a few words: ["memory", "Saved to memory · Dentist"]. Lookups and listings aren't worth a line. */
 function actionLine(a: Action): [string, string] | null {
@@ -343,6 +344,7 @@ export function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, 
   const [draft, setDraft] = useState('')
   const [step, setStep] = useState<string | null>(null)
   const [done, setDone] = useState<{ summary: string; ok: boolean; decision: string }[]>([])
+  const [checklist, setChecklist] = useState<{ step: string; done: boolean }[]>([])
   const [err, setErr] = useState<string | null>(null)
   const [failed, setFailed] = useState<string | null>(null)
   const talk = useHoldToTalk(w => { setText(t => t.trim() ? `${t.trimEnd()} ${w}` : w); box.current?.focus() }, e => setErr(`Couldn't dictate: ${e}`))
@@ -468,12 +470,16 @@ export function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, 
     if (!working) return
     // The next look is 150 ms after the last answer, so a slow server doesn't get them stacked up.
     let t = 0, off = false
-    const poll = () => invoke<{ draft: string | null; step: string | null; done: { summary: string; ok: boolean; decision: string }[] }>('live', { botId: replier, chatId: cid })
-      // done is a new array every time: set it only when it says something new.
-      .then(l => { setDraft(l?.draft ?? ''); setStep(l?.step ?? null); const d = l?.done ?? []; setDone(o => JSON.stringify(o) === JSON.stringify(d) ? o : d) }, () => {})
+    const poll = () => invoke<{ draft: string | null; step: string | null; done: { summary: string; ok: boolean; decision: string }[]; checklist?: { step: string; done: boolean }[] }>('live', { botId: replier, chatId: cid })
+      // done and checklist are new arrays every time: set them only when they say something new.
+      .then(l => {
+        setDraft(l?.draft ?? ''); setStep(l?.step ?? null)
+        const d = l?.done ?? []; setDone(o => JSON.stringify(o) === JSON.stringify(d) ? o : d)
+        const c = l?.checklist ?? []; setChecklist(o => JSON.stringify(o) === JSON.stringify(c) ? o : c)
+      }, () => {})
       .finally(() => { if (!off) t = window.setTimeout(poll, 150) })
     t = window.setTimeout(poll, 150)
-    return () => { off = true; clearTimeout(t); setDraft(''); setStep(null); setDone([]) }
+    return () => { off = true; clearTimeout(t); setDraft(''); setStep(null); setDone([]); setChecklist([]) }
   }, [working, replier, cid])
   useLayoutEffect(() => {
     const t = box.current
@@ -585,6 +591,7 @@ export function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, 
             {local && !incognito && !working && (!only || m.bot_id === botId) && <button type="button" className="msg-copy" onClick={() => branchFrom(m)} aria-label="Branch from here" title="Branch from here: a new conversation that picks up from this message"><Icon name="branch" size={13} /></button>}
             <CopyButton text={text} /></div>
           {text && <div className="msg-body"><Markdown text={text} /></div>}
+          {m.cards?.map(c => <ToolCard key={c.key} card={c} onMessage={t => { setText(t); box.current?.focus() }} />)}
           {files.map(f => <SentFile key={f} chatId={chat.chat_id} name={f} />)}
           {/* Only under the latest message: once anything follows, it's been answered one way or another. */}
           {m.content.includes(NO_REMINDER) && m === msgs[msgs.length - 1] && <button type="button" className="btn btn-sm" onClick={() => send(`@${b.name} Set the reminder you said you would.`)} disabled={working}>Set it</button>}
@@ -653,6 +660,11 @@ export function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, 
                 <Avatar id={them.id} name={them.name} size={26} alive mood={moodOf(step, draft)} />
                 <div><div className="msg-head"><b>{them.name}</b>{draft && <time>writing…</time>}
                   {now - started >= 5 && <time className="elapsed">{now - started >= 60 ? `${Math.floor((now - started) / 60)}m ${(now - started) % 60}s` : `${now - started}s`}</time>}</div>
+                  {checklist.length > 0 && (
+                    <ol className="steps checklist" aria-label={`Checklist: ${checklist.filter(c => c.done).length} of ${checklist.length} done`}>
+                      {checklist.map((c, i) => <li key={i} className={c.done ? 'ok' : 'open'}>{c.done ? <Icon name="check" size={11} /> : <span className="box" />}{c.step}</li>)}
+                    </ol>
+                  )}
                   {(done.length > 0 || step) && (
                     <ol className="steps" aria-label="What it's doing">
                       {done.map((d, i) => <li key={i} className={d.ok ? 'ok' : 'failed'}><Icon name={d.ok ? 'check' : 'x'} size={11} />{d.summary}</li>)}

@@ -56,9 +56,11 @@ pub fn secret_set(name: &str, value: &str) -> Result<()> {
 }
 
 /// Accounts that take an API key: (secret name, env var fallback).
-/// (`brave` is Brave Search's key, for the bots' web_search, and `x` an X API bearer token, for x_search: not AI accounts.)
-const KEYED: [(&str, &str, &str); 5] = [
+/// (`brave` is Brave Search's key, for the bots' web_search, and `x` an X API bearer token, for x_search: not AI accounts.
+/// `anthropic` isn't an account of its own either: Claude bots go on to it when the plan says no, see provider::api_credits.)
+const KEYED: [(&str, &str, &str); 6] = [
     ("openai", "openai_api_key", "OPENAI_API_KEY"),
+    ("anthropic", "anthropic_api_key", "ANTHROPIC_API_KEY"),
     ("openrouter", OPENROUTER_KEY, "OPENROUTER_API_KEY"),
     ("xai", "xai_api_key", "XAI_API_KEY"),
     ("brave", "brave_api_key", "BRAVE_API_KEY"),
@@ -80,7 +82,9 @@ const SIGNAL_API: &str = "signal_api";
 const WHATSAPP: &str = "whatsapp_number_id";
 const WHATSAPP_TOKEN: &str = "whatsapp_token";
 const WHATSAPP_SECRET: &str = "whatsapp_app_secret";
-const CHANNEL_SECRETS: [&str; 9] = [TG, SLACK_BOT, SLACK_APP, DISCORD, SIGNAL, SIGNAL_API, WHATSAPP, WHATSAPP_TOKEN, WHATSAPP_SECRET];
+/// Not a secret, but kept with the bot's other channel settings.
+const IMESSAGE: &str = "imessage_chat";
+const CHANNEL_SECRETS: [&str; 10] = [TG, SLACK_BOT, SLACK_APP, DISCORD, SIGNAL, SIGNAL_API, WHATSAPP, WHATSAPP_TOKEN, WHATSAPP_SECRET, IMESSAGE];
 /// Chat id of the built-in chat in the app (no messaging app needed).
 pub const LOCAL_CHAT: i64 = 0;
 
@@ -110,6 +114,8 @@ pub(crate) fn channels_of(bot: i64) -> runtime::Channels {
         discord: s(DISCORD),
         signal: s(SIGNAL).map(|n| (s(SIGNAL_API).unwrap_or_default(), n)),
         whatsapp: s(WHATSAPP).zip(s(WHATSAPP_TOKEN)).zip(s(WHATSAPP_SECRET)).map(|((i, t), a)| (i, t, a)),
+        // Messages on this Mac: never on a server.
+        imessage: s(IMESSAGE).filter(|_| !is_server()),
     }
 }
 
@@ -141,6 +147,7 @@ struct BotView {
     has_discord: bool,
     has_signal: bool,
     has_whatsapp: bool,
+    has_imessage: bool,
 }
 
 /// Write-only channel secrets: None = keep, "" = remove, else replace.
@@ -156,6 +163,7 @@ struct Secrets {
     whatsapp_number_id: Option<String>,
     whatsapp_token: Option<String>,
     whatsapp_app_secret: Option<String>,
+    imessage_chat: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -208,11 +216,26 @@ fn set_chat_tokens(db: &Db, t: &[ChatToken]) -> Result<()> {
     db.set_setting(CHAT_TOKENS, &serde_json::to_string(t)?)
 }
 
-/// The bot a chat API token reaches, if it's one of ours (and the bot still exists).
-pub fn chat_token_bot(db: &Db, token: &str) -> Option<i64> {
+/// Chat API chats: one per token, ids from a range no other chat uses (Telegram's are below 2^52, topics from 8e15,
+/// other apps from 9e15). A token id is 12 hex digits, so they fit.
+const API_CHATS: i64 = 7_000_000_000_000_000;
+
+/// The bot a chat API token reaches, if it's one of ours (and the bot still exists), and the token's own chat. Not
+/// the built-in chat, and not a private one: whoever holds a token (or talks to the speaker that uses it) isn't
+/// necessarily you, so no email, calendar, meetings or computer, and nothing of the app's conversation.
+pub fn chat_token_bot(db: &Db, token: &str) -> Option<(i64, i64)> {
     let h = token_hash(token);
-    let bot = chat_tokens(db).ok()?.into_iter().find(|t| t.hash == h)?.bot_id;
-    db.bot(bot).ok().map(|_| bot)
+    let t = chat_tokens(db).ok()?.into_iter().find(|t| t.hash == h)?;
+    db.bot(t.bot_id).ok()?;
+    let chat = API_CHATS + i64::from_str_radix(&t.id, 16).ok()?;
+    // Listed with the chats (its own channel, so it's never taken for a Telegram one), to see what it was asked.
+    db.pair_api(chat, &t.id, &format!("Chat API: {}", t.name)).ok()?;
+    Some((t.bot_id, chat))
+}
+
+/// A chat API token's chat: what's said there isn't taken as your own words.
+pub fn is_api_chat(chat: i64) -> bool {
+    (API_CHATS..API_CHATS + 1_000_000_000_000_000).contains(&chat)
 }
 
 impl Host {
@@ -284,6 +307,8 @@ impl Host {
         discord: s(DISCORD),
         signal: s(SIGNAL).map(|n| (s(SIGNAL_API).unwrap_or_default(), n)),
         whatsapp: s(WHATSAPP).zip(s(WHATSAPP_TOKEN)).zip(s(WHATSAPP_SECRET)).map(|((i, t), a)| (i, t, a)),
+        // Messages on this Mac: never on a server.
+        imessage: s(IMESSAGE).filter(|_| !is_server()),
     }
     }
 
@@ -350,6 +375,20 @@ impl Host {
         if running.get(&key).is_some_and(|(h, _)| h.id() == task) {
             running.remove(&key);
         }
+    }
+
+    /// "" off, "limit" once the plan says no, "routines" that and its routines from the start (get without `mode`).
+    // ponytail: out of `call`, whose one stack frame holds every arm's locals and is at Windows' limit in debug tests
+    fn api_credits(&self, a: &Value) -> Result<Value> {
+        let key = format!("api_credits:{}", arg::<i64>(a, "bot_id")?);
+        match arg::<Option<String>>(a, "mode")?.as_deref() {
+            None => {}
+            Some("") => self.db.set_setting(&key, "")?,
+            Some(m @ ("limit" | "routines")) if api_key("anthropic").is_some() => self.db.set_setting(&key, m)?,
+            Some("limit" | "routines") => bail!("add your Anthropic API key in Settings → AI keys first"),
+            Some(m) => bail!("unknown mode '{m}'"),
+        }
+        ok(self.db.setting(&key)?.unwrap_or_default())
     }
 
     pub async fn call(&self, cmd: &str, a: &Value) -> Result<Value> {
@@ -425,14 +464,14 @@ impl Host {
                 .into_iter()
                 .map(|b| {
                     let ch = self.channels(b.id);
-                    BotView { has_telegram_token: ch.telegram.is_some(), has_slack: ch.slack.is_some(), has_discord: ch.discord.is_some(), has_signal: ch.signal.is_some(), has_whatsapp: ch.whatsapp.is_some(), bot: b }
+                    BotView { has_telegram_token: ch.telegram.is_some(), has_slack: ch.slack.is_some(), has_discord: ch.discord.is_some(), has_signal: ch.signal.is_some(), has_whatsapp: ch.whatsapp.is_some(), has_imessage: ch.imessage.is_some(), bot: b }
                 })
                 .collect::<Vec<_>>()),
             "save_bot" => {
                 // The UI sends back the bot as `bots` listed it: the channel flags are that list's, not the bot's.
                 let mut bot = a.get("bot").cloned().unwrap_or_default();
                 if let Some(o) = bot.as_object_mut() {
-                    for k in ["has_telegram_token", "has_slack", "has_discord", "has_signal", "has_whatsapp"] {
+                    for k in ["has_telegram_token", "has_slack", "has_discord", "has_signal", "has_whatsapp", "has_imessage"] {
                         o.remove(k);
                     }
                 }
@@ -444,6 +483,12 @@ impl Host {
                 if !unknown.is_empty() {
                     bail!("unknown tools: {}", unknown.join(", "));
                 }
+                if let Some(chat) = secrets.imessage_chat.as_deref().filter(|c| !c.trim().is_empty()) {
+                    if is_server() {
+                        bail!("iMessage works only in the Mac app");
+                    }
+                    crate::imessage::IMessage::new(chat)?;
+                }
                 let id = self.db.bot_save(&bot)?;
                 for (name, value) in
                     [(TG, secrets.telegram_token), (SLACK_BOT, secrets.slack_bot_token), (SLACK_APP, secrets.slack_app_token), (DISCORD, secrets.discord_token), (SIGNAL, secrets.signal_number),
@@ -451,6 +496,7 @@ impl Host {
                     (WHATSAPP, secrets.whatsapp_number_id),
                     (WHATSAPP_TOKEN, secrets.whatsapp_token),
                     (WHATSAPP_SECRET, secrets.whatsapp_app_secret),
+                    (IMESSAGE, secrets.imessage_chat),
                 ]
                 {
                     if let Some(v) = value {
@@ -622,6 +668,13 @@ impl Host {
                 }
                 ok(self.db.setting("email_tasks")?.as_deref() == Some("on"))
             }
+            // The memory folder: Markdown copies of your memories; changes made there wait in Needs you.
+            "memory_folder" => {
+                if let Some(dir) = arg::<Option<String>>(a, "dir")? {
+                    crate::vault::set(&self.db, Some(&dir))?;
+                }
+                ok(crate::vault::folder(&self.db).map(|p| p.to_string_lossy().to_string()).unwrap_or_default())
+            }
             // Webhooks out: the address, which events go to it, and whether the text goes too. The secret the bodies
             // are signed with is made (in the keychain) the first time an address is saved, or anew with `rotate`.
             "webhook_out" => {
@@ -719,6 +772,8 @@ impl Host {
                 }
                 ok(self.db.fallback(bot)?.map(|(provider, model)| json!({"provider": provider, "model": model})))
             }
+            // A Claude bot on the Anthropic API key (the monthly API credits): see api_credits.
+            "api_credits" => self.api_credits(a),
             // The request-match check: off until false asks are measured (scripts/e2e-flows.py turns it on).
             "set_ask_check" => ok(self.db.set_setting("ask_check", if arg(a, "on")? { "on" } else { "off" })?),
             "set_telegram_topics" => ok(self.db.set_setting(&format!("telegram_topics:{}", arg::<i64>(a, "bot_id")?), if arg(a, "on")? { "on" } else { "off" })?),
@@ -852,6 +907,8 @@ impl Host {
             "decide_skill" => ok(self.db.skill_decide(&scope(a)?, arg(a, "id")?, arg(a, "accept")?)?),
             "remove_skill" => ok(self.db.skill_remove(&scope(a)?, arg(a, "id")?)?),
             "undo_memory" => ok(self.db.undo(&scope(a)?, arg(a, "id")?)?),
+            // A button in a tool server's card (MCP Apps): its tool, through the tool gate.
+            "card_call" => ok(crate::ext::card_call(&self.db, &arg::<String>(a, "key")?, &arg::<String>(a, "name")?, &a["arguments"]).await?),
             // The weekly look back: how the last four weeks went, and when you last reviewed what was learned.
             "learning" => {
                 let chat: i64 = arg(a, "chat_id")?;
@@ -868,7 +925,7 @@ impl Host {
                 let (p, chat, text): (_, i64, String) = (self.provider(bot)?, arg(a, "chat_id")?, arg(a, "text")?);
                 ok(boxed(|| crate::tidy::import(&self.db, &p, bot, chat, &text)).await?)
             }
-            // Other agents on this computer (Claude Code, Hermes, OpenClaw) and what they have; `import_agent` brings
+            // Other agents on this computer (Claude Code, Codex, Hermes, OpenClaw) and what they have; `import_agent` brings
             // one in as suggestions, skill proposals and paused routines.
             "import_sources" => ok(crate::imports::sources()),
             "import_agent" => {
@@ -1194,14 +1251,16 @@ impl Host {
             }
             // The reply being written right now (streams while send_local is running).
             "draft" => ok(crate::live::get(arg(a, "bot_id")?, arg(a, "chat_id")?)),
-            // A reply in progress: the text so far, what it's doing now, and the steps it has finished.
+            // A reply in progress: the text so far, what it's doing now, the steps it has finished, and its checklist.
             "live" => {
                 let (bot, chat): (i64, i64) = (arg(a, "bot_id")?, arg(a, "chat_id")?);
                 let done = match self.db.running_run(bot, chat)? {
-                    Some(run) => self.db.tool_calls(run)?.into_iter().map(|c| json!({"summary": c.summary, "ok": c.ok, "decision": c.decision})).collect(),
+                    // Ticking the checklist shows as the checklist itself.
+                    Some(run) => self.db.tool_calls(run)?.into_iter().filter(|c| c.tool != "progress_set").map(|c| json!({"summary": c.summary, "ok": c.ok, "decision": c.decision})).collect(),
                     None => vec![],
                 };
-                ok(json!({"draft": crate::live::get(bot, chat), "step": crate::live::step(bot, chat), "done": done}))
+                let checklist: Vec<Value> = crate::tools::progress(&self.db, bot, chat).into_iter().map(|(step, done)| json!({"step": step, "done": done})).collect();
+                ok(json!({"draft": crate::live::get(bot, chat), "step": crate::live::step(bot, chat), "done": done, "checklist": checklist}))
             }
             // Stop from the Runs list: a reply in a messaging app (it records itself as stopped and says so there), or
             // one in the app (below).
@@ -1253,7 +1312,7 @@ impl Host {
             // A webhook routine's address (on this server) and the secret its caller signs with.
             "webhook" => {
                 let (chat, id): (i64, i64) = (arg(a, "chat_id")?, arg(a, "id")?);
-                self.db.routines(chat)?.into_iter().find(|r| r.id == id && r.cron == "webhook").context("no such webhook routine")?;
+                self.db.routines(chat)?.into_iter().find(|r| r.id == id && crate::events::is_hook(&r.cron)).context("no such webhook routine")?;
                 ok(json!({"path": format!("/hook/{id}"), "secret": crate::events::webhook_secret(&self.db, id)?}))
             }
             // Run a routine now, as a test: the result lands in the chat whatever its delivery setting.
@@ -1496,6 +1555,13 @@ impl Host {
                 }
                 ok(self.db.setting("weekly_review")?.as_deref() != Some("off"))
             }
+            // Health, beliefs, money and the like in proposed memories: off unless switched on (get without `on`).
+            "remember_sensitive" => {
+                if let Some(on) = arg::<Option<bool>>(a, "on")? {
+                    self.db.set_setting(crate::tidy::SENSITIVE, if on { "on" } else { "off" })?;
+                }
+                ok(self.db.setting(crate::tidy::SENSITIVE)?.as_deref() == Some("on"))
+            }
             "update_routine" => {
                 let (chat, id, cron): (i64, i64, String) = (arg(a, "chat_id")?, arg(a, "id")?, arg(a, "cron")?);
                 // A new trigger needs what it runs on; pausing one whose mailbox went away still works.
@@ -1707,6 +1773,11 @@ impl Host {
             }
             "send_local" => {
                 let bot: i64 = arg(a, "bot_id")?;
+                // The built-in chat, or a chat API token's own (the server passes it).
+                let chat = arg::<Option<i64>>(a, "chat_id")?.unwrap_or(LOCAL_CHAT);
+                if chat != LOCAL_CHAT && !is_api_chat(chat) {
+                    bail!("send_local answers in the built-in chat or a chat API one");
+                }
                 let provider = self.provider(bot)?;
                 let text: String = arg(a, "text")?;
                 // Photos pasted or dropped into the app (saved by save_media); only files inside media/ are accepted.
@@ -1722,14 +1793,14 @@ impl Host {
                 // Run as a task so Stop can cancel it (dropping it kills the CLI process too).
                 let (db, asked) = (self.db.clone(), text.clone());
                 let task = tokio::spawn(boxed(move || async move {
-                    let mut ctx = ToolCtx::new(db, bot, LOCAL_CHAT);
+                    let mut ctx = ToolCtx::new(db, bot, chat);
                     ctx.images = images;
                     turn(&provider, &ctx, Trigger::Message(&text)).await
                 }));
                 let me = task.id();
-                self.running.lock().unwrap().insert((bot, LOCAL_CHAT), (task.abort_handle(), asked));
+                self.running.lock().unwrap().insert((bot, chat), (task.abort_handle(), asked));
                 let out = task.await;
-                self.finished((bot, LOCAL_CHAT), me);
+                self.finished((bot, chat), me);
                 match out {
                     Ok(reply) => ok(reply?),
                     Err(e) if e.is_cancelled() => bail!("stopped"),
@@ -1992,9 +2063,13 @@ mod tests {
         assert!(host.call("chat_token_add", &json!({"bot_id": 999, "name": "Shortcuts"})).await.is_err());
         let token = host.call("chat_token_add", &json!({"bot_id": bot, "name": "Shortcuts"})).await.unwrap();
         let token = token.as_str().unwrap();
-        assert_eq!(chat_token_bot(&host.db, token), Some(bot));
-        assert_eq!(chat_token_bot(&host.db, &token[..token.len() - 1]), None);
         let list = host.call("chat_tokens", &json!({})).await.unwrap();
+        // Its own chat, not the built-in one, and listed with the chats.
+        let chat = API_CHATS + i64::from_str_radix(list[0]["id"].as_str().unwrap(), 16).unwrap();
+        assert_eq!(chat_token_bot(&host.db, token), Some((bot, chat)));
+        assert!(is_api_chat(chat) && !host.db.chat_private(chat));
+        assert!(host.db.chats().unwrap().iter().any(|c| c.chat_id == chat && c.channel == "api" && c.title == "Chat API: Shortcuts"));
+        assert_eq!(chat_token_bot(&host.db, &token[..token.len() - 1]), None);
         assert_eq!((list[0]["name"].as_str(), list[0]["bot_id"].as_i64(), list[0].get("hash")), (Some("Shortcuts"), Some(bot), None));
         assert!(!list.to_string().contains(token));
         let other = host.call("chat_token_add", &json!({"bot_id": 1, "name": "HA"})).await.unwrap();
@@ -2006,7 +2081,7 @@ mod tests {
         assert_eq!(host.call("bots", &json!({})).await.unwrap().as_array().unwrap().len(), 1);
         let list = host.call("chat_tokens", &json!({})).await.unwrap();
         assert_eq!(list.as_array().unwrap().len(), 1, "the deleted bot's token went with it");
-        assert_eq!(chat_token_bot(&host.db, other.as_str().unwrap()), Some(1));
+        assert_eq!(chat_token_bot(&host.db, other.as_str().unwrap()).map(|t| t.0), Some(1));
         host.stop_all();
     }
 }

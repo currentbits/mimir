@@ -1,10 +1,10 @@
-export type ChannelStatus = { kind: 'telegram' | 'slack' | 'discord' | 'signal' | 'whatsapp'; connected: boolean; handle: string | null; error: string | null }
+export type ChannelStatus = { kind: 'telegram' | 'slack' | 'discord' | 'signal' | 'whatsapp' | 'imessage'; connected: boolean; handle: string | null; error: string | null }
 
 export type Status = { bot_id: number; provider: string; pair_code: string | null; channels: ChannelStatus[]; error: string | null }
 
 export type Bot = {
   id: number; name: string; persona: string; provider: string; model: string; base_url: string; tools: string
-  has_telegram_token: boolean; has_slack: boolean; has_discord: boolean; has_signal: boolean; has_whatsapp: boolean
+  has_telegram_token: boolean; has_slack: boolean; has_discord: boolean; has_signal: boolean; has_whatsapp: boolean; has_imessage: boolean
   /** Its creature, as you chose it (JSON of Look); empty = the one its id gives it. */
   look?: string
 }

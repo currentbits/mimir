@@ -52,6 +52,8 @@ Setting it all up takes about ten minutes: [Getting started](getting-started.md)
 ## Start here
 
 - [Getting started](getting-started.md): install the app, connect an AI account, make your first bot, talk to it.
+- [Moving from OpenClaw or Hermes](getting-started.md#moving-from-openclaw-or-hermes): your memories, persona, skills and
+  scheduled jobs, in one import.
 - [What you can do with it](examples.md): everyday jobs, from a morning briefing to your inbox, step by step.
 - [Connect your email, calendar and web search](connect.md): app passwords, calendar links and search keys, step by
   step, and what bots then do.
