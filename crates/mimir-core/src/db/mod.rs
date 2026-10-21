@@ -861,7 +861,7 @@ mod tests {
         let d = db();
         let s = "chat:1";
         let old = d.store(s, "knowledge", "Gym", "Mondays", "", None).unwrap();
-        let new = d.store_by(s, "knowledge", "Gym", "Tuesdays", "", Some(old), &Prov::by("tidy")).unwrap();
+        let new = d.store_by(s, "knowledge", "Gym", "Tuesdays", "", Some(old), &Prov::by("tidy")).unwrap().0;
         assert!(d.undo(s, new).unwrap());
         let e = d.entries(s).unwrap();
         assert_eq!(e.iter().filter(|e| e.status == "active").map(|e| e.id).collect::<Vec<_>>(), vec![old], "the earlier version is back");

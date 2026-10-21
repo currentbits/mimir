@@ -1255,7 +1255,7 @@ mod tests {
         let run = db.run_start(1, 5, "message", None, "test").unwrap();
         db.run_asked(run, "I might start going to the gym on Mondays").unwrap();
         let prov = crate::db::Prov { origin: "bot", bot: Some(1), run: Some(run), tainted: false };
-        let gym = db.store_by("chat:5", "knowledge", "Gym", "Goes to the gym every Monday", "", None, &prov).unwrap();
+        let gym = db.store_by("chat:5", "knowledge", "Gym", "Goes to the gym every Monday", "", None, &prov).unwrap().0;
         let (msg, ids) = weekly_review(&db, 5, now + 1).unwrap().unwrap();
         assert!(msg.contains("1. **Gym**: Goes to the gym every Monday") && msg.contains("/undo 1"), "{msg}");
         // Their words next to it: "might start" was saved as "every Monday".
