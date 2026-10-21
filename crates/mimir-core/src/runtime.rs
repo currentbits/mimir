@@ -2028,6 +2028,15 @@ impl Core {
                     eprintln!("mail tasks: {e:#}");
                 }
             }
+            // The memory folder, kept in step by the memory bot (no AI involved, so while paused too).
+            if crate::tidy::memory_bot(&self.db) == Some(self.bot) && crate::vault::folder(&self.db).is_some() {
+                let db = self.db.clone();
+                match tokio::task::spawn_blocking(move || crate::vault::sync(&db)).await {
+                    Ok(Err(e)) => eprintln!("memory folder: {e:#}"),
+                    Err(e) => eprintln!("memory folder: {e}"),
+                    Ok(Ok(_)) => {}
+                }
+            }
             // Paused by you: nothing runs on its own (routines, digest, weekly review, tidy-up) until it ends.
             if self.db.paused(self.bot, now).unwrap_or_else(|e| { eprintln!("pause: {e:#}"); None }).is_some() {
                 tokio::time::sleep(Duration::from_secs(30)).await;
