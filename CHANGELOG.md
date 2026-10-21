@@ -2,6 +2,14 @@
 
 What changed for people using Mimir. The newest release is at the top; "Unreleased" is what the next one brings.
 
+## Unreleased
+
+### Safety
+- **Chat API tokens can't read your email:** an app using a [chat API](docs/self-hosting.md) token now talks to the bot
+  in a chat of the token's own ("Chat API: Home Assistant"), not your built-in chat. It isn't private, so no email,
+  calendar, meetings or computer there, and a rule said through it is a suggestion for you to accept. Whoever holds the
+  token, or talks to the speaker that uses it, isn't necessarily you.
+
 ## 0.5.0
 
 ### Talking to your bots
