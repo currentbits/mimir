@@ -2,6 +2,13 @@
 
 What changed for people using Mimir. The newest release is at the top; "Unreleased" is what the next one brings.
 
+## Unreleased
+
+- **Claude on your monthly API credits:** Max and Team plans include monthly API credits. Save an Anthropic API key
+  from your linked Console organisation (Settings → AI keys), and a Claude bot can go on with it when the plan says
+  no, in the same conversation, or run its routines on it from the start. The credits stop when they run out: nothing
+  is billed. See [docs/ai-accounts.md](docs/ai-accounts.md#claude-your-plans-monthly-api-credits).
+
 ## 0.5.0
 
 ### Talking to your bots
