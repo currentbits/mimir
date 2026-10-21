@@ -128,6 +128,27 @@ the daily ones. See [Skills](skills.md).
   for you to accept ([Memory](memory.md)).
 - Start a Teams or Zoom call, then **Meetings → Start transcribing** ([Meetings](meetings.md)).
 
+## Moving from OpenClaw or Hermes
+
+Your bots keep running on your Claude plan, through Anthropic's own CLI (Claude Code): no API key, nothing extra to
+pay. Updates are calm: the app downloads one in the background and installs it only when you choose **Restart to
+update**, so an update never stops a bot mid-reply.
+
+Bring your setup across with **Memory → Import → From OpenClaw** (or **From Hermes**), with Mimir on the same computer:
+
+- **Memories**: OpenClaw's `USER.md`, `MEMORY.md` and `memory/` from its workspace (`OPENCLAW_WORKSPACE_DIR`, or
+  `agents.defaults.workspace` in `openclaw.json`, or `~/.openclaw/workspace`); Hermes' `memories/`. They arrive as
+  suggestions, marked *imported from OpenClaw*, and nothing is saved until you accept.
+- **Profiles**: every `~/.openclaw-<name>` and `~/.hermes/profiles/<name>` comes in too, in the same import.
+- **Persona**: `SOUL.md` and `IDENTITY.md` (Hermes: `SOUL.md`) aren't memories. The import offers **Use as
+  <bot>'s role**; the role changes only if you click it.
+- **Skills** become proposals, and **cron jobs** routines that start paused. A job set for another time zone
+  says so ("Was set for 09:00 Europe/Amsterdam"): it runs on this computer's clock, so check the time before you
+  resume it.
+
+Keys, tokens and channel logins don't come over: connect Telegram, Slack or Discord again on the bot's page. More in
+[Memory](memory.md#changing-and-removing).
+
 ## Finding a setting
 
 The box at the top of **Settings** filters it as you type ("email", "token", "quiet hours"); ⌘F (Ctrl+F) jumps to it

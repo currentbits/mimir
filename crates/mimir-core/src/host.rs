@@ -56,9 +56,11 @@ pub fn secret_set(name: &str, value: &str) -> Result<()> {
 }
 
 /// Accounts that take an API key: (secret name, env var fallback).
-/// (`brave` is Brave Search's key, for the bots' web_search, and `x` an X API bearer token, for x_search: not AI accounts.)
-const KEYED: [(&str, &str, &str); 5] = [
+/// (`brave` is Brave Search's key, for the bots' web_search, and `x` an X API bearer token, for x_search: not AI accounts.
+/// `anthropic` isn't an account of its own either: Claude bots go on to it when the plan says no, see provider::api_credits.)
+const KEYED: [(&str, &str, &str); 6] = [
     ("openai", "openai_api_key", "OPENAI_API_KEY"),
+    ("anthropic", "anthropic_api_key", "ANTHROPIC_API_KEY"),
     ("openrouter", OPENROUTER_KEY, "OPENROUTER_API_KEY"),
     ("xai", "xai_api_key", "XAI_API_KEY"),
     ("brave", "brave_api_key", "BRAVE_API_KEY"),
@@ -357,6 +359,20 @@ impl Host {
         if running.get(&key).is_some_and(|(h, _)| h.id() == task) {
             running.remove(&key);
         }
+    }
+
+    /// "" off, "limit" once the plan says no, "routines" that and its routines from the start (get without `mode`).
+    // ponytail: out of `call`, whose one stack frame holds every arm's locals and is at Windows' limit in debug tests
+    fn api_credits(&self, a: &Value) -> Result<Value> {
+        let key = format!("api_credits:{}", arg::<i64>(a, "bot_id")?);
+        match arg::<Option<String>>(a, "mode")?.as_deref() {
+            None => {}
+            Some("") => self.db.set_setting(&key, "")?,
+            Some(m @ ("limit" | "routines")) if api_key("anthropic").is_some() => self.db.set_setting(&key, m)?,
+            Some("limit" | "routines") => bail!("add your Anthropic API key in Settings → AI keys first"),
+            Some(m) => bail!("unknown mode '{m}'"),
+        }
+        ok(self.db.setting(&key)?.unwrap_or_default())
     }
 
     pub async fn call(&self, cmd: &str, a: &Value) -> Result<Value> {
@@ -712,6 +728,8 @@ impl Host {
                 }
                 ok(self.db.fallback(bot)?.map(|(provider, model)| json!({"provider": provider, "model": model})))
             }
+            // A Claude bot on the Anthropic API key (the monthly API credits): see api_credits.
+            "api_credits" => self.api_credits(a),
             // The request-match check: off until false asks are measured (scripts/e2e-flows.py turns it on).
             "set_ask_check" => ok(self.db.set_setting("ask_check", if arg(a, "on")? { "on" } else { "off" })?),
             "set_telegram_topics" => ok(self.db.set_setting(&format!("telegram_topics:{}", arg::<i64>(a, "bot_id")?), if arg(a, "on")? { "on" } else { "off" })?),

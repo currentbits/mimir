@@ -267,7 +267,7 @@ pub async fn sign_in(conf: ServerConf, listen: bool) -> Result<String> {
     // unless the server itself is there.
     let mut http = reqwest::Client::builder().timeout(Duration::from_secs(20));
     if !crate::tools::is_private_host(&conf.url) {
-        http = http.redirect(crate::tools::public_redirects());
+        http = http.redirect(crate::tools::public_redirects()).dns_resolver(std::sync::Arc::new(crate::tools::PublicDns));
     }
     let http = http.build()?;
     let server = url::Url::parse(&conf.url)?;

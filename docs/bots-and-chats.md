@@ -130,6 +130,9 @@ guest's chat whoever paired it (several people read it), so bots there get none 
 logins. Your household is you plus each guest whose direct chat you added on the same app. (On Telegram, a bot
 in a group only sees every message if its privacy mode is off in @BotFather; otherwise talk to it with an @-mention.)
 
+In any other Telegram group, the bot answers only a message that @-mentions it, replies to one of its messages, or is
+a `/command`, even with privacy mode off. A family group's bot answers every message it sees.
+
 ### Pairing a messaging app
 
 Only chats you've paired can talk to your bot. Send it `pair <CODE>` (the code is on the bot's page, or printed by
