@@ -113,7 +113,8 @@ pub(super) fn gate(db: &Db, tool: &str, site: Option<&str>, tainted: bool) -> Re
     // ask_choice only shows the person buttons; what they tap is theirs to pick. send_file goes to them, like the reply.
     // progress_set only ticks the run's own checklist.
     // An ask after outside content is guarded too, so it never offers "always" (a page could be asking).
-    let exempt = is_read_only(db, tool) || matches!(tool, "plan_propose" | "skill_save" | "ask_choice" | "send_file" | "progress_set");
+    // email_hand_over only puts an email in front of the person, in Needs you.
+    let exempt = is_read_only(db, tool) || matches!(tool, "plan_propose" | "skill_save" | "ask_choice" | "send_file" | "progress_set" | "email_hand_over");
     Ok(if tainted && !exempt && ((action == "allow" && !browser) || action == "ask") { ("ask".into(), "guarded") } else { (action, "rule") })
 }
 
@@ -886,6 +887,7 @@ pub(crate) fn describe_tool(name: &str) -> String {
         "computer_signin" => "use saved logins",
         "computer_type" => "type on the computer",
         "email_draft" => "draft emails",
+        "email_hand_over" => "hand replies to you",
         "email_read" => "read your email",
         "email_search" => "search your email",
         "email_send" => "send emails",

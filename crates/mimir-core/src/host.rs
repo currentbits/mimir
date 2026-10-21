@@ -646,6 +646,8 @@ impl Host {
                 }
                 ok(self.db.setting("email_tasks")?.as_deref() == Some("on"))
             }
+            // The line added to emails a bot sends to someone you haven't written to ("" = none).
+            "email_disclose" => ok(crate::email::disclose(&self.db, arg(a, "line")?)?),
             // The memory folder: Markdown copies of your memories; changes made there wait in Needs you.
             "memory_folder" => {
                 if let Some(dir) = arg::<Option<String>>(a, "dir")? {
@@ -1598,6 +1600,8 @@ impl Host {
                     "suggestions": counts,
                     // Goals waiting on the person: over their budget (go on?), or blocked on them.
                     "goals": self.db.goals_waiting()?,
+                    // Replies to a bot's email that it handed to you instead of answering.
+                    "mail": crate::email::handed_over(&self.db),
                     // The daily check found the database damaged: restore a backup.
                     "damage": self.db.setting(crate::backup::DAMAGE)?,
                     // Plain asks you keep allowing: stop asking?
@@ -1680,7 +1684,11 @@ impl Host {
             }
             // The AI plan's usage windows, where the AI reports them (Claude Code does).
             "ai_windows" => ok(crate::provider::windows(&self.db)),
-            "inbox_dismiss" => ok(self.db.inbox_dismiss(&arg::<String>(a, "kind")?, arg(a, "id")?)?),
+            "inbox_dismiss" => {
+                let (kind, id): (String, i64) = (arg(a, "kind")?, arg(a, "id")?);
+                if kind == "mail" { crate::email::handed_done(&self.db, id)? } else { self.db.inbox_dismiss(&kind, id)? }
+                ok(())
+            }
             "rule_hint_dismiss" => ok(tools::rule_hint_dismiss(&self.db, &arg::<String>(a, "tool")?, arg::<Option<String>>(a, "site")?.as_deref())?),
             "site_rules" => ok(self.db.site_rules()?.into_iter().map(|(tool, host, action)| json!({"tool": tool, "host": host, "action": action})).collect::<Vec<_>>()),
             "set_site_rule" => ok(self.db.set_site_rule(&arg::<String>(a, "tool")?, &arg::<String>(a, "host")?, &arg::<String>(a, "action")?)?),

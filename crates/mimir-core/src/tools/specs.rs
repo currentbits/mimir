@@ -115,6 +115,18 @@ pub fn specs() -> Vec<(&'static str, &'static str, Value)> {
             },"required":["to","subject","body"]}),
         ),
         (
+            "email_hand_over",
+            "Hand an email to the user instead of answering it: a reply to an email a bot sent that's personal, off-topic, or \
+             asks them to commit to something (a meeting, money, a contract). It goes in their Needs you with your one-line \
+             summary; you don't answer it.",
+            json!({"type":"object","properties":{
+                "account":{"type":"string","description":"the mailbox (its address) it's in; default: the first"},
+                "from":{"type":"string","description":"the sender, as the email shows it"},
+                "subject":{"type":"string"},
+                "summary":{"type":"string","description":"one line: what they want from the user"}
+            },"required":["from","subject","summary"]}),
+        ),
+        (
             "email_read",
             "Read one email by the id email_search gave (its text and attachment names). Nothing is marked read.",
             json!({"type":"object","properties":{"id":{"type":"integer"},"folder":{"type":"string","description":"default INBOX"},

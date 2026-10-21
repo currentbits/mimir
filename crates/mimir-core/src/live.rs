@@ -151,6 +151,7 @@ pub fn step_label(tool: &str) -> String {
         "email_search" => "Looking through your email".into(),
         "email_read" => "Reading an email".into(),
         "email_draft" => "Writing an email draft".into(),
+        "email_hand_over" => "Handing an email to you".into(),
         "email_send" => "Sending an email".into(),
         "file_list" | "file_read" => "Looking at the workspace".into(),
         "file_write" => "Writing a file".into(),

@@ -73,6 +73,13 @@ Only in a chat with you, never in a group or incognito:
   whole text on the card, until you press "Always" on one. An email too long to read on the card can't be sent (the
   bot saves a draft instead), and a chat can send at most 20 a day. A copy lands in your Sent folder, like mail you
   send yourself (Gmail files one on its own; for iCloud and others, Mimir saves it).
+- **Says it's an assistant**: an email a bot sends to someone you haven't written to yourself (nothing to them in
+  your Sent folder but what bots sent) ends with a line, "Sent by my assistant" unless you change it in **Settings →
+  Email → Say it's an assistant**. On for new installs; turn it on there after an update. The line is added when the
+  email goes, after the approval card.
+- **Replies come to you**: a reply to an email a bot sent that's personal, off-topic, or asks you to commit to
+  something (a meeting, money, a contract) isn't answered by the bot. It goes to **Needs you → Replies for you** with
+  the bot's one-line summary.
 - The **Inbox triage** skill ([Skills](skills.md)) sorts your mail into "needs you", FYI and noise and offers short
   replies.
 
