@@ -95,12 +95,13 @@ impl Db {
     // ---------- memory ----------
 
     pub fn store(&self, scope: &str, kind: &str, title: &str, body: &str, source: &str, supersedes: Option<i64>) -> Result<i64> {
-        self.store_by(scope, kind, title, body, source, supersedes, &Prov::default())
+        Ok(self.store_by(scope, kind, title, body, source, supersedes, &Prov::default())?.0)
     }
 
-    /// `store`, recording who wrote it.
+    /// `store`, recording who wrote it. Also says whether a row was created (false: the same text was already kept,
+    /// and that one's id comes back).
     #[allow(clippy::too_many_arguments)]
-    pub fn store_by(&self, scope: &str, kind: &str, title: &str, body: &str, source: &str, supersedes: Option<i64>, prov: &Prov) -> Result<i64> {
+    pub fn store_by(&self, scope: &str, kind: &str, title: &str, body: &str, source: &str, supersedes: Option<i64>, prov: &Prov) -> Result<(i64, bool)> {
         if !TYPES.contains(&kind) {
             bail!("type must be one of {TYPES:?}");
         }
@@ -109,15 +110,21 @@ impl Db {
         }
         let mut c = self.c();
         let tx = c.transaction()?;
+        // A bot only matches (and only replaces) what it can see: shared memories and its own.
         let dup: Option<i64> = tx
             .query_row(
-                "SELECT id FROM entries WHERE scope=?1 AND title=?2 AND body=?3 AND superseded_by IS NULL AND invalid=0",
-                params![scope, title, body],
+                "SELECT id FROM entries WHERE scope=?1 AND title=?2 AND body=?3 AND superseded_by IS NULL AND invalid=0 AND (?4 IS NULL OR for_bot IN (0, ?4))",
+                params![scope, title, body, prov.bot],
                 |r| r.get(0),
             )
             .optional()?;
         if let Some(id) = dup {
-            return Ok(id);
+            // The same text written clean (the person's own words) confirms one saved after outside content.
+            if !prov.tainted {
+                tx.execute("UPDATE entries SET tainted=0 WHERE id=?1", [id])?;
+                tx.commit()?;
+            }
+            return Ok((id, false));
         }
         tx.execute(
             "INSERT INTO entries(scope,type,title,body,source,importance,created_at,origin,bot_id,run_id,tainted) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
@@ -127,8 +134,8 @@ impl Db {
         if let Some(old) = supersedes {
             let n = tx.execute(
                 // id != ?1: the row just inserted can't be the one it replaces (an unknown id could match it).
-                "UPDATE entries SET superseded_by=?1 WHERE id=?2 AND id != ?1 AND scope=?3 AND superseded_by IS NULL",
-                params![id, old, scope],
+                "UPDATE entries SET superseded_by=?1 WHERE id=?2 AND id != ?1 AND scope=?3 AND superseded_by IS NULL AND (?4 IS NULL OR for_bot IN (0, ?4))",
+                params![id, old, scope, prov.bot],
             )?;
             if n == 0 {
                 bail!("entry #{old} not found or already superseded");
@@ -141,7 +148,7 @@ impl Db {
             )?;
         }
         tx.commit()?;
-        Ok(id)
+        Ok((id, true))
     }
 
     pub fn forget(&self, scope: &str, id: i64) -> Result<bool> {

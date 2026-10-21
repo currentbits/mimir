@@ -1511,6 +1511,16 @@ mod tests {
         let v2 = db.store("chat:100", "knowledge", "Padel", "plays padel on Thursdays", "", Some(id)).unwrap();
         assert!(db.search("chat:100", 2, "padel", 5).unwrap().is_empty() && db.entries("chat:100").unwrap()[0].for_bot == 1, "{v2}");
         assert!(db.set_for_bot("chat:100", v2, 0).unwrap() && !db.search("chat:100", 2, "padel", 5).unwrap().is_empty(), "shared again");
+        // "Just for you" on a memory every bot already has leaves it shared.
+        let out = call(&you, "memory_store", &json!({"type": "knowledge", "title": "Padel", "body": "plays padel on Thursdays", "only_me": true})).await.unwrap();
+        assert_eq!(out, format!("already known as #{v2} (shared)"));
+        assert!(!db.search("chat:100", 2, "padel", 5).unwrap().is_empty(), "still shared");
+        // Another bot can't match or replace one kept for bot 1 only.
+        let out = call(&you, "memory_store", &json!({"type": "knowledge", "title": "Locker", "body": "number 12", "only_me": true})).await.unwrap();
+        let locker: i64 = out.trim_start_matches("stored #").parse().unwrap();
+        let bot2 = crate::db::Prov { origin: "bot", bot: Some(2), ..Default::default() };
+        assert!(db.store_by("chat:100", "knowledge", "Locker", "number 14", "", Some(locker), &bot2).is_err());
+        assert!(db.store_by("chat:100", "knowledge", "Locker", "number 12", "", None, &bot2).unwrap().1, "a row of its own");
 
         // (b) The household: your direct chat is in it; a guest and a group only once you add them.
         assert!(db.in_household(100) && !db.in_household(200) && !db.in_household(-300) && !db.in_household(crate::INCOGNITO_CHAT));
