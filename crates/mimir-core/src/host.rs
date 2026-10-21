@@ -600,6 +600,13 @@ impl Host {
                 }
                 ok(self.db.setting("email_tasks")?.as_deref() == Some("on"))
             }
+            // The memory folder: Markdown copies of your memories; changes made there wait in Needs you.
+            "memory_folder" => {
+                if let Some(dir) = arg::<Option<String>>(a, "dir")? {
+                    crate::vault::set(&self.db, Some(&dir))?;
+                }
+                ok(crate::vault::folder(&self.db).map(|p| p.to_string_lossy().to_string()).unwrap_or_default())
+            }
             // Webhooks out: the address, which events go to it, and whether the text goes too. The secret the bodies
             // are signed with is made (in the keychain) the first time an address is saved, or anew with `rotate`.
             "webhook_out" => {

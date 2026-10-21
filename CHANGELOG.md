@@ -2,6 +2,13 @@
 
 What changed for people using Mimir. The newest release is at the top; "Unreleased" is what the next one brings.
 
+## Unreleased
+
+- **Memory as files:** **Settings → Memory** can keep your memories as Markdown files too, in a folder you pick: one
+  file per memory, a folder per chat, with frontmatter (type, chat, bot, dates). Open it in Obsidian, grep it, keep it
+  in git. What you edit, add or delete there waits in Needs you as a suggestion; nothing changes until you accept it.
+  Guests' and incognito chats stay out, and files already in the folder are left alone.
+
 ## 0.5.0
 
 ### Talking to your bots

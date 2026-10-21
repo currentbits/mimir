@@ -76,13 +76,15 @@ impl Db {
         // One pending suggestion per memory, and no second pending "add" with the same title:
         // conflicting proposals (e.g. forget A and forget B for a duplicate pair) could lose the fact.
         // A suggestion you dismissed doesn't come back for 90 days.
+        // A change you made in the memory folder is asked about every time, whatever you dismissed before.
+        let yours = crate::vault::from_folder(&s.reason);
         let dup: bool = c
             .prepare(
                 "SELECT 1 FROM suggestions WHERE scope=?1
-                   AND (status='pending' OR (status='dismissed' AND action=?4 AND created_at > ?5))
+                   AND (status='pending' OR (status='dismissed' AND NOT ?6 AND action=?4 AND created_at > ?5))
                    AND ((?2 IS NOT NULL AND entry_id = ?2) OR (?2 IS NULL AND entry_id IS NULL AND lower(title) = lower(?3)))",
             )?
-            .exists(params![scope, s.entry_id, s.title.trim(), s.action, now() - 90 * 86400])?;
+            .exists(params![scope, s.entry_id, s.title.trim(), s.action, now() - 90 * 86400, yours])?;
         if dup {
             return Ok(None);
         }
@@ -101,7 +103,7 @@ impl Db {
         // proposer worse; filtering lookalikes is what works: Greptile, 19% → 55% of comments acted on.)
         // ponytail: the 90 days let a real need come back
         let mut reason = s.reason.trim().to_string();
-        if matches!(s.action.as_str(), "add" | "update") && !reason.starts_with("Imported") {
+        if matches!(s.action.as_str(), "add" | "update") && !reason.starts_with("Imported") && !yours {
             let mut st = c.prepare(
                 "SELECT title, body, created_at FROM suggestions WHERE scope=?1 AND status='dismissed' AND action IN ('add','update') AND type=?2 AND created_at > ?3
                  ORDER BY id DESC LIMIT 200",
@@ -216,6 +218,8 @@ impl Db {
                 ("imported, approved by you", Prov::by("import"))
             } else if s.reason.starts_with("Found in your") {
                 ("found in your email or calendar, approved by you", Prov::by("know_me"))
+            } else if crate::vault::from_folder(&s.reason) {
+                ("edited in your memory folder, approved by you", Prov::by("you"))
             } else if s.reason.starts_with(BOT_PROPOSED) {
                 ("proposed by a bot, approved by you", Prov::by("bot"))
             } else {
