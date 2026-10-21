@@ -76,6 +76,7 @@ pub mod live;
 pub mod oauth;
 pub mod openrouter;
 mod discord;
+mod imessage;
 mod signal;
 mod slack;
 mod telegram;

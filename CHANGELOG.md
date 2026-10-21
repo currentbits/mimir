@@ -14,6 +14,10 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
   nothing active until you accept it.
 
 ### Talking to your bots
+- **iMessage, in the Mac app:** a bot can answer in one Messages conversation you choose, a note to yourself or a
+  chat with a second Apple ID, and never reads any other. Text, photos and voice messages in; replies as plain text,
+  with approval cards and questions as numbered lists, as on Signal. Needs Full Disk Access and permission to control
+  Messages, and works only while the Mac is awake. Setup is under [Connect](docs/connect.md#imessage).
 - **Mimir on your phone's home screen:** the server's web app can be added to a phone's home screen and opens full
   screen with its own icon. See [Self-hosting](docs/self-hosting.md#3-open-it-in-your-browser).
 - **Telegram groups:** a bot in a group (not a family group) answers only when you @-mention it, reply to one of its
