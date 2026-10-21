@@ -91,6 +91,7 @@ pub mod say;
 pub mod server_update;
 pub mod tools;
 pub mod usage_stats;
+pub mod vault;
 pub mod watch;
 pub mod caldav;
 pub mod calendar;

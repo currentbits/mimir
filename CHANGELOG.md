@@ -32,6 +32,12 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
   event filter, like `issues.opened repo:acme/app`. Other events get no run, and the run gets a short summary of the
   event instead of GitHub's raw payload.
 
+### Memory
+- **Memory as files:** **Settings → Memory** can keep your memories as Markdown files too, in a folder you pick: one
+  file per memory, a folder per chat, with frontmatter (type, chat, bot, dates). Open it in Obsidian, grep it, keep it
+  in git. What you edit, add or delete there waits in Needs you as a suggestion; nothing changes until you accept it.
+  Guests' and incognito chats stay out, and files already in the folder are left alone.
+
 ### Safety
 - **Chat API tokens can't read your email:** an app using a [chat API](docs/self-hosting.md) token now talks to the bot
   in a chat of the token's own ("Chat API: Home Assistant"), not your built-in chat. It isn't private, so no email,

@@ -105,6 +105,7 @@ export function SettingsView({ onComputer, find = '' }: { onComputer: () => void
       <EmailSettings />
       <CalendarSettings />
       <KnowMeSettings />
+      <MemoryFolderSettings />
       <ComputerSettings onChange={() => { onComputer(); toolsChanged() }} />
       <BrowserSettings onChange={toolsChanged} />
       <ToolServerSettings onChange={toolsChanged} />
@@ -701,6 +702,27 @@ function KnowMeSettings() {
         desc={state.found !== undefined ? (state.found ? 'Accept or dismiss each in Memory (built-in chat).' : 'Tell a bot about yourself instead.') : 'Uses your connected email and calendar link'}>
         {state.found === undefined && <button className="btn btn-sm" disabled={state.busy} onClick={go}>{state.busy ? 'Looking…' : 'Get to know me'}</button>}
       </Row>
+    </Group>
+  )
+}
+
+/** Memories as Markdown files in a folder you pick (vault.rs): Obsidian, grep, git. What you change there is asked about. */
+function MemoryFolderSettings() {
+  const st = useLoad(() => invoke<string>('memory_folder', {}), [])
+  const [dir, setDir] = useState<string | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+  if (st.data == null) return null
+  const save = (d: string) => invoke<string>('memory_folder', { dir: d }).then(() => { setDir(null); setErr(null); st.reload() }, e => setErr(String(e)))
+  const value = dir ?? st.data
+  return (
+    <Group title="Memory" note={err ? <span className="error">{err}</span> : <>One Markdown file per memory, a folder per chat, kept up to date. Open it in Obsidian, search it, keep it in git. What you edit, add or delete there waits in Needs you as a suggestion: nothing changes until you accept it. Files already in the folder are left alone.{remoteServer() || !inDesktop ? ' The folder is on the server.' : ''}</>}>
+      <form className="row-block" onSubmit={e => { e.preventDefault(); void save(value) }}>
+        <div className="editor" style={{ margin: 0 }}><div className="er">
+          <input className="input mono" placeholder="Also keep as files: a folder's full path, e.g. /Users/you/Notes/Mimir" aria-label="Memory folder" value={value} onChange={e => setDir(e.target.value)} />
+          <button className="btn" disabled={value.trim() === st.data}>Save</button>
+          {st.data && <button type="button" className="btn btn-ghost" onClick={() => save('')}>Stop</button>}
+        </div></div>
+      </form>
     </Group>
   )
 }
