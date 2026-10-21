@@ -10,6 +10,13 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
   calendar, meetings or computer there, and a rule said through it is a suggestion for you to accept. Whoever holds the
   token, or talks to the speaker that uses it, isn't necessarily you.
 
+### Fixes
+- **Signal and WhatsApp:** replying to an approval card with a number now works after Mimir restarts. Before, the
+  number was taken as a "no" with the number as the reason.
+- **Skill imports:** a skill imported from another agent or a bot file with the name of one you already have (perhaps
+  one all bots share) comes in as "‹name› (imported)" instead of replacing it when you accept. A taught skill that
+  would replace one says so on its card.
+
 ## 0.5.0
 
 ### Talking to your bots
