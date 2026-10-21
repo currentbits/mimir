@@ -55,7 +55,7 @@ PRAGMA secure_delete=ON;
 
 /// The schema version this build writes (`PRAGMA user_version`). A schema change bumps it and adds a step to
 /// `migrate`; each step runs once per database.
-pub(crate) const VERSION: i64 = 14;
+pub(crate) const VERSION: i64 = 15;
 
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS entries(
@@ -232,6 +232,9 @@ fn migrate(c: &Connection) -> Result<()> {
     }
     if v < 14 {
         migrate_v14(c)?;
+    }
+    if v < 15 {
+        migrate_v15(c)?;
     }
     c.execute(
         "INSERT INTO settings(key, value) VALUES ('schema_written_by', ?1) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -537,6 +540,15 @@ fn migrate_v14(c: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Version 15: whose daily allowance a reply counts against (#171): a guest's direct chat, the same for their messages
+/// in a family group. NULL: yours, or not a reply.
+fn migrate_v15(c: &Connection) -> Result<()> {
+    if !c.prepare("SELECT 1 FROM pragma_table_info('runs') WHERE name='person'")?.exists([])? {
+        c.execute_batch("ALTER TABLE runs ADD COLUMN person INTEGER")?;
+    }
+    Ok(())
+}
+
 impl Db {
     /// Opens the database, migrating it first if an older Mimir wrote it. An up-to-date database only reads its
     /// version: the tools process opens it on every turn, and mustn't compete with the app for the write lock.
@@ -681,23 +693,24 @@ mod tests {
         assert_eq!(n, 2);
         drop(d);
 
-        // Version 10 → 14: the goals (11), an approval's draft and reason (12), cache writes and what a session holds (13),
-        // tool servers' cards (14).
+        // Version 10 → 15: the goals (11), an approval's draft and reason (12), cache writes and what a session holds (13),
+        // tool servers' cards (14), whose allowance a run counts against (15).
         Connection::open(&p)
             .unwrap()
             .execute_batch(
                 "DROP TABLE goals; ALTER TABLE routines DROP COLUMN goal_id; ALTER TABLE delegations DROP COLUMN goal_id; ALTER TABLE runs DROP COLUMN goal_id;
                  ALTER TABLE approvals DROP COLUMN draft; ALTER TABLE approvals DROP COLUMN reason;
                  ALTER TABLE runs DROP COLUMN cache_write; ALTER TABLE sessions DROP COLUMN sent; ALTER TABLE sessions DROP COLUMN prompt;
-                 DROP TABLE tool_cards; PRAGMA user_version = 10",
+                 DROP TABLE tool_cards; ALTER TABLE runs DROP COLUMN person; PRAGMA user_version = 10",
             )
             .unwrap();
         let d = Db::open(&p).unwrap();
-        assert_eq!(user_version(&d.c()).unwrap(), 14);
+        assert_eq!(user_version(&d.c()).unwrap(), 15);
         assert!(d.c().prepare("SELECT goal_id FROM runs").is_ok() && d.c().prepare("SELECT id FROM goals").is_ok(), "v11 ran");
         assert!(d.c().prepare("SELECT draft, reason FROM approvals").is_ok(), "v12 ran");
         assert!(d.c().prepare("SELECT cache_write FROM runs").is_ok() && d.c().prepare("SELECT sent, prompt FROM sessions").is_ok(), "v13 ran");
         assert!(d.c().prepare("SELECT key, html, csp FROM tool_cards").is_ok(), "v14 ran");
+        assert!(d.c().prepare("SELECT person FROM runs").is_ok(), "v15 ran");
         drop(d);
         // A new database starts at the latest.
         let fresh = dir.join("fresh.db");

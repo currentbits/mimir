@@ -126,6 +126,22 @@ impl Db {
         Ok(Some(name.unwrap_or_else(|| "Someone".into()).replace('<', "‹").replace('>', "›").replace(':', "")))
     }
 
+    /// Whose daily allowance a message counts against (#171): a guest's chat is its own person; in a family group, the
+    /// household member who wrote (their direct chat, so it's one allowance for both). None: you, never capped.
+    pub fn allowance_person(&self, chat: i64, from: &str) -> Result<Option<i64>> {
+        if !self.chat_guest(chat) {
+            return Ok(None);
+        }
+        if !self.chat_family(chat) {
+            return Ok(Some(chat));
+        }
+        let channel: String = self.c().query_row("SELECT coalesce(channel, 'telegram') FROM chats WHERE chat_id=?1", [chat], |r| r.get(0))?;
+        if !self.pairs_as_guest(&channel, from)? {
+            return Ok(None);
+        }
+        Ok(Some(self.household_people(&channel)?.into_iter().find(|p| p.0 == from).map_or(chat, |p| p.1)))
+    }
+
     pub fn chat_family(&self, chat: i64) -> bool {
         self.c().query_row("SELECT family FROM chats WHERE chat_id=?1", [chat], |r| r.get::<_, bool>(0)).unwrap_or(false)
     }

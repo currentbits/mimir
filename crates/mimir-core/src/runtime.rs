@@ -1089,6 +1089,15 @@ impl Core {
                     chan.send(ext, &paused_note(until)).await;
                     return Ok(());
                 }
+                // Someone other than you, over their daily allowance: a short note instead, and Needs you asks you (#171).
+                let person = self.db.allowance_person(chat, from.id)?;
+                if let Some(p) = person
+                    && let Some((key, h)) = self.db.over_allowance(p, crate::day_start())?
+                {
+                    self.db.hold_set(&key, &h)?;
+                    chan.send(ext, tr("I've used today's share for you, sorry. I'm back tomorrow, or sooner if the person who runs me allows more today.")).await;
+                    return Ok(());
+                }
                 // Measured on arrival, so a long reply (say, waiting for an approval) doesn't count as being offline.
                 let late = late_note(sent, crate::db::now());
                 // In a family group the bot is told who wrote each message.
@@ -1101,15 +1110,16 @@ impl Core {
                 if images.is_empty() && crate::live::steer(self.bot, chat, &text) {
                     return Ok(());
                 }
-                self.clone().answer(chan.clone(), ext.to_string(), chat, conv, text, images, late, self.provider.clone());
+                self.clone().answer(chan.clone(), ext.to_string(), chat, conv, text, images, late, person, self.provider.clone());
             }
         }
         Ok(())
     }
 
-    /// Write the reply to a message in its own task, on `provider` (the bot's own account, or its fallback).
+    /// Write the reply to a message in its own task, on `provider` (the bot's own account, or its fallback). `person`:
+    /// whose daily allowance it counts against (None: yours).
     #[allow(clippy::too_many_arguments)]
-    fn answer(self: Arc<Self>, chan: Chan, ext: String, chat: i64, conv: i64, text: String, images: Vec<std::path::PathBuf>, late: Option<String>, provider: Arc<Provider>) {
+    fn answer(self: Arc<Self>, chan: Chan, ext: String, chat: i64, conv: i64, text: String, images: Vec<std::path::PathBuf>, late: Option<String>, person: Option<i64>, provider: Arc<Provider>) {
         let core = self;
         tokio::spawn(async move {
             // Typing at once, even when this chat is still busy; a wait past a few seconds says why, once.
@@ -1129,6 +1139,7 @@ impl Core {
             let mut ctx = ToolCtx::new(core.db.clone(), core.bot, chat);
             ctx.conv = conv;
             ctx.images = images;
+            ctx.person = person;
             let own = Arc::ptr_eq(&provider, &core.provider);
             let kind = provider.kind();
             let asked = text.clone();
@@ -1387,7 +1398,8 @@ impl Core {
                 let Some((kind, model)) = self.db.fallback(self.bot)? else { return Ok(Some(tr("This bot has no fallback account any more.").into())) };
                 let provider = Provider::new(&kind, Some(model.clone()), None, crate::host::api_key(&kind), crate::data_dir()?)?;
                 let conv = self.conv(chan, ext, chat)?;
-                self.clone().answer(chan.clone(), ext.to_string(), chat, conv, asked, vec![], None, Arc::new(provider));
+                let person = self.db.allowance_person(chat, from.id)?;
+                self.clone().answer(chan.clone(), ext.to_string(), chat, conv, asked, vec![], None, person, Arc::new(provider));
                 trf("Answering with {account}…", &[("account", &with.unwrap_or_else(|| account_label(&kind, &model)))])
             }
             TapFor::Routine { id, prompt, said, outside } => {
@@ -2811,6 +2823,47 @@ mod tests {
         assert!(db.over_cap(&r, 0).unwrap().is_none());
         db.set_setting("cap_routine", "3000").unwrap();
         assert!(db.over_cap(&r, 0).unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn an_allowance_per_person() {
+        let p = std::env::temp_dir().join(format!("mimir-allowance-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = Db::open(&p).unwrap();
+        let core = Arc::new(core_on(&db, &fake_ai("200 OK", r#"{"choices":[{"message":{"role":"assistant","content":"Done."}}],"usage":{"prompt_tokens":3,"completion_tokens":2}}"#).await));
+        let (api, sent) = fake_telegram().await;
+        let tg = Chan::Telegram(Tg::at(&api, "t").unwrap());
+        // You (42), Sam a guest in the household (43), and a family group you paired (-100).
+        for (chat, owner, title) in [(42, "42", "Me"), (43, "43", "Sam"), (-100, "42", "Family")] {
+            db.pair_external("telegram", &chat.to_string(), title).unwrap();
+            db.chat_set_owner(chat, owner).unwrap();
+        }
+        db.chat_set_guest(43, true).unwrap();
+        db.chat_set_household(43, true).unwrap();
+        db.chat_set_family(-100, true).unwrap();
+        // Sam is one person in their own chat and in the family group; you're never counted.
+        assert_eq!([db.allowance_person(42, "42"), db.allowance_person(-100, "42"), db.allowance_person(43, "43"), db.allowance_person(-100, "43")].map(|p| p.unwrap()), [None, None, Some(43), Some(43)]);
+        // No cap: nothing to check. A reply to Sam (5 tokens) counts against Sam.
+        assert!(db.over_allowance(43, 0).unwrap().is_none());
+        let mut ctx = ToolCtx::new(db.clone(), 1, -100);
+        ctx.person = Some(43);
+        crate::turn(&core.provider, &ctx, Trigger::Message("Sam: hi")).await.unwrap();
+        db.set_setting("cap_person", "5").unwrap();
+        let (key, h) = db.over_allowance(43, 0).unwrap().expect("over");
+        assert!(key == "hold:person:43" && h.why.starts_with("Sam reached the daily allowance of 5 tokens"), "{h:?}");
+        // Sam writes in the group: a short note, no reply, and one item in Needs you (however often Sam writes).
+        let runs = db.runs(None, 99).unwrap().len();
+        for _ in 0..2 {
+            core.incoming_with(&tg, "-100", Sender { id: "43", dm: false }, "Family", "and now?", vec![], None).await.unwrap();
+        }
+        assert_eq!((db.runs(None, 99).unwrap().len(), sent.load(std::sync::atomic::Ordering::SeqCst)), (runs, 2));
+        let held = db.holds(crate::db::now()).unwrap();
+        assert_eq!(held.iter().map(|h| (h.0.as_str(), h.1)).collect::<Vec<_>>(), vec![("hold:person:43", 1)]);
+        // Your own messages still get answered.
+        assert_eq!(db.allowance_person(-100, "42").unwrap(), None);
+        // Allow more today: out of Needs you, and Sam is answered again until midnight.
+        db.hold_clear(&key, true).unwrap();
+        assert!(db.holds(crate::db::now()).unwrap().is_empty() && db.over_allowance(43, 0).unwrap().is_none());
     }
 
     /// A Telegram double that counts what it's sent and answers ok.

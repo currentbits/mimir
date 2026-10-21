@@ -378,7 +378,7 @@ function DecisionsSettings() {
   )
 }
 
-type Caps = { routine: number | null; bot: number | null; day: number | null }
+type Caps = { routine: number | null; bot: number | null; day: number | null; person: number | null }
 
 type Windows = { at: number; status: string; windows: { name: string; used: number; resets_at: number }[] }
 
@@ -407,10 +407,11 @@ function LimitsSettings() {
     </Row>
   )
   return (
-    <Group title="Limits" note={msg ?? 'Caps on what routines use in a day. One that would go over pauses until midnight, and Needs you asks whether to let it go on today. Replies to your own messages are never stopped. Tokens read back from the AI’s cache count a tenth, as they’re billed; each routine shows what it uses on average.'}>
+    <Group title="Limits" note={msg ?? 'Caps on what routines and the people you share bots with use in a day. A routine that would go over pauses until midnight, and Needs you asks whether to let it go on today. Replies to your own messages are never stopped. Tokens read back from the AI’s cache count a tenth, as they’re billed; each routine shows what it uses on average.'}>
       {field('routine', 'Each routine', 'What one routine may use in a day.')}
       {field('bot', 'Each bot', 'What one bot may use in a day, replies included; only its routines pause.')}
       {field('day', 'All bots together', 'Everything, every bot, in a day.')}
+      {field('person', 'Each person', 'What replies to one guest or family member may use in a day, in their own chat and a family group together. Over it they get a short note, and Needs you asks whether to allow more today.')}
       <Row icon={<Icon name="clock" size={15} />} title="Fresh start after a quiet spell"
         desc="When a Telegram, Slack or Discord chat has been quiet this long, the next message starts a new conversation with a short note on where you left off. Each reply re-sends less. 0: never.">
         {fresh !== null && <><input className="input mono" type="number" min={0} max={720} aria-label="Fresh start after" style={{ width: 72 }} defaultValue={fresh}

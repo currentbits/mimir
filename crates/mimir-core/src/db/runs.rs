@@ -128,6 +128,12 @@ impl Db {
         Ok(c.last_insert_rowid())
     }
 
+    /// A reply to someone other than you: it counts against their daily allowance (`Db::over_allowance`).
+    pub fn run_person(&self, run: i64, person: i64) -> Result<()> {
+        self.c().execute("UPDATE runs SET person=?2 WHERE id=?1", params![run, person])?;
+        Ok(())
+    }
+
     /// Everything being worked on right now, newest first: (bot, chat, trigger: message | routine | delegated | tidy …).
     /// Not runs older than the longest a turn may take: one a crash left open isn't work (it's closed at the next start).
     pub fn busy(&self) -> Result<Vec<(i64, i64, String)>> {

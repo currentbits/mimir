@@ -268,6 +268,9 @@ pub async fn turn(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) -> R
         Trigger::Reported { .. } => ("reported", None),
     };
     let run = ctx.db.run_start(ctx.bot_id, ctx.chat_id, kind, routine_id, &provider.name())?;
+    if let Some(p) = ctx.person {
+        ctx.db.run_person(run, p)?;
+    }
     // A handed-over task (and its report back) arrives carrying the asking run's id: link them, so the hand-off can be followed.
     let parent = match (&trigger, ctx.run_id) {
         (Trigger::Delegated { .. } | Trigger::Reported { .. }, Some(parent)) => {
