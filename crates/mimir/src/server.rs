@@ -65,9 +65,9 @@ async fn require_token(State(app): State<App>, req: axum::extract::Request, next
     next.run(req).await
 }
 
-/// The bot a chat API token reaches (set by `require_chat_token`).
+/// The bot a chat API token reaches, and the token's own chat (set by `require_chat_token`).
 #[derive(Clone, Copy)]
-struct ChatBot(i64);
+struct ChatBot(i64, i64);
 
 /// Errors the way OpenAI's API words them, so clients show the message.
 fn oai_error(status: StatusCode, message: &str) -> Response {
@@ -78,8 +78,8 @@ fn oai_error(status: StatusCode, message: &str) -> Response {
 /// is read, like the admin API.
 async fn require_chat_token(State(app): State<App>, mut req: Request, next: Next) -> Response {
     match bearer(req.headers()).and_then(|t| mimir_core::host::chat_token_bot(&app.host.db, t)) {
-        Some(bot) => {
-            req.extensions_mut().insert(ChatBot(bot));
+        Some((bot, chat)) => {
+            req.extensions_mut().insert(ChatBot(bot, chat));
             next.run(req).await
         }
         None => oai_error(StatusCode::UNAUTHORIZED, "wrong or missing token: make one under Settings, Chat API"),
@@ -96,9 +96,9 @@ fn last_user_text(req: &Value) -> String {
     }
 }
 
-/// OpenAI-compatible chat for Shortcuts, Home Assistant and the like: one bot, its built-in chat. Mimir keeps the
-/// conversation itself, so only the last user message is the turn; the rest of `messages` is ignored.
-async fn chat_completions(State(app): State<App>, Extension(ChatBot(bot)): Extension<ChatBot>, body: axum::body::Bytes) -> Response {
+/// OpenAI-compatible chat for Shortcuts, Home Assistant and the like: one bot, in the token's own chat. Mimir keeps
+/// the conversation itself, so only the last user message is the turn; the rest of `messages` is ignored.
+async fn chat_completions(State(app): State<App>, Extension(ChatBot(bot, chat)): Extension<ChatBot>, body: axum::body::Bytes) -> Response {
     let req: Value = match serde_json::from_slice(&body) {
         Ok(v) => v,
         Err(e) => return oai_error(StatusCode::BAD_REQUEST, &format!("bad request body: {e}")),
@@ -107,7 +107,7 @@ async fn chat_completions(State(app): State<App>, Extension(ChatBot(bot)): Exten
     if text.trim().is_empty() {
         return oai_error(StatusCode::BAD_REQUEST, "no user message to answer");
     }
-    let reply = match app.host.call("send_local", &json!({"bot_id": bot, "text": text})).await {
+    let reply = match app.host.call("send_local", &json!({"bot_id": bot, "chat_id": chat, "text": text})).await {
         Ok(Value::String(s)) => s,
         Ok(v) => v.to_string(),
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": {"message": format!("{e:#}"), "type": "server_error"}}))).into_response(),
@@ -131,7 +131,7 @@ async fn chat_completions(State(app): State<App>, Extension(ChatBot(bot)): Exten
 }
 
 /// The one "model" a token reaches: its bot. Clients ask for this to check the connection.
-async fn models(State(app): State<App>, Extension(ChatBot(bot)): Extension<ChatBot>) -> Response {
+async fn models(State(app): State<App>, Extension(ChatBot(bot, _)): Extension<ChatBot>) -> Response {
     let name = app.host.db.bot(bot).map(|b| b.name).unwrap_or_default();
     Json(json!({"object": "list", "data": [{"id": name, "object": "model", "created": 0, "owned_by": "mimir"}]})).into_response()
 }

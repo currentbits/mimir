@@ -812,7 +812,8 @@ pub async fn run(db: &Db, provider: &Provider, bot: i64, chat: i64) -> Result<us
     // is theirs, even if a bot also read a page in that conversation (else one web search would leave every lesson
     // from that chat unconfirmed, and so out of the bots' instructions).
     // A quoted message they replied to isn't theirs either (it's often the bot's, repeating a page).
-    let own: Vec<String> = msgs.iter().filter(|m| m.role == "user" && crate::own_words(&m.content)).map(|m| crate::own_part(&m.content).to_string()).collect();
+    // A chat API token's chat has none: anyone with the token types there.
+    let own: Vec<String> = msgs.iter().filter(|m| m.role == "user" && !crate::host::is_api_chat(chat) && crate::own_words(&m.content)).map(|m| crate::own_part(&m.content).to_string()).collect();
     let recent: Vec<String> = msgs
         .iter()
         .map(|m| {
