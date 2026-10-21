@@ -56,6 +56,10 @@ Pick one:
 Then the app is the same as on the desktop: make a bot, connect Telegram, Slack or Discord, and set up email and web
 search in Settings ([Getting started](getting-started.md)).
 
+**On your phone,** add it to the home screen (Safari: Share → *Add to Home Screen*; Chrome: ⋮ → *Install app*) and it
+opens full screen with its own icon, like an app. Chrome offers this only over HTTPS (the domain or `.ts.net` options
+above).
+
 ## 4. Sign in to your AI accounts
 
 The image includes the official `claude` and `codex` apps, so bots can run on your Claude or ChatGPT plan. Sign in once,
