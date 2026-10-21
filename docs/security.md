@@ -165,7 +165,10 @@ half is built into the app); a tampered download is refused. It never restarts o
   photo would make later changes in that chat ask, and marking only image files would still miss phone screenshots,
   which Telegram sends as photos.
 
-- Signal doesn't mark forwards, so a message or voice note you forward there counts as your own words.
+- Signal doesn't mark forwards, so a message or voice note you forward there counts as your own words. Nor does
+  iMessage.
+- iMessage needs Full Disk Access, which lets the whole app read any file of yours, not just Messages. Mimir reads only
+  the one conversation you chose (its query is limited to that chat), but macOS can't hold it to that.
 
 - A message with a photo goes to Grok on its command line (it has no file form for that), where other accounts on the
   same computer could read it.
