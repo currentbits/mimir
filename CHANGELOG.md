@@ -4,6 +4,7 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 
 ## Unreleased
 
+### Memory
 - **Sensitive topics stay out of memory:** the tidy-up, imports and *Get to know me* no longer suggest memories about
   your health, religion or beliefs, politics, sexuality or finances (account numbers too), unless you say "remember
   that…" yourself. Turn on **Settings → Memory → Remember sensitive topics** to let them in. See
@@ -11,8 +12,22 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 - **Import from Codex:** **Memory → Import → From Codex** brings in `~/.codex/AGENTS.md` as memory suggestions and
   your own Codex skills as proposals, under the same rules as Claude Code, Hermes and OpenClaw: outside content,
   nothing active until you accept it.
+
+### Talking to your bots
 - **Mimir on your phone's home screen:** the server's web app can be added to a phone's home screen and opens full
   screen with its own icon. See [Self-hosting](docs/self-hosting.md#3-open-it-in-your-browser).
+
+### Safety
+- **Quiet checks stay off your network:** a watched page that redirects to a name pointing at this computer or the
+  local network (a home router, a cloud server's metadata) is no longer fetched; before, only addresses written as
+  numbers were refused. Quiet checks and `web_fetch` also read at most 2 MB of a page.
+
+### Fixes
+- **Signal and WhatsApp:** replying to an approval card with a number now works after Mimir restarts. Before, the
+  number was taken as a "no" with the number as the reason.
+- **Skill imports:** a skill imported from another agent or a bot file with the name of one you already have (perhaps
+  one all bots share) comes in as "‹name› (imported)" instead of replacing it when you accept. A taught skill that
+  would replace one says so on its card.
 
 ## 0.5.0
 

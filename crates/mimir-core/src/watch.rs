@@ -76,7 +76,12 @@ async fn look(db: &Db, watch: &str, bot: i64) -> Result<String> {
         }
         return Ok(lines.join("\n"));
     }
-    let http = reqwest::Client::builder().timeout(Duration::from_secs(30)).redirect(crate::tools::public_redirects()).build()?;
+    // A name (or a redirect to one) that resolves to this computer or the local network is refused at connect time.
+    let http = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .redirect(crate::tools::public_redirects())
+        .dns_resolver(std::sync::Arc::new(crate::tools::PublicDns))
+        .build()?;
     let mut req = http.get(watch);
     // reqwest drops it on a redirect to another site.
     if let Some(c) = cookies(bot, watch) {
@@ -84,7 +89,7 @@ async fn look(db: &Db, watch: &str, bot: i64) -> Result<String> {
     }
     let res = req.send().await?.error_for_status()?;
     let markup = res.headers().get(reqwest::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).is_none_or(|t| t.contains("html") || t.contains("xml"));
-    let body = res.text().await?;
+    let body = crate::tools::capped_text(res, crate::tools::PAGE_MAX).await?;
     let text = match json_lines(&body) {
         Some(j) => j,
         None if markup => crate::tools::html_lines(&body),
@@ -269,6 +274,28 @@ mod tests {
         assert!(json_lines("<html>").is_none() && json_lines("42").is_none());
         assert!(valid("mail").is_ok() && valid("https://example.com/x").is_ok());
         assert!(valid("http://192.168.1.1/").is_err() && valid("ftp://x").is_err() && valid("file:///etc/passwd").is_err());
+    }
+
+    /// A name that resolves to this computer isn't fetched, even though only the literal host is checked before; and a
+    /// body is read only up to its cap.
+    #[tokio::test]
+    async fn look_refuses_local_names() {
+        let server = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = server.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            while let Ok((mut s, _)) = server.accept().await {
+                let _ = s.read(&mut [0; 1024]).await;
+                let _ = s.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 10000\r\n\r\n{}", "x".repeat(10_000)).as_bytes()).await;
+            }
+        });
+        let p = std::env::temp_dir().join(format!("mimir-look-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let d = Db::open(&p).unwrap();
+        let e = look(&d, &format!("http://localhost:{port}/"), 1).await.unwrap_err();
+        assert!(format!("{e:#}").contains("points at this computer"), "{e:#}");
+        let res = reqwest::get(format!("http://127.0.0.1:{port}/")).await.unwrap();
+        assert_eq!(crate::tools::capped_text(res, 100).await.unwrap().len(), 100);
     }
 
     /// Against a real page: `cargo test -p mimir-core gate_live -- --ignored`.

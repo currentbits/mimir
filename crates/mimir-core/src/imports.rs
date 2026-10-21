@@ -103,7 +103,7 @@ fn bring_in(db: &Db, bot: i64, chat: i64, label: &str, home: &Path, found: &Foun
     for p in &found.skills {
         let Some((name, description, body)) = read(p).as_deref().and_then(crate::tidy::parse_skill_md) else { continue };
         // Already proposed, dismissed, too long or holding a secret: skipped, the rest still come in.
-        match crate::tidy::skill_md_propose(db, &scope, bot, &format!("{label}, {}", shown(home, p)), &name, &description, &body) {
+        match crate::tidy::skill_md_propose(db, &scope, bot, &format!("{label}, {}", shown(home, p)), &name, &description, &body, true) {
             Ok(Some(_)) => skills += 1,
             Ok(None) => {}
             Err(e) => eprintln!("import: skipped {}: {e:#}", p.display()),
@@ -576,7 +576,7 @@ pub fn import_bot(db: &Db, text: &str, chat: i64, rules: bool, duplicate_of: Opt
     let scope = format!("chat:{chat}");
     let mut done = Imported::default();
     for k in &f.skills {
-        match crate::tidy::skill_md_propose(db, &scope, id, &format!("the bot file for {name}"), &k.name, &k.description, &k.body) {
+        match crate::tidy::skill_md_propose(db, &scope, id, &format!("the bot file for {name}"), &k.name, &k.description, &k.body, true) {
             Ok(Some(_)) => done.skills += 1,
             Ok(None) => {}
             Err(e) => eprintln!("import: skipped skill {}: {e:#}", k.name),
@@ -752,7 +752,14 @@ mod tests {
 
         let p = home.join("test.db");
         let db = Db::open(&p).unwrap();
+        // A skill by that name is already shared with all bots: the import comes in under a name of its own, so
+        // accepting it can't replace that one with someone else's steps.
+        db.skill_from_library("chat:7", 0, "news-roundup", "When asked for the news", "1. My own steps").unwrap();
         assert_eq!(bring_in(&db, 1, 7, "Hermes", &home, &f).unwrap(), (1, 1));
+        let k = db.skills("chat:7").unwrap().into_iter().find(|k| k.status == "proposed").unwrap();
+        assert_eq!((k.name.as_str(), k.bot_id), ("news-roundup (imported)", 1));
+        assert!(db.skill_decide("chat:7", k.id, true).unwrap());
+        assert_eq!(db.skills_active("chat:7", 1).unwrap().len(), 2, "the shared one stays");
         let r = &db.routines(7).unwrap()[0];
         assert!(r.paused && r.tainted, "a proposal: paused, and someone else's words");
         assert_eq!(r.cron, "0 9 * * *");
@@ -773,7 +780,7 @@ mod tests {
 
         // Codex: AGENTS.md and the person's own skills, not the bundled ones in skills/.system.
         put(&home.join(".codex/AGENTS.md"), "Reply in Dutch");
-        put(&home.join(".codex/skills/release-notes/SKILL.md"), &skill.replace("news-roundup", "release-notes"));
+        put(&home.join(".codex/skills/release-notes/SKILL.md"), "---\nname: release-notes\ndescription: When asked for release notes\n---\n1. Read the merged PRs\n2. One line each");
         put(&home.join(".codex/skills/.system/skill-creator/SKILL.md"), &skill.replace("news-roundup", "skill-creator"));
         let x = scan(&home, "codex");
         assert_eq!((x.memory.len(), x.skills.len(), x.jobs.len()), (1, 1, 0));
