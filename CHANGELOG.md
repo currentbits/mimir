@@ -8,6 +8,13 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 - **Telegram groups:** a bot in a group (not a family group) answers only when you @-mention it, reply to one of its
   messages or send a `/command`. Before, with privacy mode off, it answered every message.
 
+### Moving in
+- **Moving from OpenClaw or Hermes:** **Memory → Import → From OpenClaw** now finds a workspace set in
+  `openclaw.json` or `OPENCLAW_WORKSPACE_DIR`, and brings in every profile (`~/.openclaw-<name>`,
+  `~/.hermes/profiles/<name>`) too. Its `SOUL.md` is offered as the bot's role (one click) instead of becoming
+  memories, imported memories say which agent they came from, and a cron job set for another time zone says so on
+  its paused routine. See [Getting started](docs/getting-started.md#moving-from-openclaw-or-hermes).
+
 ### Routines
 - **Claude on your monthly API credits:** Max and Team plans include monthly API credits. Save an Anthropic API key
   from your linked Console organisation (Settings → AI keys), and a Claude bot can go on with it when the plan says
