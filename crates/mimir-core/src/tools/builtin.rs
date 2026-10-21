@@ -233,7 +233,7 @@ pub(super) fn calendar_linked(ctx: &ToolCtx, cron: &str) -> Result<()> {
     if crate::calendar::trigger(cron)?.is_some() && crate::host::secret_get(crate::calendar::SECRET).is_none() {
         bail!("no calendar is linked yet: the person adds its link in Mimir's Meetings → Calendar first");
     }
-    if crate::events::on(cron)? == Some(crate::events::On::Webhook) {
+    if crate::events::is_hook(cron) {
         bail!("only the person can set up a webhook, in Mimir's Routines tab (When called)");
     }
     crate::events::ready(&ctx.db, ctx.chat_id, cron)
@@ -356,7 +356,8 @@ pub(super) async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<Stri
             // A convention steers every future reply: only the person's own words set one directly. One a bot
             // inferred (or picked up after reading outside content) waits for them to accept it.
             // The person's own message must state a rule, and be about this one (shares a word with it).
-            let asked = ctx.run_id.map(|r| ctx.db.asked(r)).transpose()?.flatten();
+            // A chat API token's chat says nothing in your words: anyone with the token (or at the speaker using it) types there.
+            let asked = ctx.run_id.filter(|_| !crate::host::is_api_chat(ctx.chat_id)).map(|r| ctx.db.asked(r)).transpose()?.flatten();
             let own_words = !ctx.is_tainted() && asked.as_deref().is_some_and(|t| crate::states_rule(t) && crate::shares_words(t, &format!("{title} {body}")));
             // What the person's message says in their own words is theirs, whatever else the conversation read (a page
             // can't put words in their message): it isn't marked unconfirmed for the conversation's outside content.
@@ -873,7 +874,7 @@ pub(super) async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<Stri
                 bail!("refusing to fetch local/private addresses");
             }
             ctx.taint();
-            let body = ctx.http.get(url).send().await?.error_for_status()?.text().await?;
+            let body = super::capped_text(ctx.http.get(url).send().await?.error_for_status()?, super::PAGE_MAX).await?;
             truncate(&strip_html(&body), 15_000)
         }
         "bot_create" => {
