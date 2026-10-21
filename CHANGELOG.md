@@ -19,6 +19,13 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 - **Telegram groups:** a bot in a group (not a family group) answers only when you @-mention it, reply to one of its
   messages or send a `/command`. Before, with privacy mode off, it answered every message.
 
+### Moving in
+- **Moving from OpenClaw or Hermes:** **Memory → Import → From OpenClaw** now finds a workspace set in
+  `openclaw.json` or `OPENCLAW_WORKSPACE_DIR`, and brings in every profile (`~/.openclaw-<name>`,
+  `~/.hermes/profiles/<name>`) too. Its `SOUL.md` is offered as the bot's role (one click) instead of becoming
+  memories, imported memories say which agent they came from, and a cron job set for another time zone says so on
+  its paused routine. See [Getting started](docs/getting-started.md#moving-from-openclaw-or-hermes).
+
 ### Safety
 - **Quiet checks stay off your network:** a watched page that redirects to a name pointing at this computer or the
   local network (a home router, a cloud server's metadata) is no longer fetched; before, only addresses written as
