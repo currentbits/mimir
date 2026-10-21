@@ -864,6 +864,11 @@ impl Core {
         Ok(self.db.chat_lookup(chan.kind(), ext)?.is_some())
     }
 
+    /// A family group: everyone there talks to the bot, so it hears every message, not just the ones addressed to it.
+    pub(crate) fn is_family(&self, chan: &Chan, ext: &str) -> bool {
+        self.db.chat_lookup(chan.kind(), ext).ok().flatten().is_some_and(|chat| self.db.chat_family(chat))
+    }
+
     /// Keep a file the person sent, under <home>/media (the only folder the AI may read files from). Startup deletes
     /// what's older than 60 days (`Host::new`).
     pub(crate) fn save_media(&self, bytes: &[u8], ext: &str) -> Result<std::path::PathBuf> {

@@ -16,6 +16,8 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 ### Talking to your bots
 - **Mimir on your phone's home screen:** the server's web app can be added to a phone's home screen and opens full
   screen with its own icon. See [Self-hosting](docs/self-hosting.md#3-open-it-in-your-browser).
+- **Telegram groups:** a bot in a group (not a family group) answers only when you @-mention it, reply to one of its
+  messages or send a `/command`. Before, with privacy mode off, it answered every message.
 
 ### Safety
 - **Quiet checks stay off your network:** a watched page that redirects to a name pointing at this computer or the
