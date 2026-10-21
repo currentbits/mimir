@@ -857,7 +857,7 @@ pub(super) async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<Stri
                 bail!("refusing to fetch local/private addresses");
             }
             ctx.taint();
-            let body = ctx.http.get(url).send().await?.error_for_status()?.text().await?;
+            let body = super::capped_text(ctx.http.get(url).send().await?.error_for_status()?, super::PAGE_MAX).await?;
             truncate(&strip_html(&body), 15_000)
         }
         "bot_create" => {

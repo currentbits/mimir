@@ -263,17 +263,35 @@ pub async fn teach(db: &Db, provider: &Provider, bot: i64, chat: i64, source: &s
     };
     // A SKILL.md (the agentskills.io format Hermes, Claude Code and others use): taken as written, no model needed.
     if let Some((name, description, body)) = parse_skill_md(&text) {
-        return skill_md_propose(db, &scope, bot, &origin, &name, &description, &body)?.map(Some).ok_or_else(|| anyhow::anyhow!("a version of \"{name}\" is already waiting for you in Memory"));
+        return skill_md_propose(db, &scope, bot, &origin, &name, &description, &body, false)?.map(Some).ok_or_else(|| anyhow::anyhow!("a version of \"{name}\" is already waiting for you in Memory"));
     }
     teach_from(db, provider, bot, chat, &origin, &text, vec![]).await
 }
 
 /// A parsed SKILL.md as a proposal, taken as written (it came from outside, so the person reads it first). None when
-/// that version is already proposed or was dismissed.
-pub(crate) fn skill_md_propose(db: &Db, scope: &str, bot: i64, origin: &str, name: &str, description: &str, body: &str) -> Result<Option<i64>> {
+/// that version is already proposed or was dismissed. A bulk import (`fresh`: another agent's skills, a bot file)
+/// never becomes a new version of a skill the bot has, perhaps one shared with all bots: it comes in under a name of
+/// its own, as memory imports never update a memory. None when the bot already has these exact steps.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn skill_md_propose(db: &Db, scope: &str, bot: i64, origin: &str, name: &str, description: &str, body: &str, fresh: bool) -> Result<Option<i64>> {
     if crate::tools::looks_secret(db, &format!("{name}\n{description}\n{body}")).is_some() {
         bail!("that skill contains something that looks like a password or key, so it wasn't kept");
     }
+    let mut name = name.trim().to_string();
+    if fresh {
+        let have = db.skills_active(scope, bot)?;
+        if have.iter().any(|k| k.body.trim() == body.trim()) {
+            return Ok(None);
+        }
+        let base = name.clone();
+        for n in 1.. {
+            if !have.iter().any(|k| k.name.eq_ignore_ascii_case(&name)) {
+                break;
+            }
+            name = if n == 1 { format!("{base} (imported)") } else { format!("{base} (imported {n})") };
+        }
+    }
+    let name = name.as_str();
     let mut reason = format!("Imported from a SKILL.md ({origin}). It came from outside: read it before accepting.");
     if let Some(p) = crate::tools::instruction_like(&format!("{description}\n{body}")) {
         reason.push_str(&format!(" Warning: it contains instruction-like text (\"{p}\")."));
