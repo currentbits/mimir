@@ -194,7 +194,8 @@ pub fn specs() -> Vec<(&'static str, &'static str, Value)> {
              events with someone else invited) or :outside (only ones with someone from another company): \
              'calendar:60:outside' runs an hour before each meeting with someone outside, and each run is told the event. \
              For \"tell me when X arrives\" by email, cron can be mail:<rule> instead: from:<address or domain>, \
-             subject:<word or \"phrase\">, and any other words the email must contain, e.g. 'mail:from:acme.com subject:invoice'. \
+             subject:<word or \"phrase\">, and any other words the email must contain, e.g. 'mail:from:acme.com subject:invoice'; \
+             a|b is either one (subject:invoice|quote). \
              Mimir checks new mail every 2 minutes itself and runs you only for a match, with that email. It ends after the \
              first match unless keep=true (\"every time…\"). For a message in a Slack channel you're in, cron can be \
              slack:#<channel> with optional from:@<person> and words the message must contain, e.g. 'slack:#deploys failed'; \
