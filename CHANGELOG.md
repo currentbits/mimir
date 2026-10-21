@@ -4,6 +4,11 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 
 ## Unreleased
 
+### Talking to your bots
+- **An allowance per person:** Settings → Limits → *Each person* caps what replies to one guest or family member may
+  use in a day, in their own chat and a family group together. Over it, they get a short note instead of an answer,
+  and Needs you offers **Allow more today**. Your own chats are never capped.
+
 ### Fixes
 - **Signal and WhatsApp:** replying to an approval card with a number now works after Mimir restarts. Before, the
   number was taken as a "no" with the number as the reason.

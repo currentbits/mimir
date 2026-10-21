@@ -59,6 +59,8 @@ pub struct ToolCtx {
     pub rehearsal: bool,
     /// Images the person sent with this message (saved under <home>/media). Host-side only.
     pub images: Vec<std::path::PathBuf>,
+    /// A reply to someone other than you: whose daily allowance it counts against (`Db::allowance_person`).
+    pub person: Option<i64>,
     /// External tool servers started during this turn (killed when the turn's context is dropped).
     pub(crate) ext: Arc<tokio::sync::Mutex<std::collections::HashMap<String, crate::ext::Client>>>,
     /// The browser's current page, for checking where a saved login may be typed.
@@ -96,6 +98,7 @@ impl ToolCtx {
             unattended: false,
             rehearsal: false,
             images: vec![],
+            person: None,
             ext: Arc::default(),
             page_url: Arc::default(),
             raw_result: Arc::default(),

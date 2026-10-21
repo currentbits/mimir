@@ -106,6 +106,7 @@ static NL: &[(&str, &str)] = &[
     ),
     // Commands.
     ("Nothing to stop: I'm not writing anything right now.", "Niets te stoppen: ik ben nu niets aan het schrijven."),
+    ("I've used today's share for you, sorry. I'm back tomorrow, or sooner if the person who runs me allows more today.", "Sorry, je deel voor vandaag is op. Morgen ben ik er weer, of eerder als degene die mij beheert vandaag meer toestaat."),
     (
         "Hi! Just talk to me. /memory shows what I remember, /routines lists schedules, /why shows what my last reply used, /new starts a fresh conversation, /branch (as a reply to a message) starts a new one from there, /stop cuts off a reply I'm writing, /undo N takes back something from my weekly list of what I learned.",
         "Hoi! Praat gewoon met me. /memory laat zien wat ik onthoud, /routines toont wat ik volgens schema doe, /why laat zien wat mijn laatste antwoord gebruikte, /new begint een nieuw gesprek, /branch (als antwoord op een bericht) begint er een nieuw gesprek vanaf, /stop breekt een antwoord af dat ik aan het schrijven ben, /undo N neemt iets terug uit mijn wekelijkse lijst van wat ik heb geleerd.",
