@@ -1,0 +1,12 @@
+{
+  "name": "Mimir",
+  "short_name": "Mimir",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#FBFBFA",
+  "theme_color": "#FBFBFA",
+  "icons": [
+    { "src": "/logo.png", "type": "image/png", "sizes": "256x256", "purpose": "any" }
+  ]
+}

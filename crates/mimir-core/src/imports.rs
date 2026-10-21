@@ -1,5 +1,5 @@
-//! One-click import from other agents on this computer: Claude Code (~/.claude), Hermes (~/.hermes) and OpenClaw
-//! (~/.openclaw). Their memory files go through the pasted-memory import (suggestions), SKILL.md files become skill
+//! One-click import from other agents on this computer: Claude Code (~/.claude), Codex (~/.codex), Hermes (~/.hermes)
+//! and OpenClaw (~/.openclaw). Their memory files go through the pasted-memory import (suggestions), SKILL.md files become skill
 //! proposals, and scheduled jobs become routines that start paused (resuming one is accepting it). Nothing comes in
 //! active, no secrets come in, and nothing is granted: a routine runs with the bot's own tools, marked as outside content.
 //! A Mimir bot file (export_bot / import_bot) comes in the same way, after you've read what it would add.
@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 /// (id, label) of the agents we know how to read.
-pub const SOURCES: [(&str, &str); 3] = [("claude_code", "Claude Code"), ("hermes", "Hermes"), ("openclaw", "OpenClaw")];
+pub const SOURCES: [(&str, &str); 4] = [("claude_code", "Claude Code"), ("codex", "Codex"), ("hermes", "Hermes"), ("openclaw", "OpenClaw")];
 
 /// A scheduled job from another agent: its name, its cron and what it asks.
 struct Job {
@@ -91,12 +91,12 @@ pub async fn run(db: &Db, provider: &Provider, bot: i64, chat: i64, source: &str
 }
 
 /// Memory files as one text, each under its path. The import reads only the first 20,000 characters, so what's about
-/// the person goes first: their own instructions (CLAUDE.md, USER.md), then Claude Code memories typed `user` or
+/// the person goes first: their own instructions (CLAUDE.md, AGENTS.md, USER.md), then Claude Code memories typed `user` or
 /// `feedback`, then the rest (project notes), newest first within each.
 fn memory_text(home: &Path, files: &[PathBuf]) -> String {
     let mut read: Vec<(&PathBuf, String)> = files.iter().filter_map(|p| Some((p, read(p)?))).filter(|(_, t)| !t.trim().is_empty()).collect();
     read.sort_by_key(|(p, t)| {
-        if p.ends_with("CLAUDE.md") || p.ends_with("USER.md") {
+        if p.ends_with("CLAUDE.md") || p.ends_with("AGENTS.md") || p.ends_with("USER.md") {
             0
         } else if t.contains("type: user") || t.contains("type: feedback") {
             1
@@ -169,6 +169,12 @@ fn scan(home: &Path, source: &str) -> Found {
             for project in children(&c.join("projects")) {
                 f.memory.extend(children(&project.join("memory")).into_iter().filter(|p| p.extension().is_some_and(|e| e == "md") && !p.ends_with("MEMORY.md")));
             }
+            skill_files(&c.join("skills"), &[], 2, &mut f.skills);
+        }
+        "codex" => {
+            let c = dir("CODEX_HOME", ".codex");
+            f.memory.push(c.join("AGENTS.md"));
+            // Codex keeps its bundled skills in skills/.system, a hidden folder: only the person's own come in.
             skill_files(&c.join("skills"), &[], 2, &mut f.skills);
         }
         "hermes" => {
@@ -858,6 +864,15 @@ mod tests {
         // A file too big to be a memory is left out rather than read whole.
         std::fs::write(home.join(".claude/projects/-x/memory/huge.md"), "x".repeat((1 << 20) + 1)).unwrap();
         assert!(!memory_text(&home, &scan(&home, "claude_code").memory).contains("huge.md"));
+
+        // Codex: AGENTS.md and the person's own skills, not the bundled ones in skills/.system.
+        put(&home.join(".codex/AGENTS.md"), "Reply in Dutch");
+        put(&home.join(".codex/skills/release-notes/SKILL.md"), "---\nname: release-notes\ndescription: When asked for release notes\n---\n1. Read the merged PRs\n2. One line each");
+        put(&home.join(".codex/skills/.system/skill-creator/SKILL.md"), &skill.replace("news-roundup", "skill-creator"));
+        let x = scan(&home, "codex");
+        assert_eq!((x.memory.len(), x.skills.len(), x.jobs.len()), (1, 1, 0));
+        assert!(memory_text(&home, &x.memory).starts_with("## ~/.codex/AGENTS.md\nReply in Dutch"));
+        assert_eq!(bring_in(&db, 1, 7, "Codex", &home, &x).unwrap(), (1, 0));
 
         // OpenClaw: openclaw.json moves the workspace, a profile has its own, and the persona is a role, not a memory.
         let ws = home.join("elsewhere");
