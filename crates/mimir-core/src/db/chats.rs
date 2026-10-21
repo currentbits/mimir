@@ -32,6 +32,15 @@ impl Db {
         Ok(())
     }
 
+    /// A chat API token's chat (see `host::chat_token_bot`): never a direct one, and nothing to send to.
+    pub fn pair_api(&self, chat: i64, token: &str, title: &str) -> Result<()> {
+        self.c().execute(
+            "INSERT INTO chats(chat_id, title, channel, external) VALUES (?1,?2,'api',?3) ON CONFLICT(chat_id) DO UPDATE SET title = excluded.title",
+            params![chat, title, token],
+        )?;
+        Ok(())
+    }
+
     /// Paired chats with their live memory counts (for UIs).
     pub fn chats(&self) -> Result<Vec<Chat>> {
         let c = self.c();
@@ -279,7 +288,7 @@ impl Db {
 
     /// Where to send messages for a chat: (channel, external id). None for the local chat.
     pub fn chat_address(&self, chat: i64) -> Result<Option<(String, String)>> {
-        if chat == 0 || chat == crate::INCOGNITO_CHAT {
+        if chat == 0 || chat == crate::INCOGNITO_CHAT || crate::host::is_api_chat(chat) {
             return Ok(None);
         }
         let row: Option<(String, Option<String>)> =
@@ -294,6 +303,8 @@ impl Db {
             "DELETE FROM settings WHERE key LIKE 'seen:%' AND key LIKE (SELECT 'seen:%:' || channel || ':' || external FROM chats WHERE chat_id=?1)",
             [chat],
         )?;
+        // Messages still waiting to go out would otherwise reach whoever has that chat next.
+        self.c().execute("DELETE FROM outbox WHERE chat_id=?1", [chat])?;
         self.c().execute("DELETE FROM chats WHERE chat_id=?1", [chat])?;
         Ok(())
     }

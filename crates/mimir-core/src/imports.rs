@@ -19,6 +19,8 @@ struct Job {
     name: String,
     cron: String,
     prompt: String,
+    /// Its own time zone (IANA), when it had one.
+    tz: Option<String>,
 }
 
 #[derive(Default)]
@@ -26,6 +28,8 @@ struct Found {
     memory: Vec<PathBuf>,
     skills: Vec<PathBuf>,
     jobs: Vec<Job>,
+    /// Who the agent is (SOUL.md, IDENTITY.md): a proposed role, never a memory.
+    persona: Vec<PathBuf>,
 }
 
 /// An agent found on this computer, with how much it has of each.
@@ -44,6 +48,11 @@ pub struct Imported {
     pub memories: usize,
     pub skills: usize,
     pub routines: usize,
+    /// The agent's persona, for the card to offer as `bot`'s role (only on a click). None when it holds a secret.
+    pub role: Option<String>,
+    /// What in that role deserves a look (risky()).
+    pub role_flags: Vec<String>,
+    pub bot: i64,
 }
 
 /// The agents on this computer that have something to import.
@@ -64,12 +73,17 @@ pub async fn run(db: &Db, provider: &Provider, bot: i64, chat: i64, source: &str
     let Some(&(_, label)) = SOURCES.iter().find(|s| s.0 == source) else { bail!("unknown source {source}") };
     let Some(home) = crate::user_home() else { bail!("no home folder") };
     let found = scan(&home, source);
-    let mut done = Imported::default();
+    let mut done = Imported { bot, ..Default::default() };
     // The memory files first: it's the part that can fail (a model call), and a retry is harmless (all deduplicated).
     let text = memory_text(&home, &found.memory);
     if !text.is_empty() {
         // Written by that agent, not typed by the person: outside content (adds only, unconfirmed).
-        done.memories = crate::tidy::import_outside(db, provider, bot, chat, &text).await?;
+        done.memories = crate::tidy::import_outside(db, provider, bot, chat, &text, &format!("Imported from {label}")).await?;
+    }
+    let role = found.persona.iter().filter_map(|p| read(p)).map(|t| t.trim().to_string()).filter(|t| !t.is_empty()).collect::<Vec<_>>().join("\n\n");
+    if !role.is_empty() && crate::tools::looks_secret(db, &role).is_none() {
+        done.role_flags = risky(&role).into_iter().map(String::from).collect();
+        done.role = Some(crate::tools::truncate(&role, 8_000).to_string());
     }
     let (skills, routines) = bring_in(db, bot, chat, label, &home, &found)?;
     (done.skills, done.routines) = (skills, routines);
@@ -103,19 +117,24 @@ fn bring_in(db: &Db, bot: i64, chat: i64, label: &str, home: &Path, found: &Foun
     for p in &found.skills {
         let Some((name, description, body)) = read(p).as_deref().and_then(crate::tidy::parse_skill_md) else { continue };
         // Already proposed, dismissed, too long or holding a secret: skipped, the rest still come in.
-        match crate::tidy::skill_md_propose(db, &scope, bot, &format!("{label}, {}", shown(home, p)), &name, &description, &body) {
+        match crate::tidy::skill_md_propose(db, &scope, bot, &format!("{label}, {}", shown(home, p)), &name, &description, &body, true) {
             Ok(Some(_)) => skills += 1,
             Ok(None) => {}
             Err(e) => eprintln!("import: skipped {}: {e:#}", p.display()),
         }
     }
-    let have: Vec<String> = db.routines(chat)?.into_iter().map(|r| r.prompt).collect();
+    let mut have: Vec<String> = db.routines(chat)?.into_iter().map(|r| r.prompt).collect();
     let mut routines = 0;
     for j in &found.jobs {
-        let prompt = format!("{} (imported from {label})\n\n{}", j.name, j.prompt.trim());
+        let mut prompt = format!("{} (imported from {label})\n\n{}", j.name, j.prompt.trim());
+        if let Some(note) = j.tz.as_deref().and_then(|tz| tz_note(&j.cron, tz)) {
+            prompt = format!("{prompt}\n\n({note})");
+        }
+        // The same job in two profiles comes in once.
         if have.contains(&prompt) || crate::tools::looks_secret(db, &prompt).is_some() {
             continue;
         }
+        have.push(prompt.clone());
         match propose_routine(db, bot, chat, &j.cron, &prompt, false) {
             Ok(_) => routines += 1,
             Err(e) => eprintln!("import: skipped job {}: {e:#}", j.name),
@@ -153,28 +172,91 @@ fn scan(home: &Path, source: &str) -> Found {
             skill_files(&c.join("skills"), &[], 2, &mut f.skills);
         }
         "hermes" => {
-            let h = dir("HERMES_HOME", ".hermes");
-            f.memory.extend([h.join("memories/USER.md"), h.join("memories/MEMORY.md")]);
-            // Skills Hermes ships with are listed in its manifest: only the person's own come in.
-            let bundled: Vec<String> =
-                std::fs::read_to_string(h.join("skills/.bundled_manifest")).unwrap_or_default().lines().filter_map(|l| Some(l.split(':').next()?.trim().to_string())).collect();
-            skill_files(&h.join("skills"), &bundled, 4, &mut f.skills);
-            f.jobs = jobs(&h.join("cron/jobs.json"));
+            // The default home, then each profile (`hermes profile`): a whole Hermes home of its own.
+            let main = dir("HERMES_HOME", ".hermes");
+            let profiles = children(&main.join("profiles")).into_iter().filter(|p| p.is_dir());
+            for h in std::iter::once(main.clone()).chain(profiles) {
+                f.memory.extend([h.join("memories/USER.md"), h.join("memories/MEMORY.md")]);
+                // Skills Hermes ships with are listed in its manifest: only the person's own come in.
+                let bundled: Vec<String> =
+                    std::fs::read_to_string(h.join("skills/.bundled_manifest")).unwrap_or_default().lines().filter_map(|l| Some(l.split(':').next()?.trim().to_string())).collect();
+                skill_files(&h.join("skills"), &bundled, 4, &mut f.skills);
+                f.jobs.extend(jobs(&h.join("cron/jobs.json")));
+                persona(&mut f, &[h.join("SOUL.md")]);
+            }
         }
         "openclaw" => {
-            let o = dir("OPENCLAW_STATE_DIR", ".openclaw");
-            let w = o.join("workspace");
-            f.memory.extend([w.join("USER.md"), w.join("MEMORY.md")]);
-            f.memory.extend(children(&w.join("memory")).into_iter().filter(|p| p.extension().is_some_and(|e| e == "md")));
-            skill_files(&w.join("skills"), &[], 2, &mut f.skills);
-            skill_files(&o.join("skills"), &[], 2, &mut f.skills);
-            f.jobs = jobs(&o.join("cron/jobs.json"));
+            let main = dir("OPENCLAW_STATE_DIR", ".openclaw");
+            let env = std::env::var_os("OPENCLAW_WORKSPACE_DIR").filter(|v| !v.is_empty()).map(PathBuf::from);
+            let mut roots = vec![(main.clone(), env.or_else(|| workspace_of(home, &main)).unwrap_or_else(|| main.join("workspace")))];
+            // Profiles (`openclaw --profile work`): ~/.openclaw-work, its workspace ~/.openclaw/workspace-work by default.
+            let mut profiles: Vec<PathBuf> = children(home).into_iter().filter(|p| p.is_dir() && p.file_name().is_some_and(|n| n.to_string_lossy().starts_with(".openclaw-"))).collect();
+            profiles.sort();
+            for o in profiles {
+                let name = o.file_name().unwrap_or_default().to_string_lossy()[".openclaw-".len()..].to_string();
+                let w = workspace_of(home, &o).unwrap_or_else(|| Some(home.join(format!(".openclaw/workspace-{name}"))).filter(|w| w.is_dir()).unwrap_or_else(|| o.join("workspace")));
+                roots.push((o, w));
+            }
+            for (o, w) in roots {
+                f.memory.extend([w.join("USER.md"), w.join("MEMORY.md")]);
+                f.memory.extend(children(&w.join("memory")).into_iter().filter(|p| p.extension().is_some_and(|e| e == "md")));
+                skill_files(&w.join("skills"), &[], 2, &mut f.skills);
+                skill_files(&o.join("skills"), &[], 2, &mut f.skills);
+                f.jobs.extend(jobs(&o.join("cron/jobs.json")));
+                // Not AGENTS.md: that's mostly about OpenClaw's own tools.
+                persona(&mut f, &[w.join("SOUL.md"), w.join("IDENTITY.md")]);
+            }
         }
         _ => {}
     }
     f.memory.retain(|p| p.is_file());
+    // A profile pointing at the main workspace: its files once.
+    f.memory.sort();
+    f.memory.dedup();
+    f.skills.dedup();
     f.memory.sort_by_key(|p| std::cmp::Reverse(std::fs::metadata(p).and_then(|m| m.modified()).ok()));
     f
+}
+
+/// The first root with a persona gives the role: the main one before profiles.
+fn persona(f: &mut Found, files: &[PathBuf]) {
+    if f.persona.is_empty() {
+        f.persona = files.iter().filter(|p| p.is_file()).cloned().collect();
+    }
+}
+
+/// `agents.defaults.workspace` in a state dir's openclaw.json, `~` expanded. That file is JSON5: one plain JSON
+/// can't read is passed over, and the default workspace is used.
+// ponytail: JSON only; a JSON5 parser if people's configs with comments miss their workspace
+fn workspace_of(home: &Path, state: &Path) -> Option<PathBuf> {
+    let v: serde_json::Value = serde_json::from_str(&read(&state.join("openclaw.json"))?).ok()?;
+    let w = v["agents"]["defaults"]["workspace"].as_str()?.trim();
+    match w.strip_prefix("~/").or(w.strip_prefix("~\\")) {
+        Some(rest) => Some(home.join(rest)),
+        None if w == "~" => Some(home.to_path_buf()),
+        None if !w.is_empty() => Some(PathBuf::from(w)),
+        None => None,
+    }
+}
+
+/// A job set for another time zone runs here on this computer's clock: the routine says so. None when the zone
+/// doesn't parse or matches this computer's (now).
+// ponytail: zones compared by today's offset; one that matches now but not after a DST switch gets no note
+fn tz_note(cron: &str, tz: &str) -> Option<String> {
+    use chrono::{Offset, TimeZone};
+    let zone: chrono_tz::Tz = tz.trim().parse().ok()?;
+    let now = chrono::Utc::now().naive_utc();
+    if zone.offset_from_utc_datetime(&now).fix() == chrono::Local.offset_from_utc_datetime(&now).fix() {
+        return None;
+    }
+    let f: Vec<&str> = cron.split_whitespace().collect();
+    // A 6-field cron starts with seconds.
+    let (m, h) = if f.len() == 6 { (f.get(1), f.get(2)) } else { (f.first(), f.get(1)) };
+    let at = match (m.and_then(|m| m.parse::<u32>().ok()), h.and_then(|h| h.parse::<u32>().ok())) {
+        (Some(m), Some(h)) => format!("{h:02}:{m:02} "),
+        _ => String::new(),
+    };
+    Some(format!("Was set for {at}{zone}; this runs on this computer's clock"))
 }
 
 /// Another agent's file, if it's a plain file of a sensible size: a huge one would hang the import before any cut.
@@ -208,7 +290,7 @@ fn skill_files(dir: &Path, skip: &[String], depth: usize, out: &mut Vec<PathBuf>
 
 /// Cron jobs from a Hermes or OpenClaw `jobs.json` ({"jobs": [...]}). Only cron schedules: one-offs and plain
 /// intervals are left out.
-// ponytail: a job's own time zone is ignored (the routine runs on this computer's clock); convert when someone needs it
+// ponytail: a job's own time zone isn't converted, the routine only says it (tz_note); convert when someone needs it
 fn jobs(path: &Path) -> Vec<Job> {
     let v: serde_json::Value = read(path).and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
     v["jobs"]
@@ -225,7 +307,8 @@ fn jobs(path: &Path) -> Vec<Job> {
                 None => prompt.trim(),
             };
             let name = j["name"].as_str().filter(|n| !n.trim().is_empty()).unwrap_or("A scheduled job").trim().to_string();
-            (!prompt.is_empty()).then(|| Job { name, cron, prompt: prompt.to_string() })
+            let tz = j["schedule"]["tz"].as_str().or(j["schedule"]["timezone"].as_str()).map(String::from);
+            (!prompt.is_empty()).then(|| Job { name, cron, prompt: prompt.to_string(), tz })
         })
         .collect()
 }
@@ -570,7 +653,7 @@ pub fn import_bot(db: &Db, text: &str, chat: i64, rules: bool, duplicate_of: Opt
     let scope = format!("chat:{chat}");
     let mut done = Imported::default();
     for k in &f.skills {
-        match crate::tidy::skill_md_propose(db, &scope, id, &format!("the bot file for {name}"), &k.name, &k.description, &k.body) {
+        match crate::tidy::skill_md_propose(db, &scope, id, &format!("the bot file for {name}"), &k.name, &k.description, &k.body, true) {
             Ok(Some(_)) => done.skills += 1,
             Ok(None) => {}
             Err(e) => eprintln!("import: skipped skill {}: {e:#}", k.name),
@@ -746,11 +829,22 @@ mod tests {
 
         let p = home.join("test.db");
         let db = Db::open(&p).unwrap();
+        // A skill by that name is already shared with all bots: the import comes in under a name of its own, so
+        // accepting it can't replace that one with someone else's steps.
+        db.skill_from_library("chat:7", 0, "news-roundup", "When asked for the news", "1. My own steps").unwrap();
         assert_eq!(bring_in(&db, 1, 7, "Hermes", &home, &f).unwrap(), (1, 1));
+        let k = db.skills("chat:7").unwrap().into_iter().find(|k| k.status == "proposed").unwrap();
+        assert_eq!((k.name.as_str(), k.bot_id), ("news-roundup (imported)", 1));
+        assert!(db.skill_decide("chat:7", k.id, true).unwrap());
+        assert_eq!(db.skills_active("chat:7", 1).unwrap().len(), 2, "the shared one stays");
         let r = &db.routines(7).unwrap()[0];
         assert!(r.paused && r.tainted, "a proposal: paused, and someone else's words");
         assert_eq!(r.cron, "0 9 * * *");
         assert_eq!(bring_in(&db, 1, 7, "Hermes", &home, &f).unwrap(), (0, 0), "importing again adds nothing");
+        put(&h.join("profiles/work/memories/MEMORY.md"), "Works at Acme");
+        put(&h.join("profiles/work/SOUL.md"), "A profile's persona");
+        let f = scan(&home, "hermes");
+        assert!(f.memory.len() == 2 && f.persona.len() == 1, "a profile is one more root");
 
         put(&home.join(".claude/CLAUDE.md"), "Always answer in English");
         put(&home.join(".claude/projects/-x/memory/MEMORY.md"), "- [a](a.md)");
@@ -764,6 +858,30 @@ mod tests {
         // A file too big to be a memory is left out rather than read whole.
         std::fs::write(home.join(".claude/projects/-x/memory/huge.md"), "x".repeat((1 << 20) + 1)).unwrap();
         assert!(!memory_text(&home, &scan(&home, "claude_code").memory).contains("huge.md"));
+
+        // OpenClaw: openclaw.json moves the workspace, a profile has its own, and the persona is a role, not a memory.
+        let ws = home.join("elsewhere");
+        put(&home.join(".openclaw/openclaw.json"), r#"{"agents":{"defaults":{"workspace":"~/elsewhere"}}}"#);
+        put(&ws.join("USER.md"), "Lives in Amsterdam");
+        put(&ws.join("SOUL.md"), "You are Molty, dry and brief.");
+        put(&home.join(".openclaw/workspace/USER.md"), "the default workspace, not used");
+        put(&home.join(".openclaw/workspace-work/MEMORY.md"), "Works at Acme");
+        let job = |tz: &str| format!(r#"{{"jobs":[{{"name":"Standup","payload":{{"message":"Post the standup"}},"schedule":{{"kind":"cron","expr":"0 9 * * 1-5","tz":"{tz}"}}}}]}}"#);
+        // A zone that's never this computer's offset at the same time as the other, so one of them gets the note.
+        put(&home.join(".openclaw-work/cron/jobs.json"), &job("Pacific/Kiritimati"));
+        put(&home.join(".openclaw/cron/jobs.json"), &job("Pacific/Pago_Pago"));
+        let o = scan(&home, "openclaw");
+        let shown: Vec<String> = o.memory.iter().map(|p| shown(&home, p)).collect();
+        assert!(shown.contains(&"~/elsewhere/USER.md".into()) && shown.contains(&"~/.openclaw/workspace-work/MEMORY.md".into()) && shown.len() == 2, "{shown:?}");
+        assert_eq!(o.persona, [ws.join("SOUL.md")]);
+        assert!(!memory_text(&home, &o.memory).contains("Molty"), "the persona stays out of memory");
+        assert_eq!(o.jobs.len(), 2);
+        let note = |tz: &str| tz_note("0 9 * * 1-5", tz);
+        assert!(note("Pacific/Kiritimati").is_some() || note("Pacific/Pago_Pago").is_some());
+        assert_eq!(note("Pacific/Kiritimati").or(note("Pacific/Pago_Pago")).unwrap().split(';').next().unwrap().split(' ').take(4).collect::<Vec<_>>().join(" "), "Was set for 09:00");
+        assert_eq!(tz_note("0 9 * * *", "Not/AZone"), None);
+        bring_in(&db, 1, 8, "OpenClaw", &home, &o).unwrap();
+        assert!(db.routines(8).unwrap().iter().any(|r| r.prompt.contains("this runs on this computer's clock")));
         let _ = std::fs::remove_dir_all(&home);
     }
 }
