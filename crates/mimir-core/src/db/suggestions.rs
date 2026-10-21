@@ -212,8 +212,10 @@ impl Db {
             Ok("dismissed".to_string())
         } else {
             // ponytail: import proposals are told apart by their reason; a column if more origins appear
+            // "Imported from OpenClaw: …" keeps where from, so what one agent brought can be told apart.
+            let imported = s.reason.split_once(':').map(|(o, _)| o).filter(|o| o.starts_with("Imported from ")).map(|o| format!("i{}, approved by you", &o[1..]));
             let (src, mut prov) = if s.reason.starts_with("Imported") {
-                ("imported, approved by you", Prov::by("import"))
+                (imported.as_deref().unwrap_or("imported, approved by you"), Prov::by("import"))
             } else if s.reason.starts_with("Found in your") {
                 ("found in your email or calendar, approved by you", Prov::by("know_me"))
             } else if s.reason.starts_with(BOT_PROPOSED) {

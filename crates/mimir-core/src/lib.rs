@@ -1535,6 +1535,8 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
 
 #[cfg(test)]
 mod tests {
+    /// Held by a test that points MIMIR_CLAUDE_BIN / MIMIR_GROK_BIN at a fake CLI (the environment is the process's).
+    pub(crate) static FAKE_CLI: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
     /// #218: a resumed claude or grok keeps its first turn's instructions, so changed ones come along in the next
     /// message, once. A fake CLI records each run's instructions, message and --resume.
@@ -1570,7 +1572,8 @@ echo '{{"type":"result","result":"ok","session_id":"s1","usage":{{"input_tokens"
         )
         .unwrap();
         std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
-        // SAFETY: only this test starts claude or grok.
+        let _cli = FAKE_CLI.lock().await;
+        // SAFETY: tests that start claude or grok hold FAKE_CLI.
         unsafe {
             std::env::set_var("MIMIR_CLAUDE_BIN", &fake);
             std::env::set_var("MIMIR_GROK_BIN", &fake);

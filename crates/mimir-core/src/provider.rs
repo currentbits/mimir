@@ -193,18 +193,43 @@ impl Provider {
     async fn run_once(&self, ctx: &ToolCtx, system: &str, history: &[(String, String)], user: &str, session: Option<String>) -> Result<Reply> {
         match self {
             Provider::Claude { model, home } | Provider::Codex { model, home } | Provider::Grok { model, home } => {
-                let go = |sid: Option<&str>| {
-                    let (m, sid) = (model.as_deref(), sid.map(String::from));
+                let go = |sid: Option<&str>, key: Option<&str>| {
+                    let (m, sid, key) = (model.as_deref(), sid.map(String::from), key.map(String::from));
                     async move {
                         match self {
-                            Provider::Claude { .. } => claude(ctx, home, m, system, user, sid.as_deref()).await,
+                            Provider::Claude { .. } => claude(ctx, home, m, system, user, sid.as_deref(), key.as_deref()).await,
                             Provider::Codex { .. } => codex(ctx, home, m, system, user, sid.as_deref()).await,
                             _ => grok(ctx, home, m, system, user, sid.as_deref()).await,
                         }
                     }
                 };
+                // Claude on the Anthropic API key (the monthly API credits of a Max or Team plan), when the bot's page says
+                // so: once the plan says no, or from the start for a routine set to run on the credits. Either way the
+                // other one is tried once when the first is out (same session, tools and instructions).
+                let credits = if matches!(self, Provider::Claude { .. }) { api_credits(ctx) } else { None };
+                let mut on_key = credits.as_ref().is_some_and(|c| c.1);
+                let mut first: Option<anyhow::Error> = None;
                 // A session that can't be reopened is the caller's to retry: it has the chat to start the new one with.
-                let r = go(session.as_deref()).await;
+                // One call site: in a debug build each one is a whole CLI future on the stack (Windows' tests overflowed).
+                let mut r = loop {
+                    match go(session.as_deref(), credits.as_ref().filter(|_| on_key).map(|c| c.0.as_str())).await {
+                        Err(e) if credits.is_some() && first.is_none() && spent(&e) => {
+                            on_key = !on_key;
+                            first = Some(e);
+                        }
+                        r => {
+                            let then = if on_key { "on your Anthropic API key" } else { "on the plan" };
+                            break r.map_err(|e2| match first {
+                                Some(e) => anyhow!("{e:#}; then {then}: {e2:#}"),
+                                None => e2,
+                            });
+                        }
+                    }
+                };
+                // The run log shows it next to the model.
+                if let (true, Ok(r)) = (on_key, &mut r) {
+                    r.usage.model = Some(format!("{} on your Anthropic API key", r.usage.model.as_deref().unwrap_or("Claude")));
+                }
                 // A saved model ChatGPT has retired (gpt-5.5 on 2026-10-14): once more on the default, and say so.
                 if let (Provider::Codex { .. }, Some(m), Err(e)) = (self, model, &r)
                     && model_gone(&format!("{e:#}"))
@@ -224,6 +249,19 @@ impl Provider {
     }
 }
 
+/// The Anthropic API key, when the bot's page says to use it (`api_credits:<bot>`: "limit" or "routines"), with whether
+/// this run starts on it: a routine (nobody watching) on a bot set to run routines on the monthly API credits.
+fn api_credits(ctx: &ToolCtx) -> Option<(String, bool)> {
+    let mode = ctx.db.setting(&format!("api_credits:{}", ctx.bot_id)).ok()?.filter(|m| !m.is_empty())?;
+    Some((crate::host::api_key("anthropic")?, mode == "routines" && ctx.unattended))
+}
+
+/// The plan's usage limit, or API credits that ran out (they stop rather than bill).
+// ponytail: "credit balance" is the API's wording for an empty balance; not seen from claude -p on the monthly credits yet
+fn spent(e: &anyhow::Error) -> bool {
+    is_usage_limit(e) || format!("{e:#}").to_lowercase().contains("credit balance")
+}
+
 /// The message a run starts over with after the person sent more while it was being written.
 fn steered(user: &str, more: &[String]) -> String {
     format!(
@@ -240,7 +278,7 @@ fn steer_line(text: &str) -> String {
     json!({"type": "user", "message": {"role": "user", "content": text}}).to_string() + "\n"
 }
 
-async fn claude(ctx: &ToolCtx, home: &PathBuf, model: Option<&str>, system: &str, user: &str, session: Option<&str>) -> Result<Reply> {
+async fn claude(ctx: &ToolCtx, home: &PathBuf, model: Option<&str>, system: &str, user: &str, session: Option<&str>, key: Option<&str>) -> Result<Reply> {
     let exe = std::env::current_exe()?;
     // Tools off: no tools server at all (with --strict-mcp-config nothing else loads), so the run doesn't pay its startup.
     let mcp = if ctx.tools_off {
@@ -290,6 +328,10 @@ async fn claude(ctx: &ToolCtx, home: &PathBuf, model: Option<&str>, system: &str
     }
     if let Some(s) = session {
         cmd.args(["--resume", s]);
+    }
+    // In -p mode an API key in the environment wins over the plan's sign-in.
+    if let Some(k) = key {
+        cmd.env("ANTHROPIC_API_KEY", k);
     }
     if ctx.incognito() {
         // Claude Code otherwise keeps every session's transcript on disk.
@@ -1560,6 +1602,63 @@ mod tests {
         assert_eq!(v["choices"][0]["message"]["content"], "Hello");
         assert_eq!(v["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"], "{\"query\":\"rust\"}");
         assert_eq!((v["usage"]["prompt_tokens"].as_i64(), v["model"].as_str()), (Some(12), Some("gpt-x")));
+    }
+
+    /// #204: the plan says no, so the same run goes again on the Anthropic API key, when the bot's page says so; a
+    /// routine set to run on the monthly API credits starts there. A fake claude is at its limit without the key.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn claude_answers_on_the_api_key_when_the_plan_says_no() {
+        use std::os::unix::fs::PermissionsExt;
+        let _cli = crate::tests::FAKE_CLI.lock().await;
+        let dir = std::env::temp_dir().join(format!("mimir-credits-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (fake, log) = (dir.join("claude"), dir.join("keys"));
+        std::fs::write(
+            &fake,
+            format!(
+                r#"#!/bin/sh
+head -n 1 > /dev/null
+echo "${{ANTHROPIC_API_KEY:-}}" >> {}
+if [ "$ANTHROPIC_API_KEY" = sk-credits ]; then
+  echo '{{"type":"result","result":"on the key","session_id":"s1","usage":{{"input_tokens":1,"output_tokens":1}},"modelUsage":{{"claude-sonnet-5":{{}}}}}}'
+else
+  echo '{{"type":"result","is_error":true,"result":"Claude AI usage limit reached|1791650400"}}'
+fi
+"#,
+                log.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // SAFETY: tests that start claude or grok hold FAKE_CLI.
+        unsafe { std::env::set_var("MIMIR_CLAUDE_BIN", &fake) };
+        let db = crate::db::Db::open(&dir.join("mimir.db")).unwrap();
+        crate::host::install_secrets(std::sync::Arc::new(crate::host::DbSecrets(db.clone())));
+        crate::host::secret_set("anthropic_api_key", "sk-credits").unwrap();
+        let p = Provider::new("claude", None, None, None, dir.clone()).unwrap();
+        let mut ctx = ToolCtx::new(db.clone(), 1, 0);
+        let keys = || std::fs::read_to_string(&log).unwrap_or_default().lines().map(|l| l == "sk-credits").collect::<Vec<_>>();
+        let run = async |ctx: &ToolCtx| {
+            std::fs::remove_file(&log).ok();
+            p.run(ctx, "sys", &[], "hi", None).await
+        };
+
+        let e = run(&ctx).await.unwrap_err();
+        assert!(is_usage_limit(&e) && keys() == [false], "off by default: {e:#}");
+        db.set_setting("api_credits:1", "limit").unwrap();
+        let r = run(&ctx).await.unwrap();
+        assert_eq!((r.text.as_str(), r.usage.model.as_deref()), ("on the key", Some("claude-sonnet-5 on your Anthropic API key")));
+        assert_eq!(keys(), [false, true], "only the second call has the key");
+        // Routines on the credits: a routine starts there; a chat still starts on the plan.
+        db.set_setting("api_credits:1", "routines").unwrap();
+        run(&ctx).await.unwrap();
+        assert_eq!(keys(), [false, true]);
+        ctx.unattended = true;
+        run(&ctx).await.unwrap();
+        assert_eq!(keys(), [true]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

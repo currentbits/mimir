@@ -873,6 +873,11 @@ impl Core {
         Ok(self.db.chat_lookup(chan.kind(), ext)?.is_some())
     }
 
+    /// A family group: everyone there talks to the bot, so it hears every message, not just the ones addressed to it.
+    pub(crate) fn is_family(&self, chan: &Chan, ext: &str) -> bool {
+        self.db.chat_lookup(chan.kind(), ext).ok().flatten().is_some_and(|chat| self.db.chat_family(chat))
+    }
+
     /// Keep a file the person sent, under <home>/media (the only folder the AI may read files from). Startup deletes
     /// what's older than 60 days (`Host::new`).
     pub(crate) fn save_media(&self, bytes: &[u8], ext: &str) -> Result<std::path::PathBuf> {
@@ -1266,6 +1271,15 @@ impl Core {
             }
             None => Ok(None),
         }
+    }
+
+    /// A number replying to a pending card whose numbers this process never saw (Mimir restarted since it went out):
+    /// the button it names, numbered as `signal::numbered` did. Without this, the "1" would deny the card as its reason.
+    pub(crate) fn card_pick(&self, chan: &Chan, ext: &str, card: &str, said: &str) -> Result<Option<String>> {
+        let Some(n) = crate::signal::pick(said) else { return Ok(None) };
+        let Some(chat) = self.db.chat_lookup(chan.kind(), ext)? else { return Ok(None) };
+        let Some(a) = self.db.approval_by_card(chat, card)?.map(|id| self.db.approval(id)).transpose()?.flatten() else { return Ok(None) };
+        Ok(card_buttons(&a).into_iter().flatten().map(|(_, d)| d).filter(|d| !d.starts_with("https://")).nth(n - 1))
     }
 
     /// A text reply to a pending card: no, and this is why (the bot is told, in the person's words). True if it was
@@ -2931,6 +2945,12 @@ mod tests {
         // A text reply to a card: no, and why. Only that card, in its own chat, from the person who pairs it.
         let card = ask(5, false);
         db.approval_mark_notified(card, Some("c9")).unwrap();
+        // A number replying to it after a restart (Signal's numbers lost) still picks that button, not a denial.
+        let first = card_buttons(&db.approval(card).unwrap().unwrap())[0][0].1.clone();
+        assert_eq!(core.card_pick(&tg, "5", "c9", "1.").unwrap(), Some(first));
+        assert_eq!(core.card_pick(&tg, "5", "c9", "99").unwrap(), None, "out of range");
+        assert_eq!(core.card_pick(&tg, "5", "c9", "not now").unwrap(), None, "not a number");
+        assert_eq!(core.card_pick(&tg, "5", "c8", "1").unwrap(), None, "another message");
         assert!(!core.deny_by_reply(&tg, "42", me, "c9", "not now").unwrap(), "another chat");
         assert!(!core.deny_by_reply(&tg, "5", Sender { id: "9", dm: false }, "c9", "not now").unwrap(), "someone else");
         assert!(!core.deny_by_reply(&tg, "5", me, "c8", "not now").unwrap(), "another message");
@@ -3000,8 +3020,10 @@ mod tests {
         let other = Chan::Slack(crate::slack::Slack::new("xoxb-1", "xapp-1").unwrap());
         db.pair_external("slack", "C1", "c1").unwrap();
         assert!(core.mark_seen(&other, "C1", 3));
+        db.outbox_add(1, chat, "discord", "C1", None, "still to send", "[]", "[]", None).unwrap();
         db.unpair(chat).unwrap();
         assert_eq!((core.seen(&chan, "C1"), core.seen(&other, "C1")), (None, Some(3)));
+        assert!(db.outbox_take(1, crate::db::now() + 1000).unwrap().is_empty(), "nothing left to send to an unpaired chat");
     }
 
     #[tokio::test]

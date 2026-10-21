@@ -482,6 +482,21 @@ pub(crate) fn public_redirects() -> reqwest::redirect::Policy {
     reqwest::redirect::Policy::custom(|a| if a.previous().len() >= 10 || is_private_host(a.url().as_str()) { a.stop() } else { a.follow() })
 }
 
+/// The most of a fetched page that's read: the rest isn't downloaded, so an endless page can't fill memory.
+pub(crate) const PAGE_MAX: usize = 2_000_000;
+
+/// A response's body as text, its first `max` bytes only. ponytail: decoded as UTF-8 (lossy), not by its charset.
+pub(crate) async fn capped_text(mut res: reqwest::Response, max: usize) -> Result<String> {
+    let mut bytes = vec![];
+    while bytes.len() < max
+        && let Some(chunk) = res.chunk().await?
+    {
+        bytes.extend_from_slice(&chunk);
+    }
+    bytes.truncate(max);
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
 pub fn fmt_ts(t: i64) -> String {
     use chrono::TimeZone;
     chrono::Local.timestamp_opt(t, 0).single().map(|d| d.format("%a %Y-%m-%d %H:%M").to_string()).unwrap_or_default()
@@ -1367,6 +1382,32 @@ mod tests {
         assert!(guest.iter().all(|t| GUEST_TOOLS.contains(&t.as_str())), "{guest:?}");
         db.chat_set_guest(200, false).unwrap();
         assert!(names(200).contains(&"bot_create".to_string()), "you can make a guest's chat yours");
+    }
+
+    #[tokio::test]
+    async fn a_chat_api_turn_gets_nothing_private_and_sets_no_rules() {
+        let p = std::env::temp_dir().join(format!("mimir-api-chat-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = Db::open(&p).unwrap();
+        let chat = 7_000_000_000_000_000 + 0xabc;
+        assert!(crate::host::is_api_chat(chat) && !crate::host::is_api_chat(crate::host::LOCAL_CHAT) && !crate::host::is_api_chat(9_000_000_000_000_000));
+        db.pair_api(chat, "abc", "Chat API: Home Assistant").unwrap();
+        assert!(db.is_paired(chat).unwrap() && !db.chat_private(chat) && !db.in_household(chat));
+        assert_eq!(db.chat_address(chat).unwrap(), None, "nothing to send to");
+        db.meeting_save("Launch sync", 1_000, 1_600, &[(1_060, "others".into(), "Sam owns the deck.".into())]).unwrap();
+        let names = |chat| specs_for(&ToolCtx::new(db.clone(), 1, chat)).into_iter().map(|s| s.0).collect::<Vec<_>>();
+        assert!(names(crate::host::LOCAL_CHAT).contains(&"meeting_read".to_string()));
+        let api = names(chat);
+        // calendar_add only makes a link to add an event (a guest's chat has it too); calendar_list reads yours.
+        assert!(!api.iter().any(|t| t != "calendar_add" && ["email_", "calendar_", "meeting_", "computer_"].iter().any(|p| t.starts_with(p))), "{api:?}");
+        assert!(!api.contains(&"ask_choice".to_string()));
+        // The owner's own words in the app set a rule; the same words through a token are a suggestion.
+        let run = db.run_start(1, chat, "message", None, "test").unwrap();
+        db.run_asked(run, "From now on, give me news in 3 bullets").unwrap();
+        let ctx = ToolCtx::new(db.clone(), 1, chat).with_run(Some(run));
+        let conv = json!({"type": "convention", "title": "News", "body": "When briefing news, use 3 bullets.", "source": "x"});
+        assert!(exec(&ctx, "memory_store", &conv).await.unwrap().starts_with("Not saved yet"));
+        assert_eq!(db.suggestions(&ctx.scope()).unwrap().len(), 1);
     }
 
     #[tokio::test]
