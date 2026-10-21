@@ -2,6 +2,13 @@
 
 What changed for people using Mimir. The newest release is at the top; "Unreleased" is what the next one brings.
 
+## Unreleased
+
+### Safety
+- **Quiet checks stay off your network:** a watched page that redirects to a name pointing at this computer or the
+  local network (a home router, a cloud server's metadata) is no longer fetched; before, only addresses written as
+  numbers were refused. Quiet checks and `web_fetch` also read at most 2 MB of a page.
+
 ## 0.5.0
 
 ### Talking to your bots
