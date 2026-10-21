@@ -710,7 +710,7 @@ function MemoryFolderSettings() {
   const st = useLoad(() => invoke<string>('memory_folder', {}), [])
   const [dir, setDir] = useState<string | null>(null)
   const [err, setErr] = useState<string | null>(null)
-  if (st.data === undefined) return null
+  if (st.data == null) return null
   const save = (d: string) => invoke<string>('memory_folder', { dir: d }).then(() => { setDir(null); setErr(null); st.reload() }, e => setErr(String(e)))
   const value = dir ?? st.data
   return (
