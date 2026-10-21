@@ -86,6 +86,8 @@ export const IDLE = 4_102_444_800
 export function schedule(cron: string): string {
   if (cron.trim() === 'webhook') return 'When its webhook is called'
   if (cron.trim().startsWith('mail:')) return `When an email matches ${cron.trim().slice(5).trim()}`
+  if (cron.trim().startsWith('slack:')) return `When a Slack message matches ${cron.trim().slice(6).trim()}`
+  if (cron.trim().startsWith('github:')) return `On GitHub ${cron.trim().slice(7).trim() || 'events'}`
   const cal = cron.trim().match(/^calendar:(\d+)(?::(meetings|outside))?$/)
   if (cal) {
     const m = +cal[1], lead = m % 60 === 0 && m > 0 ? `${m / 60} hour${m === 60 ? '' : 's'}` : `${m} min`
