@@ -200,7 +200,8 @@ impl Tg {
     pub(crate) async fn listen(&self, me: &Chan, core: Arc<Core>, slot: Slot) -> Result<()> {
         let bot = self.call("getMe", json!({})).await.context("Telegram rejected the bot token")?;
         let me_id = bot["id"].as_i64();
-        slot.connected(format!("@{}", bot["username"].as_str().unwrap_or("?")));
+        let my_name = bot["username"].as_str().unwrap_or("?").to_string();
+        slot.connected(format!("@{my_name}"));
         // The "/" menu in Telegram shows these.
         let base = json!([
             {"command": "memory", "description": tr("What I remember about you")},
@@ -254,7 +255,11 @@ impl Tg {
                     // The stop button on a streaming draft: same as /stop.
                     let chat = chat.to_string();
                     core.stop(me, &chat, Sender { id: &chat, dm: true }).map(drop)
-                } else if let (Some(_), Some(text)) = (u["message"]["chat"]["id"].as_i64(), u["message"]["text"].as_str()) {
+                } else if let (Some(_), Some(text)) = (
+                    u["message"]["chat"]["id"].as_i64(),
+                    u["message"]["text"].as_str().and_then(|t| for_bot(&u["message"], t, me_id, &my_name, || core.is_family(me, &address(&u["message"], false)))),
+                ) {
+                    let text = text.as_str();
                     let chat = address(&u["message"], core.topics());
                     let c = &u["message"]["chat"];
                     let title = c["title"].as_str().or(c["username"].as_str()).or(c["first_name"].as_str()).unwrap_or("");
@@ -416,6 +421,26 @@ fn address(m: &Value, topics: bool) -> String {
     }
 }
 
+/// A text message as the bot should take it, or None when it isn't for the bot. Direct chats and family groups: every
+/// message. Other groups: only one that @-mentions the bot (the mention taken out), replies to one of its messages, is a
+/// /command or pairs. (Telegram never shows a bot other bots' messages in a group.)
+fn for_bot(m: &Value, text: &str, me_id: Option<i64>, name: &str, family: impl FnOnce() -> bool) -> Option<String> {
+    if !matches!(m["chat"]["type"].as_str(), Some("group" | "supergroup")) {
+        return Some(text.to_string());
+    }
+    // Usernames are ASCII and case-insensitive; "@mybot2" isn't "@mybot".
+    let (tag, lower) = (format!("@{}", name.to_ascii_lowercase()), text.to_ascii_lowercase());
+    let at = lower.match_indices(&tag).map(|(i, _)| i).find(|&i| !lower[i + tag.len()..].starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_'));
+    let said = match at {
+        Some(i) => format!("{}{}", &text[..i], &text[i + tag.len()..]).trim().to_string(),
+        None => text.to_string(),
+    };
+    let r = &m["reply_to_message"];
+    let to_me = me_id.is_some() && r["from"]["id"].as_i64() == me_id && !r["forum_topic_created"].is_object();
+    let addressed = at.is_some() || to_me || said.starts_with('/') || matches!(crate::runtime::parse_command(&said), crate::runtime::Command::Pair(_));
+    (addressed || family()).then_some(said)
+}
+
 fn keyboard(rows: &[Row]) -> Value {
     let button = |text: &str, data: &str| if data.starts_with("https://") { json!({"text": text, "url": data}) } else { json!({"text": text, "callback_data": data}) };
     json!({"inline_keyboard": rows.iter().map(|row| row.iter().map(|(text, data)| button(text, data)).collect::<Vec<_>>()).collect::<Vec<_>>()})
@@ -498,6 +523,27 @@ mod tests {
         let group = json!({"chat": {"id": -100, "type": "supergroup"}, "message_thread_id": 9, "is_topic_message": true});
         assert_eq!(super::address(&group, true), "-100", "private chats only");
         assert_eq!(crate::db::tg_chat("5:9"), "5");
+    }
+
+    #[test]
+    fn a_group_message_reaches_the_bot_only_when_meant_for_it() {
+        let group = |extra: serde_json::Value| {
+            let mut m = json!({"chat": {"id": -100, "type": "supergroup"}});
+            m.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            m
+        };
+        let take = |m: &serde_json::Value, t: &str, family: bool| super::for_bot(m, t, Some(7), "MyBot", || family);
+        assert_eq!(take(&group(json!({})), "lunch anyone?", false), None, "not addressed");
+        assert_eq!(take(&group(json!({})), "lunch anyone?", true).as_deref(), Some("lunch anyone?"), "a family group hears all");
+        assert_eq!(take(&group(json!({})), "@mybot hi", false).as_deref(), Some("hi"));
+        assert_eq!(take(&group(json!({})), "ask @mybot2 instead", false), None, "another bot's name");
+        assert_eq!(take(&group(json!({})), "/new@MyBot", false).as_deref(), Some("/new"));
+        assert_eq!(take(&group(json!({})), "/memory", false).as_deref(), Some("/memory"));
+        assert_eq!(take(&group(json!({})), "pair ab12", false).as_deref(), Some("pair ab12"));
+        assert_eq!(take(&group(json!({"reply_to_message": {"from": {"id": 7}}})), "and tomorrow?", false).as_deref(), Some("and tomorrow?"));
+        assert_eq!(take(&group(json!({"reply_to_message": {"from": {"id": 9}}})), "and tomorrow?", false), None, "someone else's message");
+        let private = json!({"chat": {"id": 5, "type": "private"}});
+        assert_eq!(take(&private, "hi", false).as_deref(), Some("hi"), "direct chats hear all");
     }
 
     #[test]
