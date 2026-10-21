@@ -572,7 +572,8 @@ pub async fn read(a: &Account, folder: &str, uid: u32) -> Result<String> {
 /// Sends, then files a copy in Sent (above), and says where (empty when the server keeps its own) and whether the
 /// `disclose` line went on. Once it's sent, nothing turns that into an error: the bot would say it failed, or send it again.
 pub async fn send(a: &Account, d: &Draft<'_>, disclose: Option<&str>) -> Result<String> {
-    let (mut s, id, msg, disclosed) = bounded(deliver(a, d, disclose)).await?;
+    // Boxed: with the Sent lookup this future is big, and the tool call that awaits it sits on Host::call's stack.
+    let (mut s, id, msg, disclosed) = bounded(Box::pin(deliver(a, d, disclose))).await?;
     let said = if disclosed { format!(" It ends with “{}”, as it's to someone the user hasn't written to.", disclose.unwrap_or_default().trim()) } else { String::new() };
     let note = said + &match tokio::time::timeout(Duration::from_secs(20), file_sent(&mut s, &id, &msg, Duration::from_secs(3))).await {
         Ok(Ok(Some(folder))) => format!(" A copy is in {folder}."),
@@ -620,6 +621,18 @@ pub fn hand_over(db: &crate::db::Db, mut h: HandedOver) -> Result<()> {
     h.id = list.iter().map(|x| x.id).max().unwrap_or(0) + 1;
     list.insert(0, h);
     db.set_setting(HANDED, &serde_json::to_string(&list)?)
+}
+
+/// The line added to emails a bot sends to someone you haven't written to ("" = none): set it with `line`, and read it.
+pub fn disclose(db: &crate::db::Db, line: Option<String>) -> Result<String> {
+    if let Some(line) = line {
+        let line = line.trim();
+        if line.chars().count() > 200 || line.contains(['\r', '\n']) {
+            bail!("one line, up to 200 characters");
+        }
+        db.set_setting("email_disclose", line)?;
+    }
+    Ok(db.setting("email_disclose")?.unwrap_or_default())
 }
 
 /// Dealt with: out of Needs you.
@@ -908,7 +921,7 @@ mod tests {
     /// Needs you until it's done.
     #[test]
     fn bot_threads_and_hand_overs() {
-        let parse = |h: &str| mail_parser::MessageParser::default().parse(format!("From: sam@x.com\r\nSubject: Re: Invoice\r\n{h}\r\nhi\r\n").into_bytes()).unwrap().into_owned();
+        let parse = |h: &str| mail_parser::MessageParser::default().parse(&format!("From: sam@x.com\r\nSubject: Re: Invoice\r\n{h}\r\nhi\r\n")).unwrap().into_owned();
         assert!(super::bot_thread(&parse("In-Reply-To: <a1b2@mimir.local>\r\n")));
         assert!(super::bot_thread(&parse("References: <x@gmail.com> <a1b2@mimir.local>\r\nIn-Reply-To: <x@gmail.com>\r\n")));
         assert!(!super::bot_thread(&parse("In-Reply-To: <x@gmail.com>\r\n")) && !super::bot_thread(&parse("")));

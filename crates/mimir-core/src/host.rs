@@ -601,16 +601,7 @@ impl Host {
                 ok(self.db.setting("email_tasks")?.as_deref() == Some("on"))
             }
             // The line added to emails a bot sends to someone you haven't written to ("" = none).
-            "email_disclose" => {
-                if let Some(line) = arg::<Option<String>>(a, "line")? {
-                    let line = line.trim();
-                    if line.chars().count() > 200 || line.contains(['\r', '\n']) {
-                        bail!("one line, up to 200 characters");
-                    }
-                    self.db.set_setting("email_disclose", line)?;
-                }
-                ok(self.db.setting("email_disclose")?.unwrap_or_default())
-            }
+            "email_disclose" => ok(crate::email::disclose(&self.db, arg(a, "line")?)?),
             // Webhooks out: the address, which events go to it, and whether the text goes too. The secret the bodies
             // are signed with is made (in the keychain) the first time an address is saved, or anew with `rotate`.
             "webhook_out" => {
@@ -1630,10 +1621,11 @@ impl Host {
             }
             // The AI plan's usage windows, where the AI reports them (Claude Code does).
             "ai_windows" => ok(crate::provider::windows(&self.db)),
-            "inbox_dismiss" => match arg::<String>(a, "kind")?.as_str() {
-                "mail" => ok(crate::email::handed_done(&self.db, arg(a, "id")?)?),
-                kind => ok(self.db.inbox_dismiss(kind, arg(a, "id")?)?),
-            },
+            "inbox_dismiss" => {
+                let (kind, id): (String, i64) = (arg(a, "kind")?, arg(a, "id")?);
+                if kind == "mail" { crate::email::handed_done(&self.db, id)? } else { self.db.inbox_dismiss(&kind, id)? }
+                ok(())
+            }
             "rule_hint_dismiss" => ok(tools::rule_hint_dismiss(&self.db, &arg::<String>(a, "tool")?, arg::<Option<String>>(a, "site")?.as_deref())?),
             "site_rules" => ok(self.db.site_rules()?.into_iter().map(|(tool, host, action)| json!({"tool": tool, "host": host, "action": action})).collect::<Vec<_>>()),
             "set_site_rule" => ok(self.db.set_site_rule(&arg::<String>(a, "tool")?, &arg::<String>(a, "host")?, &arg::<String>(a, "action")?)?),
