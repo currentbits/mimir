@@ -75,7 +75,8 @@ the same budget again.
 A routine can start when something comes in instead of at a time. In the Routines tab, pick it under **When**:
 
 - **When email arrives**: a rule like `from:acme.com subject:invoice` (`from:` an address or domain, `subject:` a word
-  or "a phrase", and any other words the email must contain, in the subject or the text; case doesn't matter). Mimir
+  or "a phrase", and any other words the email must contain, in the subject or the text; case doesn't matter;
+  `subject:invoice|quote` takes either). Mimir
   looks at new mail every 2 minutes itself and only a matching email starts a run, so mail that doesn't match costs
   nothing. Mail from before the routine was made doesn't count. The run is told each matching email (who, when, the
   subject and the start of the text). It watches the first mailbox in Settings → Email, and works only in your own private chat.
@@ -224,7 +225,14 @@ Every run starts a fresh conversation with the AI, so a routine that runs every 
 
 A routine can be **quiet**: it runs with read-only tools and messages you only when something needs your attention;
 otherwise it stays silent (the run log still shows it). "Keep an eye on X and only tell me if it changes" makes one.
-The Routines tab also offers ready-made ones: a morning task check, an evening look-ahead, watching a page.
+The Routines tab also offers ready-made ones: a morning task check, an evening look-ahead, watching a page, and a
+second look.
+
+**A second look** runs on each email with confirm, booking, reservation, itinerary, quote, quotation or invoice in the
+subject (or the Dutch words for them). It finds what was agreed (the earlier emails with that sender, your calendar,
+memory and the chat) and compares the dates, amounts, names and quantities. It speaks up only when something differs:
+"Hotel confirmation says 12–14 Nov; your calendar says 13–15." Like any quiet check it only reads, so it never replies
+to the email. It's off until you add it; edit its rule or words like any routine's.
 
 A quiet check about one page, feed or your inbox can **watch** it (the page's address, or `mail` for new unread email;
 bots set it when you ask them to keep an eye on something). Mimir then looks itself before each run: when nothing
