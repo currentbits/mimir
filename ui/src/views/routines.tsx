@@ -35,7 +35,10 @@ const CHECKINS = [
 ]
 
 // ---- schedule picker: plain choices in, cron out (anything else stays editable as "Custom") ----
-type WhenMode = 'daily' | 'weekdays' | 'weekly' | 'hours' | 'custom' | 'mail' | 'webhook'
+type WhenMode = 'daily' | 'weekdays' | 'weekly' | 'hours' | 'custom' | 'mail' | 'slack' | 'webhook' | 'github'
+
+/** Event triggers written as `<prefix>:<rule>` where a cron goes. */
+const RULED = { mail: 'mail:', slack: 'slack:', github: 'github:' } as const
 
 type When = { mode: WhenMode; time: string; day: string; hours: number; cron: string; rule: string }
 
@@ -44,7 +47,7 @@ const WEEK = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 function toWhen(cron: string): When {
   const base: When = { mode: 'custom', time: '08:00', day: 'Mon', hours: 3, cron, rule: '' }
   if (cron.trim() === 'webhook') return { ...base, mode: 'webhook' }
-  if (cron.trim().startsWith('mail:')) return { ...base, mode: 'mail', rule: cron.trim().slice(5).trim() }
+  for (const [mode, p] of Object.entries(RULED) as [keyof typeof RULED, string][]) if (cron.trim().startsWith(p)) return { ...base, mode, rule: cron.trim().slice(p.length).trim() }
   const f = cron.trim().split(/\s+/)
   if (f.length !== 5) return base
   const [m, h, dom, mon, dow] = f
@@ -63,7 +66,8 @@ function toWhen(cron: string): When {
 function toCron(w: When): string {
   const [h, m] = w.time.split(':').map(Number)
   return w.mode === 'daily' ? `${m} ${h} * * *` : w.mode === 'weekdays' ? `${m} ${h} * * Mon-Fri` : w.mode === 'weekly' ? `${m} ${h} * * ${w.day}`
-    : w.mode === 'hours' ? `0 */${w.hours} * * *` : w.mode === 'mail' ? (w.rule.trim() ? `mail:${w.rule.trim()}` : '') : w.mode === 'webhook' ? 'webhook' : w.cron
+    : w.mode === 'hours' ? `0 */${w.hours} * * *` : w.mode === 'mail' || w.mode === 'slack' ? (w.rule.trim() ? `${RULED[w.mode]}${w.rule.trim()}` : '')
+    : w.mode === 'github' ? `github:${w.rule.trim()}` : w.mode === 'webhook' ? 'webhook' : w.cron
 }
 
 type RoutineDraft = { prompt: string; botId: number; quiet: boolean; when: When; delivery: Delivery; watch: string; urgent: string; firstOnly?: boolean; until: string }
@@ -104,7 +108,7 @@ function RoutineForm({ draft, setDraft, bots, onCancel, onSave, inline, skills =
       )}
       <div className="field-label"><span>When</span>
         <Segmented size="sm" label="How often" value={w.mode} onChange={mode => when(mode === 'custom' ? { mode, cron } : { mode })}
-          options={[{ id: 'daily', label: 'Every day' }, { id: 'weekdays', label: 'Weekdays' }, { id: 'weekly', label: 'Weekly' }, { id: 'hours', label: 'Every few hours' }, { id: 'mail', label: 'When email arrives' }, { id: 'webhook', label: 'When called' }, { id: 'custom', label: 'Custom' }]} />
+          options={[{ id: 'daily', label: 'Every day' }, { id: 'weekdays', label: 'Weekdays' }, { id: 'weekly', label: 'Weekly' }, { id: 'hours', label: 'Every few hours' }, { id: 'mail', label: 'When email arrives' }, { id: 'slack', label: 'On a Slack message' }, { id: 'webhook', label: 'When called' }, { id: 'github', label: 'On GitHub' }, { id: 'custom', label: 'Custom' }]} />
         <div className="er when-row">
           {w.mode === 'weekly' && (
             <select className="select" aria-label="Day" value={w.day} onChange={e => when({ day: e.target.value })}>
@@ -119,12 +123,16 @@ function RoutineForm({ draft, setDraft, bots, onCancel, onSave, inline, skills =
           )}
           {w.mode === 'custom' && <input className="input mono" aria-label="Cron schedule" value={w.cron} placeholder="30 8 * * Mon-Fri" onChange={e => when({ cron: e.target.value })} />}
           {w.mode === 'mail' && <input className="input mono" aria-label="Which email" value={w.rule} placeholder='from:acme.com subject:invoice' onChange={e => when({ rule: e.target.value })} />}
+          {w.mode === 'slack' && <input className="input mono" aria-label="Which Slack message" value={w.rule} placeholder='#deploys from:@sam failed' onChange={e => when({ rule: e.target.value })} />}
+          {w.mode === 'github' && <input className="input mono" aria-label="Which GitHub events" value={w.rule} placeholder='issues.opened repo:acme/app' onChange={e => when({ rule: e.target.value })} />}
         </div>
         {w.mode === 'mail' && <span className="hint"><code>from:</code> an address or domain, <code>subject:</code> a word or "a phrase", and any other words the email must contain. Mimir checks new mail every 2 minutes; mail that doesn’t match costs nothing.</span>}
-        {w.mode === 'mail' && draft.firstOnly !== undefined && (
+        {w.mode === 'slack' && <span className="hint">The <code>#channel</code> (a channel the bot is in), <code>from:@person</code>, and any words the message must contain. Mimir watches it itself; messages that don’t match cost nothing.</span>}
+        {w.mode === 'github' && <span className="hint">Events like <code>issues.opened</code>, <code>pull_request</code> or <code>push</code> (several with commas; none for any), and <code>repo:owner/name</code>. Point a GitHub webhook at the address shown after saving; other events are taken without a run.</span>}
+        {(w.mode === 'mail' || w.mode === 'slack') && draft.firstOnly !== undefined && (
           <div className="quiet-row">
             <Switch label="Only the first one" checked={draft.firstOnly} onChange={firstOnly => setDraft({ ...draft, firstOnly })} />
-            <div><b>Only the first one</b><span>Runs for the first matching email, then it’s gone (“tell me when it arrives”).</span></div>
+            <div><b>Only the first one</b><span>Runs for the first match, then it’s gone (“tell me when it arrives”).</span></div>
           </div>
         )}
         {w.mode === 'webhook' && <span className="hint">Runs each time its address on your Mimir server is called, with what was sent. After saving, the routine shows the address and its secret.</span>}
@@ -243,8 +251,8 @@ export function RoutinesView({ chatId, bots }: { chatId: number; bots: Bot[] }) 
                   <div>
                     <div className="rt">{when(r)}{r.followup && <span className="badge" title="The bot booked this on its own, to check back. Delete it to cancel.">Follow-up</span>}{r.for_goal && <span className="badge" title="Booked for this chat's goal: it goes when the goal is done or removed">For the goal</span>}{!!r.ends && <span className="badge" title="Its last run is the last one before this; then it’s gone">Until {untilText(r.ends)}</span>}{r.quiet && <span className="badge pending" title="Read-only; speaks up only when something needs your attention">Quiet</span>}{(r.paused || held !== undefined) ? <span className="badge">Paused</span> : r.goal_held && <span className="badge" title="Its goal is paused or done; it runs again when the goal is resumed">Paused (goal)</span>}{r.delivery === 'digest' && <span className="badge" title="Collected into your daily digest">In digest</span>}{r.delivery === 'log' && <span className="badge" title="Not sent; see Activity">Log only</span>}{r.delivery === 'card' && <span className="badge" title="Updates a card pinned at the top of the chat; nothing is sent">On a card</span>}{r.urgent && <span className="badge" title={`Comes through right away if: ${r.urgent}`}>Urgent if…</span>}{r.quiet && r.watch && <span className="badge" title="Mimir looks first and only runs the AI when this changed">Watching {r.watch === 'mail' ? 'mail' : (() => { try { return new URL(r.watch).host } catch { return r.watch } })()}</span>}</div>
                     <div className="rp selectable">{r.prompt}</div>
-                    <div className="rm"><Avatar id={b.id} name={b.name} size={16} still /><span>{b.name}</span><span>·</span><span>{r.paused ? 'Won’t run until you turn it back on' : held !== undefined ? `${pausedText(held)} with ${b.name}; ${r.once ? 'it runs once then' : 'runs in between are skipped, not caught up'}` : r.goal_held ? 'Waits while its goal is paused' : r.once && !r.cron && r.next_fire >= IDLE ? 'Running, or waits for you in Needs you' : r.next_fire >= IDLE ? `${r.cron === 'webhook' ? 'Waits for a call' : r.cron.startsWith('mail:') ? 'Waits for a matching email' : 'No matching event on the calendar this week'}${r.once ? ', then it’s gone' : ''}` : `${r.once ? 'Runs' : 'Next run'} ${ahead(r.next_fire)}${r.once ? ', then it’s gone' : ''}`}</span></div>
-                    {r.cron === 'webhook' && <WebhookAddress chatId={chatId} id={r.id} />}
+                    <div className="rm"><Avatar id={b.id} name={b.name} size={16} still /><span>{b.name}</span><span>·</span><span>{r.paused ? 'Won’t run until you turn it back on' : held !== undefined ? `${pausedText(held)} with ${b.name}; ${r.once ? 'it runs once then' : 'runs in between are skipped, not caught up'}` : r.goal_held ? 'Waits while its goal is paused' : r.once && !r.cron && r.next_fire >= IDLE ? 'Running, or waits for you in Needs you' : r.next_fire >= IDLE ? `${r.cron === 'webhook' ? 'Waits for a call' : r.cron.startsWith('github:') ? 'Waits for a GitHub event' : r.cron.startsWith('mail:') ? 'Waits for a matching email' : r.cron.startsWith('slack:') ? 'Waits for a matching Slack message' : 'No matching event on the calendar this week'}${r.once ? ', then it’s gone' : ''}` : `${r.once ? 'Runs' : 'Next run'} ${ahead(r.next_fire)}${r.once ? ', then it’s gone' : ''}`}</span></div>
+                    {(r.cron === 'webhook' || r.cron.startsWith('github:')) && <WebhookAddress chatId={chatId} id={r.id} />}
                     <RoutineHealth s={stats.data?.find(x => x.id === r.id)} onReset={() => invoke('reset_watch_noise', { chatId, id: r.id }).then(stats.reload, e => setErr(String(e)))} />
                     {rehearsal?.id === r.id && (rehearsal.r ? <RehearsalResult r={rehearsal.r} onClose={() => setRehearsal(null)} /> : <p className="hint">Rehearsing… it runs for real, but anything it would send or change is only described.</p>)}
                   </div>
