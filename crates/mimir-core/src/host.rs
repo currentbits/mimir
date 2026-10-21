@@ -936,7 +936,7 @@ impl Host {
                 "edited in app",
                 arg(a, "supersedes")?,
                 &crate::db::Prov::by("you"),
-            )?),
+            )?.0),
             "suggestions" => ok(self.db.suggestions(&scope(a)?)?),
             // The one-time "get to know me" pass: whether it can run (email or calendar connected) and has; `run` starts it.
             "know_me" => {

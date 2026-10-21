@@ -416,12 +416,17 @@ pub(super) async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<Stri
             // let a page give your memory an end date (and push it out of standing memory).
             let existing = ctx.is_tainted() && ctx.db.entries(&scope)?.iter().any(|e| e.status == "active" && e.title == title && e.body == body);
             let until = until.filter(|_| !existing);
-            let id = ctx.db.store_by(&scope, kind, title, body, src, sup, &prov)?;
+            let (id, new) = ctx.db.store_by(&scope, kind, title, body, src, sup, &prov)?;
             if let Some(until) = until {
                 ctx.db.set_until(&scope, id, until)?;
             }
-            if args["only_me"].as_bool() == Some(true) {
+            // Only a new row: "just for you" on one every bot already has would take it away from the others.
+            if new && args["only_me"].as_bool() == Some(true) {
                 ctx.db.set_for_bot(&scope, id, ctx.bot_id)?;
+            }
+            if !new {
+                let shared = ctx.db.entries(&scope)?.iter().any(|e| e.id == id && e.for_bot == 0);
+                return Ok(format!("already known as #{id} ({})", if shared { "shared" } else { "just for you" }));
             }
             format!("stored #{id}{}", if household { " in the household" } else { "" })
         }
