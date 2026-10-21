@@ -8,6 +8,13 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 - **Telegram groups:** a bot in a group (not a family group) answers only when you @-mention it, reply to one of its
   messages or send a `/command`. Before, with privacy mode off, it answered every message.
 
+### Fixes
+- **Signal and WhatsApp:** replying to an approval card with a number now works after Mimir restarts. Before, the
+  number was taken as a "no" with the number as the reason.
+- **Skill imports:** a skill imported from another agent or a bot file with the name of one you already have (perhaps
+  one all bots share) comes in as "‹name› (imported)" instead of replacing it when you accept. A taught skill that
+  would replace one says so on its card.
+
 ## 0.5.0
 
 ### Talking to your bots
