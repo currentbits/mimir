@@ -245,6 +245,10 @@ async fn channels(bot: &str, ch: crate::runtime::Channels) -> Vec<Check> {
         let r = match crate::whatsapp::WhatsApp::new(&id, &token, &secret) { Ok(c) => within(c.check()).await, Err(e) => Err(e) };
         out.push(("WhatsApp", r, "Check the phone number id and that the access token hasn't expired (a system user's token doesn't)."));
     }
+    if let Some(handle) = ch.imessage {
+        let r = match crate::imessage::IMessage::new(&handle) { Ok(c) => within(c.check()).await, Err(e) => Err(e) };
+        out.push(("iMessage", r, "Give Mimir Full Disk Access (System Settings → Privacy & Security) and check the conversation's number or email."));
+    }
     out.into_iter()
         .map(|(name, r, fix)| match r {
             Ok(me) => ok(format!("{bot}: {name} reaches {me}")),

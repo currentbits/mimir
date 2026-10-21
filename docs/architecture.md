@@ -17,8 +17,8 @@ For contributors: how the pieces fit together.
 |---|---|
 | `db/` | SQLite (one file): memories with FTS5 search and versions, bots, chats, messages (FTS5 too, for `chat_search`), routines, runs, tool calls, approvals, rules, suggestions, skills (versions, uses, proposals by kind), meetings. `mod.rs` holds `Db`, opening and migrations; each area (`memory.rs`, `chats.rs`, `routines.rs`…) has its own `impl Db` block |
 | `host` | `Host::call(cmd, args)`: every command the UI sends; starts and stops each bot's runtime; the secret store |
-| `runtime` | Per-bot channel listeners (Telegram, Slack, Discord, Signal, WhatsApp), the 30 s routine scheduler, approval cards, the daily digest |
-| `telegram`, `slack`, `discord`, `signal`, `whatsapp` | The messaging apps (outbound connections, streaming replies; WhatsApp's messages come in on the server's `/whatsapp` webhook) |
+| `runtime` | Per-bot channel listeners (Telegram, Slack, Discord, Signal, WhatsApp, iMessage), the 30 s routine scheduler, approval cards, the daily digest |
+| `telegram`, `slack`, `discord`, `signal`, `whatsapp`, `imessage` | The messaging apps (outbound connections, streaming replies; WhatsApp's messages come in on the server's `/whatsapp` webhook; iMessage polls this Mac's `chat.db` and sends with AppleScript) |
 | `provider` | AI accounts: starts `claude -p` / `codex exec` / `grok -p`, or calls an OpenAI-compatible API; streams replies |
 | `chatgpt` | Sign in with ChatGPT: OAuth (PKCE, dynamic registration), the plan's tokens, and replies on the Responses API |
 | `grok_plan` | Sign in with your Grok plan: xAI's device-code sign-in, the plan's rotating tokens, used as the `xai` account's key |
@@ -151,6 +151,7 @@ and the data folder in a dialog. Installs from before the rename to Mimir (`~/.b
 | `MIMIR_NPM_REGISTRY`, `MIMIR_PYPI` | npm registry and PyPI base URLs for pinning tool servers' packages (a mirror, or a test fake) |
 | `MIMIR_TELEGRAM_API` | Telegram Bot API base URL (a self-hosted Bot API server, or the test mock) |
 | `MIMIR_SIGNAL_API` | signal-cli-rest-api's address when a bot's page doesn't set one (default `http://127.0.0.1:8081`, as 8080 is `mimir server`'s own) |
+| `MIMIR_IMESSAGE_DB` | A stand-in for `~/Library/Messages/chat.db` (tests) |
 | `MIMIR_WHATSAPP_API` | WhatsApp's Graph API base URL, with its version (default `https://graph.facebook.com/v23.0`; the test fake) |
 | `MIMIR_CHATGPT_AUTH`, `MIMIR_CHATGPT_API` | Sign in with ChatGPT: the sign-in and API base URLs (for the test fake, `scripts/fake-ai.py`) |
 | `MIMIR_CLAUDE_BIN`, `MIMIR_CODEX_BIN`, `MIMIR_GROK_BIN`, `MIMIR_NPX` | Paths to the CLIs, if not on PATH |
