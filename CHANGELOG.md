@@ -2,6 +2,14 @@
 
 What changed for people using Mimir. The newest release is at the top; "Unreleased" is what the next one brings.
 
+## Unreleased
+
+- **Moving from OpenClaw or Hermes:** **Memory → Import → From OpenClaw** now finds a workspace set in
+  `openclaw.json` or `OPENCLAW_WORKSPACE_DIR`, and brings in every profile (`~/.openclaw-<name>`,
+  `~/.hermes/profiles/<name>`) too. Its `SOUL.md` is offered as the bot's role (one click) instead of becoming
+  memories, imported memories say which agent they came from, and a cron job set for another time zone says so on
+  its paused routine. See [Getting started](docs/getting-started.md#moving-from-openclaw-or-hermes).
+
 ## 0.5.0
 
 ### Talking to your bots
