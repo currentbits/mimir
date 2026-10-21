@@ -150,8 +150,12 @@ the meetings list, the quick-ask shortcut, keeping the computer awake.
 `https://<your server>/v1`, the token as its API key, and any model name. It can then ask that bot
 (`POST /v1/chat/completions`, `GET /v1/models`) and do nothing else: the token doesn't open `/api` or any other bot.
 
-The bot answers in its built-in chat, so what the app asked shows up there. Mimir keeps the conversation itself: only
-the last user message of each request counts, and the app's own history is ignored. `"stream": true` gets the whole
+Each token has a chat of its own, listed with your chats as "Chat API: <name>", so what the app asked shows up there.
+It isn't your built-in chat and it isn't private: whoever holds the token, or talks to the speaker that uses it, may not
+be you. So the bot has no email, calendar, meetings or computer there, doesn't see your built-in chat's conversation or
+memories, and a rule said through it ("from now on…") is a suggestion in Memory for you to accept, not saved straight
+away. Mimir keeps the conversation itself: only the last user message of each request counts, and the app's own
+history is ignored. `"stream": true` gets the whole
 reply as one chunk once it's done. Anything the bot needs approved waits in Needs you as usual, so set up such a bot
 with the tools it needs allowed. The token is shown once and only its hash is kept; delete it there to cut the app off,
 and deleting a bot deletes its tokens.

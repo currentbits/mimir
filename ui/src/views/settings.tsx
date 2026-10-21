@@ -255,7 +255,7 @@ function ChatApiSettings() {
     if (await ask(`Delete the token for “${n}”? Whatever uses it stops working.`, 'Delete', true)) invoke('chat_token_delete', { id }).then(tokens.reload, e => setErr(String(e)))
   }
   return (
-    <Group title="Chat API" note={err ? <span className="error">{err}</span> : <>For apps that speak OpenAI’s chat API. Base URL <code className="selectable">{base}</code>; each token reaches one bot, which answers in its built-in chat, and nothing else. Approvals still come here.</>}>
+    <Group title="Chat API" note={err ? <span className="error">{err}</span> : <>For apps that speak OpenAI’s chat API. Base URL <code className="selectable">{base}</code>; each token reaches one bot, in a chat of its own (no email, calendar, meetings or computer there), and nothing else. Approvals still come here.</>}>
       {(tokens.data ?? []).map(t => (
         <Row key={t.id} icon={<Icon name="key" size={15} />} title={t.name} desc={bots.find(b => b.id === t.bot_id)?.name}>
           <button type="button" className="btn btn-ghost btn-danger btn-sm" aria-label={`Delete ${t.name}`} onClick={() => remove(t.id, t.name)}><Icon name="trash" size={13} /></button>

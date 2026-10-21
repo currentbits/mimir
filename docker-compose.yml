@@ -55,7 +55,7 @@ services:
   #   image: bbernhard/signal-cli-rest-api:0.101@sha256:2cf09d66a86fdd210e42ee91662216364acc27da1163a8c44167a77ea3a6559a
   #   restart: unless-stopped
   #   environment: {MODE: json-rpc}
-  #   ports: ["127.0.0.1:8081:8080"]
+  #   ports: ["127.0.0.1:8081:8080"]          # for linking the number only: comment out again once it's linked
   #   volumes: [signal-data:/home/.local/share/signal-cli]
   #   networks: [signal]
 
