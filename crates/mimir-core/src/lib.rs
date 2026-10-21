@@ -1558,12 +1558,15 @@ mod tests {
             &fake,
             format!(
                 r#"#!/bin/sh
+[ "$1" = --version ] && {{ echo "grok 1.0.62 (fake) [stable]"; exit 0; }}
 d="{}/$(ls "{0}" | wc -l | tr -d ' ')"; mkdir -p "$d"
+printf %s "${{CLAUDE_CODE_FORK_SUBAGENT:-}}" > "$d/fork"
 while [ $# -gt 0 ]; do
   case "$1" in
     --append-system-prompt-file) cp "$2" "$d/system"; shift;;
     --prompt-file) cp "$2" "$d/user"; shift;;
     --resume) printf %s "$2" > "$d/resume"; shift;;
+    --background-wait-timeout=*) printf %s "${{1#*=}}" > "$d/wait";;
   esac
   shift
 done
@@ -1600,6 +1603,9 @@ echo '{{"type":"result","result":"ok","session_id":"s1","usage":{{"input_tokens"
             let first = say("hello").await;
             assert!(read(first, "system").contains("Zebrafish") && read(first, "resume").is_empty(), "{kind}: {}", read(first, "system"));
             assert!(read(first, "user").contains("Now: ") && !read(first, "system").contains("Now: "), "{kind}: the time is in the message");
+            // #302: grok's wait for background work is bounded by the turn's; claude doesn't fork subagents.
+            let (wait, fork) = if kind == "grok" { ("600", "") } else { ("", "0") };
+            assert_eq!((read(first, "wait").as_str(), read(first, "fork").as_str()), (wait, fork), "{kind}");
             let same = say("and again").await;
             assert_eq!(read(same, "resume"), "s1", "{kind}");
             assert!(!read(same, "user").contains("instructions_update"), "{kind}: unchanged instructions aren't sent again");

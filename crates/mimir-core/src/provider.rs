@@ -315,6 +315,8 @@ async fn claude(ctx: &ToolCtx, home: &PathBuf, model: Option<&str>, system: &str
         .args(["--allowedTools", &if ctx.images.is_empty() { "mcp__mimir,WebSearch".to_string() } else { format!("mcp__mimir,WebSearch,Read(/{}/**)", home.join("media").display()) }])
         // Our tools can legitimately take minutes (waiting on an approval, a handed-over task).
         .env("MCP_TOOL_TIMEOUT", (TURN_TIMEOUT.as_millis() as u64).to_string())
+        // No fork subagents (on by default since 2.1.302): one process per turn, and the turn's usage is what it shows.
+        .env("CLAUDE_CODE_FORK_SUBAGENT", "0")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -571,6 +573,9 @@ async fn grok_turn(ctx: &ToolCtx, home: &std::path::Path, model: Option<&str>, s
     if let Some(s) = session {
         cmd.args(["--resume", s]);
     }
+    if grok_bounds_background(home).await {
+        cmd.arg(format!("--background-wait-timeout={}", TURN_TIMEOUT.as_secs()));
+    }
     let mut child = cmd.spawn().context("failed to start `grok` — is Grok Build installed?")?;
     let mut lines = tokio::io::BufReader::new(child.stdout.take().context("no stdout")?).lines();
     // Read stderr alongside stdout: a chatty grok must never block on a full pipe.
@@ -626,6 +631,21 @@ async fn grok_turn(ctx: &ToolCtx, home: &std::path::Path, model: Option<&str>, s
         bail!("grok error: {detail}");
     }
     Ok(Ok(Reply { text: v["result"].as_str().unwrap_or("").to_string(), session: sid, usage: claude_usage(&v) }))
+}
+
+/// Since 1.0.62 `grok -p` waits for background work after the turn (on an active goal, without limit) unless
+/// --background-wait-timeout bounds it. Older versions refuse the flag, so ask which this one is.
+async fn grok_bounds_background(home: &std::path::Path) -> bool {
+    let mut c = grok_cmd(home);
+    c.arg("--version").stdout(Stdio::piped()).stderr(Stdio::null());
+    let out = tokio::time::timeout(Duration::from_secs(15), c.output()).await.ok().and_then(Result::ok);
+    out.is_some_and(|o| grok_at_least(&String::from_utf8_lossy(&o.stdout), &[1, 0, 62]))
+}
+
+/// `grok --version` prints "grok 1.0.62 (1474f9cbdd91) [stable]".
+fn grok_at_least(version: &str, min: &[u32]) -> bool {
+    let v: Vec<u32> = version.split_whitespace().nth(1).unwrap_or("").split('.').map_while(|n| n.parse().ok()).collect();
+    v.as_slice() >= min
 }
 
 /// Fail closed on grok's toolset, one stream line at a time: grok offers every tool it has (shell, files) when it
@@ -1671,6 +1691,13 @@ fi
         on_claude_event(42, 9, &json!({"type":"message_start"}));
         assert_eq!(crate::live::get(42, 9).as_deref(), Some(""), "a new message replaces the old text");
         crate::live::end(42, 9);
+    }
+
+    #[test]
+    fn grok_version_gates_the_background_wait() {
+        let at = |v: &str| grok_at_least(v, &[1, 0, 62]);
+        assert!(at("grok 1.0.62 (1474f9cbdd91) [stable]") && at("grok 1.1.0 (x)") && at("grok 2"));
+        assert!(!at("grok 1.0.61 (x) [stable]") && !at("grok 1.0.9") && !at("") && !at("not grok"));
     }
 
     #[test]

@@ -35,12 +35,15 @@ set up Brave Search or your own SearXNG once in Settings → Web search, and eve
   Since October 7, 2026, Max and Team plans also come with [monthly API credits](https://support.claude.com/en/articles/17154008).
   They pay only for use through an API key from the Claude Console organisation linked to your plan, never for the
   Claude sign-in bots use here; to spend them, add that key as an *API key* account.
+  Claude Code's fork subagents (on by default since 2.1.302) stay off for bots: each reply is one `claude` process,
+  so its usage stays what one turn costs and nothing keeps running after the answer.
 - **Grok**: Settings → AI keys → *Sign in to Grok* (a device code). Mimir keeps that login in its own Grok home
   (`~/.mimir/grok`), so your personal Grok plugins, hooks and tool servers never load into a bot, and neither do
   your Claude or Cursor settings. Grok's own memory and `/goal` stay off, so bots can't read each other's notes and
   incognito chats leave nothing behind. A message that starts with `/` reaches the bot as written; Grok doesn't run
   it as one of its commands. Bots on Grok search the web, but not X: Grok Build can't yet turn on X search without
-  also turning on its shell and file tools.
+  also turning on its shell and file tools. On Grok Build 1.0.62 and later, a run waits at most 10 minutes (a turn's
+  limit) for background work after the answer, rather than until an open goal ends.
   Plans: since October 2026 Grok comes with [The X Subscription](https://x.ai/news/x-subscription) (Free, Plus,
   Premium, Super, Ultra). Any of them can sign in, but Free and Plus allow little use; Premium ($30 a month, with
   SuperGrok's and X Premium+'s benefits) or higher suits bots that run all day. SuperGrok and X Premium+ plans you
