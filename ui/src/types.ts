@@ -40,7 +40,7 @@ export type Account = { installed: boolean; signed_in?: boolean; version?: strin
 
 export type Model = { id: string; tools: boolean | null; name?: string }
 
-export type Hold = { key: string; bot_id: number; routine_id: number | null; routine?: string | null; until: number; why: string; cap: boolean }
+export type Hold = { key: string; bot_id: number; routine_id: number | null; routine?: string | null; person?: string | null; until: number; why: string; cap: boolean }
 
 /** A chat's goal: one lasting objective its bot works on until it's done. */
 export type Goal = { id: number; bot_id: number; chat_id: number; text: string; done_when: string; status: 'active' | 'paused' | 'blocked' | 'done'; progress: string; why: string; budget: number; spent: number; tainted: boolean; updated_at: number }

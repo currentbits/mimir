@@ -1590,11 +1590,12 @@ impl Host {
                     "approvals": self.db.approvals_pending()?,
                     "missed": self.db.approvals_missed(now - 86400)?,
                     "failed": self.db.runs_failed(now - 7 * 86400)?,
-                    // Routines waiting: for a usage limit to reset, or for tomorrow after a daily cap.
-                    // A bot running on its fallback account isn't waiting.
-                    "holds": self.db.holds(now)?.into_iter().filter(|(_, bot, routine, _)| routine.is_some() || !self.db.on_fallback(*bot, now).is_ok_and(|f| f.is_some())).map(|(key, bot, routine, h)| {
+                    // Routines waiting: for a usage limit to reset, or for tomorrow after a daily cap; and people over their
+                    // allowance. A bot running on its fallback account isn't waiting.
+                    "holds": self.db.holds(now)?.into_iter().filter(|(key, bot, routine, _)| routine.is_some() || key.starts_with("hold:person:") || !self.db.on_fallback(*bot, now).is_ok_and(|f| f.is_some())).map(|(key, bot, routine, h)| {
                         let prompt = routine.and_then(|id| self.db.routine_prompt(id).ok().flatten()).map(|p| crate::tools::truncate(&p, 60));
-                        json!({"key": key, "bot_id": bot, "routine_id": routine, "routine": prompt, "until": h.until, "why": h.why, "cap": h.waive.is_some()})
+                        let person = key.strip_prefix("hold:person:").and_then(|p| p.parse().ok()).map(|p| self.db.chat_title(p).unwrap_or_default());
+                        json!({"key": key, "bot_id": bot, "routine_id": routine, "routine": prompt, "person": person, "until": h.until, "why": h.why, "cap": h.waive.is_some()})
                     }).collect::<Vec<_>>(),
                     "suggestions": counts,
                     // Goals waiting on the person: over their budget (go on?), or blocked on them.
@@ -1657,14 +1658,14 @@ impl Host {
             }
             // Daily token caps (get without values, set with them; 0 or null = no cap).
             "caps" => {
-                for (k, name) in crate::db::CAPS.iter().zip(["routine", "bot", "day"]) {
+                for (k, name) in crate::db::CAPS.iter().zip(["routine", "bot", "day", "person"]) {
                     if let Some(v) = a.get(name).filter(|v| !v.is_null()) {
                         let n = v.as_i64().filter(|n| *n >= 0).context("a cap is a number of tokens")?;
                         self.db.set_setting(k, &n.to_string())?;
                     }
                 }
-                let [routine, bot, day] = self.db.caps()?;
-                ok(json!({"routine": routine, "bot": bot, "day": day}))
+                let [routine, bot, day, person] = self.db.caps()?;
+                ok(json!({"routine": routine, "bot": bot, "day": day, "person": person}))
             }
             // Where people reach this server's web app (the app tells it on load): links in messages, like to the live
             // computer when a bot needs you there.
