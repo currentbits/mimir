@@ -128,12 +128,12 @@ pub fn now() -> i64 {
 
 /// Turn free text into an FTS5 OR-query of quoted prefix terms (no user syntax reaches FTS).
 fn fts_query(q: &str) -> Option<String> {
-    let terms: Vec<String> = q
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|w| w.chars().count() >= 2)
-        .take(16)
-        .map(|w| format!("\"{}\"*", w.to_lowercase()))
-        .collect();
+    // The 16 longest distinct words, so a long message isn't searched on its first 16 alone (long words carry the meaning).
+    let mut words: Vec<String> = q.split(|c: char| !c.is_alphanumeric()).filter(|w| w.chars().count() >= 2).map(str::to_lowercase).collect();
+    words.sort_by_key(|w| std::cmp::Reverse(w.chars().count()));
+    let mut seen = std::collections::HashSet::new();
+    words.retain(|w| seen.insert(w.clone()));
+    let terms: Vec<String> = words.iter().take(16).map(|w| format!("\"{w}\"*")).collect();
     (!terms.is_empty()).then(|| terms.join(" OR "))
 }
 
@@ -796,6 +796,38 @@ mod tests {
         d.tool_card_add(1, 1, 1, "demo__show", "<p>y</p>", "", &serde_json::json!({}), &serde_json::json!({})).unwrap();
         d.erase(s, secret).unwrap();
         assert_eq!(d.tool_cards(1).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn fts_query_keeps_the_longest_distinct_words() {
+        assert_eq!(fts_query("a to To tO"), Some("\"to\"*".into()), "one-letter words out, case folded, deduped");
+        let long = format!("{} appointment", "ab ".repeat(30));
+        assert_eq!(fts_query(&long).unwrap().split(" OR ").next(), Some("\"appointment\"*"), "a word after the first 16 still counts");
+        assert_eq!(fts_query(&long).unwrap().split(" OR ").count(), 2);
+        assert_eq!(fts_query("?!"), None);
+    }
+
+    #[test]
+    fn an_old_exact_match_survives_a_fresh_partial_one() {
+        let d = db();
+        let s = "chat:1";
+        let old = d.store(s, "knowledge", "Dentist", "Dentist is Dr Lee on Long Street", "", None).unwrap();
+        d.c().execute("UPDATE entries SET created_at = ?1 WHERE id = ?2", params![now() - 730 * 86400, old]).unwrap();
+        d.store(s, "knowledge", "Dentistry", "Read an article about dentistry", "", None).unwrap();
+        assert!(d.search(s, 0, "dentist lee long street", 5).unwrap().iter().any(|e| e.id == old));
+    }
+
+    #[test]
+    fn recall_drops_unconfirmed_before_the_limit() {
+        let d = db();
+        let s = "chat:1";
+        let tainted = Prov { tainted: true, ..Prov::by("bot") };
+        for i in 0..3 {
+            d.store_by(s, "knowledge", "Padel", &format!("Padel club {i} padel padel"), "", None, &tainted).unwrap();
+        }
+        let clean = d.store(s, "knowledge", "Sport", "Plays padel on Tuesdays", "", None).unwrap();
+        assert!(d.search(s, 0, "padel", 6).unwrap().len() == 4, "search still finds them all");
+        assert_eq!(d.recall(s, 0, "padel", 1).unwrap().iter().map(|e| e.id).collect::<Vec<_>>(), vec![clean]);
     }
 
     #[test]
