@@ -294,6 +294,8 @@ impl Db {
             "DELETE FROM settings WHERE key LIKE 'seen:%' AND key LIKE (SELECT 'seen:%:' || channel || ':' || external FROM chats WHERE chat_id=?1)",
             [chat],
         )?;
+        // Messages still waiting to go out would otherwise reach whoever has that chat next.
+        self.c().execute("DELETE FROM outbox WHERE chat_id=?1", [chat])?;
         self.c().execute("DELETE FROM chats WHERE chat_id=?1", [chat])?;
         Ok(())
     }

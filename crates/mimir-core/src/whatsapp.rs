@@ -324,6 +324,12 @@ impl WhatsApp {
         {
             return choose(me, core, chat, from, &data).await;
         }
+        if m.file.is_none()
+            && let Some(card) = m.quoted.as_deref()
+            && let Some(data) = core.card_pick(me, chat, card, &m.text)?
+        {
+            return choose(me, core, chat, from, &data).await;
+        }
         // A reply to a card waiting for an answer, not a number: no, and why.
         if m.file.is_none()
             && let Some(card) = m.quoted.as_deref()
