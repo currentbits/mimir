@@ -56,9 +56,11 @@ pub fn secret_set(name: &str, value: &str) -> Result<()> {
 }
 
 /// Accounts that take an API key: (secret name, env var fallback).
-/// (`brave` is Brave Search's key, for the bots' web_search, and `x` an X API bearer token, for x_search: not AI accounts.)
-const KEYED: [(&str, &str, &str); 5] = [
+/// (`brave` is Brave Search's key, for the bots' web_search, and `x` an X API bearer token, for x_search: not AI accounts.
+/// `anthropic` isn't an account of its own either: Claude bots go on to it when the plan says no, see provider::api_credits.)
+const KEYED: [(&str, &str, &str); 6] = [
     ("openai", "openai_api_key", "OPENAI_API_KEY"),
+    ("anthropic", "anthropic_api_key", "ANTHROPIC_API_KEY"),
     ("openrouter", OPENROUTER_KEY, "OPENROUTER_API_KEY"),
     ("xai", "xai_api_key", "XAI_API_KEY"),
     ("brave", "brave_api_key", "BRAVE_API_KEY"),
@@ -200,11 +202,26 @@ fn set_chat_tokens(db: &Db, t: &[ChatToken]) -> Result<()> {
     db.set_setting(CHAT_TOKENS, &serde_json::to_string(t)?)
 }
 
-/// The bot a chat API token reaches, if it's one of ours (and the bot still exists).
-pub fn chat_token_bot(db: &Db, token: &str) -> Option<i64> {
+/// Chat API chats: one per token, ids from a range no other chat uses (Telegram's are below 2^52, topics from 8e15,
+/// other apps from 9e15). A token id is 12 hex digits, so they fit.
+const API_CHATS: i64 = 7_000_000_000_000_000;
+
+/// The bot a chat API token reaches, if it's one of ours (and the bot still exists), and the token's own chat. Not
+/// the built-in chat, and not a private one: whoever holds a token (or talks to the speaker that uses it) isn't
+/// necessarily you, so no email, calendar, meetings or computer, and nothing of the app's conversation.
+pub fn chat_token_bot(db: &Db, token: &str) -> Option<(i64, i64)> {
     let h = token_hash(token);
-    let bot = chat_tokens(db).ok()?.into_iter().find(|t| t.hash == h)?.bot_id;
-    db.bot(bot).ok().map(|_| bot)
+    let t = chat_tokens(db).ok()?.into_iter().find(|t| t.hash == h)?;
+    db.bot(t.bot_id).ok()?;
+    let chat = API_CHATS + i64::from_str_radix(&t.id, 16).ok()?;
+    // Listed with the chats (its own channel, so it's never taken for a Telegram one), to see what it was asked.
+    db.pair_api(chat, &t.id, &format!("Chat API: {}", t.name)).ok()?;
+    Some((t.bot_id, chat))
+}
+
+/// A chat API token's chat: what's said there isn't taken as your own words.
+pub fn is_api_chat(chat: i64) -> bool {
+    (API_CHATS..API_CHATS + 1_000_000_000_000_000).contains(&chat)
 }
 
 impl Host {
@@ -342,6 +359,20 @@ impl Host {
         if running.get(&key).is_some_and(|(h, _)| h.id() == task) {
             running.remove(&key);
         }
+    }
+
+    /// "" off, "limit" once the plan says no, "routines" that and its routines from the start (get without `mode`).
+    // ponytail: out of `call`, whose one stack frame holds every arm's locals and is at Windows' limit in debug tests
+    fn api_credits(&self, a: &Value) -> Result<Value> {
+        let key = format!("api_credits:{}", arg::<i64>(a, "bot_id")?);
+        match arg::<Option<String>>(a, "mode")?.as_deref() {
+            None => {}
+            Some("") => self.db.set_setting(&key, "")?,
+            Some(m @ ("limit" | "routines")) if api_key("anthropic").is_some() => self.db.set_setting(&key, m)?,
+            Some("limit" | "routines") => bail!("add your Anthropic API key in Settings → AI keys first"),
+            Some(m) => bail!("unknown mode '{m}'"),
+        }
+        ok(self.db.setting(&key)?.unwrap_or_default())
     }
 
     pub async fn call(&self, cmd: &str, a: &Value) -> Result<Value> {
@@ -697,6 +728,8 @@ impl Host {
                 }
                 ok(self.db.fallback(bot)?.map(|(provider, model)| json!({"provider": provider, "model": model})))
             }
+            // A Claude bot on the Anthropic API key (the monthly API credits): see api_credits.
+            "api_credits" => self.api_credits(a),
             // The request-match check: off until false asks are measured (scripts/e2e-flows.py turns it on).
             "set_ask_check" => ok(self.db.set_setting("ask_check", if arg(a, "on")? { "on" } else { "off" })?),
             "set_telegram_topics" => ok(self.db.set_setting(&format!("telegram_topics:{}", arg::<i64>(a, "bot_id")?), if arg(a, "on")? { "on" } else { "off" })?),
@@ -1210,7 +1243,7 @@ impl Host {
             // A webhook routine's address (on this server) and the secret its caller signs with.
             "webhook" => {
                 let (chat, id): (i64, i64) = (arg(a, "chat_id")?, arg(a, "id")?);
-                self.db.routines(chat)?.into_iter().find(|r| r.id == id && r.cron == "webhook").context("no such webhook routine")?;
+                self.db.routines(chat)?.into_iter().find(|r| r.id == id && crate::events::is_hook(&r.cron)).context("no such webhook routine")?;
                 ok(json!({"path": format!("/hook/{id}"), "secret": crate::events::webhook_secret(&self.db, id)?}))
             }
             // Run a routine now, as a test: the result lands in the chat whatever its delivery setting.
@@ -1664,6 +1697,11 @@ impl Host {
             }
             "send_local" => {
                 let bot: i64 = arg(a, "bot_id")?;
+                // The built-in chat, or a chat API token's own (the server passes it).
+                let chat = arg::<Option<i64>>(a, "chat_id")?.unwrap_or(LOCAL_CHAT);
+                if chat != LOCAL_CHAT && !is_api_chat(chat) {
+                    bail!("send_local answers in the built-in chat or a chat API one");
+                }
                 let provider = self.provider(bot)?;
                 let text: String = arg(a, "text")?;
                 // Photos pasted or dropped into the app (saved by save_media); only files inside media/ are accepted.
@@ -1679,14 +1717,14 @@ impl Host {
                 // Run as a task so Stop can cancel it (dropping it kills the CLI process too).
                 let (db, asked) = (self.db.clone(), text.clone());
                 let task = tokio::spawn(async move {
-                    let mut ctx = ToolCtx::new(db, bot, LOCAL_CHAT);
+                    let mut ctx = ToolCtx::new(db, bot, chat);
                     ctx.images = images;
                     turn(&provider, &ctx, Trigger::Message(&text)).await
                 });
                 let me = task.id();
-                self.running.lock().unwrap().insert((bot, LOCAL_CHAT), (task.abort_handle(), asked));
+                self.running.lock().unwrap().insert((bot, chat), (task.abort_handle(), asked));
                 let out = task.await;
-                self.finished((bot, LOCAL_CHAT), me);
+                self.finished((bot, chat), me);
                 match out {
                     Ok(reply) => ok(reply?),
                     Err(e) if e.is_cancelled() => bail!("stopped"),
@@ -1949,9 +1987,13 @@ mod tests {
         assert!(host.call("chat_token_add", &json!({"bot_id": 999, "name": "Shortcuts"})).await.is_err());
         let token = host.call("chat_token_add", &json!({"bot_id": bot, "name": "Shortcuts"})).await.unwrap();
         let token = token.as_str().unwrap();
-        assert_eq!(chat_token_bot(&host.db, token), Some(bot));
-        assert_eq!(chat_token_bot(&host.db, &token[..token.len() - 1]), None);
         let list = host.call("chat_tokens", &json!({})).await.unwrap();
+        // Its own chat, not the built-in one, and listed with the chats.
+        let chat = API_CHATS + i64::from_str_radix(list[0]["id"].as_str().unwrap(), 16).unwrap();
+        assert_eq!(chat_token_bot(&host.db, token), Some((bot, chat)));
+        assert!(is_api_chat(chat) && !host.db.chat_private(chat));
+        assert!(host.db.chats().unwrap().iter().any(|c| c.chat_id == chat && c.channel == "api" && c.title == "Chat API: Shortcuts"));
+        assert_eq!(chat_token_bot(&host.db, &token[..token.len() - 1]), None);
         assert_eq!((list[0]["name"].as_str(), list[0]["bot_id"].as_i64(), list[0].get("hash")), (Some("Shortcuts"), Some(bot), None));
         assert!(!list.to_string().contains(token));
         let other = host.call("chat_token_add", &json!({"bot_id": 1, "name": "HA"})).await.unwrap();
@@ -1963,7 +2005,7 @@ mod tests {
         assert_eq!(host.call("bots", &json!({})).await.unwrap().as_array().unwrap().len(), 1);
         let list = host.call("chat_tokens", &json!({})).await.unwrap();
         assert_eq!(list.as_array().unwrap().len(), 1, "the deleted bot's token went with it");
-        assert_eq!(chat_token_bot(&host.db, other.as_str().unwrap()), Some(1));
+        assert_eq!(chat_token_bot(&host.db, other.as_str().unwrap()).map(|t| t.0), Some(1));
         host.stop_all();
     }
 }

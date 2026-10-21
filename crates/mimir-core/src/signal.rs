@@ -204,7 +204,7 @@ impl Signal {
     /// Sends a message (and attachments as data: URIs); its Signal timestamp, which is its id.
     async fn send(&self, to: &str, text: &str, files: Vec<String>) -> Result<String> {
         let body = json!({"number": self.number, "recipients": [to], "message": text, "base64_attachments": files});
-        let resp = self.http.post(format!("{}/v2/send", self.api)).json(&body).send().await?;
+        let resp = self.http.post(format!("{}/v2/send", self.api)).json(&body).send().await.map_err(|e| e.without_url())?;
         let status = resp.status();
         let text = resp.text().await?;
         if !status.is_success() {
@@ -272,9 +272,10 @@ impl Signal {
 
     /// signal-cli-rest-api answers, and has the bot's number linked: the number.
     pub(crate) async fn check(&self) -> Result<String> {
-        let accounts: Value = self.http.get(format!("{}/v1/accounts", self.api)).send().await.with_context(|| format!("can't reach signal-cli-rest-api at {}", self.api))?.json().await?;
+        let api = shown(&self.api);
+        let accounts: Value = self.http.get(format!("{}/v1/accounts", self.api)).send().await.map_err(|e| e.without_url()).with_context(|| format!("can't reach signal-cli-rest-api at {api}"))?.json().await.map_err(|e| e.without_url())?;
         if !accounts.as_array().is_some_and(|a| a.iter().any(|n| n == self.number.as_str())) {
-            bail!("{} isn't linked to signal-cli yet: open {}/v1/qrcodelink?device_name=mimir and scan it in Signal (Settings → Linked devices)", self.number, self.api);
+            bail!("{} isn't linked to signal-cli yet: open {api}/v1/qrcodelink?device_name=mimir and scan it in Signal (Settings → Linked devices)", self.number);
         }
         Ok(self.number.clone())
     }
@@ -298,6 +299,13 @@ impl Signal {
                     let v: Value = serde_json::from_str(&text).unwrap_or_default();
                     if let Err(e) = self.on_message(me, &core, &v["envelope"]).await {
                         eprintln!("signal message: {e:#}");
+                    }
+                    // signal-cli keeps every attachment until deleted: whatever was fetched (and any envelope ignored,
+                    // a stranger's, a group's, one too big) goes now, not lingering past Mimir's own media cleanup.
+                    for id in attachment_ids(&v["envelope"]) {
+                        if let Err(e) = self.forget(&id).await {
+                            eprintln!("signal: deleting attachment: {e:#}");
+                        }
                     }
                 }
             }
@@ -332,12 +340,50 @@ impl Signal {
         core.incoming(me, chat, from, format!("Signal {}", m.name).trim_end(), &m.text, m.sent).await
     }
 
-    /// An attachment someone sent, as signal-cli saved it.
-    async fn download(&self, id: String) -> Result<Vec<u8>> {
+    fn attachment(&self, id: &str) -> Result<String> {
         if id.is_empty() || id.contains(['/', '\\', '?', '#']) || id.contains("..") {
             bail!("that isn't a Signal attachment");
         }
-        Ok(self.http.get(format!("{}/v1/attachments/{id}", self.api)).send().await?.error_for_status()?.bytes().await?.to_vec())
+        Ok(format!("{}/v1/attachments/{id}", self.api))
+    }
+
+    /// An attachment someone sent, as signal-cli saved it; at most MAX_FILE, whatever size the sender claimed.
+    async fn download(&self, id: String) -> Result<Vec<u8>> {
+        let mut resp = self.http.get(self.attachment(&id)?).send().await.and_then(|r| r.error_for_status()).map_err(|e| e.without_url())?;
+        let mut bytes = vec![];
+        while let Some(c) = resp.chunk().await.map_err(|e| e.without_url())? {
+            bytes.extend_from_slice(&c);
+            if bytes.len() as u64 > crate::runtime::MAX_FILE {
+                bail!("it's over 20 MB");
+            }
+        }
+        Ok(bytes)
+    }
+
+    async fn forget(&self, id: &str) -> Result<()> {
+        self.http.delete(self.attachment(id)?).send().await.and_then(|r| r.error_for_status()).map_err(|e| e.without_url())?;
+        Ok(())
+    }
+}
+
+/// Every attachment signal-cli saved for an envelope: a message's, an edit's, or one the bot's phone sent.
+fn attachment_ids(env: &Value) -> Vec<String> {
+    [&env["dataMessage"], &env["editMessage"]["dataMessage"], &env["syncMessage"]["sentMessage"]]
+        .into_iter()
+        .filter_map(|d| d["attachments"].as_array())
+        .flatten()
+        .filter_map(|a| a["id"].as_str().map(String::from))
+        .collect()
+}
+
+/// signal-cli-rest-api's address for errors and the bot's status: without any user:password in it.
+fn shown(api: &str) -> String {
+    match url::Url::parse(api) {
+        Ok(mut u) if u.has_authority() => {
+            let _ = (u.set_username(""), u.set_password(None));
+            u.as_str().trim_end_matches('/').into()
+        }
+        _ => api.into(),
     }
 }
 
@@ -418,5 +464,19 @@ mod tests {
         post("300", false, vec!["tp:a:0".into()]);
         post("301", false, vec![]);
         assert_eq!(s.picks.picked("u-1", "1", Some("300")), None);
+    }
+
+    #[test]
+    fn every_attachment_is_cleaned_up_and_credentials_stay_out_of_errors() {
+        // A group's photo is ignored by message_of, but signal-cli saved it all the same.
+        let group = json!({"dataMessage": {"groupInfo": {}, "attachments": [{"id": "a.jpg"}, {"id": "b.pdf"}]}});
+        assert_eq!(attachment_ids(&group), ["a.jpg", "b.pdf"]);
+        let edit = json!({"editMessage": {"dataMessage": {"attachments": [{"id": "c"}]}}});
+        let sync = json!({"syncMessage": {"sentMessage": {"attachments": [{"id": "d"}]}}});
+        assert_eq!((attachment_ids(&edit), attachment_ids(&sync)), (vec!["c".to_string()], vec!["d".to_string()]));
+        assert!(attachment_ids(&json!({"receiptMessage": {}})).is_empty());
+
+        assert_eq!(shown("https://user:pass@signal.example.com/api"), "https://signal.example.com/api");
+        assert_eq!(shown("http://127.0.0.1:8081"), "http://127.0.0.1:8081");
     }
 }

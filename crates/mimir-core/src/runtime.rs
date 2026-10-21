@@ -592,7 +592,7 @@ pub(crate) struct File {
 }
 
 /// The most a file may be for the bot to fetch it (Telegram's cap for bots, used for every app).
-const MAX_FILE: u64 = 20_000_000;
+pub(crate) const MAX_FILE: u64 = 20_000_000;
 
 /// Messages sent while Mimir was away are fetched on reconnect if they're at most this old.
 pub(crate) const CATCH_UP_SECS: i64 = 86_400;
@@ -839,6 +839,15 @@ impl Core {
         }
         let _ = self.db.set_setting(&format!("seen:{}:{}:{ext}", self.bot, chan.kind()), &at.to_string());
         true
+    }
+
+    /// Does a `slack:` routine of this bot wait for a channel message? Then `slack_said` with each one.
+    pub(crate) fn slack_waits(&self) -> bool {
+        crate::events::slack_waits(&self.db, self.bot)
+    }
+
+    pub(crate) fn slack_said(&self, channel: &[String], from: &[String], text: &str) {
+        crate::events::slack_said(&self.db, self.bot, channel, from, text)
     }
 
     /// Is this the person this paired chat answers? (For bookkeeping that should only follow them, like which message

@@ -330,6 +330,7 @@ function Fallback({ bot, onErr }: { bot: Bot; onErr: (e: string) => void }) {
     <Group title="When it hits a usage limit" note={PAID.includes(fb.provider)
       ? 'This account bills per token: routines that run on it while your plan is at its limit cost money. Daily caps in Settings → Limits still apply.'
       : 'Routines run on the fallback until your plan’s limit resets, then on the bot’s own account again. The run log says which ran there. Daily caps still apply.'}>
+      {bot.provider === 'claude' && <ApiCredits bot={bot} onErr={onErr} />}
       <div className="row-block">
         <div className="editor" style={{ margin: 0 }}>
           <div className="er" style={{ alignItems: 'flex-start' }}>
@@ -345,6 +346,23 @@ function Fallback({ bot, onErr }: { bot: Bot; onErr: (e: string) => void }) {
         </div>
       </div>
     </Group>
+  )
+}
+
+/** A Claude bot on the Anthropic API key from Settings → AI keys: a Max or Team plan's monthly API credits, which
+ *  stop when they run out rather than bill. The same run goes on there, with its tools and conversation. */
+function ApiCredits({ bot, onErr }: { bot: Bot; onErr: (e: string) => void }) {
+  const mode = useLoad(() => invoke<string>('api_credits', { botId: bot.id }), [bot.id])
+  const set = (m: string) => invoke('api_credits', { botId: bot.id, mode: m }).then(() => mode.reload(), e => onErr(String(e)))
+  return (
+    <Row icon={<Icon name="key" size={15} />} title="Anthropic API key"
+      desc="Your Max or Team plan’s monthly API credits, with the key from your linked Claude Console organisation (Settings → AI keys). When they run out, requests stop: nothing is billed.">
+      <select className="select" aria-label="Anthropic API key" value={mode.data ?? ''} disabled={mode.data === null} onChange={e => set(e.target.value)}>
+        <option value="">Don’t use it</option>
+        <option value="limit">When the plan says no</option>
+        <option value="routines">For routines, and when the plan says no</option>
+      </select>
+    </Row>
   )
 }
 
