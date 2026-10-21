@@ -4,6 +4,10 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 
 ## Unreleased
 
+### Talking to your bots
+- **Telegram groups:** a bot in a group (not a family group) answers only when you @-mention it, reply to one of its
+  messages or send a `/command`. Before, with privacy mode off, it answered every message.
+
 ### Routines
 - **Claude on your monthly API credits:** Max and Team plans include monthly API credits. Save an Anthropic API key
   from your linked Console organisation (Settings → AI keys), and a Claude bot can go on with it when the plan says
