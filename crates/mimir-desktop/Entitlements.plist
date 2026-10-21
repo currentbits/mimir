@@ -6,5 +6,8 @@
        record your side of a call. (The call's other side, the computer's sound, needs no entitlement.) -->
   <key>com.apple.security.device.audio-input</key>
   <true/>
+  <!-- iMessage: replies go out through Messages with AppleScript, which the hardened runtime blocks without this. -->
+  <key>com.apple.security.automation.apple-events</key>
+  <true/>
 </dict>
 </plist>
