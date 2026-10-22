@@ -67,6 +67,10 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
   in git. What you edit, add or delete there waits in Needs you as a suggestion; nothing changes until you accept it.
   Guests' and incognito chats stay out, and files already in the folder are left alone.
 
+### Tools
+- **More tool servers to browse:** Excalidraw (diagrams drawn as a card in the chat), Gamma (presentations, with an
+  API key) and a new Analytics group with Mixpanel, PostHog and Amplitude, under Settings → Tool servers → **Browse**.
+
 ### Safety
 - **Chat API tokens can't read your email:** an app using a [chat API](docs/self-hosting.md) token now talks to the bot
   in a chat of the token's own ("Chat API: Home Assistant"), not your built-in chat. It isn't private, so no email,

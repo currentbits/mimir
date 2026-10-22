@@ -1,7 +1,7 @@
 /** Hosted MCP servers offered with one click under Settings → Tool servers. Each URL is on the company's own domain
  *  (most are also in the official MCP registry under that domain), answers MCP over Streamable HTTP and either needs no
  *  sign-in or offers MCP's sign-in with app registration, so Add just works. `header`: no such sign-in; the person
- *  pastes a token into this header. Checked 2026-10-19. */
+ *  pastes a token into this header. Checked 2026-10-19; Excalidraw, Gamma and the Analytics ones 2026-10-22. */
 export type Listed = { name: string; category: string; desc: string; url: string; header?: string }
 
 // ponytail: a hand-kept list, not the registry: registry search returns lookalikes (third-party "kraken", "ahrefs")
@@ -42,6 +42,12 @@ export const DIRECTORY: Listed[] = [
   { category: 'Files and design', name: 'Miro', desc: 'Boards, sticky notes and diagrams', url: 'https://mcp.miro.com/' },
   { category: 'Files and design', name: 'Webflow', desc: 'Sites, pages and CMS collections', url: 'https://mcp.webflow.com/mcp' },
   { category: 'Files and design', name: 'Wix', desc: 'Your Wix sites, stores and bookings', url: 'https://mcp.wix.com/mcp' },
+  { category: 'Files and design', name: 'Excalidraw', desc: 'Hand-drawn diagrams, drawn as a card in the chat', url: 'https://mcp.excalidraw.com/mcp' },
+  { category: 'Files and design', name: 'Gamma', desc: 'Presentations, documents and web pages. Needs an API key from Gamma’s settings: sk-gamma-…', url: 'https://mcp.gamma.app/mcp', header: 'X-API-KEY' },
+
+  { category: 'Analytics', name: 'Mixpanel', desc: 'Events, funnels, retention and reports', url: 'https://mcp.mixpanel.com/mcp' },
+  { category: 'Analytics', name: 'PostHog', desc: 'Product analytics, feature flags and errors', url: 'https://mcp.posthog.com/mcp' },
+  { category: 'Analytics', name: 'Amplitude', desc: 'Charts, dashboards and experiments', url: 'https://mcp.amplitude.com/mcp' },
 
   { category: 'Developer', name: 'GitHub', desc: 'Repositories, issues and pull requests. Needs a personal access token: Bearer ghp_…', url: 'https://api.githubcopilot.com/mcp/', header: 'Authorization' },
   { category: 'Developer', name: 'GitLab', desc: 'Projects, issues and merge requests', url: 'https://gitlab.com/api/v4/mcp' },
