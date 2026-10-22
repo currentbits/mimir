@@ -16,7 +16,7 @@ pub struct LibrarySkill {
 }
 
 type Entry = (&'static str, &'static str, &'static [&'static str], Option<(&'static str, &'static str)>, &'static str);
-const LIST: [Entry; 18] = [
+const LIST: [Entry; 24] = [
     ("morning-briefing", "Every day", &["memory_search"], Some(("30 7 * * Mon-Fri", "Weekdays at 07:30")), include_str!("../skills/morning-briefing.md")),
     ("inbox-triage", "Every day", &["email_search"], None, include_str!("../skills/inbox-triage.md")),
     ("follow-up-tracker", "Every day", &["memory_search", "chat_search"], Some(("0 9 * * Mon", "Mondays at 09:00")), include_str!("../skills/follow-up-tracker.md")),
@@ -25,12 +25,18 @@ const LIST: [Entry; 18] = [
     ("meeting-follow-up", "Meetings", &["meeting_read"], None, include_str!("../skills/meeting-follow-up.md")),
     ("research-brief", "Research", &["web_fetch"], None, include_str!("../skills/research-brief.md")),
     ("summarize-link", "Research", &["web_fetch"], None, include_str!("../skills/summarize-link.md")),
+    ("deep-research", "Research", &["web_fetch", "file_write"], None, include_str!("../skills/deep-research.md")),
+    ("chart-check", "Research", &["web_fetch"], None, include_str!("../skills/chart-check.md")),
     ("price-watch", "Keeping watch", &["web_fetch", "routine_create"], None, include_str!("../skills/price-watch.md")),
     ("topic-watch", "Keeping watch", &["web_fetch", "routine_create"], None, include_str!("../skills/topic-watch.md")),
     ("write-like-me", "Writing and thinking", &["chat_search"], None, include_str!("../skills/write-like-me.md")),
     ("decision-memo", "Writing and thinking", &[], None, include_str!("../skills/decision-memo.md")),
     ("document-to-actions", "Writing and thinking", &["memory_store"], None, include_str!("../skills/document-to-actions.md")),
+    ("make-it-human", "Writing and thinking", &[], None, include_str!("../skills/make-it-human.md")),
+    ("seo-check", "Writing and thinking", &[], None, include_str!("../skills/seo-check.md")),
+    ("prompt-polish", "Writing and thinking", &[], None, include_str!("../skills/prompt-polish.md")),
     ("trip-planner", "Planning", &["web_fetch"], None, include_str!("../skills/trip-planner.md")),
+    ("landing-page", "Making things", &["web_fetch", "file_write"], None, include_str!("../skills/landing-page.md")),
     ("hire-a-bot", "Your bots", &["bot_create"], None, include_str!("../skills/hire-a-bot.md")),
     ("bot-role-check", "Your bots", &[], None, include_str!("../skills/bot-role-check.md")),
     ("team-check", "Your bots", &["chat_search"], None, include_str!("../skills/team-check.md")),
