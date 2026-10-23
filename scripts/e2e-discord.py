@@ -4,17 +4,16 @@ dedupe of a replayed MESSAGE_CREATE, an approval card answered by a button tap, 
 them into real checks: #375 (a "yes" reply to a card denies it) and #378/#213 (inline handling blocks
 interactions and heartbeats).
 
-    CARGO_TARGET_DIR=/tmp/mimir-d53a cargo build -p mimir   # if the binary isn't already built
+    cargo build -p mimir && cp $CARGO_TARGET_DIR/debug/mimir /tmp/e2e-discord/mimir   # worktrees share the target: copy it out
     python3 scripts/e2e-discord.py /tmp/e2e-discord
 """
-import json, os, re, shutil, sqlite3, subprocess, sys, time, urllib.request
+import json, os, re, sqlite3, subprocess, sys, time, urllib.request
 
 W = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 DIR = sys.argv[1] if len(sys.argv) > 1 else "/tmp/e2e-discord"
 HOME, LOG, BIN, MOCK, AI = f"{DIR}/home", f"{DIR}/calls.jsonl", f"{DIR}/mimir", 18086, 18896
 CHANNEL, USER = "200", "500"
 subprocess.run(["rm", "-rf", HOME, LOG]); os.makedirs(HOME)
-shutil.copy2("/tmp/mimir-d53a/debug/mimir", BIN); os.chmod(BIN, 0o755)
 procs = [subprocess.Popen([sys.executable, f"{W}/scripts/mock-discord.py", str(MOCK), LOG]),
          subprocess.Popen([sys.executable, f"{W}/scripts/fake-ai.py", str(AI)], stdout=open(f"{DIR}/ai.log", "w"))]
 time.sleep(1.5)
