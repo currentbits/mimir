@@ -4,6 +4,7 @@ import React, { type CSSProperties, type ReactNode } from 'react'
 import { AbsoluteFill, Easing, interpolate, random, Sequence, useCurrentFrame, useVideoConfig } from 'remotion'
 import T from './timeline.json'
 import G from './guide.json'
+import A from './ad.json'
 import { traits, type Mood } from '../../ui/src/face-core'
 import { pigment } from '../../ui/src/format'
 import { Icon } from '../../ui/src/ui'
@@ -28,9 +29,10 @@ export const BOT = { ada: 1, researcher: 2, briefer: 3, reviewer: 4, watcher: 6 
 
 // ---------------- the beat clock ----------------
 
-// The film and the guide share one clock: same tempo, and scene ids that don't clash.
-const SCENES = { ...T.scenes, ...G.scenes }
-if (G.bpm !== T.bpm || Object.keys(G.scenes).some((k) => k in T.scenes)) throw new Error('guide.json: same bpm as timeline.json, and its own scene ids')
+// The film, the guide and the ad share one clock: same tempo, and scene ids that don't clash.
+const SCENES = { ...T.scenes, ...G.scenes, ...A.scenes }
+for (const [name, X] of [['guide', G], ['ad', A]] as const)
+  if (X.bpm !== T.bpm || Object.keys(X.scenes).some((k) => k in T.scenes || (X !== G && k in G.scenes))) throw new Error(`${name}.json: same bpm as timeline.json, and its own scene ids`)
 export const BPM = T.bpm
 export type SceneId = keyof typeof SCENES
 export const fpb = (fps: number) => (fps * 60) / BPM
@@ -292,10 +294,10 @@ export function Ripple({ x, y, at, size = 900, rings = 3, color = C.foam, streng
 /** The well behind everything: peat-dark water, light moving on it, old slips of paper at the bottom. */
 export function Well() {
   const frame = useCurrentFrame()
-  const { fps } = useVideoConfig()
+  const { fps, width, height } = useVideoConfig()
   const s = frame / fps
   const slips = Array.from({ length: 16 }, (_, i) => ({
-    x: random(`sx${i}`) * 1920, y: random(`sy${i}`) * 1080, w: 70 + random(`sw${i}`) * 90, r: (random(`sr${i}`) - 0.5) * 50,
+    x: random(`sx${i}`) * width, y: random(`sy${i}`) * height, w: 70 + random(`sw${i}`) * 90, r: (random(`sr${i}`) - 0.5) * 50,
     d: 0.4 + random(`sd${i}`) * 0.6,
   }))
   return (
@@ -320,7 +322,7 @@ export function Grain() {
   return (
     <AbsoluteFill style={{ pointerEvents: 'none' }}>
       <AbsoluteFill style={{ background: 'radial-gradient(ellipse 75% 70% at 50% 46%, transparent 55%, rgba(5,3,2,0.6) 100%)' }} />
-      <svg width="1920" height="1080" style={{ position: 'absolute', inset: 0, opacity: 0.07, mixBlendMode: 'screen' }}>
+      <svg width="100%" height="100%" style={{ position: 'absolute', inset: 0, opacity: 0.07, mixBlendMode: 'screen' }}>
         <filter id="grain"><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" seed={frame % 7} stitchTiles="stitch" /><feColorMatrix type="saturate" values="0" /></filter>
         <rect width="100%" height="100%" filter="url(#grain)" />
       </svg>

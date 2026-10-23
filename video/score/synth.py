@@ -352,7 +352,7 @@ def master(name, pad_curve, arc, gap):
         h = np.vstack([hp(v[c], 150) for c in range(2)])
         return 20 * np.log10(np.sqrt(np.mean(v ** 2)) + 1e-12), 20 * np.log10(np.sqrt(np.mean(h ** 2)) + 1e-12)
     for k, v in [("keys", bus["keys"]), ("pad", padded * 1.4 * duck), ("bass", bus["duck"] * 0.5 * duck), ("kit", bus["kit"]), ("pluck", bus["pluck"] * 2), ("fx", bus["fx"] * 2.2), ("hall", hall * 0.4)]:
-        print(f"{k:5s}", "  ".join(f"{a}-{b}s rms {r:6.1f} hp {h:6.1f}" for a, b in ((10, 28), (50, 70)) for r, h in [level(v, a, b)]))
+        print(f"{k:5s}", "  ".join(f"{a}-{b}s rms {r:6.1f} hp {h:6.1f}" for a, b in ((10, 28), (50, 70)) if b * SR <= N for r, h in [level(v, a, b)]))
     # Loudness for the web: measure (ffmpeg's EBU R128), apply plain gain to -16 LUFS, and catch the few peaks
     # above -2.4 dBFS with a 4 ms lookahead limiter, so the arc stays as written.
     raw, out = ROOT / f"score/{name}.raw.wav", ROOT / f"public/{name}.wav"
