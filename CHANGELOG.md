@@ -2,7 +2,7 @@
 
 What changed for people using Mimir. The newest release is at the top; "Unreleased" is what the next one brings.
 
-## Unreleased
+## 0.6.0
 
 ### Email
 - **Bots say they're an assistant:** an email a bot sends to someone you haven't written to yourself ends with "Sent
@@ -22,8 +22,15 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 - **Import from Codex:** **Memory → Import → From Codex** brings in `~/.codex/AGENTS.md` as memory suggestions and
   your own Codex skills as proposals, under the same rules as Claude Code, Hermes and OpenClaw: outside content,
   nothing active until you accept it.
+- **Memory as files:** **Settings → Memory** can keep your memories as Markdown files too, in a folder you pick: one
+  file per memory, a folder per chat, with frontmatter (type, chat, bot, dates). Open it in Obsidian, grep it, keep it
+  in git. What you edit, add or delete there waits in Needs you as a suggestion; nothing changes until you accept it.
+  Guests' and incognito chats stay out, and files already in the folder are left alone.
 
 ### Talking to your bots
+- **Word, PDF and Excel files from bots:** ask for "the expense report as a spreadsheet" or "this as a PDF" and the bot
+  sends a real file, on every channel. Headings, lists and tables come through; a spreadsheet gets a bold, frozen
+  header row. Files hold text only (no links, macros or formulas), and PDFs print only Latin script for now.
 - **An allowance per person:** Settings → Limits → *Each person* caps what replies to one guest or family member may
   use in a day, in their own chat and a family group together. Over it, they get a short note instead of an answer,
   and Needs you offers **Allow more today**. Your own chats are never capped.
@@ -66,11 +73,12 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
   event filter, like `issues.opened repo:acme/app`. Other events get no run, and the run gets a short summary of the
   event instead of GitHub's raw payload.
 
-### Memory
-- **Memory as files:** **Settings → Memory** can keep your memories as Markdown files too, in a folder you pick: one
-  file per memory, a folder per chat, with frontmatter (type, chat, bot, dates). Open it in Obsidian, grep it, keep it
-  in git. What you edit, add or delete there waits in Needs you as a suggestion; nothing changes until you accept it.
-  Guests' and incognito chats stay out, and files already in the folder are left alone.
+### Tools
+- **More tool servers to browse:** Excalidraw (diagrams drawn as a card in the chat), Gamma (presentations, with an
+  API key) and a new Analytics group with Mixpanel, PostHog and Amplitude, under Settings → Tool servers → **Browse**.
+- **Box, HubSpot, Calendly and Cal.com:** in **Browse** too, with a sign-in that works. Calendly and Cal.com are one
+  click; Box and HubSpot don't let apps register themselves, so their entries say how to make one and ask once for its
+  client id and secret.
 
 ### Safety
 - **Chat API tokens can't read your email:** an app using a [chat API](docs/self-hosting.md) token now talks to the bot
@@ -95,6 +103,13 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 - **Grok and Claude bots:** on Grok Build 1.0.62 and later, a reply no longer waits on grok's background work for
   longer than a turn may take. Claude Code's fork subagents, on by default since 2.1.302, stay off for bots, so a
   reply is one process and its usage is that turn's.
+- **Telegram files:** a photo, voice note or file over 20 MB gets a reply saying so, instead of nothing. Your own
+  photos and files in a group are taken when they're addressed to the bot, like text. Buttons older than 7 days say
+  they've expired. Two files saved in the same second no longer overwrite each other, and a guest-mode reply that's
+  cut short says so.
+- **Signal:** the bot's "I heard" echo or a file upload no longer closes an open question's numbers.
+- **"Just for you" on a shared memory:** saving a memory every bot already has as "just for you" no longer hides it
+  from the other bots.
 
 ## 0.5.0
 

@@ -5,7 +5,7 @@ members = ["crates/mimir-core", "crates/mimir", "crates/mimir-desktop"]
 # The one place the version lives: every crate inherits it, and the desktop app takes it from its crate (tauri.conf.json
 # has none). The release workflow checks the tag against it.
 [workspace.package]
-version = "0.5.0"
+version = "0.6.0"
 
 [profile.release]
 strip = true
