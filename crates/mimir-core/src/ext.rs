@@ -258,7 +258,8 @@ fn well_known(base: &url::Url, name: &str) -> String {
 /// Begin signing in to a remote server (one that answered 401): find its authorization server from the server's
 /// metadata, register Mimir as an app there (dynamic client registration), and return the address to open.
 /// `listen`: the browser comes back to this computer (desktop); else the person pastes the address (a server).
-pub async fn sign_in(conf: ServerConf, listen: bool) -> Result<String> {
+/// `client`: (client id, secret) of an app the person registered there, for a service that doesn't register apps.
+pub async fn sign_in(conf: ServerConf, listen: bool, client: Option<(String, Option<String>)>) -> Result<String> {
     validate(&conf)?;
     if conf.url.is_empty() {
         bail!("only a server with a URL signs in");
@@ -311,31 +312,44 @@ pub async fn sign_in(conf: ServerConf, listen: bool) -> Result<String> {
     if meta["code_challenge_methods_supported"].as_array().is_some_and(|m| !m.iter().any(|x| x == "S256")) {
         bail!("{}'s sign-in doesn't support PKCE (S256), which Mimir needs", conf.name);
     }
-    let register = meta["registration_endpoint"].as_str().filter(|r| secure(r)).with_context(|| {
-        format!("{} doesn't let apps register themselves for a sign-in; make a token in its settings and add it as a header (Authorization: Bearer …)", conf.name)
-    })?;
-    let redirect = crate::oauth::redirect(listen, "127.0.0.1", "/callback").await?;
-    let reg: Value = http
-        .post(register)
-        .json(&json!({"client_name": "Mimir", "application_type": "native", "redirect_uris": [redirect.uri], "grant_types": ["authorization_code", "refresh_token"], "response_types": ["code"], "token_endpoint_auth_method": "none"}))
-        .send()
-        .await?
-        .error_for_status()
-        .with_context(|| format!("{} didn't let Mimir register for a sign-in", conf.name))?
-        .json()
-        .await?;
-    let client_id = reg["client_id"].as_str().context("the registration gave no client id")?.to_string();
+    let register = meta["registration_endpoint"].as_str().filter(|r| secure(r));
+    // An app the person registered at the service (Box, HubSpot): given now, or kept from the last sign-in when the
+    // service has no registration to do again. Its redirect is the fixed address they listed for it.
+    let own = client.map(|(id, secret)| (id.trim().to_string(), secret.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()))).filter(|(id, _)| !id.is_empty());
+    let own = own.or_else(|| register.is_none().then(|| crate::oauth::load(&oauth_key(&conf.name))).flatten().map(|s| (s.client_id, s.client_secret)));
+    let (client_id, client_secret, redirect) = match (own, register) {
+        (Some((id, secret)), _) => (id, secret, crate::oauth::redirect(listen, true, "localhost", "/callback").await?),
+        (None, None) => bail!("{} doesn't let apps register themselves for a sign-in; make a token in its settings and add it as a header (Authorization: Bearer …)", conf.name),
+        (None, Some(register)) => {
+            let mut redirect = crate::oauth::redirect(listen, false, "127.0.0.1", "/callback").await?;
+            let mut reg = register_app(&http, register, &redirect.uri).await;
+            // Some (Calendly) refuse 127.0.0.1 but take localhost, which reaches the same listener.
+            if reg.is_err() {
+                redirect.uri = redirect.uri.replacen("127.0.0.1", "localhost", 1);
+                reg = register_app(&http, register, &redirect.uri).await;
+            }
+            let reg = reg.with_context(|| format!("{} didn't let Mimir register for a sign-in", conf.name))?;
+            let id = reg["client_id"].as_str().context("the registration gave no client id")?.to_string();
+            (id, reg["client_secret"].as_str().map(String::from), redirect)
+        }
+    };
     let scope = prm.as_ref().and_then(|v| v["scopes_supported"].as_array()).map(|a| a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" ")).filter(|s| !s.is_empty());
     let resource = prm.as_ref().and_then(|v| v["resource"].as_str().map(String::from)).unwrap_or_else(|| conf.url.clone());
     // A token is only ever asked for this server: metadata naming another site is refused (RFC 9728, 3.3).
     if url::Url::parse(&resource).map(|r| r.origin()) != Ok(server.origin()) {
         bail!("{}'s sign-in metadata is for {resource}, not this server", conf.name);
     }
-    let saved = crate::oauth::Saved { token_url: token, client_id, client_secret: reg["client_secret"].as_str().map(String::from), scope, resource: Some(resource), refresh: String::new() };
+    let saved = crate::oauth::Saved { token_url: token, client_id, client_secret, scope, resource: Some(resource), refresh: String::new() };
     let issuer = meta["issuer"].as_str().map(|i| (i.to_string(), meta["authorization_response_iss_parameter_supported"] == true));
     let url = crate::oauth::begin(&oauth_key(&conf.name), &conf.name, authorize, saved, redirect, &[], issuer)?;
     *SIGNING_IN.lock().unwrap() = Some(conf);
     Ok(url)
+}
+
+/// Register Mimir as a public app coming back to `redirect` (dynamic client registration, RFC 7591).
+async fn register_app(http: &reqwest::Client, endpoint: &str, redirect: &str) -> Result<Value> {
+    let body = json!({"client_name": "Mimir", "application_type": "native", "redirect_uris": [redirect], "grant_types": ["authorization_code", "refresh_token"], "response_types": ["code"], "token_endpoint_auth_method": "none"});
+    Ok(http.post(endpoint).json(&body).send().await?.error_for_status()?.json().await?)
 }
 
 /// `resource_metadata="…"` from a WWW-Authenticate header.
@@ -1458,7 +1472,8 @@ mod tests {
         let conf = ServerConf { name: "fake".into(), url: "http://127.0.0.1:8977/mcp".into(), ..Default::default() };
         let err = format!("{:#}", save_server(&db, conf.clone()).await.unwrap_err());
         assert!(err.contains("wants you to sign in"), "{err}");
-        let url = sign_in(conf, true).await.unwrap();
+        let url = sign_in(conf.clone(), true, None).await.unwrap();
+        assert!(url.contains("localhost"), "the fake refuses 127.0.0.1, so it registered localhost: {url}");
         assert!(signing_in());
         // The fake authorization page approves at once and sends the browser back.
         let page = reqwest::get(&url).await.unwrap().text().await.unwrap();
@@ -1473,6 +1488,16 @@ mod tests {
         assert_eq!(refresh(&db, &servers(&db)[0]).await.unwrap(), 1, "refused token: refreshed and retried");
         delete_server(&db, "fake").unwrap();
         assert!(!signed_in("fake"));
+        // An app the person registered (Box, HubSpot): their client id and secret, back to the fixed address.
+        let url = sign_in(conf, true, Some(("pre".into(), Some("s3cret".into())))).await.unwrap();
+        assert!(url.contains("client_id=pre") && url.contains("localhost%3A33418%2Fcallback"), "{url}");
+        let page = reqwest::get(&url).await.unwrap().text().await.unwrap();
+        assert!(page.contains("Signed in to fake"), "{page}");
+        crate::oauth::finish().await.unwrap();
+        assert_eq!(signed_in_save(&db).await.unwrap(), 1);
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        assert_eq!(refresh(&db, &servers(&db)[0]).await.unwrap(), 1, "refreshes with the secret");
+        delete_server(&db, "fake").unwrap();
     }
 
     #[test]

@@ -4,7 +4,8 @@
 
 /mcp answers 401 with a resource_metadata hint until a valid bearer token comes. It serves protected-resource and
 authorization-server metadata, dynamic registration (native apps only, as some services insist on for a localhost
-redirect), an /authorize page that approves at once (redirects back with a code and, RFC 9207, its issuer), and
+redirect; like Calendly, http://localhost but not http://127.0.0.1), an app registered by hand ("pre", secret "s3cret",
+coming back to http://localhost:33418/callback, like Box and HubSpot), an /authorize page that approves at once (redirects back with a code and, RFC 9207, its issuer), and
 /token (PKCE S256 checked; tokens last 2 s; refresh tokens rotate). POST /revoke ends the current access token early,
 to test the retry. The MCP side has one tool, "echo".
 """
@@ -14,7 +15,7 @@ from urllib.parse import urlparse, parse_qs, urlencode
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8977
 BASE = f"http://127.0.0.1:{PORT}"
-clients, codes, access, refresh = {}, {}, {}, set()
+clients, codes, access, refresh = {"pre": {"redirect_uris": ["http://localhost:33418/callback"], "secret": "s3cret"}}, {}, {}, set()
 
 
 class H(BaseHTTPRequestHandler):
@@ -56,11 +57,15 @@ class H(BaseHTTPRequestHandler):
         if u.path == "/register":
             c = json.loads(raw)
             if c.get("application_type") != "native": return self.send(400, {"error": "invalid_redirect_uri"})
+            if any(r.startswith("http://127.0.0.1") for r in c["redirect_uris"]):
+                return self.send(400, {"error": "invalid_client_metadata", "errors": {"redirect_uri": ["must start with https in Production."]}})
             cid = secrets.token_hex(6); clients[cid] = c
             return self.send(201, {"client_id": cid, **c})
         if u.path == "/token":
             f = {k: v[0] for k, v in parse_qs(raw).items()}
             if f.get("resource") != f"{BASE}/mcp": return self.send(400, {"error": "invalid_target"})
+            if clients.get(f.get("client_id"), {}).get("secret", f.get("client_secret")) != f.get("client_secret"):
+                return self.send(401, {"error": "invalid_client"})
             if f["grant_type"] == "authorization_code":
                 q = codes.pop(f.get("code"), None)
                 ok = q and q["client_id"] == f["client_id"] and q["redirect_uri"] == f["redirect_uri"] and \

@@ -16,6 +16,7 @@ use tokio::task::JoinHandle;
 
 const SIGN_IN_TIMEOUT: Duration = Duration::from_secs(600);
 /// Where a server's sign-in says it comes back to: nothing listens there, the person pastes the address instead.
+/// Also the one port of an app the person registered themselves (it lists this exact address).
 const PASTE_PORT: u16 = 33418;
 
 /// A sign-in as kept: enough to refresh it. `refresh` is empty once it has ended (or the server gave none).
@@ -110,8 +111,10 @@ pub struct Redirect {
 
 /// `listen`: this computer's browser comes back here (the desktop app); else (a server) the address is pasted.
 /// `host`: "127.0.0.1" (RFC 8252) or "localhost" (what Microsoft lets you register); `path` like "/callback" or "".
-pub async fn redirect(listen: bool, host: &str, path: &str) -> Result<Redirect> {
-    let listener = if listen { Some(TcpListener::bind("127.0.0.1:0").await?) } else { None };
+/// `fixed`: listen on PASTE_PORT, not any free port (an app the person registered names the exact address).
+pub async fn redirect(listen: bool, fixed: bool, host: &str, path: &str) -> Result<Redirect> {
+    let at = if fixed { PASTE_PORT } else { 0 };
+    let listener = if listen { Some(TcpListener::bind(("127.0.0.1", at)).await.with_context(|| format!("port {at} on this computer is busy; close what's using it and try again"))?) } else { None };
     let port = listener.as_ref().map(|l| l.local_addr().map(|a| a.port())).transpose()?.unwrap_or(PASTE_PORT);
     Ok(Redirect { uri: format!("http://{host}:{port}{path}"), listener })
 }
@@ -413,7 +416,7 @@ mod tests {
             r#"{"access_token":"a2","refresh_token":"r2","expires_in":3600}"#.into(),
         ])
         .await;
-        let r = redirect(true, "127.0.0.1", "/callback").await.unwrap();
+        let r = redirect(true, false, "127.0.0.1", "/callback").await.unwrap();
         let back = r.uri.clone();
         let saved = Saved { token_url, client_id: "c1".into(), scope: Some("s".into()), ..Default::default() };
         let url = url::Url::parse(&begin("oauth:test", "Test", "https://auth.example/authorize", saved, r, &[], None).unwrap()).unwrap();
@@ -439,7 +442,7 @@ mod tests {
         let _one = SERIAL.lock().await;
         secrets();
         let token_url = token_server(vec![r#"{"access_token":"a1"}"#.into()]).await;
-        let r = redirect(false, "127.0.0.1", "/callback").await.unwrap();
+        let r = redirect(false, false, "127.0.0.1", "/callback").await.unwrap();
         let back = r.uri.clone();
         let saved = Saved { token_url, client_id: "c1".into(), ..Default::default() };
         let url = url::Url::parse(&begin("oauth:iss", "Test", "https://auth.example/authorize", saved, r, &[], Some(("https://auth.example".into(), true))).unwrap()).unwrap();

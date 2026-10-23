@@ -909,7 +909,8 @@ function parseServer(text: string): ParsedServer | string | null {
 
 function ToolServerSettings({ onChange }: { onChange: () => void }) {
   const list = useLoad(() => invoke<{ servers: ToolServer[] }>('tool_servers'), [], 60000)
-  const [form, setForm] = useState<{ text: string; name: string; guess: string; env: EnvRow[]; editing: boolean } | null>(null)
+  // `app`: from the directory, how to register an app there; its client id and secret go to the sign-in, not the server.
+  const [form, setForm] = useState<{ text: string; name: string; guess: string; env: EnvRow[]; editing: boolean; app?: string; id?: string; secret?: string } | null>(null)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const [msg, setMsg] = useState<string | null>(null)
@@ -947,8 +948,8 @@ function ToolServerSettings({ onChange }: { onChange: () => void }) {
   // A remote server that answered 401 (or whose sign-in ended) offers MCP's sign-in.
   const server = conf()
   const wantsSignIn = remote && !!server && !!err && /sign in/.test(err)
-  const signIn = (conf: object, name: string, label = `Sign in to ${name}`) => <SignInBrowser<number> label={label} what={name}
-    start={() => invoke('tool_server_sign_in', { server: conf })} wait="tool_server_sign_in_wait" paste="tool_server_sign_in_paste" onDone={ready(name)} />
+  const signIn = (conf: object, name: string, label = `Sign in to ${name}`, client?: [string, string | null]) => <SignInBrowser<number> label={label} what={name} disabled={!!client && !client[0].trim()}
+    start={() => invoke('tool_server_sign_in', { server: conf, client })} wait="tool_server_sign_in_wait" paste="tool_server_sign_in_paste" onDone={ready(name)} />
   // Moves its pinned package to the release named on the button (one at least a week old). Starts it once, like Save.
   const update = async (s: ToolServer) => {
     setBusy(true); setErr(null)
@@ -961,8 +962,8 @@ function ToolServerSettings({ onChange }: { onChange: () => void }) {
     const base = slug(d.name)
     const name = servers.some(s => s.name === base) ? `${base}_2` : base
     setBrowse(null); setErr(null); setMsg(null)
-    setForm({ text: d.url, name, guess: name, env: d.header ? [{ key: d.header, value: '' }] : [], editing: false })
-    if (!d.header) void save({ name, command: '', args: [], url: d.url, headers: {} })
+    setForm({ text: d.url, name, guess: name, env: d.header ? [{ key: d.header, value: '' }] : [], editing: false, app: d.app, id: '', secret: '' })
+    if (!d.header && !d.app) void save({ name, command: '', args: [], url: d.url, headers: {} })
   }
   const words = (browse ?? '').toLowerCase().split(/\s+/).filter(Boolean)
   const listed = DIRECTORY.filter(d => words.every(w => `${d.name} ${d.category} ${d.desc}`.toLowerCase().includes(w)))
@@ -1047,7 +1048,15 @@ function ToolServerSettings({ onChange }: { onChange: () => void }) {
             <button className="btn btn-primary" disabled={busy || !parsed || typeof parsed === 'string' || !form.name.trim()}>{busy ? 'Starting…' : form.editing ? 'Save' : 'Add server'}</button>
           </div>
           {err && <p className={wantsSignIn ? 'hint' : 'error'} style={{ margin: 0 }}>{err}</p>}
-          {wantsSignIn && <div className="er">{signIn(server, server.name || 'the server')}<span className="hint">You sign in in your browser; Mimir keeps the sign-in, never your password.</span></div>}
+          {form.app && server && <div className="field-label"><span>Your app’s sign-in</span>
+            <span className="hint">{form.app}</span>
+            <div className="er">
+              <input className="input mono" style={{ flex: 1 }} aria-label="Client ID" placeholder="Client ID" value={form.id} onChange={e => setForm({ ...form, id: e.target.value })} />
+              <input className="input" style={{ flex: 1 }} type="password" aria-label="Client secret" placeholder="Client secret" autoComplete="new-password" value={form.secret} onChange={e => setForm({ ...form, secret: e.target.value })} />
+            </div>
+            <span>{signIn(server, server.name || 'the server', undefined, [form.id ?? '', form.secret || null])}</span>
+          </div>}
+          {wantsSignIn && !form.app && <div className="er">{signIn(server, server.name || 'the server')}<span className="hint">You sign in in your browser; Mimir keeps the sign-in, never your password.</span></div>}
         </form>
       )}
       {err && !form && <div className="row-block"><p className="error" style={{ margin: 0 }}>{err}</p></div>}
