@@ -1055,10 +1055,12 @@ impl Host {
             "tool_server_read_only" => ok(ext::confirm_read_only(&self.db, &arg::<String>(a, "name")?, &arg::<Vec<String>>(a, "tools")?)?),
             // A remote server that wants a sign-in (MCP's OAuth): returns the address to open; then `_wait` (desktop) or
             // `_paste` (a server: the address the browser ended up on) finishes it and saves the server. Returns its tool count.
+            // `client`: optional [client id, secret] of an app the person registered at a service that doesn't register apps.
             "tool_server_sign_in" => {
                 let paste = self.mode == "server";
                 let server = arg(a, "server")?;
-                ok(json!({"url": boxed(|| ext::sign_in(server, !paste)).await?, "paste": paste}))
+                let client = arg(a, "client")?;
+                ok(json!({"url": boxed(|| ext::sign_in(server, !paste, client)).await?, "paste": paste}))
             }
             "tool_server_sign_in_wait" | "tool_server_sign_in_paste" => {
                 if !ext::signing_in() {

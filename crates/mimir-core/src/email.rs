@@ -188,7 +188,7 @@ pub async fn outlook_sign_in(client_id: &str, tenant: &str, listen: bool) -> Res
         bail!("the tenant is the Directory (tenant) ID, your domain, or empty");
     }
     // `localhost`: Microsoft lets a desktop app register http://localhost, and ignores the port.
-    let redirect = crate::oauth::redirect(listen, "localhost", "").await?;
+    let redirect = crate::oauth::redirect(listen, false, "localhost", "").await?;
     let key = format!("oauth:mail:{}", crate::random_hex(8)?);
     let base = format!("{}/{tenant}/oauth2/v2.0", ms_login());
     let saved = crate::oauth::Saved { token_url: format!("{base}/token"), client_id: client_id.into(), scope: Some(OUTLOOK_SCOPES.into()), ..Default::default() };

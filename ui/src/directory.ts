@@ -1,8 +1,9 @@
 /** Hosted MCP servers offered with one click under Settings → Tool servers. Each URL is on the company's own domain
  *  (most are also in the official MCP registry under that domain), answers MCP over Streamable HTTP and either needs no
  *  sign-in or offers MCP's sign-in with app registration, so Add just works. `header`: no such sign-in; the person
- *  pastes a token into this header. Checked 2026-10-19. */
-export type Listed = { name: string; category: string; desc: string; url: string; header?: string }
+ *  pastes a token into this header. `app`: no app registration there; the person registers one (how: this text) and
+ *  pastes its client id and secret. Checked 2026-10-19; Box, HubSpot, Cal.com and Calendly 2026-10-23. */
+export type Listed = { name: string; category: string; desc: string; url: string; header?: string; app?: string }
 
 // ponytail: a hand-kept list, not the registry: registry search returns lookalikes (third-party "kraken", "ahrefs")
 // that would get the person's sign-in. Registry search can come later, limited to publishers that own the URL's domain.
@@ -34,9 +35,15 @@ export const DIRECTORY: Listed[] = [
   { category: 'Work', name: 'Intercom', desc: 'Conversations, contacts and help articles', url: 'https://mcp.intercom.com/mcp' },
   { category: 'Work', name: 'Attio', desc: 'CRM records, lists and notes', url: 'https://mcp.attio.com/mcp' },
   { category: 'Work', name: 'Close', desc: 'CRM leads, opportunities and activities', url: 'https://mcp.close.com/mcp' },
+  { category: 'Work', name: 'HubSpot', desc: 'CRM contacts, companies, deals and tickets. Needs an MCP connector you create in HubSpot', url: 'https://mcp.hubspot.com/',
+    app: 'In HubSpot, go to Development → MCP Connectors → Create MCP connector, with redirect URL http://localhost:33418/callback. Paste its client ID and secret here.' },
+  { category: 'Work', name: 'Calendly', desc: 'Event types, availability and bookings', url: 'https://mcp.calendly.com' },
+  { category: 'Work', name: 'Cal.com', desc: 'Event types, availability and bookings', url: 'https://mcp.cal.com/mcp' },
   { category: 'Work', name: 'Zapier', desc: 'Actions in thousands of apps you connect at Zapier', url: 'https://mcp.zapier.com/api/v1/connect' },
 
   { category: 'Files and design', name: 'Dropbox', desc: 'Search and read your files', url: 'https://mcp.dropbox.com/mcp' },
+  { category: 'Files and design', name: 'Box', desc: 'Search, read and organize your files. Needs credentials from your Box admin', url: 'https://mcp.box.com',
+    app: 'Your Box admin opens Admin Console → Integrations → Box MCP server → Configure, adds integration credentials with redirect URI http://localhost:33418/callback, and gives you the client ID and secret.' },
   { category: 'Files and design', name: 'Figma', desc: 'Design files, components and variables', url: 'https://mcp.figma.com/mcp' },
   { category: 'Files and design', name: 'Canva', desc: 'Create, search and export designs', url: 'https://mcp.canva.com/mcp' },
   { category: 'Files and design', name: 'Miro', desc: 'Boards, sticky notes and diagrams', url: 'https://mcp.miro.com/' },
