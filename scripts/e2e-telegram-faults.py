@@ -131,7 +131,7 @@ try:
     fail(method="getFile", match="nosize", description="Bad Request: file is too big")
     t = time.time(); push(update(document={"file_id": "nosize", "file_name": "scan.png", "mime_type": "image/png"}))
     check("getFile was asked", until(lambda: [c for c in calls(t) if c["method"] == "getFile"], 10), calls(t))
-    known(384, "(left over after #384 closed) getFile's 'file is too big' gets the 'over 20 MB' note too", until(lambda: any("20 MB" in x for x in texts(t)), 8), texts(t))
+    check("getFile's 'file is too big' gets the 'over 20 MB' note too",until(lambda: any("20 MB" in x for x in texts(t)), 8), texts(t))
 
     # A group: paired by the owner, who sends a photo there.
     t = time.time(); msg(f"/pair {code(1)}", chat=GROUP, group=True)

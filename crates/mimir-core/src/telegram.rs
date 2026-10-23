@@ -283,7 +283,15 @@ impl Tg {
                     for_bot(&u["message"], u["message"]["caption"].as_str().unwrap_or(""), me_id, &my_name, || core.is_family(me, &address(&u["message"], false))),
                 ) {
                     // In a group, a photo or file addressed to the bot (or any in a family group); `on_media` checks who sent it.
-                    self.on_media(me, &core, &address(&u["message"], core.topics()), &u["message"], caption).await
+                    let chat = address(&u["message"], core.topics());
+                    match self.on_media(me, &core, &chat, &u["message"], caption).await {
+                        // No file_size to check up front: getFile is where Telegram says it's over 20 MB.
+                        Err(e) if format!("{e:#}").contains("file is too big") => {
+                            me.send(&chat, tr("That file is over 20 MB, more than Telegram lets me download. Could you send a smaller one?")).await;
+                            Ok(())
+                        }
+                        r => r,
+                    }
                 } else {
                     Ok(())
                 };
