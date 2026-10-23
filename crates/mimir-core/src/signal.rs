@@ -201,7 +201,8 @@ impl Signal {
         Ok(Signal { http: reqwest::Client::builder().timeout(Duration::from_secs(60)).build()?, api: api.trim_end_matches('/').into(), number, picks: Default::default() })
     }
 
-    /// Sends a message (and attachments as data: URIs); its Signal timestamp, which is its id.
+    /// Sends a message (and attachments as data: URIs); its Signal timestamp, which is its id. Only the bot's own turn
+    /// (`finish`, `card`) calls `picks.sent`: an echo, a card's outcome or a file leaves a question's numbers open.
     async fn send(&self, to: &str, text: &str, files: Vec<String>) -> Result<String> {
         let body = json!({"number": self.number, "recipients": [to], "message": text, "base64_attachments": files});
         let resp = self.http.post(format!("{}/v2/send", self.api)).json(&body).send().await.map_err(|e| e.without_url())?;
@@ -212,7 +213,6 @@ impl Signal {
         }
         let v: Value = serde_json::from_str(&text).unwrap_or_default();
         let msg = v["timestamp"].as_str().map(String::from).or(v["timestamp"].as_i64().map(|t| t.to_string())).unwrap_or_default();
-        self.picks.sent(to, &msg);
         Ok(msg)
     }
 
@@ -236,8 +236,14 @@ impl Signal {
         let mut text = crate::fmt::plain(text);
         let data = numbered(&mut text, rows, false);
         let msg = self.send(chat, &text, vec![]).await?;
+        self.picks.sent(chat, &msg);
         self.picks.offer(chat, msg, false, data);
         Ok(())
+    }
+
+    /// A note that isn't the bot's turn (the "🎙️ I heard" echo).
+    pub(crate) async fn note(&self, chat: &str, text: &str) -> Result<()> {
+        self.send(chat, &crate::fmt::plain(text), vec![]).await.map(drop)
     }
 
     pub(crate) async fn draft_post(&self, _chat: &str, _text: &str) -> Option<String> {
@@ -266,6 +272,7 @@ impl Signal {
         let mut text = card_text(a);
         let data = numbered(&mut text, &crate::runtime::card_buttons(a), true);
         let msg = self.send(chat, &text, vec![]).await?;
+        self.picks.sent(chat, &msg);
         self.picks.offer(chat, msg.clone(), true, data);
         Ok(Some(msg))
     }
@@ -464,6 +471,11 @@ mod tests {
         post("300", false, vec!["tp:a:0".into()]);
         post("301", false, vec![]);
         assert_eq!(s.picks.picked("u-1", "1", Some("300")), None);
+
+        // An echo ("🎙️ I heard"), a card's outcome or a file isn't the bot's turn: only `send`, no `picks.sent`.
+        post("400", false, vec!["tp:b:0".into()]);
+        s.picks.drop("u-1", "200");
+        assert_eq!(s.picks.picked("u-1", "1", None).as_deref(), Some("tp:b:0"), "still open");
     }
 
     #[test]
