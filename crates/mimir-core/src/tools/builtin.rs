@@ -511,7 +511,10 @@ pub(super) async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<Stri
             } else {
                 let p = s(args, "path").map_err(|_| anyhow::anyhow!("give a workspace path, or screenshot=true"))?;
                 let (text, _) = crate::files::read(&ctx.db, ctx.chat_id, p)?;
-                (p.rsplit('/').next().unwrap_or(p).to_string(), text.into_bytes())
+                match args["format"].as_str() {
+                    Some(f) => crate::office::make(f, p, &text)?,
+                    None => (p.rsplit('/').next().unwrap_or(p).to_string(), text.into_bytes()),
+                }
             };
             let name = crate::files::send(&ctx.db, ctx.chat_id, run, &name, &bytes)?;
             format!("{name} will be sent to the chat with your reply. Don't paste its contents too.")

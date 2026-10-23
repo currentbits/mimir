@@ -14,6 +14,6 @@ description: Use once a week to look back (done, slipped) and plan the next week
 
 **Check:** You only suggest; nothing is changed, scheduled or forgotten without the person saying so.
 
-**Return:** Done, Slipped, Next week (calendar highlights), Priorities (three at most). Under 20 lines.
+**Return:** Done, Slipped, Next week (calendar highlights), Priorities (three at most). Under 20 lines. If they want it as a PDF (to keep or share), write the same as markdown with file_write (reviews/<date>.md) and send it with send_file, format pdf, instead of pasting it.
 
 **Stop and ask if:** They want tasks closed, moved or forgotten: confirm each one.
