@@ -27,12 +27,18 @@ text is Mimir's own. They're plain text: no scripts, nothing downloaded.
 | **Meeting follow-up** | After a transcribed meeting: decided, to do, open questions | a [transcribed meeting](meetings.md) |
 | **Research brief** | A question answered from current sources, each claim numbered | reading web pages ([web search](connect.md#web-search) helps) |
 | **Summarise a link** | The gist of a page you send | reading web pages |
+| **Deep research** | A thorough report from many sources: a plan you watch, notes per part, every claim labelled, a report file | reading web pages, files ([web search](connect.md#web-search) helps) |
+| **Chart check** | Trend, levels and indicators for a stock, currency or coin from real price data; a read, never a trade | reading web pages |
 | **Price watch** | Tells you when a product drops below a price or is back in stock | reading web pages, routines |
 | **Topic watch** | A digest of what's new on topics, companies or feeds you follow | reading web pages, routines |
 | **Write like me** | Drafts in your own voice, from how you write | earlier chats |
 | **Decision memo** | Options, trade-offs and a recommendation, after a few questions | nothing |
 | **Document to actions** | Deadlines and obligations from a contract, letter or form | memory |
+| **Make it sound human** | A stiff or machine-sounding draft rewritten to read like a person wrote it, facts untouched | nothing |
+| **SEO check** | Keywords, title, tags, and claims ads law bans (also in Chinese), before you publish | nothing ([web search](connect.md#web-search) helps) |
+| **Prompt polish** | A rough idea turned into a clear prompt for a routine, a bot or another AI tool | nothing |
 | **Trip planner** | A plan by day, a booking checklist, reminders and calendar links | reading web pages |
+| **Landing page** | A modern one-page site built from a business's current website, as a file, with image prompts | reading web pages, files |
 | **Hire a bot** | A new bot with one job, what it never does, a voice and when it works; it says its job back once made | [making bots](bots-and-chats.md#a-bot-that-makes-a-bot) |
 | **Bot role check** | Twelve checks on a bot's role (one job, job first, no "I can also help with"…), and a rewrite that passes | nothing |
 | **Team check** | Where your bots overlap or keep doing work outside their job, as proposals you pick from | earlier chats |

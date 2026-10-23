@@ -35,6 +35,11 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
   screen with its own icon. See [Self-hosting](docs/self-hosting.md#3-open-it-in-your-browser).
 - **Telegram groups:** a bot in a group (not a family group) answers only when you @-mention it, reply to one of its
   messages or send a `/command`. Before, with privacy mode off, it answered every message.
+- **Six more skills in the skill library:** *Deep research* (a thorough report from many sources, with a plan you
+  watch and every claim labelled), *Chart check* (trend, levels and indicators for a stock, currency or coin; a read,
+  never a trade), *Make it sound human*, *SEO check* (keywords, titles, tags, and claims ads law bans, also in
+  Chinese), *Prompt polish* (a rough idea into a clear prompt for a routine, a bot or another AI tool) and *Landing
+  page* (a modern one-page site from a business's current website). See [docs/skills.md](docs/skills.md).
 
 ### Moving in
 - **Moving from OpenClaw or Hermes:** **Memory → Import → From OpenClaw** now finds a workspace set in
