@@ -33,6 +33,11 @@ pub(crate) struct Slack {
 
 /// How long a mention's thread stays the place to answer (later posts, e.g. routines, go to the channel).
 // ponytail: per-channel, so two people mentioning the bot at once share the newest thread; key by turn if that bites
+/// MIMIR_SLACK_API: a test double (scripts/mock-slack.py).
+fn api() -> String {
+    std::env::var("MIMIR_SLACK_API").unwrap_or_else(|_| "https://slack.com/api".into())
+}
+
 const THREAD_FOR: Duration = Duration::from_secs(30 * 60);
 
 /// Text of a message event meant for the bot: DMs, or channel messages that @-mention it.
@@ -77,7 +82,7 @@ impl Slack {
     }
 
     async fn api(&self, method: &str, token: &str, body: Value) -> Result<Value> {
-        let v: Value = self.http.post(format!("https://slack.com/api/{method}")).bearer_auth(token).json(&body).send().await?.json().await?;
+        let v: Value = self.http.post(format!("{}/{method}", api())).bearer_auth(token).json(&body).send().await?.json().await?;
         if v["ok"].as_bool() != Some(true) {
             bail!("slack {method}: {}", v["error"].as_str().unwrap_or("unknown error"));
         }
@@ -86,7 +91,7 @@ impl Slack {
 
     /// Slack's read methods (conversations.*) take their arguments as a query, not JSON.
     async fn get(&self, method: &str, q: &[(&str, &str)]) -> Result<Value> {
-        let url = url::Url::parse_with_params(&format!("https://slack.com/api/{method}"), q)?;
+        let url = url::Url::parse_with_params(&format!("{}/{method}", api()), q)?;
         let v: Value = self.http.get(url).bearer_auth(&self.bot_token).send().await?.json().await?;
         if v["ok"].as_bool() != Some(true) {
             bail!("{}", v["error"].as_str().unwrap_or("unknown error"));
@@ -168,7 +173,7 @@ impl Slack {
     /// A file the bot sends (needs the files:write scope): Slack's two-step upload, into the same thread as a reply.
     pub(crate) async fn upload(&self, channel: &str, name: &str, bytes: Vec<u8>) -> Result<()> {
         let len = bytes.len().to_string();
-        let v: Value = self.http.post(url::Url::parse_with_params("https://slack.com/api/files.getUploadURLExternal", [("filename", name), ("length", &len)])?).bearer_auth(&self.bot_token).send().await?.json().await?;
+        let v: Value = self.http.post(url::Url::parse_with_params(&format!("{}/files.getUploadURLExternal", api()), [("filename", name), ("length", &len)])?).bearer_auth(&self.bot_token).send().await?.json().await?;
         let (Some(url), Some(id)) = (v["upload_url"].as_str(), v["file_id"].as_str()) else {
             bail!("slack files.getUploadURLExternal: {}", v["error"].as_str().unwrap_or("unknown error"));
         };

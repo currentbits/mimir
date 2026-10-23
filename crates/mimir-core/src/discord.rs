@@ -15,8 +15,10 @@ use std::time::{Duration, Instant};
 use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::Message;
 
-const API: &str = "https://discord.com/api/v10";
-const GATEWAY: &str = "wss://gateway.discord.gg/?v=10&encoding=json";
+/// MIMIR_DISCORD_API, MIMIR_DISCORD_GATEWAY: a test double (scripts/mock-discord.py).
+static API: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| std::env::var("MIMIR_DISCORD_API").unwrap_or_else(|_| "https://discord.com/api/v10".into()));
+static GATEWAY: std::sync::LazyLock<String> =
+    std::sync::LazyLock::new(|| std::env::var("MIMIR_DISCORD_GATEWAY").unwrap_or_else(|_| "wss://gateway.discord.gg/?v=10&encoding=json".into()));
 /// GUILD_MESSAGES | DIRECT_MESSAGES | MESSAGE_CONTENT
 const INTENTS: u64 = (1 << 9) | (1 << 12) | (1 << 15);
 
@@ -101,7 +103,7 @@ impl Discord {
     }
 
     async fn api(&self, method: reqwest::Method, path: &str, body: Option<Value>) -> Result<Value> {
-        let mut req = self.http.request(method, format!("{API}{path}")).header("Authorization", format!("Bot {}", self.token));
+        let mut req = self.http.request(method, format!("{}{path}", *API)).header("Authorization", format!("Bot {}", self.token));
         if let Some(mut b) = body {
             // Every message the bot writes: no pings (@everyone, roles, people), and no link previews, which Discord
             // fetches on its own (a link written by a misled bot could carry data out without anyone clicking it).
@@ -136,7 +138,7 @@ impl Discord {
         let to = self.dest(channel);
         let payload = json!({"attachments": [{"id": 0, "filename": name}], "allowed_mentions": {"parse": []}});
         let form = reqwest::multipart::Form::new().text("payload_json", payload.to_string()).part("files[0]", reqwest::multipart::Part::bytes(bytes).file_name(name.to_string()));
-        let resp = self.http.post(format!("{API}/channels/{to}/messages")).header("Authorization", format!("Bot {}", self.token)).multipart(form).send().await?;
+        let resp = self.http.post(format!("{}/channels/{to}/messages", *API)).header("Authorization", format!("Bot {}", self.token)).multipart(form).send().await?;
         let status = resp.status();
         if !status.is_success() {
             bail!("discord upload: {status} {}", crate::tools::truncate(&resp.text().await.unwrap_or_default(), 200));
@@ -228,7 +230,7 @@ impl Discord {
 
     pub(crate) async fn listen(&self, me: &Chan, core: Arc<Core>, slot: Slot) -> Result<()> {
         self.api(reqwest::Method::GET, "/users/@me", None).await.context("Discord rejected the bot token")?;
-        let (mut ws, _) = tokio_tungstenite::connect_async(GATEWAY).await?;
+        let (mut ws, _) = tokio_tungstenite::connect_async(GATEWAY.as_str()).await?;
         let hello = next_json(&mut ws).await?;
         let every = hello["d"]["heartbeat_interval"].as_u64().context("no HELLO from gateway")?;
         ws.send(Message::text(
@@ -478,7 +480,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn gateway_hello() {
-        let (mut ws, _) = tokio_tungstenite::connect_async(GATEWAY).await.unwrap();
+        let (mut ws, _) = tokio_tungstenite::connect_async(GATEWAY.as_str()).await.unwrap();
         let hello = next_json(&mut ws).await.unwrap();
         assert_eq!(hello["op"], 10);
         assert!(hello["d"]["heartbeat_interval"].as_u64().unwrap() > 1000);
