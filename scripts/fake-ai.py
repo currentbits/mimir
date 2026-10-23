@@ -16,7 +16,9 @@ replies "DONE <tool>: <the tool's result>":
 
 A routine asked to say URGENT when the person's rule holds, about something DELAYED, says so.
 Anything else gets "OK: <your message>". A message with SLOW in it is answered after 3 seconds (any bot), for
-switching away mid-reply; "SLOW <n>" waits n seconds. Each request is logged to stdout.
+switching away mid-reply; "SLOW <n>" waits n seconds. "LONG <n>" answers with about n characters in paragraphs
+("Paragraph 1: …"), for replies split into parts; "TRICKLE <n>" streams its answer a word at a time for n seconds
+(when asked to stream), for drafts that get edited. Each request is logged to stdout.
 
 It also stands in for ChatGPT's sign-in and Responses API ("Sign in with ChatGPT"): start the server with
 MIMIR_CHATGPT_AUTH=http://127.0.0.1:8899 MIMIR_CHATGPT_API=http://127.0.0.1:8899/v1. The fake sign-in code is
@@ -91,6 +93,14 @@ class H(BaseHTTPRequestHandler):
             return self.send_json(403, {"code": "The caller does not have permission to execute the specified operation", "error": "no API on this plan"})
         if "SLOW" in last_user and last.get("role") == "user":
             time.sleep(int((re.search(r"SLOW (\d+)", last_user) or [0, 3])[1]))
+        if (m := re.search(r"TRICKLE (\d+)", last_user)) and req.get("stream") and last.get("role") == "user":
+            self.send_response(200); self.send_header("content-type", "text/event-stream"); self.end_headers()
+            for i in range(int(m[1]) * 4):
+                self.wfile.write(b"data: " + json.dumps({"choices": [{"index": 0, "delta": {"content": f"word{i} "}}]}).encode() + b"\n\n"); self.wfile.flush(); time.sleep(0.25)
+            self.wfile.write(b'data: {"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}\n\ndata: [DONE]\n\n'); return
+        if (m := re.search(r"LONG (\d+)", last_user)) and last.get("role") == "user":
+            paras = [f"Paragraph {i}: " + "lorem ipsum dolor " * 20 for i in range(1, int(m[1]) // 375 + 2)]
+            return self.reply({"role": "assistant", "content": "\n\n".join(paras)})
         if bot == "Search":
             return self.reply({"role": "assistant", "content": f"SEARCH-ANSWER: the title tag is fine (asked: {last_user[-60:]})"})
         # The one-time "get to know me" pass: one suggestion per email sender line it was shown.

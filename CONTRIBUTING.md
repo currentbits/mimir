@@ -50,7 +50,11 @@ python3 scripts/e2e-flows.py                    # bot flows, checked in the data
 ```
 
 - `scripts/mock-telegram.py <port> [log]`: a fake Telegram Bot API; start Mimir with
-  `MIMIR_TELEGRAM_API=http://127.0.0.1:<port>` and any bot token.
+  `MIMIR_TELEGRAM_API=http://127.0.0.1:<port>` and any bot token. It can be told to fail calls (a 429, "file is too
+  big", a part of a reply); `scripts/e2e-telegram-faults.py <dir>` runs two bots on it through those.
+- `scripts/mock-slack.py`, `scripts/mock-discord.py`: a fake Slack (Web API and Socket Mode) and Discord (REST and
+  Gateway), for `MIMIR_SLACK_API` and `MIMIR_DISCORD_API` + `MIMIR_DISCORD_GATEWAY`. `scripts/e2e-slack.py <dir>` and
+  `scripts/e2e-discord.py <dir>` run a bot on each.
 - `scripts/mock-signal.py <port> [log]`: a fake signal-cli-rest-api; start Mimir with
   `MIMIR_SIGNAL_API=http://127.0.0.1:<port> SIGNAL_NUMBER=+15550000`. `scripts/e2e-signal.py <dir>` runs a bot on it.
 - `scripts/e2e-whatsapp.py <dir>`: a bot on WhatsApp, against a fake Graph API it runs itself and `mimir server`.

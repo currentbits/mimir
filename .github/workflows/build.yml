@@ -47,6 +47,15 @@ jobs:
             target/debug/mimir server --listen 127.0.0.1:8789 > "$RUNNER_TEMP/server.log" 2>&1 &
           for _ in $(seq 60); do curl -so /dev/null http://127.0.0.1:8789/ && break; sleep 1; done
           python3 scripts/e2e-flows.py && node scripts/ui-flows.mjs || { tail -50 "$RUNNER_TEMP/server.log"; exit 1; }
+      # Telegram, Slack and Discord against mocks that misbehave. KNOWN lines are open bugs and don't fail the step.
+      - name: Channel end-to-end (mock Telegram, Slack, Discord)
+        if: runner.os == 'Linux'
+        timeout-minutes: 10
+        run: |
+          for s in telegram-faults slack discord; do
+            d="$RUNNER_TEMP/e2e-$s"; mkdir -p "$d" && cp target/debug/mimir "$d/"
+            python3 "scripts/e2e-$s.py" "$d" || { tail -50 "$d"/serve*.log "$d"/server*.log 2>/dev/null; exit 1; }
+          done
       # Start the real app: the window renders, talks to the backend, and exits 0 with no UI errors. Catches what unit
       # tests can't, like a library the app can't load at launch (macOS once died on a missing Swift runtime rpath).
       - name: Launch the app (self-test)

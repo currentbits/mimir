@@ -150,6 +150,8 @@ and the data folder in a dialog. Installs from before the rename to Mimir (`~/.b
 | `MIMIR_OSV_API` | OSV.dev base URL for the tool servers' malware check (a test fake) |
 | `MIMIR_NPM_REGISTRY`, `MIMIR_PYPI` | npm registry and PyPI base URLs for pinning tool servers' packages (a mirror, or a test fake) |
 | `MIMIR_TELEGRAM_API` | Telegram Bot API base URL (a self-hosted Bot API server, or the test mock) |
+| `MIMIR_SLACK_API` | Slack Web API base URL (default `https://slack.com/api`; the test mock) |
+| `MIMIR_DISCORD_API`, `MIMIR_DISCORD_GATEWAY` | Discord REST and Gateway URLs (default `https://discord.com/api/v10` and its `wss://` gateway; the test mock) |
 | `MIMIR_SIGNAL_API` | signal-cli-rest-api's address when a bot's page doesn't set one (default `http://127.0.0.1:8081`, as 8080 is `mimir server`'s own) |
 | `MIMIR_IMESSAGE_DB` | A stand-in for `~/Library/Messages/chat.db` (tests) |
 | `MIMIR_WHATSAPP_API` | WhatsApp's Graph API base URL, with its version (default `https://graph.facebook.com/v23.0`; the test fake) |
@@ -208,7 +210,13 @@ Test hooks and opt-in tests:
 - `MIMIR_MEETING_TEST=<seconds>` (+ `MIMIR_MEETING_TEST_QUIT=1`): records for that long, then stops (or quits) and
   prints what was saved. With PulseAudio null sinks in a container, this tests the whole meeting pipeline on Linux.
 - `MIMIR_WHISPER_DEBUG=1`: prints voice-activity stretches and chunk timings.
-- `scripts/mock-telegram.py`: a fake Telegram Bot API; set `MIMIR_TELEGRAM_API` to it.
+- `scripts/mock-telegram.py`: a fake Telegram Bot API; set `MIMIR_TELEGRAM_API` to it. `/control/fail` makes calls
+  fail as Telegram does. `scripts/e2e-telegram-faults.py <dir>` runs two bots through a 429, a file too big, a reply
+  failing at part 2, a restart mid-batch, a card that won't send and pairing across bots.
+- `scripts/mock-slack.py` and `scripts/mock-discord.py`: a fake Slack and Discord (`MIMIR_SLACK_API`;
+  `MIMIR_DISCORD_API` and `MIMIR_DISCORD_GATEWAY`). `scripts/e2e-slack.py <dir>` and `scripts/e2e-discord.py <dir>`
+  run a bot on each: acks and redelivery, a message after an approval card, answers within 3 s, heartbeats.
+- In the channel end-to-end scripts, a `KNOWN #n` line is open bug #n: checked, but not failing the run.
 - `scripts/mock-signal.py`: a fake signal-cli-rest-api; set `MIMIR_SIGNAL_API` to it. `scripts/e2e-signal.py <dir>`
   runs a bot on it with `fake-ai.py` (pairing, numbered choices and cards, files both ways).
 - `scripts/e2e-whatsapp.py <dir>`: `mimir server` with a fake Graph API and `fake-ai.py`, sent signed webhook calls
