@@ -278,8 +278,12 @@ impl Tg {
                     } else {
                         core.incoming(me, &chat, who, title, text, u["message"]["date"].as_i64()).await
                     }
-                } else if u["message"]["chat"]["id"].is_i64() && u["message"]["chat"]["type"] == "private" {
-                    self.on_media(me, &core, &address(&u["message"], core.topics()), &u["message"]).await
+                } else if let (Some(_), Some(caption)) = (
+                    u["message"]["chat"]["id"].as_i64(),
+                    for_bot(&u["message"], u["message"]["caption"].as_str().unwrap_or(""), me_id, &my_name, || core.is_family(me, &address(&u["message"], false))),
+                ) {
+                    // In a group, a photo or file addressed to the bot (or any in a family group); `on_media` checks who sent it.
+                    self.on_media(me, &core, &address(&u["message"], core.topics()), &u["message"], caption).await
                 } else {
                     Ok(())
                 };
@@ -299,18 +303,24 @@ impl Tg {
     }
 
     /// Photos go to the bot (its AI looks at them); voice notes are transcribed first; PDFs and text files are read.
-    /// Anything else gets an honest "can't read this yet". Only in paired private chats.
-    async fn on_media(&self, me: &Chan, core: &Arc<Core>, chat: &str, m: &Value) -> Result<()> {
-        if !core.is_paired(me, chat)? {
+    /// Anything else gets an honest "can't read this yet". Only in paired chats, from the person who paired it (or a
+    /// family group's members).
+    async fn on_media(&self, me: &Chan, core: &Arc<Core>, chat: &str, m: &Value, caption: String) -> Result<()> {
+        let from_id = m["from"]["id"].as_i64().map(|i| i.to_string()).unwrap_or_default();
+        let from = Sender { id: &from_id, dm: m["chat"]["type"] == "private" };
+        if !core.files_ok(me, chat, from)? {
             return Ok(());
         }
-        let from_id = m["from"]["id"].as_i64().map(|i| i.to_string()).unwrap_or_default();
-        let from = Sender { id: &from_id, dm: true };
+        // Telegram's bots can download files up to 20 MB: a photo sent as a file, a voice note or an audio file too.
+        let photo = m["photo"].as_array().and_then(|sizes| sizes.last());
+        if [photo.unwrap_or(&Value::Null), &m["document"], &m["voice"], &m["audio"]].iter().any(|f| f["file_size"].as_i64().unwrap_or(0) > 20_000_000) {
+            me.send(chat, tr("That file is over 20 MB, more than Telegram lets me download. Could you send a smaller one?")).await;
+            return Ok(());
+        }
         // A forwarded voice note or photo is someone else's: outside content, like a forwarded message.
         let forwarded = m["forward_origin"].is_object();
-        let caption = m["caption"].as_str().unwrap_or("").to_string();
         let image_doc = m["document"]["mime_type"].as_str().is_some_and(|t| t == "image/jpeg" || t == "image/png");
-        let photo_id = m["photo"].as_array().and_then(|sizes| sizes.last()).and_then(|p| p["file_id"].as_str()).or_else(|| image_doc.then(|| m["document"]["file_id"].as_str()).flatten());
+        let photo_id = photo.and_then(|p| p["file_id"].as_str()).or_else(|| image_doc.then(|| m["document"]["file_id"].as_str()).flatten());
         if let Some(id) = photo_id {
             let (bytes, path) = self.download(id).await?;
             let saved = core.save_media(&bytes, if path.ends_with(".png") { "png" } else { "jpg" })?;
@@ -329,11 +339,6 @@ impl Tg {
             return core.incoming_voice(me, chat, from, bytes, name, outside, m["date"].as_i64()).await;
         }
         if let Some(id) = m["document"]["file_id"].as_str() {
-            // Telegram's bots can download files up to 20 MB.
-            if m["document"]["file_size"].as_i64().unwrap_or(0) > 20_000_000 {
-                me.send(chat, tr("That file is over 20 MB, more than Telegram lets me download. Could you send a smaller one?")).await;
-                return Ok(());
-            }
             let (name, mime) = (m["document"]["file_name"].as_str().unwrap_or("file"), m["document"]["mime_type"].as_str().unwrap_or(""));
             if crate::readable_document(name, mime) {
                 let (bytes, _) = self.download(id).await?;
@@ -360,7 +365,11 @@ impl Tg {
             let reply = core.guest_mode(chat, &text, referenced.as_deref()).await.unwrap_or_else(|e| crate::friendly_error(&format!("{e:#}")));
             let reply = if reply.trim().is_empty() { "(no reply)".to_string() } else { reply };
             // Rich, else Telegram HTML, else plain: one message, so a long reply is cut.
-            let html = crate::fmt::telegram(&reply, 3800).into_iter().next().unwrap_or_default();
+            let parts = crate::fmt::telegram(&reply, 3800);
+            let mut html = parts.first().cloned().unwrap_or_default();
+            if parts.len() > 1 {
+                html.push_str(&format!("…\n\n{}", tr("(Ask me in our private chat for the rest.)")));
+            }
             let tries = [
                 json!({"inline_message_id": sent, "rich_message": {"html": crate::fmt::telegram_rich(&reply)}}),
                 json!({"inline_message_id": sent, "text": html, "parse_mode": "HTML"}),

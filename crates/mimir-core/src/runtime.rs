@@ -97,6 +97,18 @@ impl Chan {
         }
     }
 
+    /// A note ahead of the bot's reply (the "🎙️ I heard" echo): on Signal, an open question's numbers still work.
+    pub(crate) async fn note(&self, ext: &str, text: &str) {
+        match self {
+            Chan::Signal(c) => {
+                if let Err(e) = c.note(ext, text).await {
+                    eprintln!("signal send to {ext} failed: {e:#}");
+                }
+            }
+            _ => self.send(ext, text).await,
+        }
+    }
+
     /// A message, with buttons under it if any; replaces the streamed draft if there is one.
     async fn post(&self, ext: &str, draft: Option<&str>, text: &str, rows: &[Row]) -> Result<()> {
         let text = if text.trim().is_empty() { "(no reply)" } else { text };
@@ -815,7 +827,7 @@ impl Core {
     pub(crate) async fn incoming_voice(self: &Arc<Self>, chan: &Chan, ext: &str, from: Sender<'_>, bytes: Vec<u8>, name: &str, outside: Option<&str>, sent: Option<i64>) -> Result<()> {
         match crate::transcribe::voice_note(&self.db, bytes, name).await {
             Some(Ok(text)) if !text.is_empty() => {
-                chan.send(ext, &trf("🎙️ I heard: “{text}”", &[("text", &text)])).await;
+                chan.note(ext, &trf("🎙️ I heard: “{text}”", &[("text", &text)])).await;
                 if let Some(what) = outside {
                     let said = crate::with_document(&format!("(I sent you {what}.)"), what, &text);
                     return self.incoming_outside_with(chan, ext, from, "", &said, vec![], sent).await;
@@ -884,6 +896,12 @@ impl Core {
         Ok(self.db.chat_lookup(chan.kind(), ext)?.is_some())
     }
 
+    /// Whether `from`'s photos and files are fetched here: the person who paired the chat, or a family group's members.
+    pub(crate) fn files_ok(&self, chan: &Chan, ext: &str, from: Sender<'_>) -> Result<bool> {
+        let Some(chat) = self.db.chat_lookup(chan.kind(), ext)? else { return Ok(false) };
+        Ok(self.sender_ok(chat, from)? == Some(true))
+    }
+
     /// A family group: everyone there talks to the bot, so it hears every message, not just the ones addressed to it.
     pub(crate) fn is_family(&self, chan: &Chan, ext: &str) -> bool {
         self.db.chat_lookup(chan.kind(), ext).ok().flatten().is_some_and(|chat| self.db.chat_family(chat))
@@ -894,7 +912,8 @@ impl Core {
     pub(crate) fn save_media(&self, bytes: &[u8], ext: &str) -> Result<std::path::PathBuf> {
         let dir = self.db.dir().join("media");
         std::fs::create_dir_all(&dir)?;
-        let path = dir.join(format!("{}-{}.{ext}", crate::db::now(), bytes.len()));
+        // Two photos of one size in the same second (scanned pages, a Slack message's photos) don't overwrite each other.
+        let path = dir.join(format!("{}-{}-{}.{ext}", crate::db::now(), bytes.len(), crate::random_hex(4)?));
         std::fs::write(&path, bytes)?;
         Ok(path)
     }
@@ -1357,6 +1376,10 @@ impl Core {
         let tap = if ours { self.db.setting_take(&key)?.and_then(|v| serde_json::from_str::<Tap>(&v).ok()) } else { None };
         let Some(tap) = tap else { return Ok(Some(tr("Already done.").into())) };
         let now = crate::db::now();
+        // A week on, the question (or the reminder, the fallback) is stale: ask again rather than act on it.
+        if now - tap.at > 7 * 86_400 {
+            return Ok(Some(tr("These buttons have expired. Ask me again if you still need it.").into()));
+        }
         Ok(Some(match tap.what {
             TapFor::Choice { question, options } => match options.get(n) {
                 // Their answer, as if typed in reply to the question (so a bot without the question in its history knows it).
@@ -3177,6 +3200,14 @@ mod tests {
         let rows = core.result_rows(&r, "x");
         assert_eq!(core.tap(&chan, "C2", me, &rows[0][0].1).await.unwrap().as_deref(), Some("Already done."));
         assert_eq!(core.tap(&chan, "C1", me, &rows[0][0].1).await.unwrap().as_deref(), Some("👍 Noted."), "still there for its own chat");
+
+        // A week-old message's buttons have expired: they don't act on a stale question.
+        let rows = core.result_rows(&r, "x");
+        let key = format!("tap:{}", rows[0][0].1.split(':').nth(1).unwrap());
+        let mut old: serde_json::Value = serde_json::from_str(&db.setting(&key).unwrap().unwrap()).unwrap();
+        old["at"] = json!(now - 8 * 86_400);
+        db.set_setting(&key, &old.to_string()).unwrap();
+        assert!(core.tap(&chan, "C1", me, &rows[0][0].1).await.unwrap().unwrap().contains("expired"));
 
         // In a family group the household can talk, but only the person who paired it can press the buttons (#135).
         let sam = db.pair_external("discord", "D2", "Sam").unwrap();

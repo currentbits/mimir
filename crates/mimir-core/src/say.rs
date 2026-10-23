@@ -230,6 +230,8 @@ static NL: &[(&str, &str)] = &[
     ("For tomorrow…", "Voor morgen…"),
     ("This chat isn't paired any more.", "Deze chat is niet meer gekoppeld."),
     ("Already done.", "Al gedaan."),
+    ("(Ask me in our private chat for the rest.)", "(Vraag me in onze privéchat om de rest.)"),
+    ("These buttons have expired. Ask me again if you still need it.", "Deze knoppen zijn verlopen. Vraag het me opnieuw als je het nog nodig hebt."),
     ("You chose: {choice}", "Je koos: {choice}"),
     ("✍️ Type your answer: {question}", "✍️ Typ je antwoord: {question}"),
     ("Type your answer.", "Typ je antwoord."),
