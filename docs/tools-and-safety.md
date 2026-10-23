@@ -168,9 +168,10 @@ chat ([Signing in from your phone](computer.md#signing-in-from-your-phone)); tha
 ## Tool servers (MCP)
 
 **Settings → Tool servers** adds any MCP server: one that runs as a command (your files, GitHub, a database…) or one
-online at a URL. **Browse** lists about forty popular hosted ones (Stripe, PayPal, Ramp, Notion, Linear, Atlassian,
-Parallel, Exa, Ahrefs, Semrush, Figma, Canva, GitHub, Sentry…), each on the company's own site: **Add** connects it,
-and one that wants a sign-in shows **Sign in to …** next (GitHub asks for a token instead). Not listed? **Search the
+online at a URL. **Browse** lists about fifty popular hosted ones (Stripe, PayPal, Ramp, Notion, Linear, Atlassian,
+Parallel, Exa, Ahrefs, Semrush, Figma, Canva, Excalidraw, Mixpanel, PostHog, GitHub, Sentry…), each on the company's
+own site: **Add** connects it, and one that wants a sign-in shows **Sign in to …** next (GitHub and Gamma ask for a
+token instead). Not listed? **Search the
 MCP registry** looks it up in the [official MCP registry](https://registry.modelcontextprotocol.io), showing only
 servers that run on their publisher's own domain (the registry checks that), with the domain next to each: a
 third party's "Ahrefs" server shows as `jojapi.com`, not `ahrefs.com`. For anything else, use **Paste** with its
