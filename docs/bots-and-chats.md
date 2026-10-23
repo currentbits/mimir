@@ -215,8 +215,10 @@ dates show as Excel's day numbers. PowerPoint files arrive slide by slide, with 
 10; a page stored as a JPEG or plain grey/colour pixels, which is how scanners and scanning apps save them). To keep scans on your computer and off your AI plan, set a
 local document model under **Settings → Scanned PDFs**: any [Ollama](https://ollama.com) model that reads pages, such
 as a build of [dots.ocr](https://github.com/studio-dots-ai/dots.ocr) or a vision model you've pulled. Mimir sends it the
-pages first and the bot gets their text, tables included; a page it can't read still goes as a photo. Slack needs the `files:read` scope for this (see the hint when you add Slack). In a channel or server,
-only the files of the person who paired it are fetched.
+pages first and the bot gets their text, tables included; a page it can't read still goes as a photo. Slack needs the `files:read` scope for this (see the hint when you add Slack). In a channel, server or group,
+only the files of the person who paired it are fetched (and, in a family group, its members'). In a Telegram group a photo or file
+has to be for the bot, like a message: @ its name in the caption, or reply to it. Every file a Telegram bot downloads, photos and
+voice notes included, can be at most 20 MB.
 
 Bots send files back too, with `send_file`: a file from the chat's workspace, or a screenshot of the bots' computer
 (the proof that a booking or a form went through). It arrives after the reply: a photo or document on Telegram, an
