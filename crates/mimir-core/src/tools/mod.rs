@@ -1590,6 +1590,10 @@ mod tests {
         assert!(call(&dm, "send_file", &json!({"path": "notes/done.md"})).await.unwrap().contains("done.md will be sent"));
         let (_, files) = crate::files::split_sent(&crate::files::sent_lines(&db, 5));
         assert_eq!(std::fs::read_to_string(crate::files::sent_path(&home, 42, &files[0]).unwrap().0).unwrap(), "booked");
+        // Made into a PDF on the way out; the workspace keeps the text.
+        assert!(call(&dm, "send_file", &json!({"path": "notes/done.md", "format": "pdf"})).await.unwrap().contains("done.pdf will be sent"));
+        let (_, files) = crate::files::split_sent(&crate::files::sent_lines(&db, 5));
+        assert!(std::fs::read(crate::files::sent_path(&home, 42, &files[1]).unwrap().0).unwrap().starts_with(b"%PDF"));
         let group = ToolCtx::new(db.clone(), 1, -42).with_run(Some(6));
         let r = tokio::time::timeout(Duration::from_millis(1500), call(&group, "send_file", &json!({"path": "notes/done.md"}))).await;
         assert!(r.is_err(), "waits for an OK");

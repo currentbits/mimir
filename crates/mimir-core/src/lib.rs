@@ -98,6 +98,7 @@ pub mod calendar;
 pub mod email;
 pub mod events;
 pub mod files;
+pub mod office;
 pub mod library;
 pub mod lookalike;
 pub mod transcribe;

@@ -502,7 +502,7 @@ pub(super) fn describe(ctx: &ToolCtx, name: &str, args: &Value) -> String {
         "file_write" => format!("{} {}: {}", match args["mode"].as_str() { Some("append") => "Add to", Some("replace") => "Rewrite", _ => "Create" }, args["path"].as_str().unwrap_or("?"), truncate(args["content"].as_str().unwrap_or(""), 300)),
         "file_delete" => format!("Delete the file {}", args["path"].as_str().unwrap_or("?")),
         "send_file" => match args["path"].as_str().filter(|_| args["screenshot"].as_bool() != Some(true)) {
-            Some(p) => format!("Send the file {p} to this chat"),
+            Some(p) => format!("Send the file {p} to this chat{}", args["format"].as_str().map(|f| format!(" as {f}")).unwrap_or_default()),
             None => "Send a screenshot of the computer's screen to this chat".into(),
         },
         // Who it's to first, then the text (an email to send, all of it: what you approve is what goes).

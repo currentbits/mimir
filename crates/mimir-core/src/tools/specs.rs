@@ -175,9 +175,12 @@ pub fn specs() -> Vec<(&'static str, &'static str, Value)> {
             "send_file",
             "Send a file to this chat with your reply, as the proof of work: a file from the workspace (path), or a \
              screenshot of your computer's screen as it is now (screenshot=true; after a booking or a form, say). It \
-             arrives after your reply as a photo or document. Up to 5 per reply.",
+             arrives after your reply as a photo or document. Up to 5 per reply. For a Word document, PDF or spreadsheet, \
+             write the content to the workspace first (markdown: headings, lists, tables; or CSV for a spreadsheet) and \
+             send it with format.",
             json!({"type":"object","properties":{
                 "path":{"type":"string","description":"a workspace file, like notes/trip.md"},
+                "format":{"type":"string","enum":["docx","xlsx","pdf"],"description":"send the file made into this: docx or pdf from markdown, xlsx from CSV or the first markdown table"},
                 "screenshot":{"type":"boolean","description":"send your computer's screen instead"}
             }}),
         ),
