@@ -2,7 +2,7 @@
 
 What changed for people using Mimir. The newest release is at the top; "Unreleased" is what the next one brings.
 
-## Unreleased
+## 0.6.1
 
 ### Approvals
 - **Bots that don't ask:** turn on **Don't ask me first** on a bot's page (under What it can do) and its tools run
