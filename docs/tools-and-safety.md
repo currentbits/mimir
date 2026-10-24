@@ -138,10 +138,18 @@ rest of that reply. Every live card also has **Approve all like this**: this act
 without asking until the reply ends. Neither covers anything after the bot read outside content, saved-login use, or
 routines.
 
-To stop being asked at all, press **Always** on the card (in the app, Telegram, Slack or Discord): from then on that
-tool, or that tool on that website, runs without asking. On a plain card that's Allow (it still asks after outside
-content); on any other card it's Always (see above). On a saved login's card it's that site's login; on a plan's card,
-plans no longer ask. Change it back in **Settings → Permissions**.
+To stop being asked at all, press **Always** on the card (in the app, the tray menu, Telegram, Slack or Discord): from
+then on that tool, or that tool on that website, runs without asking, also after outside content. On a saved login's
+card it's that site's login; on a plan's card, plans no longer ask. In a guest's chat it's Allow (it still asks after
+outside content). Change it back in **Settings → Permissions**.
+
+**A bot that never asks.** On a bot's page, **What it can do → Don't ask me first** lets that bot act without any
+approval card: whatever would ask (a rule, outside content, a sensitive source, a loop, a routine's drift, a saved
+login, a plan) just runs, and an instruction it saves to memory ("reply in Dutch") is kept right away instead of
+waiting in Memory for you to accept (one picked up from outside content stays unconfirmed), and so is a skill it
+saves. Deny rules still hold, signing in and taking over the computer still need you, and a guest's
+chat still asks the guest. A task one bot hands another only skips the asks if both bots are set so. **Settings → Your
+data → Check everything** lists the bots set this way.
 
 **Several at once.** With two or more waiting, **Allow all** and **Deny all** (in the app and in Needs you) answer every
 waiting card together, after a confirmation that lists each one. Signing in and taking over the computer aren't

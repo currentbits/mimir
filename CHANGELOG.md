@@ -2,6 +2,20 @@
 
 What changed for people using Mimir. The newest release is at the top; "Unreleased" is what the next one brings.
 
+## Unreleased
+
+### Approvals
+- **Bots that don't ask:** turn on **Don't ask me first** on a bot's page (under What it can do) and its tools run
+  without approval cards, also after it reads a web page or email, and instructions it saves to memory apply right
+  away, as do skills it saves, instead of waiting for you to accept them. Deny rules still hold, and signing in or
+  taking over the computer still need you. **Check everything** lists bots set this way.
+- **Always means always:** pressing Always on a card now stops that ask for good, also after a bot reads outside
+  content (before, a plain card's Always still asked again after the next web page). The tray menu offers Always
+  too, and accepting *Stop asking?* in Needs you does the same.
+- **Always accept instructions:** a new switch in **Settings → Memory** saves the instructions any bot learns ("reply
+  in Dutch") right away, instead of suggesting them for you to accept. One picked up from a web page or email still
+  stays unconfirmed until you check it.
+
 ## 0.6.0
 
 ### Email

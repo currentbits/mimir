@@ -452,7 +452,7 @@ pub(crate) fn offers_all(a: &Approval) -> bool {
 
 /// …and "Always" on every card with something to allow, like the app. Not in a guest's chat (of any kind): the guest
 /// answers there, and Always would change your rules for every chat.
-pub(crate) fn offers_always(a: &Approval) -> bool {
+pub fn offers_always(a: &Approval) -> bool {
     !matches!(a.kind.as_str(), "signin" | "takeover" | "guest" | "drift") && !a.guest
 }
 
@@ -3231,18 +3231,20 @@ mod tests {
             let id = db.approval_create(1, 5, tool, "do it", 60, kind, site).unwrap();
             db.approval_decide(id, true, Some(5)).unwrap().unwrap()
         };
-        // A plain ask: the card offers Always, and it allows the tool from now on.
+        // A plain ask: the card offers Always, and it never asks before the tool again, not even after outside content.
         let a = ask("memory_forget", "rule", None);
         let rows = card_buttons(&a);
         assert!(rows.iter().flatten().any(|(l, d)| l.starts_with("Always") && d.ends_with(":w")), "{rows:?}");
         crate::tools::always_allow(&db, &a).unwrap();
-        assert_eq!(db.rule("memory_forget").unwrap().as_deref(), Some("allow"));
+        assert_eq!(db.rule("memory_forget").unwrap().as_deref(), Some("always"));
+        assert_eq!(crate::tools::decide(&db, "memory_forget", true).unwrap(), "allow");
+        db.set_rule("memory_forget", "default").unwrap();
         assert!(verdict_for(&a, Decision::Always).contains("without asking"));
         // A website: only that site.
         let w = ask("web_fetch", "rule", Some("example.com"));
         assert_eq!(crate::tools::always_label(&w), "Always on example.com");
         crate::tools::always_allow(&db, &w).unwrap();
-        assert!(db.site_rules().unwrap().iter().any(|(t, h, act)| t == "web_fetch" && h == "example.com" && act == "allow"));
+        assert!(db.site_rules().unwrap().iter().any(|(t, h, act)| t == "web_fetch" && h == "example.com" && act == "always"));
         assert_ne!(db.rule("web_fetch").unwrap().as_deref(), Some("allow"), "not the whole tool");
         // Asked for more than its rule (after outside content, an email, a new bot, a loop…): Always means never ask
         // again, not even after outside content.

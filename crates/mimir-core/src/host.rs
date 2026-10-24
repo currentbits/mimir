@@ -778,6 +778,9 @@ impl Host {
             "api_credits" => self.api_credits(a),
             // The request-match check: off until false asks are measured (scripts/e2e-flows.py turns it on).
             "set_ask_check" => ok(self.db.set_setting("ask_check", if arg(a, "on")? { "on" } else { "off" })?),
+            // A bot whose tools run without asking you first (tools::hands_off).
+            "hands_off" => ok(self.db.hands_off(arg(a, "bot_id")?)),
+            "set_hands_off" => ok(self.db.set_hands_off(arg(a, "bot_id")?, arg(a, "on")?)?),
             "set_telegram_topics" => ok(self.db.set_setting(&format!("telegram_topics:{}", arg::<i64>(a, "bot_id")?), if arg(a, "on")? { "on" } else { "off" })?),
             // Has this conversation read untrusted content (so changes ask first)? And: start a fresh one.
             // Whether it read outside content, and its title and "so far" line (tidy::catch_up), if it has them yet.
@@ -1565,6 +1568,13 @@ impl Host {
                     self.db.set_setting(crate::tidy::SENSITIVE, if on { "on" } else { "off" })?;
                 }
                 ok(self.db.setting(crate::tidy::SENSITIVE)?.as_deref() == Some("on"))
+            }
+            // Instructions bots learn are saved without waiting for you to accept them (get without `on`).
+            "accept_instructions" => {
+                if let Some(on) = arg::<Option<bool>>(a, "on")? {
+                    self.db.set_setting(tools::ACCEPT_INSTRUCTIONS, if on { "on" } else { "off" })?;
+                }
+                ok(self.db.setting(tools::ACCEPT_INSTRUCTIONS)?.as_deref() == Some("on"))
             }
             "update_routine" => {
                 let (chat, id, cron): (i64, i64, String) = (arg(a, "chat_id")?, arg(a, "id")?, arg(a, "cron")?);
