@@ -159,6 +159,11 @@ export function BotPage({ bot, status, canDelete, onSaved, onDeleted, onChat, on
   const chan = (kind: string) => status?.channels.find(c => c.kind === kind)
   const toolServers = useLoad(() => invoke<{ servers: ToolServer[] }>('tool_servers'), [], 60000)
   const topics = useLoad(() => bot ? invoke<boolean>('telegram_topics', { botId: bot.id }) : Promise.resolve(false), [bot?.id], 60000)
+  const handsOff = useLoad(() => bot ? invoke<boolean>('hands_off', { botId: bot.id }) : Promise.resolve(false), [bot?.id])
+  const setHandsOff = async (on: boolean) => {
+    if (on && !await ask(`Let ${bot!.name} act without asking you first? It deletes, sends email, opens sites, uses saved logins and makes bots with no card, even after it reads a web page or email that could be telling it to. Deny rules in Settings → Permissions still hold.`, 'Don’t ask me', true)) return
+    invoke('set_hands_off', { botId: bot!.id, on }).then(handsOff.reload, e => setErr(String(e)))
+  }
   const computer = useLoad(() => invoke<ComputerStatus>('computer'), [], 60000)
   const serverTools: [string, string][] = (toolServers.data?.servers ?? []).filter(s => !s.preset).map(s => [`${s.name}__*`, `Use ${s.name}`])
   const ALL = [...Object.keys(TOOL_LABEL), 'browser__*', ...serverTools.map(([t]) => t)]
@@ -293,7 +298,12 @@ export function BotPage({ bot, status, canDelete, onSaved, onDeleted, onChat, on
         )}
       </Group>
 
-      <Group title="What it can do" note="Permissions in Settings still decide which of these ask you first.">
+      <Group title="What it can do" note={handsOff.data ? 'It uses these without asking you first.' : 'Permissions in Settings still decide which of these ask you first.'}>
+        {bot && (
+          <Row title="Don’t ask me first" desc="Its tools run without approval cards, also after it reads outside content, and instructions and skills it learns are kept without waiting for you to accept them. Signing in and taking over the computer still need you; a guest’s chat still asks the guest.">
+            <Switch label="Don’t ask me first" checked={!!handsOff.data} onChange={on => void setHandsOff(on)} />
+          </Row>
+        )}
         <div className="tool-grid">
           {[...Object.entries(TOOL_LABEL), ['browser__*', 'Use the web browser'], ...serverTools].map(([tool, label]) => (
             <Row key={tool} title={label}><Switch label={label} checked={enabled.includes(tool)} onChange={() => toggle(tool)} /></Row>

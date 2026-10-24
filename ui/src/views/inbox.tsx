@@ -48,8 +48,10 @@ export function useLeave() {
 /** The Always button's words: the whole tool, the tool on one site, or what a plan or a loop card stops asking. */
 const alwaysLabel = (a: Approval) => a.site ? `Always on ${a.site}` : a.kind === 'plan' ? 'Always approve plans' : `Always: ${toolLabel(a.tool).toLowerCase()}`
 
-/** Asks that stopped for more than the tool's rule: Always on them means never asking, not even after outside content. */
-const neverAsks = (a: Approval) => !!a.kind && a.kind !== 'rule' && a.kind !== 'guest'
+/** Always means never asking, not even after outside content; in a guest's chat it's a plain allow (still guarded). */
+const neverAsks = (a: Approval) => a.kind !== 'guest'
+/** Asks only because of the tool's rule (not a guard): allowed a few times, the card offers Always first. */
+const plainAsk = (a: Approval) => !a.kind || a.kind === 'rule' || a.kind === 'guest'
 
 type Decide = (id: number, approve: boolean, always?: 'tool' | 'site' | 'run', more?: { edits?: Record<string, string>; reason?: string }) => void
 
@@ -62,7 +64,7 @@ function ApprovalCard({ a, where, leaving, decide, inline }: {
   const b = botOf(a.bot_id)
   const risk = approvalRisk(a)
   // Allowed the same plain thing a few times already: offer to stop asking (never a nudge to drop a guard).
-  const learned = risk.always && !neverAsks(a) && (a.allowed_before ?? 0) >= 2
+  const learned = risk.always && plainAsk(a) && (a.allowed_before ?? 0) >= 2
   const [edits, setEdits] = useState<Record<string, string> | null>(null)
   const [why, setWhy] = useState<string | null>(null)
   const d = a.draft
@@ -315,14 +317,14 @@ export function InboxView({ data, troubled, reload, chats, chatName, openBot, op
         <div className="section-title"><h2>Stop asking?</h2></div>
         <div className="group">{data.rule_hints!.map(h => {
           const b = botOf(h.bot_id), key = `${h.tool}:${h.site ?? ''}`
-          const accept = () => (h.site ? invoke('set_site_rule', { tool: h.tool, host: h.site, action: 'allow' }) : invoke('set_rule', { tool: h.tool, action: 'allow' }))
+          const accept = () => (h.site ? invoke('set_site_rule', { tool: h.tool, host: h.site, action: 'always' }) : invoke('set_rule', { tool: h.tool, action: 'always' }))
           const dismiss = () => invoke('rule_hint_dismiss', { tool: h.tool, site: h.site })
           return (
             <div key={key} className="inbox-row">
               <Avatar id={b.id} name={b.name} size={28} still />
               <div className="inbox-main">
                 <div className="inbox-title">You allowed “{toolLabel(h.tool)}”{h.site ? ` on ${h.site}` : ''} {h.times} times. Always allow it?</div>
-                <div className="inbox-desc">Last asked by {b.name}, never denied in 30 days. For every bot; it still asks after a bot reads outside content. Change it in Settings → Permissions.</div>
+                <div className="inbox-desc">Last asked by {b.name}, never denied in 30 days. For every bot, also after a bot reads outside content. Change it in Settings → Permissions.</div>
               </div>
               <div className="row-ctl">
                 <button className="btn btn-sm" onClick={() => accept().then(reload, e => tell(`Couldn't change the rule: ${e}`))}>Always allow</button>

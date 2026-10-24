@@ -26,6 +26,9 @@ pub(crate) fn checklist(steps: &[(String, bool)]) -> String {
 /// How long a bot waits for the person to take over its computer.
 const HANDOFF_SECS: i64 = 600;
 
+/// The setting (Settings → Memory) that saves an instruction a bot learns right away, instead of suggesting it.
+pub const ACCEPT_INSTRUCTIONS: &str = "accept_instructions";
+
 /// chat_search results for the model: "[Mon 5 Oct 2026 14:02] You: …" / "Ada: …", flagging replies that came from
 /// a conversation that had read outside content.
 fn chat_hits(db: &Db, hits: &[crate::db::ChatHit]) -> String {
@@ -389,7 +392,11 @@ pub(super) async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<Stri
             }
             // Replacing one of the person's conventions counts too, whatever type the new entry claims to be.
             let replaces_convention = sup.is_some_and(|id| ctx.db.entries(&scope).is_ok_and(|v| v.iter().any(|e| e.id == id && e.kind == "convention")));
-            if (kind == "convention" || replaces_convention) && !own_words {
+            // Settings → Memory → Always accept instructions, or a bot set to "Don't ask me first": saved straight away
+            // (one picked up from outside content is still kept unconfirmed, like any memory: out of the standing
+            // instructions until you check it).
+            let accept = crate::tools::hands_off(ctx) || ctx.db.setting(ACCEPT_INSTRUCTIONS)?.as_deref() == Some("on");
+            if (kind == "convention" || replaces_convention) && !own_words && !accept {
                 let why = if src.is_empty() { String::new() } else { format!(" ({src})") };
                 let sug = crate::db::Suggestion {
                     id: 0,
@@ -721,6 +728,11 @@ pub(super) async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<Stri
                 reason.push_str(" The conversation had read outside content: check the steps.");
             }
             match ctx.db.skill_saved_propose(&scope, ctx.bot_id, title, description, body, &reason, ctx.run_id)? {
+                // A bot set to "Don't ask me first" keeps it straight away (its reason, with the steps, stays on it).
+                Some(id) if crate::tools::hands_off(ctx) => {
+                    ctx.db.skill_decide(&scope, id, true)?;
+                    format!("Saved skill #{id} \"{}\".", title.trim())
+                }
                 Some(id) => format!("Proposed skill #{id} \"{}\". It's waiting for the person to press Save (here in the chat, or in Memory → Skills); tell them.", title.trim()),
                 None => "A version of that skill is already waiting for the person, or they turned it down recently.".into(),
             }

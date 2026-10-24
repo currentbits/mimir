@@ -728,6 +728,18 @@ function SensitiveRow() {
   )
 }
 
+/** Whether an instruction a bot learns ("reply in Dutch") is saved right away or suggested for you to accept. */
+function AcceptInstructionsRow() {
+  const [on, setOn] = useState<boolean | null>(null)
+  useEffect(() => { invoke<boolean>('accept_instructions').then(setOn, () => {}) }, [])
+  return (
+    <Row icon={<Icon name="memory" size={15} />} title="Always accept instructions"
+      desc={on ? 'Instructions your bots learn are saved right away. One picked up from a web page or email stays unconfirmed until you check it.' : 'An instruction a bot learns waits in Memory for you to accept, unless you said it as a rule (“always…”, “from now on…”).'}>
+      {on !== null && <Switch label="Always accept instructions" checked={on} onChange={v => { setOn(v); invoke<boolean>('accept_instructions', { on: v }).then(setOn, () => setOn(!v)) }} />}
+    </Row>
+  )
+}
+
 /** Memories as Markdown files in a folder you pick (vault.rs): Obsidian, grep, git. What you change there is asked about. */
 function MemoryFolderSettings() {
   const st = useLoad(() => invoke<string>('memory_folder', {}), [])
@@ -746,6 +758,7 @@ function MemoryFolderSettings() {
         </div></div>
       </form>
       <SensitiveRow />
+      <AcceptInstructionsRow />
     </Group>
   )
 }
