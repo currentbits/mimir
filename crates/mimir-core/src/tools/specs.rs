@@ -167,6 +167,18 @@ pub fn specs() -> Vec<(&'static str, &'static str, Value)> {
             },"required":["path","content","mode"]}),
         ),
         (
+            "file_export",
+            "Copy a workspace file, or a folder with everything in it, to a folder on the user's machine (the one Mimir \
+             runs on), like ~/.claude/skills or ~/Documents/plans: the only way to put files outside the workspace. The \
+             user approves it on a card that shows where and which files. A folder lands as a folder of its name. Never \
+             into system folders, the home folder itself, or hidden ones like ~/.ssh.",
+            json!({"type":"object","properties":{
+                "path":{"type":"string","description":"a workspace file or folder, like skills/seo"},
+                "dest":{"type":"string","description":"the folder to copy into, a full path (~ is the home folder)"},
+                "replace":{"type":"boolean","description":"overwrite files already there with the same name (the card says how many)"}
+            },"required":["path","dest"]}),
+        ),
+        (
             "file_delete",
             "Delete a file from this chat's workspace.",
             json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}),

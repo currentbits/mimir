@@ -1195,7 +1195,7 @@ export const TOOL_LABEL: Record<string, string> = {
   computer_screenshot: "Look at the computer's screen", computer_scroll: 'Scroll on the computer',
   computer_signin: 'Use saved logins', computer_type: 'Type on the computer', email_draft: 'Draft emails', email_hand_over: 'Hand replies to you',
   email_read: 'Read your email', email_search: 'Search your email', email_send: 'Send emails',
-  file_delete: 'Delete files', file_list: 'List files', file_read: 'Read files', file_write: 'Write files',
+  file_delete: 'Delete files', file_export: 'Copy files to your folders', file_list: 'List files', file_read: 'Read files', file_write: 'Write files',
   goal_set: 'Set goals', goal_update: 'Update goals', routine_update: 'Change routines', send_file: 'Send files',
   skill_save: 'Save skills', web_search: 'Search the web', x_search: 'Search X',
 }

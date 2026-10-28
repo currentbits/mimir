@@ -156,6 +156,7 @@ pub fn step_label(tool: &str) -> String {
         "file_list" | "file_read" => "Looking at the workspace".into(),
         "file_write" => "Writing a file".into(),
         "file_delete" => "Deleting a file".into(),
+        "file_export" => "Copying files to your folder".into(),
         "send_file" => "Sending a file".into(),
         "card_read" => "Reading the pinned cards".into(),
         "card_write" => "Updating a pinned card".into(),

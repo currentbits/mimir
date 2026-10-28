@@ -498,6 +498,7 @@ pub(super) async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<Stri
             truncate(&text, 60_000)
         }
         "file_write" => crate::files::write(&ctx.db, ctx.chat_id, s(args, "path")?, s(args, "content")?, s(args, "mode")?, ctx.is_tainted())?,
+        "file_export" => crate::files::export(&ctx.db, ctx.chat_id, s(args, "path")?, s(args, "dest")?, args["replace"].as_bool() == Some(true))?,
         "file_delete" => {
             let p = s(args, "path")?;
             crate::files::delete(&ctx.db, ctx.chat_id, p)?;

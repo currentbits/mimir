@@ -143,6 +143,95 @@ pub fn zip_folder(db: &crate::db::Db, chat: i64, rel: &str) -> Result<Option<(St
     Ok(Some((format!("{name}.zip"), z.finish()?.into_inner())))
 }
 
+/// Folders an export never goes into, wherever a link points: the system's, and in the home folder where a file could
+/// run or let someone in. (The home folder itself, the disk's root and Mimir's own data are refused too.)
+const NO_EXPORT: [&str; 16] = [
+    "/System", "/usr", "/bin", "/sbin", "/etc", "/private/etc", "/Library", "/Applications", "/boot", "/dev", "/proc", "/sys", "/lib", "/lib64",
+    "C:\\Windows", "C:\\Program Files",
+];
+const NO_EXPORT_HOME: [&str; 7] = [".ssh", ".gnupg", ".aws", ".kube", "Library/LaunchAgents", ".config/autostart", ".mimir"];
+
+/// The folder an export goes to, as it really is (links resolved), or why not. `~` is the user's home.
+pub fn export_dir(db: &crate::db::Db, dest: &str) -> Result<PathBuf> {
+    let home = crate::user_home().context("no home folder")?;
+    let dest = dest.trim();
+    let p = match dest.strip_prefix('~') {
+        Some(rest) => home.join(rest.trim_start_matches(['/', '\\'])),
+        None => PathBuf::from(dest),
+    };
+    if !p.is_absolute() || p.components().any(|c| matches!(c, Component::ParentDir)) {
+        bail!("give the destination folder as a full path, like ~/.claude/skills");
+    }
+    // The real place: the nearest folder on the way that exists, with any link in it resolved, then the rest.
+    let (mut at, mut rest) = (p.clone(), vec![]);
+    while !at.exists() {
+        rest.push(at.file_name().context("no such folder")?.to_owned());
+        at = at.parent().context("no such folder")?.to_path_buf();
+    }
+    let mut real = at.canonicalize()?;
+    real.extend(rest.iter().rev());
+    let home = home.canonicalize().unwrap_or(home);
+    let data = db.dir().canonicalize().unwrap_or_else(|_| db.dir());
+    if real.parent().is_none()
+        || real == home
+        || real.starts_with(&data)
+        || NO_EXPORT.iter().any(|s| real.starts_with(s))
+        || NO_EXPORT_HOME.iter().any(|s| real.starts_with(home.join(s)))
+    {
+        bail!("not into {}: pick a folder of the user's own, like ~/Documents/<name> or ~/.claude/skills", real.display());
+    }
+    if real.exists() && !real.is_dir() {
+        bail!("{} is a file, not a folder", real.display());
+    }
+    Ok(real)
+}
+
+/// What an export would copy: the folder it goes to, (workspace file, where it lands) for each, and how many of
+/// those are already there (replaced only when asked to).
+pub fn export_plan(db: &crate::db::Db, chat: i64, rel: &str, dest: &str) -> Result<(PathBuf, Vec<(String, PathBuf)>, usize)> {
+    let src = resolve(&root(db, chat), rel)?;
+    let dir = export_dir(db, dest)?;
+    let base = rel.trim().trim_start_matches("./").trim_end_matches('/');
+    let name = base.rsplit('/').next().unwrap_or(base);
+    let files: Vec<(String, PathBuf)> = if src.is_dir() {
+        list(db, chat, rel)?
+            .into_iter()
+            .map(|(p, _)| {
+                let to = dir.join(name).join(p.strip_prefix(base).unwrap_or(&p).trim_start_matches('/'));
+                (p, to)
+            })
+            .collect()
+    } else if src.is_file() {
+        vec![(base.to_string(), dir.join(name))]
+    } else {
+        bail!("no file or folder {rel} in the workspace");
+    };
+    if files.is_empty() {
+        bail!("{rel} is an empty folder");
+    }
+    let there = files.iter().filter(|(_, to)| to.symlink_metadata().is_ok()).count();
+    Ok((dir, files, there))
+}
+
+/// Copy a workspace file or folder (as a folder of that name) into `dest` on this machine. Refuses to replace what's
+/// there unless `replace`, and never writes through a link.
+pub fn export(db: &crate::db::Db, chat: i64, rel: &str, dest: &str, replace: bool) -> Result<String> {
+    let (dir, files, there) = export_plan(db, chat, rel, dest)?;
+    if there > 0 && !replace {
+        bail!("{there} of these already exist in {}; ask again with replace: true to overwrite them (the card says so)", dir.display());
+    }
+    let root = root(db, chat);
+    for (from, to) in &files {
+        if to.symlink_metadata().is_ok_and(|m| m.file_type().is_symlink()) {
+            bail!("{} is a link; not writing through it", to.display());
+        }
+        std::fs::create_dir_all(to.parent().context("no folder")?)?;
+        std::fs::copy(root.join(from), to).with_context(|| format!("couldn't write {}", to.display()))?;
+    }
+    let base = rel.trim().trim_start_matches("./").trim_end_matches('/');
+    Ok(format!("Copied {} file(s) to {} on {}", files.len(), dir.join(base.rsplit('/').next().unwrap_or(base)).display(), machine()))
+}
+
 /// A file's text, and whether it's outside content (written after reading some, or not written by Mimir at all).
 pub fn read(db: &crate::db::Db, chat: i64, rel: &str) -> Result<(String, bool)> {
     let path = resolve(&root(db, chat), rel)?;
@@ -309,6 +398,39 @@ mod tests {
         std::io::Read::read_to_string(&mut z.by_name("seo/refs/b.md").unwrap(), &mut text).unwrap();
         assert_eq!(text, "skills/seo/refs/b.md");
         assert!(zip_folder(&db, 3, "../x").is_err());
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn an_export_copies_into_a_folder_of_the_users_and_nowhere_else() {
+        let home = std::env::temp_dir().join(format!("mimir-export-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(home.join("data")).unwrap();
+        let db = crate::db::Db::open(&home.join("data").join("mimir.db")).unwrap();
+        for f in ["skills/seo/SKILL.md", "skills/seo/refs/a.md"] {
+            write(&db, 3, f, f, "create", false).unwrap();
+        }
+        let out = home.join("out").join("skills");
+        let said = export(&db, 3, "skills/seo", out.to_str().unwrap(), false).unwrap();
+        assert!(said.starts_with("Copied 2 file(s) to ") && said.contains("seo"), "{said}");
+        assert_eq!(std::fs::read_to_string(out.join("seo/refs/a.md")).unwrap(), "skills/seo/refs/a.md");
+        // Again: it's there now, so only with replace.
+        assert!(export(&db, 3, "skills/seo", out.to_str().unwrap(), false).unwrap_err().to_string().contains("already exist"));
+        assert_eq!(export_plan(&db, 3, "skills/seo", out.to_str().unwrap()).unwrap().2, 2);
+        export(&db, 3, "skills/seo", out.to_str().unwrap(), true).unwrap();
+        // Never the system's folders, the root, the home folder itself, Mimir's own data, or relative paths.
+        let me = crate::user_home().unwrap();
+        for bad in ["/", "/etc", "/usr/local/x", "~", "~/.ssh", "relative/dir", "/tmp/../etc"] {
+            assert!(export_dir(&db, bad).is_err(), "{bad}");
+        }
+        assert!(export_dir(&db, home.join("data").join("x").to_str().unwrap()).is_err(), "Mimir's data");
+        assert!(export_dir(&db, &format!("{}/.claude/skills", me.display())).is_ok());
+        // A link to a system folder is followed to where it really goes, and refused there.
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink("/etc", home.join("etc-link")).unwrap();
+            assert!(export_dir(&db, home.join("etc-link").join("x").to_str().unwrap()).is_err());
+        }
         let _ = std::fs::remove_dir_all(&home);
     }
 

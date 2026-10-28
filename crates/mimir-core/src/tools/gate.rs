@@ -72,7 +72,7 @@ pub const READ_ONLY: [&str; 16] = [
 pub fn default_action(tool: &str) -> &'static str {
     match tool {
         // Opening a site asks, like the browser's (with "always on this site"); looking, clicking and typing don't.
-        "memory_forget" | "routine_delete" | "computer_open" | "bot_create" | "file_delete" | "email_send" | "calendar_create" => "ask",
+        "memory_forget" | "routine_delete" | "computer_open" | "bot_create" | "file_delete" | "file_export" | "email_send" | "calendar_create" => "ask",
         _ => "allow",
     }
 }
@@ -516,6 +516,18 @@ pub(super) fn describe(ctx: &ToolCtx, name: &str, args: &Value) -> String {
         "file_read" => format!("Read {}", args["path"].as_str().unwrap_or("?")),
         "file_write" => format!("{} {}: {}", match args["mode"].as_str() { Some("append") => "Add to", Some("replace") => "Rewrite", _ => "Create" }, args["path"].as_str().unwrap_or("?"), truncate(args["content"].as_str().unwrap_or(""), 300)),
         "file_delete" => format!("Delete the file {}", args["path"].as_str().unwrap_or("?")),
+        // Where first (in full), then what, and what it would overwrite.
+        "file_export" => match crate::files::export_plan(&ctx.db, ctx.chat_id, args["path"].as_str().unwrap_or(""), args["dest"].as_str().unwrap_or("")) {
+            Ok((dir, files, there)) => format!(
+                "Copy to {} on {}: {}{}{}",
+                dir.display(),
+                crate::files::machine(),
+                files.iter().take(12).map(|(f, _)| f.as_str()).collect::<Vec<_>>().join(", "),
+                if files.len() > 12 { format!(" and {} more", files.len() - 12) } else { String::new() },
+                if there > 0 { format!(". Replaces {there} file(s) already there.") } else { String::new() }
+            ),
+            Err(e) => format!("Copy {} to {}: {e}", args["path"].as_str().unwrap_or("?"), args["dest"].as_str().unwrap_or("?")),
+        },
         "send_file" => match args["path"].as_str().filter(|_| args["screenshot"].as_bool() != Some(true)) {
             Some(p) => format!("Send the file {p} to this chat{}", args["format"].as_str().map(|f| format!(" as {f}")).unwrap_or_default()),
             None => "Send a screenshot of the computer's screen to this chat".into(),
@@ -718,6 +730,13 @@ pub(super) fn always_ask(name: &str, decision: String, why: &'static str, tainte
 pub(super) fn precheck(ctx: &ToolCtx, name: &str, args: &Value) -> Result<()> {
     let len = |k: &str| args[k].as_str().map_or(0, |s| s.chars().count());
     match name {
+        // Where it goes and what it would overwrite, before anyone is asked.
+        "file_export" => {
+            let (dir, _, there) = crate::files::export_plan(&ctx.db, ctx.chat_id, s(args, "path")?, s(args, "dest")?)?;
+            if there > 0 && args["replace"].as_bool() != Some(true) {
+                bail!("{there} of these already exist in {}; pass replace: true to overwrite them (the card will say so), or pick another folder", dir.display());
+            }
+        }
         // Memories are short facts; a long one would also outgrow its approval card.
         "memory_store" if len("title") > 120 || len("body") > 1000 => {
             bail!("too long for a memory (title up to 120 characters, body up to 1000): keep it to the fact, or split it")
@@ -911,6 +930,7 @@ pub(crate) fn describe_tool(name: &str) -> String {
         "email_search" => "search your email",
         "email_send" => "send emails",
         "file_delete" => "delete files",
+        "file_export" => "copy files to your folders",
         "file_list" => "list files",
         "file_read" => "read files",
         "file_write" => "write files",
