@@ -10,7 +10,7 @@ import { DIRECTORY, type Listed } from '../directory'
 
 type VaultEntry = { name: string; domains: string[]; bot?: number; totp?: boolean }
 
-type Rule = { tool: string; description: string; action: 'always' | 'allow' | 'ask' | 'deny'; default: string }
+export type Rule = { tool: string; description: string; action: 'always' | 'allow' | 'ask' | 'deny'; default: string }
 
 /** Words a setting goes by besides its own text, so a search finds it ("token" → AI keys, "2fa"…). */
 const SETTING_WORDS: Record<string, string> = {
@@ -22,6 +22,7 @@ const SETTING_WORDS: Record<string, string> = {
   'Daily digest': 'quiet hours notifications summary weekly review do not disturb',
   'Limits': 'cap budget tokens cost usage limit plan subscription quota five hour weekly cheaper model haiku',
   'Permissions': 'allow ask deny approve rules tools safety always',
+  'Export folders': 'export copy files folder skills file_export',
   'Browser': 'playwright chromium saved logins passwords vault',
   'Tool servers': `mcp plugins integrations connectors apps browse directory ${DIRECTORY.map(d => d.name).join(' ')}`,
   'Sensitive sources': 'bank banking health medical private finance money leak',
@@ -111,6 +112,7 @@ export function SettingsView({ onComputer, find = '' }: { onComputer: () => void
       <ToolServerSettings onChange={toolsChanged} />
       <SensitiveSettings key={'s' + tools} />
       <Permissions key={tools} />
+      <ExportFolders />
       <WebhooksOutSettings />
       <DataSettings />
       {(!inDesktop || remoteServer()) && <ChatApiSettings />}
@@ -1208,13 +1210,37 @@ export const TOOL_LABEL: Record<string, string> = {
   computer_screenshot: "Look at the computer's screen", computer_scroll: 'Scroll on the computer',
   computer_signin: 'Use saved logins', computer_type: 'Type on the computer', email_draft: 'Draft emails', email_hand_over: 'Hand replies to you',
   email_read: 'Read your email', email_search: 'Search your email', email_send: 'Send emails',
-  file_delete: 'Delete files', file_list: 'List files', file_read: 'Read files', file_write: 'Write files',
+  file_delete: 'Delete files', file_export: 'Copy files to your folders', file_list: 'List files', file_read: 'Read files', file_write: 'Write files',
   goal_set: 'Set goals', goal_update: 'Update goals', routine_update: 'Change routines', send_file: 'Send files',
   skill_save: 'Save skills', web_search: 'Search the web', x_search: 'Search X',
 }
 
 /** "browser__browser_click" → "Click" (grouped under Browser) */
 export const toolLabel = (t: string) => TOOL_LABEL[t] ?? (t.includes('__') ? t.split('__')[1].replace(/^browser_/, '').replaceAll('_', ' ').replace(/^./, c => c.toUpperCase()) : t)
+
+/** Folders bots may copy files into (file_export, which asks every time). None: any folder of yours. */
+function ExportFolders() {
+  const folders = useLoad(() => invoke<string[]>('export_folders'), [], 60000)
+  const [add, setAdd] = useState('')
+  const [err, setErr] = useState<string | null>(null)
+  const all = folders.data ?? []
+  const save = (next: string[]) => invoke<string[]>('set_export_folders', { folders: next }).then(() => { setErr(null); setAdd(''); folders.reload() }, e => setErr(String(e)))
+  const pickHere = inDesktop && !remoteServer()
+  return (
+    <Group title="Export folders" note={err ?? `Where bots may copy files with file_export, on ${pickHere ? 'this computer' : 'the machine Mimir runs on'}; each copy still asks you. With none here, any folder of yours (never system folders, your home folder itself, or ~/.ssh-style ones).`}>
+      {all.map(f => (
+        <Row key={f} icon={<Icon name="file" size={15} />} title={f}>
+          <button type="button" className="btn btn-sm btn-ghost btn-danger" onClick={() => save(all.filter(x => x !== f))}>Remove</button>
+        </Row>
+      ))}
+      <form style={{ display: 'flex', gap: 8, alignItems: 'center' }} onSubmit={e => { e.preventDefault(); if (add.trim()) void save([...all, add.trim()]) }}>
+        <input className="input" aria-label="Add an export folder" placeholder="~/.claude/skills" value={add} onChange={e => setAdd(e.target.value)} autoComplete="off" spellCheck={false} />
+        {pickHere && <button type="button" className="btn btn-sm btn-ghost" onClick={() => localInvoke<string | null>('pick_folder').then(p => { if (p) void save([...all, p]) }, e => setErr(String(e)))}>Choose…</button>}
+        <button type="submit" className="btn btn-sm" disabled={!add.trim()}>Add</button>
+      </form>
+    </Group>
+  )
+}
 
 function Permissions() {
   const rules = useLoad(() => invoke<Rule[]>('rules'), [], 60000)
@@ -1226,7 +1252,7 @@ function Permissions() {
   const byServer = new Map<string, Rule[]>()
   all.filter(r => r.tool.includes('__')).forEach(r => { const s = r.tool.split('__')[0]; byServer.set(s, [...(byServer.get(s) ?? []), r]) })
   const row = (r: Rule) => (
-    <Row key={r.tool} title={toolLabel(r.tool)} desc={r.action === 'always' ? 'Never asks, not even after a bot reads a web page (Always on a card)' : r.action !== r.default ? `Changed from “${r.default}”` : undefined}>
+    <Row key={r.tool} title={toolLabel(r.tool)} desc={r.action === 'always' ? 'Never asks, not even after a bot reads a web page (Always on a card)' : r.action !== r.default ? `Changed from “${r.default}”` : r.default === 'deny' ? 'Denied by default: it can run any code in a page or upload your files' : undefined}>
       {/* Always is set from a card; here it shows, and goes back to Allow, Ask or Deny. */}
       <Segmented size="sm" label={toolLabel(r.tool)} value={r.action} onChange={a => set(r.tool, a)}
         options={[...(r.action === 'always' ? [{ id: 'always', label: 'Always' }] : []), { id: 'allow', label: 'Allow' }, { id: 'ask', label: 'Ask' }, { id: 'deny', label: 'Deny' }]} />
@@ -1262,7 +1288,7 @@ function Permissions() {
             <button type="button" className="row" style={{ width: '100%', border: 0, background: 'none', textAlign: 'left', borderTop: '0.5px solid var(--line)' }} onClick={() => setOpenServer(o => o === server ? null : server)} aria-expanded={openServer === server}>
               <span className="row-icon"><Icon name={server === 'browser' ? 'browser' : 'plug'} size={15} /></span>
               <div className="row-main"><div className="row-title">{server === 'browser' ? 'Browser actions' : `${server} tools`}</div>
-                <div className="row-desc">{rs.length} tools{changed ? ` · ${changed} changed` : ''}</div></div>
+                <div className="row-desc">{rs.length} tools{changed ? ` · ${changed} changed` : ''}{rs.some(r => r.default === 'deny' && r.action === 'deny') ? ' · unsafe ones denied by default' : ''}</div></div>
               <Icon name={openServer === server ? 'down' : 'chevron'} size={14} />
             </button>
             {openServer === server && rs.map(row)}

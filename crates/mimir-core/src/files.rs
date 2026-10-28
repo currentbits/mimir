@@ -11,8 +11,127 @@ const MAX_FILE: usize = 1_000_000;
 const MAX_CHAT: u64 = 50_000_000;
 const HISTORY: &str = ".history";
 
-pub fn root(db: &crate::db::Db, chat: i64) -> PathBuf {
-    db.dir().join("files").join(format!("chat-{chat}"))
+/// A workspace is a chat's, or a bot's own: its working folder if the person chose one, else files/bot-<id> (for the
+/// tasks other bots hand it). A bot's has an id far below any chat's, so marks and every function here take it like a
+/// chat's. See `workspace`.
+const BOT_WS: i64 = -(1 << 40);
+
+pub fn bot_ws(bot: i64) -> i64 {
+    BOT_WS - bot
+}
+
+fn ws_bot(ws: i64) -> Option<i64> {
+    (ws <= BOT_WS).then(|| BOT_WS - ws)
+}
+
+/// The working folder the person chose for this workspace's bot, if any.
+fn workdir(db: &crate::db::Db, ws: i64) -> Option<PathBuf> {
+    ws_bot(ws).and_then(|b| db.bot(b).ok()).map(|b| b.workdir).filter(|w| !w.trim().is_empty()).map(PathBuf::from)
+}
+
+pub fn root(db: &crate::db::Db, ws: i64) -> PathBuf {
+    if let Some(w) = workdir(db, ws) {
+        return w;
+    }
+    match ws_bot(ws) {
+        Some(bot) => db.dir().join("files").join(format!("bot-{bot}")),
+        None => db.dir().join("files").join(format!("chat-{ws}")),
+    }
+}
+
+/// Earlier versions of rewritten files: in the workspace, except for a folder of the person's (kept out of it, in
+/// Mimir's data).
+fn history(db: &crate::db::Db, ws: i64) -> PathBuf {
+    match (workdir(db, ws), ws_bot(ws)) {
+        (Some(_), Some(bot)) => db.dir().join("files").join(format!("bot-{bot}-history")),
+        _ => root(db, ws).join(HISTORY),
+    }
+}
+
+/// Whether this workspace is a folder the person chose (its files are theirs: overwriting or deleting always asks).
+pub fn is_users(db: &crate::db::Db, ws: i64) -> bool {
+    workdir(db, ws).is_some()
+}
+
+/// The workspace a bot's file tools use: its working folder if the person chose one (which must be there: never
+/// another folder instead), its own when it works on a task another bot handed it, else the chat's. A bot's own and
+/// chosen folders hold the person's files from every chat, so only for the person alone (`mine`: asked from their
+/// own chat or the app); for a guest or a group, the chat's workspace, as it always was.
+pub fn workspace(db: &crate::db::Db, bot: i64, chat: i64, delegated: bool, mine: bool) -> Result<i64> {
+    let Ok(b) = db.bot(bot) else { return Ok(chat) };
+    if !mine {
+        return Ok(chat);
+    }
+    if !b.workdir.trim().is_empty() {
+        if !Path::new(&b.workdir).is_dir() || std::fs::read_dir(&b.workdir).is_err() {
+            bail!(
+                "{}'s working folder {} is missing or can't be read on {} (moved or renamed, a drive that isn't connected, or \
+                 a path this machine doesn't have). Nothing was read or written anywhere else. Tell the user, so they can \
+                 reconnect it or choose another folder in {}'s settings.",
+                b.name,
+                b.workdir,
+                machine(),
+                b.name
+            );
+        }
+        return Ok(bot_ws(bot));
+    }
+    Ok(if delegated { bot_ws(bot) } else { chat })
+}
+
+/// A working folder the person picked, checked: a full path (~ is the home folder) to a folder that exists and can be
+/// read, not the disk's root, the home folder itself, system folders or Mimir's data. Returns it with links resolved.
+pub fn check_workdir(db: &crate::db::Db, dir: &str) -> Result<String> {
+    let real = real_dir(db, dir)?;
+    if !real.is_dir() || std::fs::read_dir(&real).is_err() {
+        bail!("{} isn't a folder that can be read on {}", real.display(), machine());
+    }
+    Ok(real.display().to_string())
+}
+
+/// Copy what a bot's workspaces hold (its own, and the app chat's) into its new working folder, keeping anything
+/// already there. Returns how many files were copied.
+pub fn copy_into_workdir(db: &crate::db::Db, bot: i64, dir: &Path) -> Result<usize> {
+    let mut n = 0;
+    for from in [db.dir().join("files").join(format!("bot-{bot}")), root(db, 0)] {
+        for (rel, _) in list_in(&from, "")? {
+            let to = dir.join(&rel);
+            if to.symlink_metadata().is_ok() {
+                continue;
+            }
+            std::fs::create_dir_all(to.parent().context("no folder")?)?;
+            std::fs::copy(from.join(&rel), &to)?;
+            n += 1;
+        }
+    }
+    Ok(n)
+}
+
+/// The machine the workspaces are on, for a bot (or the app) to tell the person: its name, and in Docker that the path
+/// is the container's (on the host, it's wherever the data volume is mounted).
+pub fn machine() -> &'static str {
+    static NAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    NAME.get_or_init(|| {
+        let name = std::process::Command::new("hostname").output().ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).filter(|n| !n.is_empty());
+        let name = name.map(|n| format!("the computer {n}")).unwrap_or_else(|| "this computer".into());
+        if Path::new("/.dockerenv").exists() {
+            format!("{name}, a Docker container (on its host, the folder is inside the volume mounted for Mimir's data)")
+        } else {
+            name
+        }
+    })
+}
+
+/// Where a workspace really is: "<absolute path> on <machine>".
+pub fn whereabouts(root: &Path) -> String {
+    format!("{} on {}", root.display(), machine())
+}
+
+/// Open a folder in Finder, Explorer or the file manager (the desktop app only).
+pub fn reveal(dir: &Path) -> Result<()> {
+    let opener = if cfg!(target_os = "macos") { "open" } else if cfg!(windows) { "explorer" } else { "xdg-open" };
+    std::process::Command::new(opener).arg(dir).spawn().with_context(|| format!("couldn't open {}", dir.display()))?;
+    Ok(())
 }
 
 /// A file's name for its mark: the path as the file system sees it (no ./ or //), in lower case, since macOS and
@@ -65,7 +184,11 @@ fn size(dir: &Path) -> u64 {
 
 /// Files (relative paths and sizes) under `dir` in the workspace, folders first, at most 200.
 pub fn list(db: &crate::db::Db, chat: i64, dir: &str) -> Result<Vec<(String, u64)>> {
-    let root = root(db, chat);
+    list_in(&root(db, chat), dir)
+}
+
+fn list_in(root: &Path, dir: &str) -> Result<Vec<(String, u64)>> {
+    let root = root.to_path_buf();
     let base = if dir.trim().is_empty() { root.clone() } else { resolve(&root, dir)? };
     let mut out = vec![];
     fn walk(root: &Path, d: &Path, out: &mut Vec<(String, u64)>) {
@@ -92,6 +215,154 @@ pub fn list(db: &crate::db::Db, chat: i64, dir: &str) -> Result<Vec<(String, u64
     }
     walk(&root, &base, &mut out);
     Ok(out)
+}
+
+/// A workspace folder as one zip (its files, at most 200, under the folder's name), named after it; None if `rel`
+/// isn't a folder.
+pub fn zip_folder(db: &crate::db::Db, chat: i64, rel: &str) -> Result<Option<(String, Vec<u8>)>> {
+    let root = root(db, chat);
+    if !resolve(&root, rel)?.is_dir() {
+        return Ok(None);
+    }
+    let files = list(db, chat, rel)?;
+    if files.is_empty() {
+        bail!("{rel} is an empty folder");
+    }
+    let base = rel.trim().trim_start_matches("./").trim_end_matches('/');
+    let name = base.rsplit('/').next().unwrap_or(base);
+    let mut z = zip::ZipWriter::new(std::io::Cursor::new(vec![]));
+    for (path, _) in &files {
+        let inner = path.strip_prefix(base).unwrap_or(path).trim_start_matches('/');
+        z.start_file(format!("{name}/{inner}"), zip::write::SimpleFileOptions::default())?;
+        std::io::Write::write_all(&mut z, &std::fs::read(root.join(path))?)?;
+    }
+    Ok(Some((format!("{name}.zip"), z.finish()?.into_inner())))
+}
+
+/// Folders an export never goes into, wherever a link points: the system's, and in the home folder where a file could
+/// run or let someone in. (The home folder itself, the disk's root and Mimir's own data are refused too.)
+const NO_EXPORT: [&str; 16] = [
+    "/System", "/usr", "/bin", "/sbin", "/etc", "/private/etc", "/Library", "/Applications", "/boot", "/dev", "/proc", "/sys", "/lib", "/lib64",
+    "C:\\Windows", "C:\\Program Files",
+];
+const NO_EXPORT_HOME: [&str; 7] = [".ssh", ".gnupg", ".aws", ".kube", "Library/LaunchAgents", ".config/autostart", ".mimir"];
+
+/// The folders the person allows exports into (Settings → Permissions → Export folders), as they really are. Empty:
+/// any folder `real_dir` allows.
+pub fn export_folders(db: &crate::db::Db) -> Vec<String> {
+    db.setting("export_folders").ok().flatten().and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default()
+}
+
+/// Set the export folders: each one checked like a destination and kept as it really is (links resolved).
+pub fn set_export_folders(db: &crate::db::Db, folders: &[String]) -> Result<Vec<String>> {
+    let mut kept = vec![];
+    for f in folders.iter().map(|f| f.trim()).filter(|f| !f.is_empty()) {
+        let real = real_dir(db, f)?.display().to_string();
+        if !kept.contains(&real) {
+            kept.push(real);
+        }
+    }
+    db.set_setting("export_folders", &serde_json::to_string(&kept)?)?;
+    Ok(kept)
+}
+
+/// The folder an export goes to, as it really is (links resolved), or why not: one `real_dir` allows, and inside an
+/// export folder when the person set any.
+pub fn export_dir(db: &crate::db::Db, dest: &str) -> Result<PathBuf> {
+    let real = real_dir(db, dest)?;
+    let allowed = export_folders(db);
+    if !allowed.is_empty() && !allowed.iter().any(|a| real.starts_with(a)) {
+        bail!(
+            "not into {}: the user allows exports only into {} (Settings → Permissions → Export folders). Pick one of those, or ask them to add it",
+            real.display(),
+            allowed.join(", ")
+        );
+    }
+    Ok(real)
+}
+
+/// A folder named by a full path (`~` is the user's home), as it really is (links resolved), or why it can't be
+/// used: the disk's root, the home folder itself, Mimir's data, system folders and ~/.ssh-style ones.
+fn real_dir(db: &crate::db::Db, dest: &str) -> Result<PathBuf> {
+    let home = crate::user_home().context("no home folder")?;
+    let dest = dest.trim();
+    let p = match dest.strip_prefix('~') {
+        Some(rest) => home.join(rest.trim_start_matches(['/', '\\'])),
+        None => PathBuf::from(dest),
+    };
+    if !p.is_absolute() || p.components().any(|c| matches!(c, Component::ParentDir)) {
+        bail!("give the destination folder as a full path, like ~/.claude/skills");
+    }
+    // The real place: the nearest folder on the way that exists, with any link in it resolved, then the rest.
+    let (mut at, mut rest) = (p.clone(), vec![]);
+    while !at.exists() {
+        rest.push(at.file_name().context("no such folder")?.to_owned());
+        at = at.parent().context("no such folder")?.to_path_buf();
+    }
+    let mut real = at.canonicalize()?;
+    real.extend(rest.iter().rev());
+    let home = home.canonicalize().unwrap_or(home);
+    let data = db.dir().canonicalize().unwrap_or_else(|_| db.dir());
+    if real.parent().is_none()
+        || real == home
+        || real.starts_with(&data)
+        || NO_EXPORT.iter().any(|s| real.starts_with(s))
+        || NO_EXPORT_HOME.iter().any(|s| real.starts_with(home.join(s)))
+    {
+        bail!("not into {}: pick a folder of the user's own, like ~/Documents/<name> or ~/.claude/skills", real.display());
+    }
+    if real.exists() && !real.is_dir() {
+        bail!("{} is a file, not a folder", real.display());
+    }
+    Ok(real)
+}
+
+/// What an export would copy: the folder it goes to, (workspace file, where it lands) for each, and how many of
+/// those are already there (replaced only when asked to).
+pub type ExportPlan = (PathBuf, Vec<(String, PathBuf)>, usize);
+
+pub fn export_plan(db: &crate::db::Db, chat: i64, rel: &str, dest: &str) -> Result<ExportPlan> {
+    let src = resolve(&root(db, chat), rel)?;
+    let dir = export_dir(db, dest)?;
+    let base = rel.trim().trim_start_matches("./").trim_end_matches('/');
+    let name = base.rsplit('/').next().unwrap_or(base);
+    let files: Vec<(String, PathBuf)> = if src.is_dir() {
+        list(db, chat, rel)?
+            .into_iter()
+            .map(|(p, _)| {
+                let to = dir.join(name).join(p.strip_prefix(base).unwrap_or(&p).trim_start_matches('/'));
+                (p, to)
+            })
+            .collect()
+    } else if src.is_file() {
+        vec![(base.to_string(), dir.join(name))]
+    } else {
+        bail!("no file or folder {rel} in the workspace");
+    };
+    if files.is_empty() {
+        bail!("{rel} is an empty folder");
+    }
+    let there = files.iter().filter(|(_, to)| to.symlink_metadata().is_ok()).count();
+    Ok((dir, files, there))
+}
+
+/// Copy a workspace file or folder (as a folder of that name) into `dest` on this machine. Refuses to replace what's
+/// there unless `replace`, and never writes through a link.
+pub fn export(db: &crate::db::Db, chat: i64, rel: &str, dest: &str, replace: bool) -> Result<String> {
+    let (dir, files, there) = export_plan(db, chat, rel, dest)?;
+    if there > 0 && !replace {
+        bail!("{there} of these already exist in {}; ask again with replace: true to overwrite them (the card says so)", dir.display());
+    }
+    let root = root(db, chat);
+    for (from, to) in &files {
+        if to.symlink_metadata().is_ok_and(|m| m.file_type().is_symlink()) {
+            bail!("{} is a link; not writing through it", to.display());
+        }
+        std::fs::create_dir_all(to.parent().context("no folder")?)?;
+        std::fs::copy(root.join(from), to).with_context(|| format!("couldn't write {}", to.display()))?;
+    }
+    let base = rel.trim().trim_start_matches("./").trim_end_matches('/');
+    Ok(format!("Copied {} file(s) to {} on {}", files.len(), dir.join(base.rsplit('/').next().unwrap_or(base)).display(), machine()))
 }
 
 /// A file's text, and whether it's outside content (written after reading some, or not written by Mimir at all).
@@ -123,7 +394,8 @@ pub fn write(db: &crate::db::Db, chat: i64, rel: &str, content: &str, mode: &str
     if new_len > MAX_FILE {
         bail!("a file can be up to 1 MB");
     }
-    if size(&root) + content.len() as u64 > MAX_CHAT {
+    // ponytail: no size cap in a folder of the person's (walking all of ~/Projects on each write would be slow; it's their disk).
+    if !is_users(db, chat) && size(&root) + content.len() as u64 > MAX_CHAT {
         bail!("this chat's workspace is full (50 MB); remove some files first");
     }
     std::fs::create_dir_all(path.parent().context("no folder")?)?;
@@ -135,7 +407,7 @@ pub fn write(db: &crate::db::Db, chat: i64, rel: &str, content: &str, mode: &str
             "appended to"
         }
         ("replace", true) => {
-            let keep = root.join(HISTORY).join(format!("{}.{}", rel.replace('/', "__"), crate::db::now()));
+            let keep = history(db, chat).join(format!("{}.{}", rel.replace('/', "__"), crate::db::now()));
             std::fs::create_dir_all(keep.parent().context("no folder")?)?;
             std::fs::copy(&path, &keep)?;
             std::fs::write(&path, content)?;
@@ -237,6 +509,69 @@ mod tests {
         assert!(sent_path(&home, 4, &files[0]).is_none(), "another chat's file");
         assert!(sent_path(&home, 3, "sent-3-x-../../mimir.db").is_none());
         assert_eq!(sent_lines(&db, 8), "", "another run");
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn a_folder_goes_as_one_zip() {
+        let home = std::env::temp_dir().join(format!("mimir-zip-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).unwrap();
+        let db = crate::db::Db::open(&home.join("mimir.db")).unwrap();
+        for f in ["skills/seo/SKILL.md", "skills/seo/refs/a.md", "skills/seo/refs/b.md", "other.md"] {
+            write(&db, 3, f, f, "create", false).unwrap();
+        }
+        assert!(zip_folder(&db, 3, "other.md").unwrap().is_none(), "a file isn't a folder");
+        let (name, bytes) = zip_folder(&db, 3, "skills/seo/").unwrap().unwrap();
+        assert_eq!(name, "seo.zip");
+        let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        let mut names: Vec<String> = z.file_names().map(String::from).collect();
+        names.sort();
+        assert_eq!(names, ["seo/SKILL.md", "seo/refs/a.md", "seo/refs/b.md"]);
+        let mut text = String::new();
+        std::io::Read::read_to_string(&mut z.by_name("seo/refs/b.md").unwrap(), &mut text).unwrap();
+        assert_eq!(text, "skills/seo/refs/b.md");
+        assert!(zip_folder(&db, 3, "../x").is_err());
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn an_export_copies_into_a_folder_of_the_users_and_nowhere_else() {
+        let home = std::env::temp_dir().join(format!("mimir-export-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(home.join("data")).unwrap();
+        let db = crate::db::Db::open(&home.join("data").join("mimir.db")).unwrap();
+        for f in ["skills/seo/SKILL.md", "skills/seo/refs/a.md"] {
+            write(&db, 3, f, f, "create", false).unwrap();
+        }
+        let out = home.join("out").join("skills");
+        let said = export(&db, 3, "skills/seo", out.to_str().unwrap(), false).unwrap();
+        assert!(said.starts_with("Copied 2 file(s) to ") && said.contains("seo"), "{said}");
+        assert_eq!(std::fs::read_to_string(out.join("seo/refs/a.md")).unwrap(), "skills/seo/refs/a.md");
+        // Again: it's there now, so only with replace.
+        assert!(export(&db, 3, "skills/seo", out.to_str().unwrap(), false).unwrap_err().to_string().contains("already exist"));
+        assert_eq!(export_plan(&db, 3, "skills/seo", out.to_str().unwrap()).unwrap().2, 2);
+        export(&db, 3, "skills/seo", out.to_str().unwrap(), true).unwrap();
+        // Never the system's folders, the root, the home folder itself, Mimir's own data, or relative paths.
+        let me = crate::user_home().unwrap();
+        for bad in ["/", "/etc", "/usr/local/x", "~", "~/.ssh", "relative/dir", "/tmp/../etc"] {
+            assert!(export_dir(&db, bad).is_err(), "{bad}");
+        }
+        assert!(export_dir(&db, home.join("data").join("x").to_str().unwrap()).is_err(), "Mimir's data");
+        assert!(export_dir(&db, &format!("{}/.claude/skills", me.display())).is_ok());
+        // Export folders set: only into one of those (and below), never elsewhere.
+        assert_eq!(set_export_folders(&db, &[out.display().to_string()]).unwrap().len(), 1);
+        assert!(export(&db, 3, "skills/seo", out.to_str().unwrap(), true).is_ok());
+        let e = export_dir(&db, &format!("{}/.claude/skills", me.display())).unwrap_err().to_string();
+        assert!(e.contains("Export folders"), "{e}");
+        assert!(set_export_folders(&db, &["/etc".into()]).is_err(), "not a system folder either");
+        set_export_folders(&db, &[]).unwrap();
+        // A link to a system folder is followed to where it really goes, and refused there.
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink("/etc", home.join("etc-link")).unwrap();
+            assert!(export_dir(&db, home.join("etc-link").join("x").to_str().unwrap()).is_err());
+        }
         let _ = std::fs::remove_dir_all(&home);
     }
 

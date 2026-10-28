@@ -1,10 +1,10 @@
 import { useState } from 'react'
-import { inDesktop, invoke, platform, remoteServer } from '../api'
+import { inDesktop, invoke, localInvoke, platform, remoteServer } from '../api'
 import { pigment, schedule, type Look } from '../format'
 import { openLink } from '../markdown'
-import { ask, Avatar, Group, Icon, Row, Switch } from '../ui'
+import { ask, Avatar, Group, Icon, Row, Segmented, Switch } from '../ui'
 import { ModelInput } from './accounts'
-import { TOOL_LABEL } from './settings'
+import { TOOL_LABEL, toolLabel, type Rule } from './settings'
 import { LOCAL, randomLook, useLoad, online, presenceOf, CHANNEL, LookPicker, SECRETS_AT } from '../shared'
 import type { Bot, Delivery, Routine, Status, ToolServer, ChannelStatus, ComputerStatus } from '../types'
 
@@ -167,6 +167,16 @@ export function BotPage({ bot, status, canDelete, onSaved, onDeleted, onChat, on
   const computer = useLoad(() => invoke<ComputerStatus>('computer'), [], 60000)
   const serverTools: [string, string][] = (toolServers.data?.servers ?? []).filter(s => !s.preset).map(s => [`${s.name}__*`, `Use ${s.name}`])
   const ALL = [...Object.keys(TOOL_LABEL), 'browser__*', ...serverTools.map(([t]) => t)]
+  // What each tool does for this bot once it's on: Settings → Permissions (the same for every bot), defaults included.
+  const rules = useLoad(() => invoke<Rule[]>('rules'), [], 60000)
+  const RULE_WORDS: Record<string, string> = { always: 'never asks', allow: 'allowed', ask: 'asks you first', deny: 'denied' }
+  const effective = (tool: string) => {
+    const of = (r: Rule) => `${RULE_WORDS[r.action] ?? r.action}${r.action === r.default ? ' (default)' : ''}`
+    if (!tool.endsWith('__*')) { const r = rules.data?.find(r => r.tool === tool); return r && of(r) }
+    const rs = (rules.data ?? []).filter(r => r.tool.startsWith(tool.slice(0, -1)))
+    const odd = rs.filter(r => r.action === 'deny' || r.action === 'ask')
+    return rs.length ? odd.map(r => `${toolLabel(r.tool)}: ${of(r)}`).join(' · ') || 'all allowed' : undefined
+  }
   const enabled = b.tools.trim() ? b.tools.split(',').map(t => t.trim()) : ALL
   const toggle = (tool: string) => {
     const next = enabled.includes(tool) ? enabled.filter(t => t !== tool) : [...enabled, tool]
@@ -176,8 +186,15 @@ export function BotPage({ bot, status, canDelete, onSaved, onDeleted, onChat, on
   const has = (k: 'has_telegram_token' | 'has_slack' | 'has_discord' | 'has_signal' | 'has_whatsapp' | 'has_imessage') => !!bot?.[k]
   const form = (x: Bot) => JSON.stringify({ ...x, has_telegram_token: 0, has_slack: 0, has_discord: 0, has_signal: 0, has_whatsapp: 0, has_imessage: 0 })
   const dirty = form(b) !== form(bot ?? { ...BLANK, look: b.look }) || Object.values(sec).some(v => v !== null)
+  // Its working folder: where it is now (and whether it's there), the system's picker on this computer, and whether
+  // to copy its files in when you set one.
+  const folder = useLoad(() => bot ? invoke<{ path: string; chosen: boolean; machine: string; problem: string | null; can_open: boolean }>('bot_folder', { botId: bot.id }) : Promise.resolve(null), [bot?.id, bot?.workdir], 60000)
+  const [copyFiles, setCopyFiles] = useState(true)
+  const newFolder = !!b.workdir?.trim() && b.workdir !== (bot?.workdir ?? '')
+  const pickHere = inDesktop && !remoteServer()
+  const pick = () => localInvoke<string | null>('pick_folder').then(p => { if (p) edit({ workdir: p }) }, e => setErr(String(e)))
   const save = (secrets: Secrets) =>
-    invoke<number>('save_bot', { bot: b, secrets })
+    invoke<number>('save_bot', { bot: b, secrets, copyFiles: newFolder && copyFiles })
       .then(async id => {
         if (isNew) await addRoutines(id)
         setSec(NO_SECRETS); setErr(null); setMsg(isNew ? 'Bot created' : 'Saved — the bot restarted with these settings'); onSaved(id)
@@ -298,17 +315,33 @@ export function BotPage({ bot, status, canDelete, onSaved, onDeleted, onChat, on
         )}
       </Group>
 
-      <Group title="What it can do" note={handsOff.data ? 'It uses these without asking you first.' : 'Permissions in Settings still decide which of these ask you first.'}>
+      <Group title="What it can do" note={handsOff.data ? 'It uses these without asking you first (deleting or changing your own files in its working folder still asks).' : 'Under each: what Settings → Permissions decides for it (the same for every bot). After a bot reads a web page, anything that changes your data asks.'}>
         {bot && (
-          <Row title="Don’t ask me first" desc="Its tools run without approval cards, also after it reads outside content, and instructions and skills it learns are kept without waiting for you to accept them. Signing in and taking over the computer still need you; a guest’s chat still asks the guest.">
+          <Row title="Don’t ask me first" desc="Its tools run without approval cards, also after it reads outside content, and instructions and skills it learns are kept without waiting for you to accept them. Signing in, taking over the computer, and deleting or changing your files in its working folder still need you; a guest’s chat still asks the guest.">
             <Switch label="Don’t ask me first" checked={!!handsOff.data} onChange={on => void setHandsOff(on)} />
           </Row>
         )}
         <div className="tool-grid">
           {[...Object.entries(TOOL_LABEL), ['browser__*', 'Use the web browser'], ...serverTools].map(([tool, label]) => (
-            <Row key={tool} title={label}><Switch label={label} checked={enabled.includes(tool)} onChange={() => toggle(tool)} /></Row>
+            <Row key={tool} title={label} desc={enabled.includes(tool) ? effective(tool) : 'off for this bot'}><Switch label={label} checked={enabled.includes(tool)} onChange={() => toggle(tool)} /></Row>
           ))}
         </div>
+      </Group>
+
+      <Group title="Working folder" note={<>Where its files go (file_list, file_read, file_write), on {pickHere ? 'this computer' : folder.data?.machine ?? 'the machine Mimir runs on'}. Pick a folder of yours to see and edit them in {platform === 'mac' ? 'Finder' : 'your file manager'}; paths stay inside it (no ../, no links out). Empty: Mimir's own workspace for each chat.</>}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <input className="input" aria-label="Working folder" placeholder={pickHere ? 'Mimir’s own workspace (default)' : 'A folder on the server, like /data/bots/scout'} value={b.workdir ?? ''} onChange={e => edit({ workdir: e.target.value })} autoComplete="off" spellCheck={false} />
+          {pickHere && <button type="button" className="btn btn-sm btn-ghost" onClick={pick}>Choose…</button>}
+          {!!b.workdir && <button type="button" className="btn btn-sm btn-ghost" onClick={() => edit({ workdir: '' })}>Use Mimir’s</button>}
+        </div>
+        {newFolder && <Row title="Copy its files there" desc="What it has in Mimir’s workspace (its own, and the app chat’s) is copied in when you save; nothing there is replaced."><Switch label="Copy its files there" checked={copyFiles} onChange={() => setCopyFiles(c => !c)} /></Row>}
+        {folder.data && !newFolder && <Row title={folder.data.chosen ? 'Its folder' : 'Its own workspace (for tasks other bots hand it)'} desc={folder.data.problem ?? `${folder.data.path} on ${folder.data.machine}`}>
+          {folder.data.can_open && !folder.data.problem && <button type="button" className="btn btn-sm btn-ghost" onClick={() => invoke('open_bot_folder', { botId: bot!.id }).catch(e => setErr(String(e)))}>{platform === 'mac' ? 'Reveal in Finder' : 'Show in Explorer'}</button>}
+        </Row>}
+        <Row title="Writing files" desc="Whether file_write asks you first, for this bot. Deleting a file, or changing one already in a folder you chose, always asks.">
+          <Segmented size="sm" label="Writing files" value={b.file_write || 'default'} onChange={v => edit({ file_write: v === 'default' ? '' : v })}
+            options={[{ id: 'default', label: 'As Permissions' }, { id: 'ask', label: 'Ask' }, { id: 'allow', label: 'Allow' }, { id: 'off', label: 'Off' }]} />
+        </Row>
       </Group>
 
       {bot && computer.data?.enabled && (

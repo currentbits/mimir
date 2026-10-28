@@ -988,7 +988,11 @@ pub(crate) fn not_connected(ctx: &ToolCtx) -> String {
             host::secret_get(calendar::SECRET).is_none() && caldav::account(db).is_none(),
             "your calendar: Settings → Calendar to add events, or the calendar link in Meetings to read it",
         ),
-        (tools::search_service(db).is_none(), "web search: Settings → Web search"),
+        // Claude, Codex and grok search the web on their own (provider.rs), whether or not a service is set up.
+        (
+            tools::search_service(db).is_none() && !db.bot(ctx.bot_id).is_ok_and(|b| ["claude", "codex", "grok"].contains(&b.provider.as_str())),
+            "web search: Settings → Web search",
+        ),
         (
             host::api_key("x").is_none(),
             "X (Twitter) search, recent posts: Settings → Web search → X (Twitter). It takes their own X API bearer token; if they \
@@ -1227,6 +1231,22 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
         ""
     };
     let missing = not_connected(ctx);
+    // Where the workspace really is: the AI CLI may show a working directory of its own, which isn't it.
+    let workspace = if !tools::specs_for(ctx).iter().any(|s| s.0 == "file_write" || s.0 == "file_list") {
+        String::new()
+    } else {
+        match tools::ws(ctx) {
+            Ok(ws) => format!(
+                "\n\nYour workspace (file_list, file_read, file_write) {} is the folder {}. When the person asks where files are, \
+                 give that path; paths you pass are relative to it. Any other working directory your environment shows is not \
+                 where files go.",
+                if files::is_users(&ctx.db, ws) { "is your working folder, which the person chose: their own files, so overwriting or deleting one always asks. It" } else { "for this chat" },
+                files::whereabouts(&files::root(&ctx.db, ws))
+            ),
+            // Its folder is gone: the bot says so before trying (and its file tools fail the same way).
+            Err(e) => format!("\n\nYour workspace isn't available: {e:#}"),
+        }
+    };
     // The chat's goal, while it's on: what the bot keeps working towards here, turn after turn.
     let goal = match ctx.db.goal(ctx.chat_id)?.filter(|g| ["active", "blocked"].contains(&g.status.as_str()) && tools::specs_for(ctx).iter().any(|s| s.0 == "goal_update")) {
         // Set or updated after reading outside content: shown as what it is, someone else's words maybe, and reading it
@@ -1283,7 +1303,7 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
     let standing = ctx.db.bootstrap(&scope, ctx.bot_id)?;
     tools::mark_sensitive_memory(ctx, &scope, &standing);
     let system = format!(
-        "Your name is {}. {PERSONA}{role}{guest}{family}{}{team}{logins}{plans}{skills}{goal}{missing}\n\n{NOW_NOTE}\n{}{household}",
+        "Your name is {}. {PERSONA}{role}{guest}{family}{}{team}{logins}{plans}{skills}{goal}{missing}{workspace}\n\n{NOW_NOTE}\n{}{household}",
         bot.name,
         if quiet { QUIET } else { "" },
         block("standing_memory", &standing)
@@ -1497,7 +1517,15 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
         reply.text.push_str(&files::sent_lines(&ctx.db, run));
     }
     match &trigger {
-        Trigger::Delegated { own: false, .. } => {}
+        // The answer goes back to the asking bot, and a copy stays in this bot's own app chat, so a failed step after it
+        // (the asker's save, say) can't lose it. Only from a chat of the person's alone: a guest's or a group's task
+        // doesn't land in their app chat.
+        Trigger::Delegated { from, task, own: false } => {
+            if !ctx.incognito() && !ctx.rehearsal && (ctx.ask_chat == host::LOCAL_CHAT || runtime::decisions_ok(&ctx.db, ctx.ask_chat)) {
+                ctx.db.log(ctx.bot_id, host::LOCAL_CHAT, "user", &format!("[Task from {from}] {task}"), None)?;
+                ctx.db.log(ctx.bot_id, host::LOCAL_CHAT, "assistant", &reply.text, ctx.run_id)?;
+            }
+        }
         // Routines in the digest or log-only lane don't land in the chat as they run.
         Trigger::Routine(r) if lane == "digest" => {
             ctx.db.digest_add(ctx.bot_id, ctx.chat_id, r.id, &reply.text, ctx.is_tainted())?;
@@ -1649,6 +1677,11 @@ echo '{{"type":"result","result":"ok","session_id":"s1","usage":{{"input_tokens"
         let _ = std::fs::remove_file(&p);
         let d = super::db::Db::open(&p).unwrap();
         let ctx = super::ToolCtx::new(d.clone(), 1, super::host::LOCAL_CHAT);
+        // Claude (the default) searches the web on its own: not "not connected".
+        assert!(!super::not_connected(&ctx).contains("web search:"), "Claude's own search");
+        let mut b = d.bot(1).unwrap();
+        b.provider = "openai".into();
+        d.bot_save(&b).unwrap();
         let note = super::not_connected(&ctx);
         assert!(note.contains("Settings → Email") && note.contains("web search: Settings → Web search"), "{note}");
         assert!(note.contains("Settings → Web search → X") && note.contains("console.x.com"), "X, with how to get a token: {note}");

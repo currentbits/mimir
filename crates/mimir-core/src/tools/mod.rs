@@ -265,6 +265,31 @@ fn lines(v: &[Entry]) -> String {
 /// Policy gate + dispatch + run-log entry. Every agent tool call goes through here.
 /// Pages, mail, files, tool servers: nothing the model reads back keeps characters hidden from the person, an error
 /// included (a tool server's error text is its own words, and one can repeat what came in).
+/// A delete, or a rewrite or append of a file that's there, in a working folder the person chose.
+fn user_file_change(ctx: &ToolCtx, name: &str, args: &Value) -> bool {
+    let Ok(ws) = ws(ctx) else { return false };
+    if !crate::files::is_users(&ctx.db, ws) {
+        return false;
+    }
+    let path = args["path"].as_str().unwrap_or("");
+    match name {
+        "file_delete" => true,
+        "file_write" => args["mode"].as_str() != Some("create") && crate::files::root(&ctx.db, ws).join(path.trim().trim_start_matches("./")).exists(),
+        _ => false,
+    }
+}
+
+/// The workspace this bot's file tools use here (files::workspace): its working folder, its own for another bot's
+/// task, or the chat's.
+pub(crate) fn ws(ctx: &ToolCtx) -> Result<i64> {
+    crate::files::workspace(&ctx.db, ctx.bot_id, ctx.chat_id, ctx.depth > 0, mine(ctx))
+}
+
+/// Asked by the person alone: from the app, or their own private chat (not a guest's, a group's or incognito).
+pub(crate) fn mine(ctx: &ToolCtx) -> bool {
+    !ctx.incognito() && (ctx.ask_chat == crate::host::LOCAL_CHAT || crate::runtime::decisions_ok(&ctx.db, ctx.ask_chat))
+}
+
 pub async fn call(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
     gated(ctx, name, args).await.map(|r| crate::visible(&r)).map_err(|e| anyhow::anyhow!(crate::visible(&format!("{e:#}"))))
 }
@@ -278,6 +303,12 @@ async fn gated(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
     let enabled = usable(ctx, name) && ctx.db.bot(ctx.bot_id)?.allows(name);
     let site = site_of(name, args);
     let (decision, why) = if enabled { gate(&ctx.db, name, site.as_deref(), ctx.is_tainted())? } else { ("deny".to_string(), "rule") };
+    // This bot's own file_write setting (its settings page), over Permissions: ask, or allow (outside content still asks).
+    let (decision, why) = match (name, ctx.db.bot(ctx.bot_id).map(|b| b.file_write).unwrap_or_default().as_str()) {
+        ("file_write", "ask") if decision == "allow" => ("ask".to_string(), "rule"),
+        ("file_write", "allow") if decision == "ask" && why == "rule" => ("allow".to_string(), "rule"),
+        _ => (decision, why),
+    };
     // A new memory saved after outside content doesn't ask: it's kept unconfirmed (out of the bots' standing
     // instructions until you confirm it), and a rule becomes a suggestion anyway. Replacing one still asks, since the
     // replacement would take a confirmed memory out of the instructions.
@@ -314,6 +345,9 @@ async fn gated(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
     let free = hands_off(ctx);
     let trusted = free || trusted(&ctx.db, name, site.as_deref());
     let (decision, why) = if decision == "ask" && trusted { ("allow".to_string(), "rule") } else { (decision, why) };
+    // In a folder the person chose, their files: deleting one, or changing one that's there, asks every time (no Always,
+    // no plan covers it, not even "Don't ask me first": that would lose their own files without a word).
+    let (decision, why) = if decision != "deny" && user_file_change(ctx, name, args) { ("ask".to_string(), "userfile") } else { (decision, why) };
     // A routine's write that looks unlike its earlier runs (somewhere new, far more of it, another unit) asks this once,
     // even under Always: what was allowed was the usual. Only ever allow → ask.
     let drift = if decision == "allow" && !free { drift(ctx, name, args) } else { vec![] };
@@ -350,7 +384,10 @@ async fn gated(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
     let out = match decision.as_str() {
         "deny" if !enabled && ctx.incognito() => Err(anyhow::anyhow!("{name} isn't available in an incognito chat. Tell the user it works in a normal chat.")),
         "deny" if !enabled => Err(anyhow::anyhow!("{name} isn't enabled for this bot. Tell the user it can't be done here.")),
-        "deny" => Err(anyhow::anyhow!("blocked by the user's rules: {name} is set to deny. Tell the user it can't be done.")),
+        "deny" => Err(anyhow::anyhow!(
+            "blocked: {name} is set to deny by {}. Tell the user it can't be done, and where that's set if they want to change it.",
+            rule_source(&ctx.db, name, site.as_deref())
+        )),
         "rehearsal" => Ok(format!(
             "REHEARSAL, nothing was done: {}. In a real run this would {}. Carry on as if it had worked, and in your reply say what you would have done.",
             describe(ctx, name, args),
@@ -673,7 +710,7 @@ mod tests {
         let p = std::env::temp_dir().join(format!("mimir-askchat-{}.db", std::process::id()));
         let _ = std::fs::remove_file(&p);
         let db = Db::open(&p).unwrap();
-        let scout = crate::db::Bot { id: 0, name: "Scout".into(), persona: String::new(), provider: "openai".into(), model: "m".into(), base_url: String::new(), tools: String::new(), look: String::new() };
+        let scout = crate::db::Bot { id: 0, name: "Scout".into(), persona: String::new(), provider: "openai".into(), model: "m".into(), base_url: String::new(), tools: String::new(), look: String::new(), workdir: String::new(), file_write: String::new() };
         let scout = db.bot_save(&scout).unwrap();
         // Working in its app chat for a bot you asked on Telegram (chat 300): the card goes there, from that bot.
         let mut ctx = ToolCtx::new(db.clone(), scout, 0);
@@ -691,7 +728,7 @@ mod tests {
         let p = std::env::temp_dir().join(format!("mimir-helpercard-{}.db", std::process::id()));
         let _ = std::fs::remove_file(&p);
         let db = Db::open(&p).unwrap();
-        let scout = crate::db::Bot { id: 0, name: "Scout".into(), persona: String::new(), provider: "openai".into(), model: "m".into(), base_url: String::new(), tools: String::new(), look: String::new() };
+        let scout = crate::db::Bot { id: 0, name: "Scout".into(), persona: String::new(), provider: "openai".into(), model: "m".into(), base_url: String::new(), tools: String::new(), look: String::new(), workdir: String::new(), file_write: String::new() };
         let scout = db.bot_save(&scout).unwrap();
         let mut ctx = ToolCtx::new(db.clone(), scout, 0);
         assert_eq!(gate::for_helper(&ctx, "Open x.com".into()), "Open x.com", "its own ask");
@@ -968,7 +1005,9 @@ mod tests {
         assert!(!db.approval_allow_rest_of_run(ask.id, None).unwrap(), "no 'all like this' on a tainted ask");
         db.approval_decide(ask.id, false, None).unwrap();
         assert!(asked.await.unwrap().is_err(), "it asked, and was denied");
-        assert!(call(&tainted, "plan_propose", &json!({"steps": ["x"], "actions": [{"tool": "memory_forget"}]})).await.is_err());
+        // After outside content: not an error, no card, and the bot is told each step asks.
+        let out = call(&tainted, "plan_propose", &json!({"steps": ["x"], "actions": [{"tool": "memory_forget"}]})).await.unwrap();
+        assert!(out.contains("each action asks") && !tainted.db.approvals_pending().unwrap().iter().any(|a| a.kind == "plan"), "{out}");
         assert!(planned(&[("browser__browser_navigate".into(), Some("playtomic.io".into()))], "browser__browser_navigate", Some("playtomic.io")));
         assert!(!planned(&[("browser__browser_navigate".into(), Some("playtomic.io".into()))], "browser__browser_navigate", Some("evil.example")), "another site isn't covered");
     }
@@ -2024,6 +2063,14 @@ mod tests {
         assert_eq!((scout.tools.as_str(), scout.provider.as_str()), ("memory_search,ask_bot,web_fetch", me.provider.as_str()), "its maker's tools, minus making bots");
         // Refused before anyone is asked: more tools than it has, a second Scout, a role too long to read on the card.
         assert!(call(&ctx, "bot_create", &json!({"name": "Ops", "role": "x", "tools": ["routine_delete"]})).await.unwrap_err().to_string().contains("only tools you have"));
+        // Allowed but not callable here (no email account, no computer) isn't offered as "yours" either.
+        let mut wide = me.clone();
+        wide.tools = String::new();
+        ctx.db.bot_save(&wide).unwrap();
+        let e = call(&ctx, "bot_create", &json!({"name": "Ops", "role": "x", "tools": ["email_send"]})).await.unwrap_err().to_string();
+        let yours = e.split_once("yourself (").unwrap().1;
+        assert!(e.contains("can't give it email_send") && !yours.contains("computer_") && !yours.contains("email_"), "{e}");
+        ctx.db.bot_save(&me).unwrap();
         assert!(call(&ctx, "bot_create", &json!({"name": "scout", "role": "x"})).await.unwrap_err().to_string().contains("already a bot"));
         assert!(call(&ctx, "bot_create", &json!({"name": "Long", "role": "a ".repeat(600)})).await.unwrap_err().to_string().contains("up to 1000"));
         assert!(ctx.db.approvals_pending().unwrap().is_empty());
@@ -2036,9 +2083,122 @@ mod tests {
         // After outside content: still asks, marked as such (the role could be a page's words).
         ctx.pre_taint();
         let ok = approve(ctx.db.clone());
-        call(&ctx, "bot_create", &json!({"name": "Pager", "role": "Summarise pages.", "tools": ["web_fetch"]})).await.unwrap();
+        // By the name the model knows it (Claude's MCP name), stored as ours.
+        call(&ctx, "bot_create", &json!({"name": "Pager", "role": "Summarise pages.", "tools": ["mcp__mimir__web_fetch"]})).await.unwrap();
         assert_eq!(ok.await.unwrap().0, "guarded");
         assert_eq!(ctx.db.bots().unwrap().into_iter().find(|b| b.name == "Pager").unwrap().tools, "web_fetch");
+    }
+
+    #[tokio::test]
+    async fn file_list_says_where_the_workspace_really_is() {
+        let p = std::env::temp_dir().join(format!("mimir-whereabouts-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let ctx = ToolCtx::new(Db::open(&p).unwrap(), 1, crate::host::LOCAL_CHAT);
+        call(&ctx, "file_write", &json!({"path": "plans/a.md", "content": "x", "mode": "replace"})).await.unwrap();
+        let out = call(&ctx, "file_list", &json!({})).await.unwrap();
+        let root = crate::files::root(&ctx.db, crate::host::LOCAL_CHAT);
+        assert!(root.is_absolute() && out.starts_with(&format!("Workspace: {} on ", root.display())) && out.contains("plans/a.md"), "{out}");
+        assert!(root.join("plans/a.md").is_file(), "the path it gives is where the file is");
+    }
+
+    #[tokio::test]
+    async fn a_bots_working_folder_is_where_its_files_go_and_nowhere_else() {
+        let top = std::env::temp_dir().join(format!("mimir-workdir-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&top);
+        std::fs::create_dir_all(top.join("data")).unwrap();
+        let db = Db::open(&top.join("data").join("mimir.db")).unwrap();
+        let dir = top.join("folder");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut me = db.bot(1).unwrap();
+        me.workdir = crate::files::check_workdir(&db, dir.to_str().unwrap()).unwrap();
+        db.bot_save(&me).unwrap();
+        let real = std::path::PathBuf::from(&me.workdir);
+        let ctx = ToolCtx::new(db.clone(), 1, crate::host::LOCAL_CHAT);
+        // A nested file lands in the folder, at that path; file_list says where it is.
+        call(&ctx, "file_write", &json!({"path": "plans/q4/launch.md", "content": "# Launch", "mode": "create"})).await.unwrap();
+        assert_eq!(std::fs::read_to_string(real.join("plans/q4/launch.md")).unwrap(), "# Launch");
+        assert!(call(&ctx, "file_list", &json!({})).await.unwrap().contains(&me.workdir));
+        // The person's own file there is readable (as outside content: on a context of its own, so the writes below
+        // don't ask); nothing escapes the folder.
+        std::fs::write(real.join("theirs.txt"), "mine").unwrap();
+        assert!(call(&ToolCtx::new(db.clone(), 1, crate::host::LOCAL_CHAT), "file_read", &json!({"path": "theirs.txt"})).await.unwrap().contains("mine"));
+        for bad in ["../escape.md", "/etc/x", "plans/../../escape.md"] {
+            assert!(call(&ctx, "file_write", &json!({"path": bad, "content": "x", "mode": "create"})).await.is_err(), "{bad}");
+        }
+        #[cfg(unix)]
+        {
+            let outside = std::env::temp_dir().join(format!("mimir-workdir-outside-{}", std::process::id()));
+            std::fs::create_dir_all(&outside).unwrap();
+            std::os::unix::fs::symlink(&outside, real.join("out")).unwrap();
+            assert!(call(&ctx, "file_write", &json!({"path": "out/x.md", "content": "x", "mode": "create"})).await.is_err(), "no writing through a link");
+            assert!(!outside.join("x.md").exists());
+            let _ = std::fs::remove_dir_all(&outside);
+        }
+        // Changing a file of theirs asks, every time (no Always): here, nobody answers in a routine, so it's parked.
+        let mut later = ctx.clone();
+        later.unattended = true;
+        let parked = call(&later, "file_write", &json!({"path": "theirs.txt", "content": "x", "mode": "replace"})).await.unwrap();
+        assert!(parked.starts_with("Not done yet"), "{parked}");
+        assert!(db.approvals_pending().unwrap().iter().any(|a| a.kind == "userfile" && a.tool == "file_write"));
+        // Never the home folder itself or a system folder.
+        assert!(crate::files::check_workdir(&db, "~").is_err() && crate::files::check_workdir(&db, "/etc").is_err() && crate::files::check_workdir(&db, "/").is_err());
+        // The folder gone: a clear error, and nothing written anywhere else.
+        std::fs::remove_dir_all(&real).unwrap();
+        let e = call(&ctx, "file_write", &json!({"path": "a.md", "content": "x", "mode": "create"})).await.unwrap_err().to_string();
+        assert!(e.contains("working folder") && e.contains("missing"), "{e}");
+        assert!(!crate::files::root(&db, crate::host::LOCAL_CHAT).join("a.md").exists(), "not into the chat's workspace instead");
+        // A guest's chat never sees the person's folder: it gets that chat's own workspace.
+        db.pair(200, "Sam").unwrap();
+        db.chat_set_guest(200, true).unwrap();
+        let guest = ToolCtx::new(db.clone(), 1, 200);
+        assert_eq!(ws(&guest).unwrap(), 200);
+        // Off for this bot: no file_write at all.
+        me.workdir = String::new();
+        me.file_write = "off".into();
+        db.bot_save(&me).unwrap();
+        assert!(!specs_for(&ctx).iter().any(|s| s.0 == "file_write"));
+        let _ = std::fs::remove_dir_all(&top);
+    }
+
+    #[tokio::test]
+    async fn a_save_that_isnt_approved_keeps_its_text_in_the_reply() {
+        let p = std::env::temp_dir().join(format!("mimir-unsaved-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = Db::open(&p).unwrap();
+        db.set_rule("file_write", "ask").unwrap();
+        let ctx = ToolCtx::new(db.clone(), 1, crate::host::LOCAL_CHAT);
+        let c = ctx.clone();
+        let waiting = tokio::spawn(async move { call(&c, "file_write", &json!({"path": "plan.md", "content": "The plan", "mode": "create"})).await });
+        let a = loop {
+            if let Some(a) = db.approvals_pending().unwrap().pop() {
+                break a;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        };
+        db.approval_decide(a.id, false, None).unwrap();
+        let e = waiting.await.unwrap().unwrap_err().to_string();
+        assert!(e.contains("wasn't saved anywhere") && e.contains("in your reply"), "{e}");
+    }
+
+    #[tokio::test]
+    async fn a_denial_says_which_rule_and_where_it_is_set() {
+        let p = std::env::temp_dir().join(format!("mimir-denywhy-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = Db::open(&p).unwrap();
+        db.set_setting("mcp_servers", r#"[{"name":"browser","command":"/nonexistent/mimir-test-browser"}]"#).unwrap();
+        db.set_setting("mcp_tools:browser", r#"[{"name":"browser_run_code_unsafe","read_only":false}]"#).unwrap();
+        let ctx = ToolCtx::new(db.clone(), 1, crate::host::LOCAL_CHAT);
+        // Mimir's own default for page scripting, and where to change it.
+        let e = call(&ctx, "browser__browser_run_code_unsafe", &json!({"code": "1"})).await.unwrap_err().to_string();
+        assert!(e.contains("Mimir's default") && e.contains("Settings → Permissions → Browser actions"), "{e}");
+        // The person's own rule.
+        db.set_rule("memory_forget", "deny").unwrap();
+        let e = call(&ctx, "memory_forget", &json!({"id": 1})).await.unwrap_err().to_string();
+        assert!(e.contains("the user's rule for memory_forget") && e.contains("every bot"), "{e}");
+        // A per-site rule beats the tool's.
+        db.set_site_rule("web_fetch", "example.com", "deny").unwrap();
+        let e = call(&ctx, "web_fetch", &json!({"url": "https://example.com/x"})).await.unwrap_err().to_string();
+        assert!(e.contains("on example.com"), "{e}");
     }
 
     #[tokio::test]
@@ -2237,7 +2397,7 @@ mod tests {
         db.set_setting("mcp_tools:notes", r#"[{"name":"append","read_only":false}]"#).unwrap();
         db.set_setting("email_accounts", r#"[{"host":"127.0.0.1","port":1143,"user":"me@example.com","oauth":"outlook"}]"#).unwrap();
         db.set_setting("searxng_url", "http://127.0.0.1:9").unwrap(); // nothing listens: a search fails at once
-        db.bot_save(&crate::db::Bot { id: 0, name: "Scout".into(), persona: String::new(), provider: "openai".into(), model: "m".into(), base_url: String::new(), tools: String::new(), look: String::new() }).unwrap();
+        db.bot_save(&crate::db::Bot { id: 0, name: "Scout".into(), persona: String::new(), provider: "openai".into(), model: "m".into(), base_url: String::new(), tools: String::new(), look: String::new(), workdir: String::new(), file_write: String::new() }).unwrap();
         db.set_setting("sensitive", r#"["bank"]"#).unwrap();
         db
     }

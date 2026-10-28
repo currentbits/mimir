@@ -27,6 +27,8 @@ pub struct Approval {
     pub reason: Option<String>,
     /// Asked in a guest's chat: the guest answers there, so its chat-app card never offers Always (your rules).
     pub guest: bool,
+    /// `shown:<where>` once a card or the app showed it, `failed:<error>` if its card couldn't be sent; None: neither yet.
+    pub delivery: Option<String>,
     /// A link to this card in the app, for chat-app cards you can edit there. Not stored.
     #[serde(skip)]
     pub edit_link: Option<String>,
@@ -246,8 +248,8 @@ impl Db {
         let mut st = c.prepare(&format!(
             "SELECT id, chat_id, tool, summary, status, created_at, expires_at, tg_message_id, bot_id, kind, site, parked_args IS NOT NULL,
              (SELECT COUNT(*) FROM approvals p WHERE p.tool = approvals.tool AND p.site IS approvals.site AND p.kind = 'rule' AND p.status = 'approved' AND p.id < approvals.id),
-             draft, reason, coalesce((SELECT guest FROM chats WHERE chats.chat_id = approvals.chat_id AND approvals.chat_id != 0), 0)
-             FROM approvals WHERE {sql} ORDER BY id"
+             draft, reason, coalesce((SELECT guest FROM chats WHERE chats.chat_id = approvals.chat_id AND approvals.chat_id != 0), 0),
+             delivery FROM approvals WHERE {sql} ORDER BY id"
         ))?;
         let v = st
             .query_map([p], |r| {
@@ -268,6 +270,7 @@ impl Db {
                     draft: r.get::<_, Option<String>>(13)?.and_then(|d| serde_json::from_str(&d).ok()),
                     reason: r.get(14)?,
                     guest: r.get(15)?,
+                    delivery: r.get(16)?,
                     edit_link: None,
                 })
             })?
@@ -452,6 +455,29 @@ impl Db {
     /// The card was sent (`card_ref`: its message, if the channel said).
     pub fn approval_mark_notified(&self, id: i64, card_ref: Option<&str>) -> Result<()> {
         self.c().execute("UPDATE approvals SET notified=1, card_ref=?2 WHERE id=?1", params![id, card_ref])?;
+        Ok(())
+    }
+
+    /// Its card reached the person: on a chat app (`where`: telegram, slack…).
+    pub fn approval_shown(&self, id: i64, place: &str) -> Result<()> {
+        self.c().execute("UPDATE approvals SET delivery='shown:' || ?2 WHERE id=?1", params![id, place])?;
+        Ok(())
+    }
+
+    /// Its card couldn't be sent (kept unless something showed it since).
+    pub fn approval_send_failed(&self, id: i64, error: &str) -> Result<()> {
+        self.c().execute("UPDATE approvals SET delivery='failed:' || ?2 WHERE id=?1 AND (delivery IS NULL OR delivery LIKE 'failed:%')", params![id, error])?;
+        Ok(())
+    }
+
+    /// The app (window, web page, menu bar or tray) listed what's pending: each is shown, unless a card already was. A
+    /// card that failed is still told (`shown:app; card failed:…`), so the app can say so.
+    pub fn approvals_shown_in_app(&self) -> Result<()> {
+        self.c().execute(
+            "UPDATE approvals SET delivery = CASE WHEN delivery LIKE 'failed:%' THEN 'shown:app; card ' || delivery ELSE 'shown:app' END
+             WHERE status='pending' AND (delivery IS NULL OR delivery LIKE 'failed:%')",
+            [],
+        )?;
         Ok(())
     }
 

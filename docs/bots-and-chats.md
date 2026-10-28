@@ -224,7 +224,32 @@ Bots send files back too, with `send_file`: a file from the chat's workspace, or
 (the proof that a booking or a form went through). It arrives after the reply: a photo or document on Telegram, an
 upload in Slack (needs the `files:write` scope), an attachment on Discord (invite the bot with Attach Files), and in
 the app's chat, shown in place. In your own direct chat it just goes; in a group, channel or guest's chat it asks you
-first. At most 5 files with one reply.
+first. At most 5 files with one reply; a folder goes as one zip.
+
+## A bot's working folder
+
+By default a bot's files live in Mimir's own workspace for each chat ([Where the files are](memory.md#files)). In a
+bot's settings, **Working folder** lets you pick a folder of yours instead (`~/Projects/security`, `~/.claude/skills`):
+that bot's `file_list`, `file_read`, `file_write` and `file_delete` then work there, in every chat, with paths relative
+to it, so you see and edit its files in Finder or Explorer (**Reveal in Finder**). Its system prompt states the folder's
+real path, so it can tell you exactly where a file is.
+
+- **Only for you.** In a guest's chat, a group or a channel the bot uses that chat's own workspace, as before, so
+  nobody else reaches your folder (or files from your private chats).
+- **It stays inside.** `../`, absolute paths and links (to anywhere) are refused; the folder itself is stored with links
+  resolved. The disk's root, your home folder itself, system folders and Mimir's data can't be chosen.
+- **Your files ask.** Deleting a file there, or rewriting or appending to one that's already there, asks every time (no
+  Always, no plan covers it). **Writing files** sets whether a new file asks: as Permissions says, Ask, Allow or Off.
+  Earlier versions of rewritten files are kept in Mimir's data, not in your folder.
+- **If it's gone** (moved, renamed, a drive that isn't connected), the bot gets an error saying so and tells you; it
+  never writes to another folder instead. The bot's settings show the problem too.
+- **On a server or in Docker**, the folder is a path on the server (a mounted volume in Docker); the settings say which
+  machine it's on, and there's no picker.
+- **Copy its files there** (when you set the folder) copies what it has in Mimir's workspace, its own and the app chat's,
+  without replacing anything already there.
+
+To put a file somewhere else once, a bot can use `file_export`: it copies a workspace file or folder to a folder you
+name, after you approve a card that shows where and which files.
 
 ## Pinned cards
 

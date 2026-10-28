@@ -7,6 +7,10 @@ export type Bot = {
   has_telegram_token: boolean; has_slack: boolean; has_discord: boolean; has_signal: boolean; has_whatsapp: boolean; has_imessage: boolean
   /** Its creature, as you chose it (JSON of Look); empty = the one its id gives it. */
   look?: string
+  /** The folder you chose as its workspace, on the machine Mimir runs on; empty = Mimir's own workspaces. */
+  workdir?: string
+  /** How its file_write asks: '' (as Permissions says), ask, allow or off. */
+  file_write?: string
 }
 
 export type Rehearsed = { reply: string; would: string[]; looked: string[] }
@@ -30,9 +34,11 @@ export type Run = {
   delivered?: string | null; repeats?: number; cache_read?: number; cache_write?: number; estimated?: boolean
 }
 
-export type Approval = { id: number; bot_id: number; chat_id: number; tool: string; summary: string; created_at: number; expires_at: number; kind?: 'rule' | 'guarded' | 'guest' | 'login' | 'plan' | 'bot' | 'send' | 'takeover' | 'signin' | 'remind' | 'unasked' | 'loop' | 'sensitive' | 'drift'; site?: string | null; parked?: boolean; allowed_before?: number
+export type Approval = { id: number; bot_id: number; chat_id: number; tool: string; summary: string; created_at: number; expires_at: number; kind?: 'rule' | 'guarded' | 'guest' | 'login' | 'plan' | 'bot' | 'send' | 'takeover' | 'signin' | 'remind' | 'unasked' | 'loop' | 'sensitive' | 'drift' | 'userfile'; site?: string | null; parked?: boolean; allowed_before?: number
   /** A card whose text you can edit before it goes: its fields (subject and body editable; to, cc and account shown). */
-  draft?: Record<string, string> | null }
+  draft?: Record<string, string> | null
+  /** shown:<where> once a card or the app showed it; failed:<error> (or shown:app; card failed:…) if its chat-app card couldn't be sent. */
+  delivery?: string | null }
 
 export type Busy = { bot_id: number; chat_id: number; trigger: string; step: string | null }
 

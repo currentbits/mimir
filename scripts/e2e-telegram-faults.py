@@ -161,7 +161,9 @@ try:
     procs[-1].kill(); procs[-1].wait(); procs[-1] = server()
     until(up, 15)
     t2 = time.time(); msg("hello again")
-    check("answers after the restart", until(lambda: any("OK: hello again" in x for x in texts(t2)), 20), texts(t2))
+    # Answered on its own, or folded into the reply being written when it arrived (the replayed batch, #380): both
+    # answer it. Which one depends on timing.
+    check("answers after the restart", until(lambda: any("OK: hello again" in x or "hello again</sent_while_you_were_answering>" in x.replace("&lt;", "<").replace("&gt;", ">") for x in texts(t2)), 20), texts(t2))
     time.sleep(3)
     known(380, "a restart doesn't answer the last batch again", sum("OK: hello replay" in x for x in texts(t)) == 1, f'{sum("OK: hello replay" in x for x in texts(t))} replies')
     firsts = [x for x in texts(t_long) if "Paragraph 1:" in x]
@@ -175,7 +177,8 @@ try:
     fail(method="sendMessage", match="Approve this action?", code=502, description="Bad Gateway")
     t = time.time(); msg(f"DELETE ROUTINE {rid}")
     check("the card's send failed", until(lambda: [c for c in calls(t) if "Approve this action?" in text(c) and c.get("failed")], 15), [c["method"] for c in calls(t)])
-    known(377, "a card whose send fails is sent again", until(lambda: [c for c in sent(t) if "Approve this action?" in text(c)], 15), [(c["method"], c.get("failed")) for c in calls(t)])
+    # Tried again 20 s later (runtime.rs CARD_RETRY), not marked sent after the failure (#377).
+    check("a card whose send fails is sent again", until(lambda: [c for c in sent(t) if "Approve this action?" in text(c)], 30), [(c["method"], c.get("failed")) for c in calls(t)])
 finally:
     for p in procs:
         p.kill()

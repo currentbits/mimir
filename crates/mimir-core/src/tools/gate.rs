@@ -83,7 +83,7 @@ pub const READ_ONLY: [&str; 16] = [
 pub fn default_action(tool: &str) -> &'static str {
     match tool {
         // Opening a site asks, like the browser's (with "always on this site"); looking, clicking and typing don't.
-        "memory_forget" | "routine_delete" | "computer_open" | "bot_create" | "file_delete" | "email_send" | "calendar_create" => "ask",
+        "memory_forget" | "routine_delete" | "computer_open" | "bot_create" | "file_delete" | "file_export" | "email_send" | "calendar_create" => "ask",
         _ => "allow",
     }
 }
@@ -94,6 +94,21 @@ pub fn default_for(db: &Db, tool: &str) -> &'static str {
         Some(t) => crate::ext::default_action(tool, t.read_only),
         None => default_action(tool),
     }
+}
+
+/// Where the rule gate() used for this tool is set, in words a bot can pass on: a per-site rule, the person's own
+/// rule, or Mimir's default (all under Settings → Permissions; rules there are the same for every bot).
+pub fn rule_source(db: &Db, tool: &str, site: Option<&str>) -> String {
+    if let Some(h) = site.filter(|h| db.site_rule(tool, h).ok().flatten().is_some()) {
+        return format!("the user's rule for {tool} on {h} (Settings → Permissions, under the sites)");
+    }
+    if db.rule(tool).ok().flatten().is_some() {
+        return format!("the user's rule for {tool} (Settings → Permissions; it applies to every bot)");
+    }
+    if default_for(db, tool) == "deny" {
+        return format!("Mimir's default: {tool} can run any code in a page or upload the user's files, so it's off until they allow it (Settings → Permissions → Browser actions)");
+    }
+    format!("Mimir's default for {tool} (Settings → Permissions)")
 }
 
 /// allow | ask | deny for this call. Untrusted content bumps "allow" to "ask" for anything that isn't
@@ -512,6 +527,18 @@ pub(super) fn describe(ctx: &ToolCtx, name: &str, args: &Value) -> String {
         "file_read" => format!("Read {}", args["path"].as_str().unwrap_or("?")),
         "file_write" => format!("{} {}: {}", match args["mode"].as_str() { Some("append") => "Add to", Some("replace") => "Rewrite", _ => "Create" }, args["path"].as_str().unwrap_or("?"), truncate(args["content"].as_str().unwrap_or(""), 300)),
         "file_delete" => format!("Delete the file {}", args["path"].as_str().unwrap_or("?")),
+        // Where first (in full), then what, and what it would overwrite.
+        "file_export" => match crate::files::export_plan(&ctx.db, ws(ctx).unwrap_or(ctx.chat_id), args["path"].as_str().unwrap_or(""), args["dest"].as_str().unwrap_or("")) {
+            Ok((dir, files, there)) => format!(
+                "Copy to {} on {}: {}{}{}",
+                dir.display(),
+                crate::files::machine(),
+                files.iter().take(12).map(|(f, _)| f.as_str()).collect::<Vec<_>>().join(", "),
+                if files.len() > 12 { format!(" and {} more", files.len() - 12) } else { String::new() },
+                if there > 0 { format!(". Replaces {there} file(s) already there.") } else { String::new() }
+            ),
+            Err(e) => format!("Copy {} to {}: {e}", args["path"].as_str().unwrap_or("?"), args["dest"].as_str().unwrap_or("?")),
+        },
         "send_file" => match args["path"].as_str().filter(|_| args["screenshot"].as_bool() != Some(true)) {
             Some(p) => format!("Send the file {p} to this chat{}", args["format"].as_str().map(|f| format!(" as {f}")).unwrap_or_default()),
             None => "Send a screenshot of the computer's screen to this chat".into(),
@@ -658,16 +685,20 @@ pub(super) async fn propose_plan(ctx: &ToolCtx, args: &Value) -> Result<String> 
         bail!("plans need the person there to approve them; in a routine, just do the steps (each ask waits in their inbox).");
     }
     let run = ctx.run_id.context("no run to attach the plan to")?;
+    // After outside content one OK can't cover actions a page might have steered: not an error, though (that read as
+    // a failure and cost the plan); the bot carries on and each step asks on its own card.
     if ctx.is_tainted() {
-        bail!("this conversation read outside content, so each action asks on its own; just go ahead step by step.");
+        return Ok("Noted, no plan card: this conversation read outside content, so each action asks the user on its own card \
+                   (they see why). Go ahead step by step, and tell them to expect one ask per step."
+            .into());
     }
     // One line per step: a step can't add lines that look like more of the card.
     let steps: Vec<String> = args["steps"].as_array().into_iter().flatten().filter_map(|s| s.as_str()).map(|s| truncate(&s.split_whitespace().collect::<Vec<_>>().join(" "), 200)).take(12).collect();
     let bot = ctx.db.bot(ctx.bot_id)?;
     let mut actions: Vec<(String, Option<String>)> = vec![];
     for a in args["actions"].as_array().into_iter().flatten() {
-        // Claude and Codex know our tools by their MCP names (mcp__mimir__memory_forget); grok as mimir__….
-        let Some(tool) = a["tool"].as_str().map(|t| t.trim_start_matches("mcp__").trim_start_matches("mimir__")) else { continue };
+        let Some(tool) = a["tool"].as_str().map(canonical) else { continue };
+        let tool = tool.as_str();
         let exists = specs().iter().any(|(n, ..)| *n == tool) || crate::ext::find(&ctx.db, tool).is_some();
         if !exists || tool == "plan_propose" || !usable(ctx, tool) || !bot.allows(tool) {
             continue;
@@ -710,6 +741,13 @@ pub(super) fn always_ask(name: &str, decision: String, why: &'static str, tainte
 pub(super) fn precheck(ctx: &ToolCtx, name: &str, args: &Value) -> Result<()> {
     let len = |k: &str| args[k].as_str().map_or(0, |s| s.chars().count());
     match name {
+        // Where it goes and what it would overwrite, before anyone is asked.
+        "file_export" => {
+            let (dir, _, there) = crate::files::export_plan(&ctx.db, ws(ctx)?, s(args, "path")?, s(args, "dest")?)?;
+            if there > 0 && args["replace"].as_bool() != Some(true) {
+                bail!("{there} of these already exist in {}; pass replace: true to overwrite them (the card will say so), or pick another folder", dir.display());
+            }
+        }
         // Memories are short facts; a long one would also outgrow its approval card.
         "memory_store" if len("title") > 120 || len("body") > 1000 => {
             bail!("too long for a memory (title up to 120 characters, body up to 1000): keep it to the fact, or split it")
@@ -903,6 +941,7 @@ pub(crate) fn describe_tool(name: &str) -> String {
         "email_search" => "search your email",
         "email_send" => "send emails",
         "file_delete" => "delete files",
+        "file_export" => "copy files to your folders",
         "file_list" => "list files",
         "file_read" => "read files",
         "file_write" => "write files",
@@ -986,6 +1025,28 @@ pub fn edit_card(db: &Db, a: &crate::db::Approval, edits: &Value) -> Result<()> 
     Ok(())
 }
 
+/// For a save that didn't happen: its text exists nowhere else, so it goes in the reply (kept in the chat's history).
+fn unsaved(tool: &str) -> &'static str {
+    if matches!(tool, "file_write" | "memory_store" | "card_write" | "skill_save") {
+        " What you meant to save wasn't saved anywhere: put it in your reply in full, so it isn't lost."
+    } else {
+        ""
+    }
+}
+
+/// Why an ask timed out, from its delivery record: one the person saw and didn't answer is not one that never reached them.
+pub(crate) fn unanswered(delivery: &str) -> String {
+    match delivery.split_once(':') {
+        Some(("shown", app)) if app.starts_with("app") => format!(
+            "it was shown in the Mimir app, but nobody answered within 5 minutes{}",
+            app.split_once("; card failed:").map(|(_, e)| format!(" (its chat-app card couldn't be sent: {e})")).unwrap_or_default()
+        ),
+        Some(("shown", place)) => format!("its card was sent on {place}, but nobody answered within 5 minutes"),
+        Some(("failed", e)) => format!("its card couldn't be sent, so the user never saw it ({e})"),
+        _ => "it never reached the user: no chat app is connected for this chat and the Mimir app wasn't open".into(),
+    }
+}
+
 /// Block until the user approves, denies, or the request expires. Works across processes via SQLite.
 /// `kind` says why it asks (rule | guarded | login); `site` is the website, for a per-site "always".
 /// Approved, it gives back the call's arguments with any text you edited on the card (`args` itself otherwise).
@@ -1018,11 +1079,14 @@ pub(crate) async fn wait_for_approval_with(ctx: &ToolCtx, name: &str, args: &Val
                 }
                 match reason {
                     // Their own words: the bot changes course instead of only giving up.
-                    Some(r) => bail!("the user denied this action ({summary}) and said why, in their own words: \"Denied: {r}\". Don't retry it as it was: do what they said instead, or ask them if it isn't clear."),
-                    None => bail!("the user denied this action ({summary}). Don't retry it; tell the user it was not done."),
+                    Some(r) => bail!("the user denied this action ({summary}) and said why, in their own words: \"Denied: {r}\". Don't retry it as it was: do what they said instead, or ask them if it isn't clear.{}", unsaved(name)),
+                    None => bail!("the user denied this action ({summary}). Don't retry it; tell the user it was not done.{}", unsaved(name)),
                 }
             }
-            "expired" => bail!("approval request timed out ({summary}); the action was not done."),
+            "expired" => {
+                let why = unanswered(&ctx.db.approval(id)?.and_then(|a| a.delivery).unwrap_or_default());
+                bail!("approval request timed out ({summary}): {why}. The action was not done; tell the user that, and why.{}", unsaved(name))
+            }
             _ => tokio::time::sleep(Duration::from_millis(500)).await,
         }
     }

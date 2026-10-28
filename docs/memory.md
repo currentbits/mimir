@@ -71,6 +71,20 @@ folder is `files/chat-<id>/` in Mimir's data folder. Rewriting a file keeps the 
 and a file written after reading a web page stays marked as outside content when a bot reads it again. Like memory,
 it belongs to the chat, so a group chat can't read your private chat's files.
 
+**Where the files are.** They're plain files on disk, not in the database (SQLite keeps only which ones count as
+outside content):
+
+| Where Mimir runs | Folder |
+| --- | --- |
+| Desktop app (macOS, Linux) | `~/.mimir/files/chat-<id>/` (hidden in Finder: **Memory → Files → Open workspace folder**, or Go → Go to Folder) |
+| Desktop app (Windows) | `%USERPROFILE%\.mimir\files\chat-<id>\` |
+| `mimir server` | `files/chat-<id>/` in its data folder (`$MIMIR_HOME`, default `~/.mimir`) on the server |
+| Docker | the same inside the container; on the host, in the volume mounted for Mimir's data |
+
+**Memory → Files** shows the exact path and which machine it's on, and a bot's `file_list` says the same, so you can
+ask a bot where it put something. (An AI tool may also show a "working directory" of its own, like
+`~/.mimir/workspace`: that's only where it starts, and nothing is kept there.)
+
 ## Changing and removing
 
 - **Edit** a memory in place; the previous wording is kept under *earlier version*.

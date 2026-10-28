@@ -143,6 +143,10 @@ async fn api(app: AppHandle, host: State<'_, Host>, cmd: String, args: Value) ->
         }
         _ => {}
     }
+    // A folder on this computer, picked in the system's own dialog (a bot's working folder).
+    if cmd == "pick_folder" {
+        return Ok(json!(rfd::AsyncFileDialog::new().pick_folder().await.map(|f| f.path().display().to_string())));
+    }
     // Meeting transcription runs on this computer even when the app is connected to a server.
     if cmd == "meeting" {
         let m = app.state::<meeting::Meeting>();
@@ -537,6 +541,8 @@ async fn notifier(app: AppHandle) {
             }
         }
         let pending = host.db.approvals_pending().unwrap_or_default();
+        // In the menu bar or tray (and a notification below): shown.
+        let _ = host.db.approvals_shown_in_app();
         let ids: Vec<i64> = pending.iter().map(|a| a.id).collect();
         if ids != shown {
             shown = ids;

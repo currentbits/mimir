@@ -17,6 +17,7 @@ function approvalRisk(a: Approval): { icon: string; label: string; tone: string;
   if (a.kind === 'send') return { icon: 'send', label: 'Sends an email as you, to the address shown first. Each email asks you, until you choose Always.', tone: 'rule', always: true }
   if (a.kind === 'remind') return { icon: 'user', label: 'Sends to someone else’s chat in your household. Asked the first time for each person.', tone: 'rule', always: true }
   if (a.kind === 'bot') return { icon: 'user', label: 'Makes a new bot with this role, on the same AI account. Each new bot asks you, until you choose Always.', tone: 'rule', always: true }
+  if (a.kind === 'userfile') return { icon: 'file', label: 'Changes or deletes a file of yours, in the working folder you chose for this bot. Asks every time.', tone: 'rule', always: false }
   if (a.kind === 'plan') return { icon: 'check', label: 'One OK for the whole plan: these steps won\'t ask again during this reply.', tone: 'rule', always: true }
   if (a.kind === 'unasked') return { icon: 'shield', label: 'Asking because this doesn’t look like what you asked for (who or what it acts on wasn’t in your message).', tone: 'guarded', always: true }
   if (a.kind === 'drift') return { icon: 'shield', label: 'Asking because this routine is doing it differently from its earlier runs (why comes first). Allowed, it counts as usual from now on.', tone: 'guarded', always: false }
@@ -89,6 +90,7 @@ function ApprovalCard({ a, where, leaving, decide, inline }: {
         </div> : <div className={'what selectable' + (a.kind === 'plan' ? ' plan' : '')}>{a.summary}</div>}
         <div className="risk"><Icon name={risk.icon} size={12} />{risk.label}</div>
         {learned && <div className="learned">You've allowed this {a.allowed_before} times. Stop asking?</div>}
+        {a.delivery?.includes('failed:') && <div className="parked">Its card couldn't be sent on {a.delivery.split('failed:')[1].split(':')[0]}, so answer it here.</div>}
         {a.parked && <div className="parked">From a routine. It runs when you approve; it waits {((w: string) => w.startsWith('in ') ? `for ${w.slice(3)}` : `until ${w}`)(ahead(a.expires_at))}.</div>}
       </div>
       {a.kind === 'signin' ? <div className="choices">

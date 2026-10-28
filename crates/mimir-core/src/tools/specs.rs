@@ -13,8 +13,8 @@ pub fn specs() -> Vec<(&'static str, &'static str, Value)> {
              Never save that a tool, account or site doesn't work, or an error you hit: those get fixed.",
             json!({"type":"object","properties":{
                 "type":{"type":"string","enum":TYPES},
-                "title":{"type":"string","description":"short label"},
-                "body":{"type":"string","description":"the fact, self-contained"},
+                "title":{"type":"string","description":"short label, up to 120 characters"},
+                "body":{"type":"string","description":"the fact, self-contained, up to 1000 characters (split a longer one, or keep it in a workspace file)"},
                 "source":{"type":"string","description":"where you learned it, e.g. 'user said', a URL"},
                 "supersedes":{"type":"integer"},
                 "until":{"type":"string","description":"YYYY-MM-DD, only when it stops being true on a known day (\"away until Friday\"). A new version (supersedes) keeps the old end date unless you give one; \"none\" removes it"},
@@ -167,6 +167,19 @@ pub fn specs() -> Vec<(&'static str, &'static str, Value)> {
             },"required":["path","content","mode"]}),
         ),
         (
+            "file_export",
+            "Copy a workspace file, or a folder with everything in it, to a folder on the user's machine (the one Mimir \
+             runs on), like ~/.claude/skills or ~/Documents/plans: the only way to put files outside the workspace. The \
+             user approves it on a card that shows where and which files. A folder lands as a folder of its name. Never \
+             into system folders, the home folder itself, or hidden ones like ~/.ssh; if the user set export folders, \
+             only into those (the error lists them).",
+            json!({"type":"object","properties":{
+                "path":{"type":"string","description":"a workspace file or folder, like skills/seo"},
+                "dest":{"type":"string","description":"the folder to copy into, a full path (~ is the home folder)"},
+                "replace":{"type":"boolean","description":"overwrite files already there with the same name (the card says how many)"}
+            },"required":["path","dest"]}),
+        ),
+        (
             "file_delete",
             "Delete a file from this chat's workspace.",
             json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}),
@@ -175,11 +188,12 @@ pub fn specs() -> Vec<(&'static str, &'static str, Value)> {
             "send_file",
             "Send a file to this chat with your reply, as the proof of work: a file from the workspace (path), or a \
              screenshot of your computer's screen as it is now (screenshot=true; after a booking or a form, say). It \
-             arrives after your reply as a photo or document. Up to 5 per reply. For a Word document, PDF or spreadsheet, \
+             arrives after your reply as a photo or document. Up to 5 per reply; a folder (path) goes as one zip of \
+             everything in it, so send several files that belong together that way. For a Word document, PDF or spreadsheet, \
              write the content to the workspace first (markdown: headings, lists, tables; or CSV for a spreadsheet) and \
              send it with format.",
             json!({"type":"object","properties":{
-                "path":{"type":"string","description":"a workspace file, like notes/trip.md"},
+                "path":{"type":"string","description":"a workspace file, like notes/trip.md, or a folder to send as a zip"},
                 "format":{"type":"string","enum":["docx","xlsx","pdf"],"description":"send the file made into this: docx or pdf from markdown, xlsx from CSV or the first markdown table"},
                 "screenshot":{"type":"boolean","description":"send your computer's screen instead"}
             }}),
@@ -215,7 +229,7 @@ pub fn specs() -> Vec<(&'static str, &'static str, Value)> {
              When you tell the person you'll check back on something yourself (\"I'll check Friday whether they replied\"), \
              book it: at, with followup=true, and prompt as what to check and tell them. Say in your reply when, and that \
              they can cancel it. It counts like any routine.",
-            json!({"type":"object","properties":{"until":{"type":"string","description":"YYYY-MM-DD (through that day) or YYYY-MM-DD HH:MM: when a repeating routine ends"},"followup":{"type":"boolean","description":"with at: a check-back you booked on your own, not one the person asked for"},"cron":{"type":"string"},"at":{"type":"string","description":"YYYY-MM-DD HH:MM, for a one-off instead of cron"},"prompt":{"type":"string"},"quiet":{"type":"boolean"},"watch":{"type":"string","description":"quiet checks only: a page or feed URL, or \"mail\""},"keep":{"type":"boolean","description":"mail: and slack: only: run for every match, not just the first"},"for":{"type":"string","description":"a household member's name, to send it to their chat instead of this one"}},"required":["prompt"]}),
+            json!({"type":"object","properties":{"until":{"type":"string","description":"YYYY-MM-DD (through that day) or YYYY-MM-DD HH:MM: when a repeating routine ends"},"followup":{"type":"boolean","description":"with at: a check-back you booked on your own, not one the person asked for"},"cron":{"type":"string"},"at":{"type":"string","description":"YYYY-MM-DD HH:MM, for a one-off instead of cron"},"prompt":{"type":"string","description":"up to 1000 characters"},"quiet":{"type":"boolean"},"watch":{"type":"string","description":"quiet checks only: a page or feed URL, or \"mail\""},"keep":{"type":"boolean","description":"mail: and slack: only: run for every match, not just the first"},"for":{"type":"string","description":"a household member's name, to send it to their chat instead of this one"}},"required":["prompt"]}),
         ),
         ("routine_list", "List this chat's routines.", json!({"type":"object","properties":{}})),
         (
@@ -251,7 +265,7 @@ pub fn specs() -> Vec<(&'static str, &'static str, Value)> {
              replies to a routine's result with what to leave out, add or change (\"skip the crypto stuff\", \"make it shorter\", \
              \"move it to 9\"): rewrite the prompt to include that, keeping everything they didn't ask to change. Give only \
              the fields that change. until sets or moves its end (\"stop it after Friday\"); \"\" clears it.",
-            json!({"type":"object","properties":{"id":{"type":"integer"},"until":{"type":"string"},"prompt":{"type":"string"},"cron":{"type":"string"},"quiet":{"type":"boolean"},"watch":{"type":"string"}},"required":["id"]}),
+            json!({"type":"object","properties":{"id":{"type":"integer"},"until":{"type":"string"},"prompt":{"type":"string","description":"up to 1000 characters"},"cron":{"type":"string"},"quiet":{"type":"boolean"},"watch":{"type":"string"}},"required":["id"]}),
         ),
         (
             "plan_propose",
@@ -318,12 +332,15 @@ pub fn specs() -> Vec<(&'static str, &'static str, Value)> {
              For a long task, set later: you get an answer straight away and can reply to the person; when the other \
              bot is done, its result comes back to you in this chat and you tell them. Set in_own_chat when the work \
              should be that bot's own (\"each in its own bot\", \"show it in its chat\"): it does the task in its own chat \
-             with the person, keeps its answer there and saves files in its own folder; you get a link to it.",
+             with the person, keeps its answer there and saves files in its own folder; you get a link to it. Either way \
+             its files go to its own workspace, not yours: to give it files, list them in files (copied into its \
+             workspace) instead of pasting them into the task.",
             json!({"type":"object","properties":{
                 "bot":{"type":"string","description":"the bot's name"},
-                "task":{"type":"string","description":"self-contained task with all needed context"},
+                "task":{"type":"string","description":"self-contained task with all needed context, up to 1000 characters; put anything longer in a workspace file and name it here"},
                 "later":{"type":"boolean","description":"don't wait: it reports back in this chat when done"},
-                "in_own_chat":{"type":"boolean","description":"it works in, and answers in, its own chat; you get a link"}
+                "in_own_chat":{"type":"boolean","description":"it works in, and answers in, its own chat; you get a link"},
+                "files":{"type":"array","items":{"type":"string"},"description":"workspace files to copy into its workspace for the task (up to 20), like plans/brief.md"}
             },"required":["bot","task"]}),
         ),
         (
@@ -333,9 +350,9 @@ pub fn specs() -> Vec<(&'static str, &'static str, Value)> {
              as yours). It uses your AI account and the same memory of this user. The user approves it first. Then hand it \
              tasks with ask_bot; the user can chat with it in the app and connect a messaging app there.",
             json!({"type":"object","properties":{
-                "name":{"type":"string","description":"short, e.g. 'Scout'"},
-                "role":{"type":"string","description":"its instructions, self-contained"},
-                "tools":{"type":"array","items":{"type":"string"},"description":"tool names, a subset of yours; omit for the same as yours"}
+                "name":{"type":"string","description":"short, e.g. 'Scout', up to 40 characters"},
+                "role":{"type":"string","description":"its instructions, self-contained, up to 1000 characters (the person reads all of it on the card)"},
+                "tools":{"type":"array","items":{"type":"string"},"description":"tool names, a subset of yours (the names you see work too, like WebSearch or mcp__mimir__web_fetch); omit for the same as yours"}
             },"required":["name","role"]}),
         ),
         (
@@ -419,6 +436,20 @@ pub fn all_specs(db: &Db) -> Vec<(String, String, Value)> {
     builtin.chain(external).collect()
 }
 
+/// A tool's name as the model knows it, in ours: Claude and Codex see `mcp__mimir__web_fetch`, grok `mimir__web_fetch`,
+/// and Claude has its own WebSearch/WebFetch.
+pub fn canonical(name: &str) -> String {
+    let t = name.trim();
+    let t = t.strip_prefix("mcp__").unwrap_or(t);
+    let t = t.strip_prefix("mimir__").unwrap_or(t);
+    match t {
+        "WebSearch" => "web_search",
+        "WebFetch" => "web_fetch",
+        t => t,
+    }
+    .to_string()
+}
+
 /// The tools this bot may use (its allowlist), as offered to the model.
 pub fn specs_for(ctx: &ToolCtx) -> Vec<(String, String, Value)> {
     if ctx.tools_off {
@@ -426,4 +457,14 @@ pub fn specs_for(ctx: &ToolCtx) -> Vec<(String, String, Value)> {
     }
     let bot = ctx.db.bot(ctx.bot_id).ok();
     all_specs(&ctx.db).into_iter().filter(|(n, ..)| bot.as_ref().is_none_or(|b| b.allows(n)) && usable(ctx, n)).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn every_name_the_model_knows_is_ours() {
+        for (seen, ours) in [("mcp__mimir__web_fetch", "web_fetch"), ("mimir__web_fetch", "web_fetch"), ("WebSearch", "web_search"), ("WebFetch", "web_fetch"), (" web_search ", "web_search"), ("mcp__mimir__browser__browser_navigate", "browser__browser_navigate")] {
+            assert_eq!(super::canonical(seen), ours);
+        }
+    }
 }

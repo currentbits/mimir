@@ -489,7 +489,16 @@ impl Host {
                     }
                     crate::imessage::IMessage::new(chat)?;
                 }
+                // A working folder: checked and stored as it really is (links resolved); its files copied in if asked.
+                let mut bot = bot;
+                let was = (bot.id > 0).then(|| self.db.bot(bot.id).ok()).flatten().map(|b| b.workdir).unwrap_or_default();
+                if !bot.workdir.trim().is_empty() && bot.workdir != was {
+                    bot.workdir = crate::files::check_workdir(&self.db, &bot.workdir)?;
+                }
                 let id = self.db.bot_save(&bot)?;
+                if arg::<Option<bool>>(a, "copy_files")?.unwrap_or(false) && !bot.workdir.is_empty() && bot.workdir != was {
+                    crate::files::copy_into_workdir(&self.db, id, std::path::Path::new(&bot.workdir))?;
+                }
                 for (name, value) in
                     [(TG, secrets.telegram_token), (SLACK_BOT, secrets.slack_bot_token), (SLACK_APP, secrets.slack_app_token), (DISCORD, secrets.discord_token), (SIGNAL, secrets.signal_number),
                     (SIGNAL_API, secrets.signal_api),
@@ -777,6 +786,9 @@ impl Host {
             // A Claude bot on the Anthropic API key (the monthly API credits): see api_credits.
             "api_credits" => self.api_credits(a),
             // The request-match check: off until false asks are measured (scripts/e2e-flows.py turns it on).
+            // Folders bots may copy files into with file_export (each asks); none: any folder of the person's.
+            "export_folders" => ok(crate::files::export_folders(&self.db)),
+            "set_export_folders" => ok(crate::files::set_export_folders(&self.db, &arg::<Vec<String>>(a, "folders")?)?),
             "set_ask_check" => ok(self.db.set_setting("ask_check", if arg(a, "on")? { "on" } else { "off" })?),
             // A bot whose tools run without asking you first (tools::hands_off).
             "hands_off" => ok(self.db.hands_off(arg(a, "bot_id")?)),
@@ -858,6 +870,37 @@ impl Host {
             "skills" => ok(self.db.skills(&scope(a)?)?),
             // The chat's file workspace, as the bots keep it: list, read, delete.
             "files" => ok(crate::files::list(&self.db, arg(a, "chat_id")?, "")?.into_iter().map(|(path, size)| json!({"path": path, "size": size})).collect::<Vec<_>>()),
+            // Where it is (path and machine), and on the desktop, open it in Finder / Explorer.
+            "workspace" => {
+                let root = crate::files::root(&self.db, arg(a, "chat_id")?);
+                ok(json!({"path": root.display().to_string(), "machine": crate::files::machine(), "exists": root.is_dir(), "can_open": is_desktop()}))
+            }
+            "open_workspace" => {
+                if !is_desktop() {
+                    bail!("the folder is on the server; open it there");
+                }
+                let root = crate::files::root(&self.db, arg(a, "chat_id")?);
+                std::fs::create_dir_all(&root)?;
+                ok(crate::files::reveal(&root)?)
+            }
+            // A bot's working folder: where (and on which machine), whether it's there, and open it on the desktop.
+            "bot_folder" => {
+                let bot = self.db.bot(arg(a, "bot_id")?)?;
+                let ws = crate::files::bot_ws(bot.id);
+                let root = crate::files::root(&self.db, ws);
+                let problem = crate::files::workspace(&self.db, bot.id, 0, true, true).err().map(|e| format!("{e:#}"));
+                ok(json!({"path": root.display().to_string(), "chosen": !bot.workdir.is_empty(), "machine": crate::files::machine(), "problem": problem, "can_open": is_desktop()}))
+            }
+            "open_bot_folder" => {
+                if !is_desktop() {
+                    bail!("the folder is on the server; open it there");
+                }
+                let bot: i64 = arg(a, "bot_id")?;
+                crate::files::workspace(&self.db, bot, 0, true, true)?;
+                let root = crate::files::root(&self.db, crate::files::bot_ws(bot));
+                std::fs::create_dir_all(&root)?;
+                ok(crate::files::reveal(&root)?)
+            }
             "file" => ok(crate::files::read(&self.db, arg(a, "chat_id")?, &arg::<String>(a, "path")?)?.0),
             "delete_file" => ok(crate::files::delete(&self.db, arg(a, "chat_id")?, &arg::<String>(a, "path")?)?),
             // A file a bot sent to the chat ([[file:…]] in its reply), as base64, to show or save.
@@ -1645,6 +1688,8 @@ impl Host {
             // Everything that needs the person: approvals waiting, ones that ran out, failed runs, memory suggestions.
             "inbox" => {
                 let now = crate::db::now();
+                // The app is about to list every pending ask: each counts as shown (a timeout then says nobody answered).
+                self.db.approvals_shown_in_app()?;
                 let counts: Vec<Value> = self.db.suggestion_counts()?.into_iter().map(|(chat, n)| json!({"chat_id": chat, "count": n})).collect();
                 ok(json!({
                     "approvals": self.db.approvals_pending()?,
