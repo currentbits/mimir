@@ -855,6 +855,19 @@ impl Host {
             "skills" => ok(self.db.skills(&scope(a)?)?),
             // The chat's file workspace, as the bots keep it: list, read, delete.
             "files" => ok(crate::files::list(&self.db, arg(a, "chat_id")?, "")?.into_iter().map(|(path, size)| json!({"path": path, "size": size})).collect::<Vec<_>>()),
+            // Where it is (path and machine), and on the desktop, open it in Finder / Explorer.
+            "workspace" => {
+                let root = crate::files::root(&self.db, arg(a, "chat_id")?);
+                ok(json!({"path": root.display().to_string(), "machine": crate::files::machine(), "exists": root.is_dir(), "can_open": is_desktop()}))
+            }
+            "open_workspace" => {
+                if !is_desktop() {
+                    bail!("the folder is on the server; open it there");
+                }
+                let root = crate::files::root(&self.db, arg(a, "chat_id")?);
+                std::fs::create_dir_all(&root)?;
+                ok(crate::files::reveal(&root)?)
+            }
             "file" => ok(crate::files::read(&self.db, arg(a, "chat_id")?, &arg::<String>(a, "path")?)?.0),
             "delete_file" => ok(crate::files::delete(&self.db, arg(a, "chat_id")?, &arg::<String>(a, "path")?)?),
             // A file a bot sent to the chat ([[file:…]] in its reply), as base64, to show or save.

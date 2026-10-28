@@ -486,7 +486,9 @@ pub(super) async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<Stri
         }
         "file_list" => {
             let v = crate::files::list(&ctx.db, ctx.chat_id, args["dir"].as_str().unwrap_or(""))?;
-            if v.is_empty() { "The workspace is empty.".into() } else { v.iter().map(|(p, n)| format!("{p} ({n} bytes)")).collect::<Vec<_>>().join("\n") }
+            // Where it really is, so the bot can tell the person where to find the files.
+            let at = format!("Workspace: {}", crate::files::whereabouts(&crate::files::root(&ctx.db, ctx.chat_id)));
+            if v.is_empty() { format!("{at}\nIt's empty.") } else { format!("{at}\n{}", v.iter().map(|(p, n)| format!("{p} ({n} bytes)")).collect::<Vec<_>>().join("\n")) }
         }
         "file_read" => {
             let (text, outside) = crate::files::read(&ctx.db, ctx.chat_id, s(args, "path")?)?;

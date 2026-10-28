@@ -2011,6 +2011,18 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn file_list_says_where_the_workspace_really_is() {
+        let p = std::env::temp_dir().join(format!("mimir-whereabouts-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let ctx = ToolCtx::new(Db::open(&p).unwrap(), 1, crate::host::LOCAL_CHAT);
+        call(&ctx, "file_write", &json!({"path": "plans/a.md", "content": "x", "mode": "replace"})).await.unwrap();
+        let out = call(&ctx, "file_list", &json!({})).await.unwrap();
+        let root = crate::files::root(&ctx.db, crate::host::LOCAL_CHAT);
+        assert!(root.is_absolute() && out.starts_with(&format!("Workspace: {} on ", root.display())) && out.contains("plans/a.md"), "{out}");
+        assert!(root.join("plans/a.md").is_file(), "the path it gives is where the file is");
+    }
+
+    #[tokio::test]
     async fn a_denial_says_which_rule_and_where_it_is_set() {
         let p = std::env::temp_dir().join(format!("mimir-denywhy-{}.db", std::process::id()));
         let _ = std::fs::remove_file(&p);

@@ -331,13 +331,16 @@ function Files({ chatId }: { chatId: number }) {
   const list = useLoad(() => invoke<{ path: string; size: number }[]>('files', { chatId }), [chatId], 15000)
   const [open, setOpen] = useState<{ path: string; text: string } | null>(null)
   const [err, setErr] = useState<string | null>(null)
+  const where = useLoad(() => invoke<{ path: string; machine: string; can_open: boolean }>('workspace', { chatId }), [chatId], 60000)
   if (!list.data?.length) return null
   const show = (path: string) => open?.path === path ? setOpen(null) : invoke<string>('file', { chatId, path }).then(text => { setErr(null); setOpen({ path, text }) }, e => setErr(String(e)))
   const remove = (path: string) => ask(`Delete ${path}?`, 'Delete', true).then(ok => { if (ok) void invoke('delete_file', { chatId, path }).then(() => { if (open?.path === path) setOpen(null); return list.reload() }, e => setErr(String(e))) })
   return (
     <section aria-label="Files">
       <div className="section-title"><h2>Files</h2><span className="count">{list.data.length}</span></div>
-      <p className="hint">Your bots' workspace in this chat: notes, lists and drafts too long for a memory. A rewritten file keeps its earlier version.</p>
+      <p className="hint">Your bots' workspace in this chat: notes, lists and drafts too long for a memory. A rewritten file keeps its earlier version.
+        {where.data && <> In <code className="selectable">{where.data.path}</code> on {where.data.machine}.</>}
+        {where.data?.can_open && <> <button type="button" className="linkish" onClick={() => invoke('open_workspace', { chatId }).catch(e => setErr(String(e)))}>Open workspace folder</button></>}</p>
       {err && <p className="error">{err}</p>}
       <div className="mem-list">{list.data.map(f => (
         <article className="mem" key={f.path}>

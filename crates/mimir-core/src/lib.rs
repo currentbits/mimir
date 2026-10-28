@@ -1231,6 +1231,16 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
         ""
     };
     let missing = not_connected(ctx);
+    // Where the workspace really is: the AI CLI may show a working directory of its own, which isn't it.
+    let workspace = if tools::specs_for(ctx).iter().any(|s| s.0 == "file_write") {
+        format!(
+            "\n\nYour workspace (file_list, file_read, file_write) for this chat is the folder {}. When the person asks where \
+             files are, give that path. Any other working directory your environment shows is not where files go.",
+            files::whereabouts(&files::root(&ctx.db, ctx.chat_id))
+        )
+    } else {
+        String::new()
+    };
     // The chat's goal, while it's on: what the bot keeps working towards here, turn after turn.
     let goal = match ctx.db.goal(ctx.chat_id)?.filter(|g| ["active", "blocked"].contains(&g.status.as_str()) && tools::specs_for(ctx).iter().any(|s| s.0 == "goal_update")) {
         // Set or updated after reading outside content: shown as what it is, someone else's words maybe, and reading it
@@ -1287,7 +1297,7 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
     let standing = ctx.db.bootstrap(&scope, ctx.bot_id)?;
     tools::mark_sensitive_memory(ctx, &scope, &standing);
     let system = format!(
-        "Your name is {}. {PERSONA}{role}{guest}{family}{}{team}{logins}{plans}{skills}{goal}{missing}\n\n{NOW_NOTE}\n{}{household}",
+        "Your name is {}. {PERSONA}{role}{guest}{family}{}{team}{logins}{plans}{skills}{goal}{missing}{workspace}\n\n{NOW_NOTE}\n{}{household}",
         bot.name,
         if quiet { QUIET } else { "" },
         block("standing_memory", &standing)

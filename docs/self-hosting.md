@@ -175,6 +175,9 @@ and loads only its own scripts. `GET /healthz` answers `ok` for health checks. A
 least 24 characters. `POST /hook/<id>` is a routine's webhook ([Routines](routines.md#started-by-something-happening)):
 it takes that routine's own secret, never the admin token, so put it on the internet only if callers need to reach it.
 
+A bot's file workspace is on the server (`files/chat-<id>/` in the data folder; in Docker, inside the data volume),
+not on the computer you open the web UI from: see [Where the files are](memory.md#files).
+
 Email, web search, the file workspaces and the skill library work the same on a server: set them up in the web UI's
 Settings ([Connect your email, calendar and web search](connect.md)). The calendar link is set under Meetings, which
 is in the desktop app only, so a server's bots can't read a calendar yet (add-to-calendar links work everywhere). The

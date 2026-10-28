@@ -15,6 +15,33 @@ pub fn root(db: &crate::db::Db, chat: i64) -> PathBuf {
     db.dir().join("files").join(format!("chat-{chat}"))
 }
 
+/// The machine the workspaces are on, for a bot (or the app) to tell the person: its name, and in Docker that the path
+/// is the container's (on the host, it's wherever the data volume is mounted).
+pub fn machine() -> &'static str {
+    static NAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    NAME.get_or_init(|| {
+        let name = std::process::Command::new("hostname").output().ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).filter(|n| !n.is_empty());
+        let name = name.map(|n| format!("the computer {n}")).unwrap_or_else(|| "this computer".into());
+        if Path::new("/.dockerenv").exists() {
+            format!("{name}, a Docker container (on its host, the folder is inside the volume mounted for Mimir's data)")
+        } else {
+            name
+        }
+    })
+}
+
+/// Where a workspace really is: "<absolute path> on <machine>".
+pub fn whereabouts(root: &Path) -> String {
+    format!("{} on {}", root.display(), machine())
+}
+
+/// Open a folder in Finder, Explorer or the file manager (the desktop app only).
+pub fn reveal(dir: &Path) -> Result<()> {
+    let opener = if cfg!(target_os = "macos") { "open" } else if cfg!(windows) { "explorer" } else { "xdg-open" };
+    std::process::Command::new(opener).arg(dir).spawn().with_context(|| format!("couldn't open {}", dir.display()))?;
+    Ok(())
+}
+
 /// A file's name for its mark: the path as the file system sees it (no ./ or //), in lower case, since macOS and
 /// Windows treat Notes/A.md and notes/a.md as one file (on Linux two such files share a mark, the stricter way).
 fn key(rel: &str) -> String {
