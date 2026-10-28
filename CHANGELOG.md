@@ -2,6 +2,33 @@
 
 What changed for people using Mimir. The newest release is at the top; "Unreleased" is what the next one brings.
 
+## Unreleased
+
+### Files and folders
+- **A bot's working folder:** pick a folder of yours in a bot's settings (`~/Projects/security`, `~/.claude/skills`)
+  and its files go there, in every chat with you, so you see and edit them in Finder. Paths can't leave it; deleting
+  or changing a file of yours there always asks; **Writing files** sets whether new files ask. If the folder goes
+  missing the bot says so, and never writes somewhere else.
+- **Copy files out:** a bot can copy a workspace file or folder to a folder on your computer with `file_export`, after
+  a card that shows where and which files. **Settings → Permissions → Export folders** limits where.
+- **Where files are:** bots, and **Memory → Files**, now give the workspace's real path and machine;
+  **Open workspace folder** opens it.
+- **Folders as a zip:** `send_file` sends a whole folder as one zip.
+
+### Approvals
+- **Cards that didn't arrive:** a chat-app card that fails to send is tried again, and a timed-out ask tells the bot
+  whether you saw it or it never reached you. The app shows when a card couldn't be sent.
+- **Clearer denials:** a blocked tool says which rule blocked it (yours, a site's, or Mimir's default) and where to
+  change it. A bot's page shows what Permissions decides for each of its tools; unsafe browser tools say they're off
+  by default.
+- **Plans after outside content:** a plan proposed after a web page no longer fails; each step asks instead.
+
+### Bots working together
+- A task handed to another bot keeps its files in that bot's own workspace, its answer is kept in its own chat too,
+  and `ask_bot` can share files with it. A save that's denied or times out no longer loses its text.
+- Tool names work as the bot sees them (`WebSearch`, `mcp__mimir__web_fetch`), a new bot is only offered tools that
+  work, and bots with their own web search aren't told it isn't connected. Size limits are in the tools' descriptions.
+
 ## 0.6.1
 
 ### Approvals
