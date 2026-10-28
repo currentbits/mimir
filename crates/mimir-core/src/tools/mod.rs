@@ -926,7 +926,9 @@ mod tests {
         assert!(!db.approval_allow_rest_of_run(ask.id, None).unwrap(), "no 'all like this' on a tainted ask");
         db.approval_decide(ask.id, false, None).unwrap();
         assert!(asked.await.unwrap().is_err(), "it asked, and was denied");
-        assert!(call(&tainted, "plan_propose", &json!({"steps": ["x"], "actions": [{"tool": "memory_forget"}]})).await.is_err());
+        // After outside content: not an error, no card, and the bot is told each step asks.
+        let out = call(&tainted, "plan_propose", &json!({"steps": ["x"], "actions": [{"tool": "memory_forget"}]})).await.unwrap();
+        assert!(out.contains("each action asks") && !tainted.db.approvals_pending().unwrap().iter().any(|a| a.kind == "plan"), "{out}");
         assert!(planned(&[("browser__browser_navigate".into(), Some("playtomic.io".into()))], "browser__browser_navigate", Some("playtomic.io")));
         assert!(!planned(&[("browser__browser_navigate".into(), Some("playtomic.io".into()))], "browser__browser_navigate", Some("evil.example")), "another site isn't covered");
     }

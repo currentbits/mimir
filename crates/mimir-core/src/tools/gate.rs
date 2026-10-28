@@ -662,8 +662,12 @@ pub(super) async fn propose_plan(ctx: &ToolCtx, args: &Value) -> Result<String> 
         bail!("plans need the person there to approve them; in a routine, just do the steps (each ask waits in their inbox).");
     }
     let run = ctx.run_id.context("no run to attach the plan to")?;
+    // After outside content one OK can't cover actions a page might have steered: not an error, though (that read as
+    // a failure and cost the plan); the bot carries on and each step asks on its own card.
     if ctx.is_tainted() {
-        bail!("this conversation read outside content, so each action asks on its own; just go ahead step by step.");
+        return Ok("Noted, no plan card: this conversation read outside content, so each action asks the user on its own card \
+                   (they see why). Go ahead step by step, and tell them to expect one ask per step."
+            .into());
     }
     // One line per step: a step can't add lines that look like more of the card.
     let steps: Vec<String> = args["steps"].as_array().into_iter().flatten().filter_map(|s| s.as_str()).map(|s| truncate(&s.split_whitespace().collect::<Vec<_>>().join(" "), 200)).take(12).collect();
