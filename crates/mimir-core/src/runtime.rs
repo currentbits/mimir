@@ -2697,6 +2697,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_helpers_files_go_to_its_own_workspace_and_its_answer_stays_in_its_chat() {
+        let top = std::env::temp_dir().join(format!("mimir-helper-files-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&top);
+        std::fs::create_dir_all(&top).unwrap();
+        let db = Db::open(&top.join("mimir.db")).unwrap();
+        // Scout writes its plan to a file, then answers.
+        let (base, asked) = scripted_ai(&[
+            r#"{"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[{"id":"c1","type":"function","function":{"name":"file_write","arguments":"{\"path\":\"plan.md\",\"content\":\"The plan\",\"mode\":\"create\"}"}}]}}]}"#,
+            r#"{"choices":[{"message":{"role":"assistant","content":"Done: the plan is in plan.md."}}],"usage":{"prompt_tokens":3,"completion_tokens":2}}"#,
+        ])
+        .await;
+        let scout = crate::db::Bot { id: 0, name: "Scout".into(), persona: String::new(), provider: "openai".into(), model: "m".into(), base_url: base, tools: String::new(), look: String::new(), workdir: String::new(), file_write: String::new() };
+        let scout = db.bot_save(&scout).unwrap();
+        db.pair(300, "You").unwrap();
+        let ctx = ToolCtx::new(db.clone(), 1, 300).with_run(Some(db.run_start(1, 300, "message", None, "test").unwrap()));
+        // The asker shares a brief from its own workspace.
+        crate::tools::call(&ctx, "file_write", &serde_json::json!({"path": "brief.md", "content": "Launch in May", "mode": "create"})).await.unwrap();
+        let out = crate::tools::call(&ctx, "ask_bot", &serde_json::json!({"bot": "Scout", "task": "Write a launch plan", "files": ["brief.md"]})).await.unwrap();
+        let own = crate::files::root(&db, crate::files::bot_ws(scout));
+        assert_eq!(std::fs::read_to_string(own.join("brief.md")).unwrap(), "Launch in May", "shared into its workspace");
+        assert!(asked.lock().unwrap()[0].contains("Files shared with you"), "the task names them");
+        assert!(own.join("plan.md").is_file() && !crate::files::root(&db, 300).join("plan.md").exists(), "its file is in its own workspace, not the asker's");
+        assert!(out.contains("Done: the plan") && out.contains(&own.display().to_string()), "{out}");
+        // Its answer is kept in its own chat too.
+        let kept: Vec<_> = db.messages_of(crate::host::LOCAL_CHAT, Some(scout), None, 0, 10).unwrap().into_iter().map(|m| m.content).collect();
+        assert!(kept.len() == 2 && kept[0].starts_with("[Task from ") && kept[1].starts_with("Done: the plan"), "{kept:?}");
+        let _ = std::fs::remove_dir_all(&top);
+    }
+
+    #[tokio::test]
     async fn a_task_done_in_its_own_chat_stays_there() {
         let p = std::env::temp_dir().join(format!("mimir-own-chat-{}.db", std::process::id()));
         let _ = std::fs::remove_file(&p);

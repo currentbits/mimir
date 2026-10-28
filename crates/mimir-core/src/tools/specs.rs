@@ -331,12 +331,15 @@ pub fn specs() -> Vec<(&'static str, &'static str, Value)> {
              For a long task, set later: you get an answer straight away and can reply to the person; when the other \
              bot is done, its result comes back to you in this chat and you tell them. Set in_own_chat when the work \
              should be that bot's own (\"each in its own bot\", \"show it in its chat\"): it does the task in its own chat \
-             with the person, keeps its answer there and saves files in its own folder; you get a link to it.",
+             with the person, keeps its answer there and saves files in its own folder; you get a link to it. Either way \
+             its files go to its own workspace, not yours: to give it files, list them in files (copied into its \
+             workspace) instead of pasting them into the task.",
             json!({"type":"object","properties":{
                 "bot":{"type":"string","description":"the bot's name"},
                 "task":{"type":"string","description":"self-contained task with all needed context, up to 1000 characters; put anything longer in a workspace file and name it here"},
                 "later":{"type":"boolean","description":"don't wait: it reports back in this chat when done"},
-                "in_own_chat":{"type":"boolean","description":"it works in, and answers in, its own chat; you get a link"}
+                "in_own_chat":{"type":"boolean","description":"it works in, and answers in, its own chat; you get a link"},
+                "files":{"type":"array","items":{"type":"string"},"description":"workspace files to copy into its workspace for the task (up to 20), like plans/brief.md"}
             },"required":["bot","task"]}),
         ),
         (

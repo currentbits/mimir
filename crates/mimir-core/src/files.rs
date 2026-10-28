@@ -279,7 +279,9 @@ pub fn export_dir(db: &crate::db::Db, dest: &str) -> Result<PathBuf> {
 
 /// What an export would copy: the folder it goes to, (workspace file, where it lands) for each, and how many of
 /// those are already there (replaced only when asked to).
-pub fn export_plan(db: &crate::db::Db, chat: i64, rel: &str, dest: &str) -> Result<(PathBuf, Vec<(String, PathBuf)>, usize)> {
+pub type ExportPlan = (PathBuf, Vec<(String, PathBuf)>, usize);
+
+pub fn export_plan(db: &crate::db::Db, chat: i64, rel: &str, dest: &str) -> Result<ExportPlan> {
     let src = resolve(&root(db, chat), rel)?;
     let dir = export_dir(db, dest)?;
     let base = rel.trim().trim_start_matches("./").trim_end_matches('/');

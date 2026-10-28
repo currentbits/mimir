@@ -1014,6 +1014,15 @@ pub fn edit_card(db: &Db, a: &crate::db::Approval, edits: &Value) -> Result<()> 
     Ok(())
 }
 
+/// For a save that didn't happen: its text exists nowhere else, so it goes in the reply (kept in the chat's history).
+fn unsaved(tool: &str) -> &'static str {
+    if matches!(tool, "file_write" | "memory_store" | "card_write" | "skill_save") {
+        " What you meant to save wasn't saved anywhere: put it in your reply in full, so it isn't lost."
+    } else {
+        ""
+    }
+}
+
 /// Why an ask timed out, from its delivery record: one the person saw and didn't answer is not one that never reached them.
 pub(crate) fn unanswered(delivery: &str) -> String {
     match delivery.split_once(':') {
@@ -1056,13 +1065,13 @@ pub(crate) async fn wait_for_approval_with(ctx: &ToolCtx, name: &str, args: &Val
                 }
                 match reason {
                     // Their own words: the bot changes course instead of only giving up.
-                    Some(r) => bail!("the user denied this action ({summary}) and said why, in their own words: \"Denied: {r}\". Don't retry it as it was: do what they said instead, or ask them if it isn't clear."),
-                    None => bail!("the user denied this action ({summary}). Don't retry it; tell the user it was not done."),
+                    Some(r) => bail!("the user denied this action ({summary}) and said why, in their own words: \"Denied: {r}\". Don't retry it as it was: do what they said instead, or ask them if it isn't clear.{}", unsaved(name)),
+                    None => bail!("the user denied this action ({summary}). Don't retry it; tell the user it was not done.{}", unsaved(name)),
                 }
             }
             "expired" => {
                 let why = unanswered(&ctx.db.approval(id)?.and_then(|a| a.delivery).unwrap_or_default());
-                bail!("approval request timed out ({summary}): {why}. The action was not done; tell the user that, and why.")
+                bail!("approval request timed out ({summary}): {why}. The action was not done; tell the user that, and why.{}", unsaved(name))
             }
             _ => tokio::time::sleep(Duration::from_millis(500)).await,
         }

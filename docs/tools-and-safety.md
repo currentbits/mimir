@@ -28,7 +28,7 @@ Bots act through **tools**. Every tool call is checked against your rules before
 | `meeting_search`, `meeting_read` | Look through your transcribed meetings ([Meetings](meetings.md)); offered once you have one | allow |
 | `calendar_create` | Add an event straight to your calendar (**Settings → Calendar**: iCloud, Fastmail, Nextcloud or any CalDAV, with an app password); offered once one is connected, in a chat with you only. The card shows when, what and where; "Always" works for it | **ask** |
 | `calendar_list` | Read your calendar between two dates (from the calendar link in Settings); offered once one is linked, in a chat with you only. Event titles are outside content | allow |
-| `ask_bot` | Hand a task to another of your bots | allow |
+| `ask_bot` | Hand a task to another of your bots. The other bot's files go to its own workspace (its working folder, if you chose one), and its answer is kept in its own app chat as well as going back. `files` copies workspace files to it (as new files); `in_own_chat` has it work and answer in its own chat, and the asker gets a link | allow |
 | `bot_create` | Make a new bot for a job you describe ([Bots and chats](bots-and-chats.md#a-bot-that-makes-a-bot)) | **asks, every time** |
 | `skill_view` | Read the steps of an accepted skill | allow |
 | `skill_save` | Propose a skill from what the conversation did, when you ask; you press Save ([Skills](skills.md)) | allow |

@@ -2106,6 +2106,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_save_that_isnt_approved_keeps_its_text_in_the_reply() {
+        let p = std::env::temp_dir().join(format!("mimir-unsaved-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = Db::open(&p).unwrap();
+        db.set_rule("file_write", "ask").unwrap();
+        let ctx = ToolCtx::new(db.clone(), 1, crate::host::LOCAL_CHAT);
+        let c = ctx.clone();
+        let waiting = tokio::spawn(async move { call(&c, "file_write", &json!({"path": "plan.md", "content": "The plan", "mode": "create"})).await });
+        let a = loop {
+            if let Some(a) = db.approvals_pending().unwrap().pop() {
+                break a;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        };
+        db.approval_decide(a.id, false, None).unwrap();
+        let e = waiting.await.unwrap().unwrap_err().to_string();
+        assert!(e.contains("wasn't saved anywhere") && e.contains("in your reply"), "{e}");
+    }
+
+    #[tokio::test]
     async fn a_denial_says_which_rule_and_where_it_is_set() {
         let p = std::env::temp_dir().join(format!("mimir-denywhy-{}.db", std::process::id()));
         let _ = std::fs::remove_file(&p);

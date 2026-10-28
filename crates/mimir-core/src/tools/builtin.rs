@@ -918,6 +918,24 @@ pub(super) async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<Stri
             if own && ctx.chat_id != crate::host::LOCAL_CHAT && !crate::runtime::decisions_ok(&ctx.db, ctx.chat_id) {
                 bail!("in_own_chat only works from the person's own private chat; hand it over without it");
             }
+            // Files from this workspace go into the helper's (as new files: never over one of the person's), and the task
+            // names them. A file that's outside content stays marked there.
+            let mut task = task.to_string();
+            let shared: Vec<&str> = args["files"].as_array().into_iter().flatten().filter_map(Value::as_str).take(20).collect();
+            if !shared.is_empty() && !ctx.rehearsing() {
+                let (from, to) = (ws(ctx)?, crate::files::workspace(&ctx.db, target.id, ctx.chat_id, true)?);
+                let mut given = vec![];
+                for p in shared {
+                    let (text, outside) = crate::files::read(&ctx.db, from, p)?;
+                    match crate::files::write(&ctx.db, to, p, &text, "create", outside || ctx.is_tainted()) {
+                        Ok(_) => given.push(p.to_string()),
+                        Err(e) if e.to_string().contains("already exists") => given.push(format!("{p} (yours already had one; not replaced)")),
+                        Err(e) => return Err(e),
+                    }
+                }
+                task = format!("{task}\n\n[Files shared with you, in your workspace: {}]", given.join(", "));
+            }
+            let task = task.as_str();
             // Later: it runs on its own (the asking bot's scheduler starts it) and reports back. A rehearsal waits for it,
             // so nothing outlives the rehearsal.
             if args["later"].as_bool() == Some(true) && !ctx.rehearsing() {
@@ -945,10 +963,13 @@ pub(super) async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<Stri
                 return Ok(format!("Handed to {}. Its result comes back to you in this chat when it's done; tell the person then.", target.name));
             }
             let reply = delegate(ctx, target, task, own).await?;
+            // Where its files are: its own workspace, not this one.
+            let folder = crate::files::root(&ctx.db, crate::files::workspace(&ctx.db, target.id, ctx.chat_id, true).unwrap_or(crate::files::bot_ws(target.id)));
+            let files = if folder.is_dir() { format!("\n(Files it wrote are in its own workspace: {}.)", crate::files::whereabouts(&folder)) } else { String::new() };
             if own {
-                return own_chat_answer(&ctx.db, target, &reply);
+                return Ok(format!("{}{files}", own_chat_answer(&ctx.db, target, &reply)?));
             }
-            format!("{} replied:\n{}", target.name, truncate(&reply, 6000))
+            format!("{} replied (its answer is also kept in its own chat):\n{}{files}", target.name, truncate(&reply, 6000))
         }
         _ => bail!("unknown tool {name}"),
     })

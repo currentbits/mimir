@@ -1517,7 +1517,15 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
         reply.text.push_str(&files::sent_lines(&ctx.db, run));
     }
     match &trigger {
-        Trigger::Delegated { own: false, .. } => {}
+        // The answer goes back to the asking bot, and a copy stays in this bot's own app chat, so a failed step after it
+        // (the asker's save, say) can't lose it. Only from a chat of the person's alone: a guest's or a group's task
+        // doesn't land in their app chat.
+        Trigger::Delegated { from, task, own: false } => {
+            if !ctx.incognito() && !ctx.rehearsal && (ctx.ask_chat == host::LOCAL_CHAT || runtime::decisions_ok(&ctx.db, ctx.ask_chat)) {
+                ctx.db.log(ctx.bot_id, host::LOCAL_CHAT, "user", &format!("[Task from {from}] {task}"), None)?;
+                ctx.db.log(ctx.bot_id, host::LOCAL_CHAT, "assistant", &reply.text, ctx.run_id)?;
+            }
+        }
         // Routines in the digest or log-only lane don't land in the chat as they run.
         Trigger::Routine(r) if lane == "digest" => {
             ctx.db.digest_add(ctx.bot_id, ctx.chat_id, r.id, &reply.text, ctx.is_tainted())?;
