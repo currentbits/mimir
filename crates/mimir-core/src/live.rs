@@ -131,10 +131,10 @@ pub fn step(bot: i64, chat: i64) -> Option<String> {
     STEPS.lock().unwrap_or_else(|e| e.into_inner()).as_ref()?.get(&(bot, chat)).cloned()
 }
 
-/// A tool name in words, for "what it's doing now". Claude's names carry an `mcp__mimir__` prefix.
+/// A tool name in words, for "what it's doing now", whichever name the model used (see tools::canonical).
 pub fn step_label(tool: &str) -> String {
-    let t = tool.strip_prefix("mcp__mimir__").unwrap_or(tool);
-    match t {
+    let t = crate::tools::canonical(tool);
+    match t.as_str() {
         "memory_search" => "Searching memory".into(),
         "memory_store" => "Saving to memory".into(),
         "memory_forget" => "Forgetting a memory".into(),
@@ -168,7 +168,7 @@ pub fn step_label(tool: &str) -> String {
         "ask_choice" => "Asking you a question".into(),
         "progress_set" => "Ticking off a step".into(),
         "bot_create" => "Creating a bot".into(),
-        "WebSearch" | "web_search" => "Searching the web".into(),
+        "web_search" =>"Searching the web".into(),
         "x_search" => "Searching X".into(),
         _ if t.starts_with("computer_") => "Using the computer".into(),
         _ => match t.split_once("__") {

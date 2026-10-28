@@ -419,6 +419,20 @@ pub fn all_specs(db: &Db) -> Vec<(String, String, Value)> {
     builtin.chain(external).collect()
 }
 
+/// A tool's name as the model knows it, in ours: Claude and Codex see `mcp__mimir__web_fetch`, grok `mimir__web_fetch`,
+/// and Claude has its own WebSearch/WebFetch.
+pub fn canonical(name: &str) -> String {
+    let t = name.trim();
+    let t = t.strip_prefix("mcp__").unwrap_or(t);
+    let t = t.strip_prefix("mimir__").unwrap_or(t);
+    match t {
+        "WebSearch" => "web_search",
+        "WebFetch" => "web_fetch",
+        t => t,
+    }
+    .to_string()
+}
+
 /// The tools this bot may use (its allowlist), as offered to the model.
 pub fn specs_for(ctx: &ToolCtx) -> Vec<(String, String, Value)> {
     if ctx.tools_off {
@@ -426,4 +440,14 @@ pub fn specs_for(ctx: &ToolCtx) -> Vec<(String, String, Value)> {
     }
     let bot = ctx.db.bot(ctx.bot_id).ok();
     all_specs(&ctx.db).into_iter().filter(|(n, ..)| bot.as_ref().is_none_or(|b| b.allows(n)) && usable(ctx, n)).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn every_name_the_model_knows_is_ours() {
+        for (seen, ours) in [("mcp__mimir__web_fetch", "web_fetch"), ("mimir__web_fetch", "web_fetch"), ("WebSearch", "web_search"), ("WebFetch", "web_fetch"), (" web_search ", "web_search"), ("mcp__mimir__browser__browser_navigate", "browser__browser_navigate")] {
+            assert_eq!(super::canonical(seen), ours);
+        }
+    }
 }

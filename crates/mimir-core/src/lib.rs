@@ -988,7 +988,11 @@ pub(crate) fn not_connected(ctx: &ToolCtx) -> String {
             host::secret_get(calendar::SECRET).is_none() && caldav::account(db).is_none(),
             "your calendar: Settings → Calendar to add events, or the calendar link in Meetings to read it",
         ),
-        (tools::search_service(db).is_none(), "web search: Settings → Web search"),
+        // Claude, Codex and grok search the web on their own (provider.rs), whether or not a service is set up.
+        (
+            tools::search_service(db).is_none() && !db.bot(ctx.bot_id).is_ok_and(|b| ["claude", "codex", "grok"].contains(&b.provider.as_str())),
+            "web search: Settings → Web search",
+        ),
         (
             host::api_key("x").is_none(),
             "X (Twitter) search, recent posts: Settings → Web search → X (Twitter). It takes their own X API bearer token; if they \
@@ -1649,6 +1653,11 @@ echo '{{"type":"result","result":"ok","session_id":"s1","usage":{{"input_tokens"
         let _ = std::fs::remove_file(&p);
         let d = super::db::Db::open(&p).unwrap();
         let ctx = super::ToolCtx::new(d.clone(), 1, super::host::LOCAL_CHAT);
+        // Claude (the default) searches the web on its own: not "not connected".
+        assert!(!super::not_connected(&ctx).contains("web search:"), "Claude's own search");
+        let mut b = d.bot(1).unwrap();
+        b.provider = "openai".into();
+        d.bot_save(&b).unwrap();
         let note = super::not_connected(&ctx);
         assert!(note.contains("Settings → Email") && note.contains("web search: Settings → Web search"), "{note}");
         assert!(note.contains("Settings → Web search → X") && note.contains("console.x.com"), "X, with how to get a token: {note}");

@@ -285,11 +285,11 @@ pub(super) fn new_bot(ctx: &ToolCtx, args: &Value) -> Result<crate::db::Bot> {
         bail!("there's already a bot called {name}; pick another name or hand it the task with ask_bot");
     }
     let me = ctx.db.bot(ctx.bot_id)?;
-    // Never more than this bot may use itself, and no bot-making of its own.
-    let all: Vec<String> = all_specs(&ctx.db).into_iter().map(|t| t.0).filter(|t| me.allows(t) && t != "bot_create").collect();
+    // Never more than this bot can call itself, here (the same list it's offered), and no bot-making of its own.
+    let all: Vec<String> = specs_for(ctx).into_iter().map(|t| t.0).filter(|t| t != "bot_create").collect();
     let tools: Vec<String> = match args.get("tools").and_then(Value::as_array) {
         Some(asked) if !asked.is_empty() => {
-            let asked: Vec<String> = asked.iter().filter_map(Value::as_str).map(|t| t.trim().to_string()).collect();
+            let asked: Vec<String> = asked.iter().filter_map(Value::as_str).map(canonical).collect();
             let not: Vec<&str> = asked.iter().filter(|t| !all.contains(t)).map(String::as_str).collect();
             if !not.is_empty() {
                 bail!("can't give it {}: only tools you have yourself ({})", not.join(", "), all.join(", "));

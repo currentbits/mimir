@@ -655,8 +655,8 @@ pub(super) async fn propose_plan(ctx: &ToolCtx, args: &Value) -> Result<String> 
     let bot = ctx.db.bot(ctx.bot_id)?;
     let mut actions: Vec<(String, Option<String>)> = vec![];
     for a in args["actions"].as_array().into_iter().flatten() {
-        // Claude and Codex know our tools by their MCP names (mcp__mimir__memory_forget); grok as mimir__….
-        let Some(tool) = a["tool"].as_str().map(|t| t.trim_start_matches("mcp__").trim_start_matches("mimir__")) else { continue };
+        let Some(tool) = a["tool"].as_str().map(canonical) else { continue };
+        let tool = tool.as_str();
         let exists = specs().iter().any(|(n, ..)| *n == tool) || crate::ext::find(&ctx.db, tool).is_some();
         if !exists || tool == "plan_propose" || !usable(ctx, tool) || !bot.allows(tool) {
             continue;

@@ -1979,6 +1979,14 @@ mod tests {
         assert_eq!((scout.tools.as_str(), scout.provider.as_str()), ("memory_search,ask_bot,web_fetch", me.provider.as_str()), "its maker's tools, minus making bots");
         // Refused before anyone is asked: more tools than it has, a second Scout, a role too long to read on the card.
         assert!(call(&ctx, "bot_create", &json!({"name": "Ops", "role": "x", "tools": ["routine_delete"]})).await.unwrap_err().to_string().contains("only tools you have"));
+        // Allowed but not callable here (no email account, no computer) isn't offered as "yours" either.
+        let mut wide = me.clone();
+        wide.tools = String::new();
+        ctx.db.bot_save(&wide).unwrap();
+        let e = call(&ctx, "bot_create", &json!({"name": "Ops", "role": "x", "tools": ["email_send"]})).await.unwrap_err().to_string();
+        let yours = e.split_once("yourself (").unwrap().1;
+        assert!(e.contains("can't give it email_send") && !yours.contains("computer_") && !yours.contains("email_"), "{e}");
+        ctx.db.bot_save(&me).unwrap();
         assert!(call(&ctx, "bot_create", &json!({"name": "scout", "role": "x"})).await.unwrap_err().to_string().contains("already a bot"));
         assert!(call(&ctx, "bot_create", &json!({"name": "Long", "role": "a ".repeat(600)})).await.unwrap_err().to_string().contains("up to 1000"));
         assert!(ctx.db.approvals_pending().unwrap().is_empty());
@@ -1991,7 +1999,8 @@ mod tests {
         // After outside content: still asks, marked as such (the role could be a page's words).
         ctx.pre_taint();
         let ok = approve(ctx.db.clone());
-        call(&ctx, "bot_create", &json!({"name": "Pager", "role": "Summarise pages.", "tools": ["web_fetch"]})).await.unwrap();
+        // By the name the model knows it (Claude's MCP name), stored as ours.
+        call(&ctx, "bot_create", &json!({"name": "Pager", "role": "Summarise pages.", "tools": ["mcp__mimir__web_fetch"]})).await.unwrap();
         assert_eq!(ok.await.unwrap().0, "guarded");
         assert_eq!(ctx.db.bots().unwrap().into_iter().find(|b| b.name == "Pager").unwrap().tools, "web_fetch");
     }
