@@ -5,7 +5,18 @@ use super::*;
 /// The bot's tools that ask the user first under their rules (not counting per-site rules or outside content),
 /// so it knows when a plan saves the person several asks.
 pub fn asking_tools(ctx: &ToolCtx) -> Vec<String> {
+    if hands_off(ctx) {
+        return vec![];
+    }
     specs_for(ctx).into_iter().map(|s| s.0).filter(|n| n != "plan_propose" && gate(&ctx.db, n, None, false).is_ok_and(|g| g.0 == "ask")).collect()
+}
+
+/// The bot is set to "Don't ask me first": what would ask runs without a card, whatever made it ask (a rule, outside
+/// content, a sensitive source, a loop, a routine's drift, a saved login, a plan). A deny rule still holds; signing in
+/// and taking over still need you (your own steps, not an OK); a guest's chat still asks the guest. A task handed over
+/// by another bot only if both bots are set so, so no bot gets around its own asks through another.
+pub(crate) fn hands_off(ctx: &ToolCtx) -> bool {
+    [Some(ctx.bot_id), ctx.via_bot].into_iter().flatten().all(|b| ctx.db.hands_off(b)) && !ctx.db.chat_guest(ctx.ask_chat)
 }
 
 /// Tools that only read: built-in READ_ONLY, or external tools their server marks read-only.
@@ -1040,6 +1051,9 @@ pub(crate) fn unanswered(delivery: &str) -> String {
 /// `kind` says why it asks (rule | guarded | login); `site` is the website, for a per-site "always".
 /// Approved, it gives back the call's arguments with any text you edited on the card (`args` itself otherwise).
 pub(crate) async fn wait_for_approval_with(ctx: &ToolCtx, name: &str, args: &Value, summary: &str, kind: &str, site: Option<&str>) -> Result<Value> {
+    if hands_off(ctx) {
+        return Ok(args.clone());
+    }
     let summary = for_helper(ctx, card_text(summary));
     let kind = guest_kind(ctx, kind);
     let id = ctx.db.approval_create(ctx.via_bot.unwrap_or(ctx.bot_id), ctx.ask_chat, name, &summary, APPROVAL_TTL_SECS, kind, site)?;
@@ -1183,8 +1197,8 @@ pub async fn run_parked(db: Db, a: crate::db::Approval) {
 }
 
 /// Call after any approval decision (app or messaging button): an approved parked call runs now.
-/// "Always" on an approval: from now on this tool (or this tool on this website) runs without asking. Only plain rule
-/// asks qualify: ones after outside content, saved logins and plans must keep asking.
+/// "Always" on an approval: from now on this tool (or this tool on this website) runs without asking, not even after
+/// outside content. Signing in, taking over and a routine's drift have no rule to change.
 pub fn always_allow(db: &Db, a: &crate::db::Approval) -> Result<()> {
     if a.status != "approved" {
         return Ok(());
@@ -1197,10 +1211,9 @@ pub fn always_allow(db: &Db, a: &crate::db::Approval) -> Result<()> {
     if a.kind == "drift" {
         bail!("approved once; from now on this counts as usual for the routine");
     }
-    // A plain ask: allowed, still asking after outside content. Any other (after outside content, a sensitive source,
-    // an email, a new bot, a saved login, a plan, a loop…): the person chose never to be asked before it again.
-    // A guest's card was a plain ask in their chat.
-    let action = if matches!(a.kind.as_str(), "rule" | "guest") { "allow" } else { "always" };
+    // Always means not being asked again: a plain "allow" would still ask after the next web page, which reads as Always
+    // not working. A guest's card was a plain ask in their chat: allowed, still guarded.
+    let action = if a.kind == "guest" { "allow" } else { "always" };
     match a.site.as_deref() {
         Some(site) => db.set_site_rule(&a.tool, site, action),
         None => db.set_rule(&a.tool, action),
@@ -1212,7 +1225,7 @@ fn hint_off_key(tool: &str, site: Option<&str>) -> String {
 }
 
 /// For Needs you: what you allowed 5 times in 30 days and never denied, while the rules still ask before it ("always
-/// allow it?"). Accepting is a plain allow (it still asks after outside content); dismissing stops it for that pair.
+/// allow it?"). Accepting is Always, like the card's button; dismissing stops it for that pair.
 pub fn rule_hints(db: &Db) -> Result<Vec<Value>> {
     let since = crate::db::now() - 30 * 86400;
     Ok(db

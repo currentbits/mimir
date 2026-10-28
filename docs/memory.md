@@ -41,7 +41,9 @@ commitment).
 
 - **Preferences need your own words.** A bot saves a "When …, …" preference directly only when *your* message in that
   reply states the rule ("from now on…", "always…", "I prefer…") and it matches what's saved. A habit a bot works out
-  on its own becomes a *suggestion* you accept or dismiss.
+  on its own becomes a *suggestion* you accept or dismiss. **Settings → Memory → Always accept instructions** saves
+  them right away instead, for every bot (one picked up from a web page or email still stays unconfirmed until you
+  check it); so does a bot set to *Don't ask me first*.
 - **No secrets.** Memory refuses passwords and API keys; use saved logins for those
   ([Tools and safety](tools-and-safety.md#the-browser-and-saved-logins)).
 - **Sensitive topics stay out.** The tidy-up, imports and *Get to know me* don't suggest memories about your health,

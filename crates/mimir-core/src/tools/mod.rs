@@ -340,15 +340,17 @@ async fn gated(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
     let (decision, why) = if from.is_some() { ("ask".to_string(), "sensitive") } else { (decision, why) };
     // A write that doesn't fit what the person asked (or the routine's brief) asks first. Only ever allow → ask.
     let (decision, why) = if decision == "allow" && off_brief(ctx, name, args) { ("ask".to_string(), "unasked") } else { (decision, why) };
-    // Always, pressed on such a card: the person chose never to be asked before this again, whatever made it ask.
-    let trusted = trusted(&ctx.db, name, site.as_deref());
+    // Always, pressed on such a card: the person chose never to be asked before this again, whatever made it ask. So did
+    // a bot set to "Don't ask me first".
+    let free = hands_off(ctx);
+    let trusted = free || trusted(&ctx.db, name, site.as_deref());
     let (decision, why) = if decision == "ask" && trusted { ("allow".to_string(), "rule") } else { (decision, why) };
     // In a folder the person chose, their files: deleting one, or changing one that's there, asks every time (no Always,
-    // no plan covers it).
+    // no plan covers it, not even "Don't ask me first": that would lose their own files without a word).
     let (decision, why) = if decision != "deny" && user_file_change(ctx, name, args) { ("ask".to_string(), "userfile") } else { (decision, why) };
     // A routine's write that looks unlike its earlier runs (somewhere new, far more of it, another unit) asks this once,
     // even under Always: what was allowed was the usual. Only ever allow → ask.
-    let drift = if decision == "allow" { drift(ctx, name, args) } else { vec![] };
+    let drift = if decision == "allow" && !free { drift(ctx, name, args) } else { vec![] };
     let (decision, why) = if drift.is_empty() { (decision, why) } else { ("ask".to_string(), "drift") };
     let mut decision = decision;
     // A rehearsal: what would change or send something, or ask the person, says what it would do instead.
@@ -658,6 +660,49 @@ mod tests {
         db.set_rule("email_send", "allow").unwrap();
         assert_eq!(db.rule("email_send").unwrap().as_deref(), Some("allow"));
         assert!(!trusted(&db, "email_send", None));
+    }
+
+    #[tokio::test]
+    async fn a_bot_set_to_not_ask_never_makes_a_card() {
+        let p = std::env::temp_dir().join(format!("mimir-hands-off-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = Db::open(&p).unwrap();
+        db.set_hands_off(1, true).unwrap();
+        let ctx = ToolCtx::new(db.clone(), 1, 0);
+        ctx.taint();
+        // Forgetting asks by default, and more so after outside content: here it goes straight to the tool.
+        let _ = tokio::time::timeout(Duration::from_secs(5), call(&ctx, "memory_forget", &json!({"id": 999}))).await.expect("didn't wait for an OK");
+        assert!(db.approvals_pending().unwrap().is_empty());
+        assert!(asking_tools(&ctx).is_empty());
+        // A deny rule still holds.
+        db.set_rule("memory_forget", "deny").unwrap();
+        assert!(call(&ctx, "memory_forget", &json!({"id": 999})).await.unwrap_err().to_string().contains("deny"));
+        db.set_rule("memory_forget", "default").unwrap();
+        // An instruction it saves isn't held back as a suggestion to accept: it's in its instructions right away.
+        let clean = ToolCtx::new(db.clone(), 1, 0);
+        let out = call(&clean, "memory_store", &json!({"type": "convention", "title": "Language", "body": "Reply in Dutch."})).await.unwrap();
+        assert!(out.starts_with("stored"), "{out}");
+        assert!(db.suggestions("chat:0").unwrap().is_empty());
+        assert!(db.entries("chat:0").unwrap().iter().any(|e| e.kind == "convention" && !e.tainted));
+        // A skill it saves is kept, not left waiting for Save.
+        let run = db.run_start(1, 0, "message", None, "test").unwrap();
+        db.tool_call_log(Some(run), 0, "web_fetch", "Open padel.example", "allow", true, "ok").unwrap();
+        let out = call(&clean, "skill_save", &json!({"title": "Book padel", "description": "When booking padel", "body": "1. Open the club site"})).await.unwrap();
+        assert!(out.starts_with("Saved skill"), "{out}");
+        assert!(db.skills_active("chat:0", 1).unwrap().iter().any(|k| k.name == "Book padel"));
+        // A task from a bot that still asks: it asks.
+        let mut helper = ToolCtx::new(db.clone(), 1, 0);
+        helper.via_bot = Some(2);
+        assert!(!hands_off(&helper));
+        // Turned off: it asks again.
+        db.set_hands_off(1, false).unwrap();
+        assert!(!hands_off(&ctx));
+        // Instructions are suggested again, unless Settings → Memory accepts them for every bot.
+        let rule = json!({"type": "convention", "title": "Tone", "body": "Keep replies short."});
+        assert!(call(&clean, "memory_store", &rule).await.unwrap().starts_with("Not saved yet"));
+        db.set_setting(ACCEPT_INSTRUCTIONS, "on").unwrap();
+        let more = json!({"type": "convention", "title": "Units", "body": "Use metric units."});
+        assert!(call(&clean, "memory_store", &more).await.unwrap().starts_with("stored"));
     }
 
     #[tokio::test]

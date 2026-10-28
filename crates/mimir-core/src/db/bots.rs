@@ -131,11 +131,21 @@ impl Db {
              DELETE FROM runs WHERE bot_id={id}; DELETE FROM messages WHERE bot_id={id};
              DELETE FROM signals WHERE bot_id={id}; DELETE FROM cases WHERE bot_id={id}; DELETE FROM digest_items WHERE bot_id={id}; DELETE FROM cards WHERE bot_id={id};
              DELETE FROM routines WHERE bot_id={id}; DELETE FROM sessions WHERE bot_id={id}; DELETE FROM conv_taint WHERE bot_id={id};
-             DELETE FROM settings WHERE key LIKE 'seen:{id}:%' OR key LIKE 'private:{id}:%' OR key IN ('pause:{id}', 'fallback:{id}', 'fallback_spent:{id}', 'api_credits:{id}');
+             DELETE FROM settings WHERE key LIKE 'seen:{id}:%' OR key LIKE 'private:{id}:%' OR key IN ('pause:{id}', 'fallback:{id}', 'fallback_spent:{id}', 'api_credits:{id}', 'hands_off:{id}');
              DELETE FROM bots WHERE id={id};"
         ))?;
         self.wipe_free_space();
         Ok(())
+    }
+
+    /// The bot's "Don't ask me first" (its page): its tools run without approval cards (tools::hands_off).
+    pub fn hands_off(&self, bot: i64) -> bool {
+        self.setting(&format!("hands_off:{bot}")).ok().flatten().is_some()
+    }
+
+    pub fn set_hands_off(&self, bot: i64, on: bool) -> Result<()> {
+        let key = format!("hands_off:{bot}");
+        if on { self.set_setting(&key, "1") } else { self.setting_take(&key).map(|_| ()) }
     }
 
     /// The account a bot's routines run on while its own is at a usage limit: (account kind, model). None: off.
