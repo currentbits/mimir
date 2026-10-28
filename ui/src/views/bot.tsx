@@ -4,7 +4,7 @@ import { pigment, schedule, type Look } from '../format'
 import { openLink } from '../markdown'
 import { ask, Avatar, Group, Icon, Row, Switch } from '../ui'
 import { ModelInput } from './accounts'
-import { TOOL_LABEL } from './settings'
+import { TOOL_LABEL, toolLabel, type Rule } from './settings'
 import { LOCAL, randomLook, useLoad, online, presenceOf, CHANNEL, LookPicker, SECRETS_AT } from '../shared'
 import type { Bot, Delivery, Routine, Status, ToolServer, ChannelStatus, ComputerStatus } from '../types'
 
@@ -162,6 +162,16 @@ export function BotPage({ bot, status, canDelete, onSaved, onDeleted, onChat, on
   const computer = useLoad(() => invoke<ComputerStatus>('computer'), [], 60000)
   const serverTools: [string, string][] = (toolServers.data?.servers ?? []).filter(s => !s.preset).map(s => [`${s.name}__*`, `Use ${s.name}`])
   const ALL = [...Object.keys(TOOL_LABEL), 'browser__*', ...serverTools.map(([t]) => t)]
+  // What each tool does for this bot once it's on: Settings → Permissions (the same for every bot), defaults included.
+  const rules = useLoad(() => invoke<Rule[]>('rules'), [], 60000)
+  const RULE_WORDS: Record<string, string> = { always: 'never asks', allow: 'allowed', ask: 'asks you first', deny: 'denied' }
+  const effective = (tool: string) => {
+    const of = (r: Rule) => `${RULE_WORDS[r.action] ?? r.action}${r.action === r.default ? ' (default)' : ''}`
+    if (!tool.endsWith('__*')) { const r = rules.data?.find(r => r.tool === tool); return r && of(r) }
+    const rs = (rules.data ?? []).filter(r => r.tool.startsWith(tool.slice(0, -1)))
+    const odd = rs.filter(r => r.action === 'deny' || r.action === 'ask')
+    return rs.length ? odd.map(r => `${toolLabel(r.tool)}: ${of(r)}`).join(' · ') || 'all allowed' : undefined
+  }
   const enabled = b.tools.trim() ? b.tools.split(',').map(t => t.trim()) : ALL
   const toggle = (tool: string) => {
     const next = enabled.includes(tool) ? enabled.filter(t => t !== tool) : [...enabled, tool]
@@ -293,10 +303,10 @@ export function BotPage({ bot, status, canDelete, onSaved, onDeleted, onChat, on
         )}
       </Group>
 
-      <Group title="What it can do" note="Permissions in Settings still decide which of these ask you first.">
+      <Group title="What it can do" note="Under each: what Settings → Permissions decides for it (the same for every bot). After a bot reads a web page, anything that changes your data asks.">
         <div className="tool-grid">
           {[...Object.entries(TOOL_LABEL), ['browser__*', 'Use the web browser'], ...serverTools].map(([tool, label]) => (
-            <Row key={tool} title={label}><Switch label={label} checked={enabled.includes(tool)} onChange={() => toggle(tool)} /></Row>
+            <Row key={tool} title={label} desc={enabled.includes(tool) ? effective(tool) : 'off for this bot'}><Switch label={label} checked={enabled.includes(tool)} onChange={() => toggle(tool)} /></Row>
           ))}
         </div>
       </Group>

@@ -85,6 +85,21 @@ pub fn default_for(db: &Db, tool: &str) -> &'static str {
     }
 }
 
+/// Where the rule gate() used for this tool is set, in words a bot can pass on: a per-site rule, the person's own
+/// rule, or Mimir's default (all under Settings → Permissions; rules there are the same for every bot).
+pub fn rule_source(db: &Db, tool: &str, site: Option<&str>) -> String {
+    if let Some(h) = site.filter(|h| db.site_rule(tool, h).ok().flatten().is_some()) {
+        return format!("the user's rule for {tool} on {h} (Settings → Permissions, under the sites)");
+    }
+    if db.rule(tool).ok().flatten().is_some() {
+        return format!("the user's rule for {tool} (Settings → Permissions; it applies to every bot)");
+    }
+    if default_for(db, tool) == "deny" {
+        return format!("Mimir's default: {tool} can run any code in a page or upload the user's files, so it's off until they allow it (Settings → Permissions → Browser actions)");
+    }
+    format!("Mimir's default for {tool} (Settings → Permissions)")
+}
+
 /// allow | ask | deny for this call. Untrusted content bumps "allow" to "ask" for anything that isn't
 /// read-only, except the browser's own actions (reading pages is what the browser is for; its
 /// navigation and page scripting are gated separately).

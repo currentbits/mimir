@@ -10,7 +10,7 @@ import { DIRECTORY, type Listed } from '../directory'
 
 type VaultEntry = { name: string; domains: string[]; bot?: number; totp?: boolean }
 
-type Rule = { tool: string; description: string; action: 'always' | 'allow' | 'ask' | 'deny'; default: string }
+export type Rule = { tool: string; description: string; action: 'always' | 'allow' | 'ask' | 'deny'; default: string }
 
 /** Words a setting goes by besides its own text, so a search finds it ("token" → AI keys, "2fa"…). */
 const SETTING_WORDS: Record<string, string> = {
@@ -1213,7 +1213,7 @@ function Permissions() {
   const byServer = new Map<string, Rule[]>()
   all.filter(r => r.tool.includes('__')).forEach(r => { const s = r.tool.split('__')[0]; byServer.set(s, [...(byServer.get(s) ?? []), r]) })
   const row = (r: Rule) => (
-    <Row key={r.tool} title={toolLabel(r.tool)} desc={r.action === 'always' ? 'Never asks, not even after a bot reads a web page (Always on a card)' : r.action !== r.default ? `Changed from “${r.default}”` : undefined}>
+    <Row key={r.tool} title={toolLabel(r.tool)} desc={r.action === 'always' ? 'Never asks, not even after a bot reads a web page (Always on a card)' : r.action !== r.default ? `Changed from “${r.default}”` : r.default === 'deny' ? 'Denied by default: it can run any code in a page or upload your files' : undefined}>
       {/* Always is set from a card; here it shows, and goes back to Allow, Ask or Deny. */}
       <Segmented size="sm" label={toolLabel(r.tool)} value={r.action} onChange={a => set(r.tool, a)}
         options={[...(r.action === 'always' ? [{ id: 'always', label: 'Always' }] : []), { id: 'allow', label: 'Allow' }, { id: 'ask', label: 'Ask' }, { id: 'deny', label: 'Deny' }]} />
@@ -1249,7 +1249,7 @@ function Permissions() {
             <button type="button" className="row" style={{ width: '100%', border: 0, background: 'none', textAlign: 'left', borderTop: '0.5px solid var(--line)' }} onClick={() => setOpenServer(o => o === server ? null : server)} aria-expanded={openServer === server}>
               <span className="row-icon"><Icon name={server === 'browser' ? 'browser' : 'plug'} size={15} /></span>
               <div className="row-main"><div className="row-title">{server === 'browser' ? 'Browser actions' : `${server} tools`}</div>
-                <div className="row-desc">{rs.length} tools{changed ? ` · ${changed} changed` : ''}</div></div>
+                <div className="row-desc">{rs.length} tools{changed ? ` · ${changed} changed` : ''}{rs.some(r => r.default === 'deny' && r.action === 'deny') ? ' · unsafe ones denied by default' : ''}</div></div>
               <Icon name={openServer === server ? 'down' : 'chevron'} size={14} />
             </button>
             {openServer === server && rs.map(row)}

@@ -348,7 +348,10 @@ async fn gated(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
     let out = match decision.as_str() {
         "deny" if !enabled && ctx.incognito() => Err(anyhow::anyhow!("{name} isn't available in an incognito chat. Tell the user it works in a normal chat.")),
         "deny" if !enabled => Err(anyhow::anyhow!("{name} isn't enabled for this bot. Tell the user it can't be done here.")),
-        "deny" => Err(anyhow::anyhow!("blocked by the user's rules: {name} is set to deny. Tell the user it can't be done.")),
+        "deny" => Err(anyhow::anyhow!(
+            "blocked: {name} is set to deny by {}. Tell the user it can't be done, and where that's set if they want to change it.",
+            rule_source(&ctx.db, name, site.as_deref())
+        )),
         "rehearsal" => Ok(format!(
             "REHEARSAL, nothing was done: {}. In a real run this would {}. Carry on as if it had worked, and in your reply say what you would have done.",
             describe(ctx, name, args),
@@ -2003,6 +2006,27 @@ mod tests {
         call(&ctx, "bot_create", &json!({"name": "Pager", "role": "Summarise pages.", "tools": ["mcp__mimir__web_fetch"]})).await.unwrap();
         assert_eq!(ok.await.unwrap().0, "guarded");
         assert_eq!(ctx.db.bots().unwrap().into_iter().find(|b| b.name == "Pager").unwrap().tools, "web_fetch");
+    }
+
+    #[tokio::test]
+    async fn a_denial_says_which_rule_and_where_it_is_set() {
+        let p = std::env::temp_dir().join(format!("mimir-denywhy-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = Db::open(&p).unwrap();
+        db.set_setting("mcp_servers", r#"[{"name":"browser","command":"/nonexistent/mimir-test-browser"}]"#).unwrap();
+        db.set_setting("mcp_tools:browser", r#"[{"name":"browser_run_code_unsafe","read_only":false}]"#).unwrap();
+        let ctx = ToolCtx::new(db.clone(), 1, crate::host::LOCAL_CHAT);
+        // Mimir's own default for page scripting, and where to change it.
+        let e = call(&ctx, "browser__browser_run_code_unsafe", &json!({"code": "1"})).await.unwrap_err().to_string();
+        assert!(e.contains("Mimir's default") && e.contains("Settings → Permissions → Browser actions"), "{e}");
+        // The person's own rule.
+        db.set_rule("memory_forget", "deny").unwrap();
+        let e = call(&ctx, "memory_forget", &json!({"id": 1})).await.unwrap_err().to_string();
+        assert!(e.contains("the user's rule for memory_forget") && e.contains("every bot"), "{e}");
+        // A per-site rule beats the tool's.
+        db.set_site_rule("web_fetch", "example.com", "deny").unwrap();
+        let e = call(&ctx, "web_fetch", &json!({"url": "https://example.com/x"})).await.unwrap_err().to_string();
+        assert!(e.contains("on example.com"), "{e}");
     }
 
     #[tokio::test]
