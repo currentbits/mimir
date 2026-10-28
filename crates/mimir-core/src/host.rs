@@ -1635,6 +1635,8 @@ impl Host {
             // Everything that needs the person: approvals waiting, ones that ran out, failed runs, memory suggestions.
             "inbox" => {
                 let now = crate::db::now();
+                // The app is about to list every pending ask: each counts as shown (a timeout then says nobody answered).
+                self.db.approvals_shown_in_app()?;
                 let counts: Vec<Value> = self.db.suggestion_counts()?.into_iter().map(|(chat, n)| json!({"chat_id": chat, "count": n})).collect();
                 ok(json!({
                     "approvals": self.db.approvals_pending()?,

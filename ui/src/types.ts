@@ -32,7 +32,9 @@ export type Run = {
 
 export type Approval = { id: number; bot_id: number; chat_id: number; tool: string; summary: string; created_at: number; expires_at: number; kind?: 'rule' | 'guarded' | 'guest' | 'login' | 'plan' | 'bot' | 'send' | 'takeover' | 'signin' | 'remind' | 'unasked' | 'loop' | 'sensitive' | 'drift'; site?: string | null; parked?: boolean; allowed_before?: number
   /** A card whose text you can edit before it goes: its fields (subject and body editable; to, cc and account shown). */
-  draft?: Record<string, string> | null }
+  draft?: Record<string, string> | null
+  /** shown:<where> once a card or the app showed it; failed:<error> (or shown:app; card failed:…) if its chat-app card couldn't be sent. */
+  delivery?: string | null }
 
 export type Busy = { bot_id: number; chat_id: number; trigger: string; step: string | null }
 

@@ -994,6 +994,19 @@ pub fn edit_card(db: &Db, a: &crate::db::Approval, edits: &Value) -> Result<()> 
     Ok(())
 }
 
+/// Why an ask timed out, from its delivery record: one the person saw and didn't answer is not one that never reached them.
+pub(crate) fn unanswered(delivery: &str) -> String {
+    match delivery.split_once(':') {
+        Some(("shown", app)) if app.starts_with("app") => format!(
+            "it was shown in the Mimir app, but nobody answered within 5 minutes{}",
+            app.split_once("; card failed:").map(|(_, e)| format!(" (its chat-app card couldn't be sent: {e})")).unwrap_or_default()
+        ),
+        Some(("shown", place)) => format!("its card was sent on {place}, but nobody answered within 5 minutes"),
+        Some(("failed", e)) => format!("its card couldn't be sent, so the user never saw it ({e})"),
+        _ => "it never reached the user: no chat app is connected for this chat and the Mimir app wasn't open".into(),
+    }
+}
+
 /// Block until the user approves, denies, or the request expires. Works across processes via SQLite.
 /// `kind` says why it asks (rule | guarded | login); `site` is the website, for a per-site "always".
 /// Approved, it gives back the call's arguments with any text you edited on the card (`args` itself otherwise).
@@ -1027,7 +1040,10 @@ pub(crate) async fn wait_for_approval_with(ctx: &ToolCtx, name: &str, args: &Val
                     None => bail!("the user denied this action ({summary}). Don't retry it; tell the user it was not done."),
                 }
             }
-            "expired" => bail!("approval request timed out ({summary}); the action was not done."),
+            "expired" => {
+                let why = unanswered(&ctx.db.approval(id)?.and_then(|a| a.delivery).unwrap_or_default());
+                bail!("approval request timed out ({summary}): {why}. The action was not done; tell the user that, and why.")
+            }
             _ => tokio::time::sleep(Duration::from_millis(500)).await,
         }
     }

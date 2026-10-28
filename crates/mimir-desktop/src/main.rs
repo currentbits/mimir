@@ -532,6 +532,8 @@ async fn notifier(app: AppHandle) {
             }
         }
         let pending = host.db.approvals_pending().unwrap_or_default();
+        // In the menu bar or tray (and a notification below): shown.
+        let _ = host.db.approvals_shown_in_app();
         let ids: Vec<i64> = pending.iter().map(|a| a.id).collect();
         if ids != shown {
             shown = ids;

@@ -87,6 +87,7 @@ function ApprovalCard({ a, where, leaving, decide, inline }: {
         </div> : <div className={'what selectable' + (a.kind === 'plan' ? ' plan' : '')}>{a.summary}</div>}
         <div className="risk"><Icon name={risk.icon} size={12} />{risk.label}</div>
         {learned && <div className="learned">You've allowed this {a.allowed_before} times. Stop asking?</div>}
+        {a.delivery?.includes('failed:') && <div className="parked">Its card couldn't be sent on {a.delivery.split('failed:')[1].split(':')[0]}, so answer it here.</div>}
         {a.parked && <div className="parked">From a routine. It runs when you approve; it waits {((w: string) => w.startsWith('in ') ? `for ${w.slice(3)}` : `until ${w}`)(ahead(a.expires_at))}.</div>}
       </div>
       {a.kind === 'signin' ? <div className="choices">

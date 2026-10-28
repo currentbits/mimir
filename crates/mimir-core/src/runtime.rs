@@ -2172,18 +2172,37 @@ impl Core {
     /// cards once they're decided.
     /// The waiting tool call (possibly in an MCP subprocess) sees the decision through SQLite.
     async fn approvals(self: Arc<Self>, chans: Vec<Chan>) -> Result<()> {
+        // A card that failed to send: when it was last tried, and how often. Tried again a little later, a few times.
+        let mut failed: std::collections::HashMap<i64, (std::time::Instant, u32)> = Default::default();
         loop {
             let quiet = quiet_now(&self.db, chrono::Local::now());
             // A routine's ask waits hours anyway: its card can wait until quiet hours end. Live asks still go.
             for mut a in self.db.approvals_to_notify(self.bot).unwrap_or_default().into_iter().filter(|a| !(quiet && a.parked)) {
                 // Channel not connected: leave it pending for the app banner (and a later reconnect).
                 let Some((c, ext)) = Self::chan_for(&chans, a.chat_id, &self.db) else { continue };
+                if failed.get(&a.id).is_some_and(|(at, _)| at.elapsed() < CARD_RETRY) {
+                    continue;
+                }
                 a.edit_link = edit_link(&self.db, &a);
-                let card = c.card(&ext, &a).await.unwrap_or_else(|e| {
-                    eprintln!("approval #{} card failed: {e:#}", a.id);
-                    None
-                });
-                let _ = self.db.approval_mark_notified(a.id, card.as_deref());
+                match c.card(&ext, &a).await {
+                    Ok(card) => {
+                        failed.remove(&a.id);
+                        let _ = self.db.approval_shown(a.id, c.kind());
+                        let _ = self.db.approval_mark_notified(a.id, card.as_deref());
+                    }
+                    // Not marked sent: tried again on a later pass, and the bot hears why if it times out unseen.
+                    Err(e) => {
+                        eprintln!("approval #{} card failed: {e:#}", a.id);
+                        let _ = self.db.approval_send_failed(a.id, &format!("{}: {}", c.kind(), crate::tools::truncate(&format!("{e:#}"), 160)));
+                        let tries = failed.get(&a.id).map_or(0, |f| f.1) + 1;
+                        if tries >= CARD_TRIES {
+                            failed.remove(&a.id);
+                            let _ = self.db.approval_mark_notified(a.id, None);
+                        } else {
+                            failed.insert(a.id, (std::time::Instant::now(), tries));
+                        }
+                    }
+                }
             }
             // A routine's ask from any other chat (the app's too) also goes to the decisions chat, saying where it's from.
             if let Some(to) = decisions_chat(&self.db).filter(|_| !quiet)
@@ -2218,6 +2237,10 @@ impl Core {
         }
     }
 }
+
+/// A card that failed to send is tried again after this, up to CARD_TRIES times in all.
+const CARD_RETRY: Duration = Duration::from_secs(20);
+const CARD_TRIES: u32 = 4;
 
 /// How long a message waits on its chat's routine or earlier reply before saying so.
 const BUSY_NOTE_AFTER: Duration = Duration::from_secs(4);
@@ -2984,6 +3007,36 @@ mod tests {
             assert!(!tools.iter().any(|t| t == no), "{no} in guest mode");
         }
         assert!(!tools.iter().any(|t| t.starts_with("computer_") || t.starts_with("browser__")));
+    }
+
+    #[tokio::test]
+    async fn a_card_that_cant_be_sent_is_tried_again_and_the_timeout_says_so() {
+        let p = std::env::temp_dir().join(format!("mimir-undelivered-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = Db::open(&p).unwrap();
+        let core = Arc::new(core_on(&db, "http://127.0.0.1:9"));
+        // Nothing listens there: every send fails at once.
+        let tg = Chan::Telegram(Tg::at("http://127.0.0.1:9", "t").unwrap());
+        let chat = db.pair_external("telegram", "42", "42").unwrap();
+        let id = db.approval_create(1, chat, "file_write", "Create notes.md", 300, "rule", None).unwrap();
+        let task = tokio::spawn(core.clone().approvals(vec![tg]));
+        let delivery = loop {
+            if let Some(d) = db.approval(id).unwrap().and_then(|a| a.delivery) {
+                break d;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        };
+        task.abort();
+        assert!(delivery.starts_with("failed:telegram"), "{delivery}");
+        assert!(db.approvals_to_notify(1).unwrap().iter().any(|a| a.id == id), "not marked sent: tried again later");
+        assert!(crate::tools::unanswered(&delivery).contains("couldn't be sent, so the user never saw it"));
+        // The app listed it after all: shown, and still says the card failed.
+        db.approvals_shown_in_app().unwrap();
+        let d = db.approval(id).unwrap().unwrap().delivery.unwrap();
+        let why = crate::tools::unanswered(&d);
+        assert!(why.contains("shown in the Mimir app") && why.contains("card couldn't be sent: telegram"), "{why}");
+        assert!(crate::tools::unanswered("shown:slack").contains("sent on slack, but nobody answered"));
+        assert!(crate::tools::unanswered("").contains("never reached the user"));
     }
 
     #[tokio::test]
