@@ -161,7 +161,9 @@ try:
     procs[-1].kill(); procs[-1].wait(); procs[-1] = server()
     until(up, 15)
     t2 = time.time(); msg("hello again")
-    check("answers after the restart", until(lambda: any("OK: hello again" in x for x in texts(t2)), 20), texts(t2))
+    # Answered on its own, or folded into the reply being written when it arrived (the replayed batch, #380): both
+    # answer it. Which one depends on timing.
+    check("answers after the restart", until(lambda: any("OK: hello again" in x or "hello again</sent_while_you_were_answering>" in x.replace("&lt;", "<").replace("&gt;", ">") for x in texts(t2)), 20), texts(t2))
     time.sleep(3)
     known(380, "a restart doesn't answer the last batch again", sum("OK: hello replay" in x for x in texts(t)) == 1, f'{sum("OK: hello replay" in x for x in texts(t))} replies')
     firsts = [x for x in texts(t_long) if "Paragraph 1:" in x]
