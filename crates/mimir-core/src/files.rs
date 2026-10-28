@@ -94,6 +94,28 @@ pub fn list(db: &crate::db::Db, chat: i64, dir: &str) -> Result<Vec<(String, u64
     Ok(out)
 }
 
+/// A workspace folder as one zip (its files, at most 200, under the folder's name), named after it; None if `rel`
+/// isn't a folder.
+pub fn zip_folder(db: &crate::db::Db, chat: i64, rel: &str) -> Result<Option<(String, Vec<u8>)>> {
+    let root = root(db, chat);
+    if !resolve(&root, rel)?.is_dir() {
+        return Ok(None);
+    }
+    let files = list(db, chat, rel)?;
+    if files.is_empty() {
+        bail!("{rel} is an empty folder");
+    }
+    let base = rel.trim().trim_start_matches("./").trim_end_matches('/');
+    let name = base.rsplit('/').next().unwrap_or(base);
+    let mut z = zip::ZipWriter::new(std::io::Cursor::new(vec![]));
+    for (path, _) in &files {
+        let inner = path.strip_prefix(base).unwrap_or(path).trim_start_matches('/');
+        z.start_file(format!("{name}/{inner}"), zip::write::SimpleFileOptions::default())?;
+        std::io::Write::write_all(&mut z, &std::fs::read(root.join(path))?)?;
+    }
+    Ok(Some((format!("{name}.zip"), z.finish()?.into_inner())))
+}
+
 /// A file's text, and whether it's outside content (written after reading some, or not written by Mimir at all).
 pub fn read(db: &crate::db::Db, chat: i64, rel: &str) -> Result<(String, bool)> {
     let path = resolve(&root(db, chat), rel)?;
@@ -237,6 +259,29 @@ mod tests {
         assert!(sent_path(&home, 4, &files[0]).is_none(), "another chat's file");
         assert!(sent_path(&home, 3, "sent-3-x-../../mimir.db").is_none());
         assert_eq!(sent_lines(&db, 8), "", "another run");
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn a_folder_goes_as_one_zip() {
+        let home = std::env::temp_dir().join(format!("mimir-zip-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).unwrap();
+        let db = crate::db::Db::open(&home.join("mimir.db")).unwrap();
+        for f in ["skills/seo/SKILL.md", "skills/seo/refs/a.md", "skills/seo/refs/b.md", "other.md"] {
+            write(&db, 3, f, f, "create", false).unwrap();
+        }
+        assert!(zip_folder(&db, 3, "other.md").unwrap().is_none(), "a file isn't a folder");
+        let (name, bytes) = zip_folder(&db, 3, "skills/seo/").unwrap().unwrap();
+        assert_eq!(name, "seo.zip");
+        let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        let mut names: Vec<String> = z.file_names().map(String::from).collect();
+        names.sort();
+        assert_eq!(names, ["seo/SKILL.md", "seo/refs/a.md", "seo/refs/b.md"]);
+        let mut text = String::new();
+        std::io::Read::read_to_string(&mut z.by_name("seo/refs/b.md").unwrap(), &mut text).unwrap();
+        assert_eq!(text, "skills/seo/refs/b.md");
+        assert!(zip_folder(&db, 3, "../x").is_err());
         let _ = std::fs::remove_dir_all(&home);
     }
 

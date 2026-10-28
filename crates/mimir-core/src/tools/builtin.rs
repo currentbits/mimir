@@ -510,10 +510,16 @@ pub(super) async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<Stri
                 ("screen.jpg".to_string(), tokio::task::spawn_blocking(crate::computer::screenshot_jpeg).await??)
             } else {
                 let p = s(args, "path").map_err(|_| anyhow::anyhow!("give a workspace path, or screenshot=true"))?;
-                let (text, _) = crate::files::read(&ctx.db, ctx.chat_id, p)?;
-                match args["format"].as_str() {
-                    Some(f) => crate::office::make(f, p, &text)?,
-                    None => (p.rsplit('/').next().unwrap_or(p).to_string(), text.into_bytes()),
+                // A folder goes as one zip (a skill with its files, a site): one of the 5, whatever it holds.
+                match crate::files::zip_folder(&ctx.db, ctx.chat_id, p)? {
+                    Some(zipped) => zipped,
+                    None => {
+                        let (text, _) = crate::files::read(&ctx.db, ctx.chat_id, p)?;
+                        match args["format"].as_str() {
+                            Some(f) => crate::office::make(f, p, &text)?,
+                            None => (p.rsplit('/').next().unwrap_or(p).to_string(), text.into_bytes()),
+                        }
+                    }
                 }
             };
             let name = crate::files::send(&ctx.db, ctx.chat_id, run, &name, &bytes)?;
