@@ -298,7 +298,7 @@ pub(super) fn new_bot(ctx: &ToolCtx, args: &Value) -> Result<crate::db::Bot> {
         }
         _ => all,
     };
-    Ok(crate::db::Bot { id: 0, name: name.into(), persona: role.into(), provider: me.provider, model: me.model, base_url: me.base_url, tools: tools.join(","), look: String::new() })
+    Ok(crate::db::Bot { id: 0, name: name.into(), persona: role.into(), provider: me.provider, model: me.model, base_url: me.base_url, tools: tools.join(","), look: String::new(), workdir: String::new(), file_write: String::new() })
 }
 
 /// An event's time from a tool's arguments (a whole day, or a start and how many minutes) and how a card says it.
@@ -485,23 +485,23 @@ pub(super) async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<Stri
             out.join("\n\n")
         }
         "file_list" => {
-            let v = crate::files::list(&ctx.db, ctx.chat_id, args["dir"].as_str().unwrap_or(""))?;
+            let v = crate::files::list(&ctx.db, ws(ctx)?, args["dir"].as_str().unwrap_or(""))?;
             // Where it really is, so the bot can tell the person where to find the files.
-            let at = format!("Workspace: {}", crate::files::whereabouts(&crate::files::root(&ctx.db, ctx.chat_id)));
+            let at = format!("Workspace: {}", crate::files::whereabouts(&crate::files::root(&ctx.db, ws(ctx)?)));
             if v.is_empty() { format!("{at}\nIt's empty.") } else { format!("{at}\n{}", v.iter().map(|(p, n)| format!("{p} ({n} bytes)")).collect::<Vec<_>>().join("\n")) }
         }
         "file_read" => {
-            let (text, outside) = crate::files::read(&ctx.db, ctx.chat_id, s(args, "path")?)?;
+            let (text, outside) = crate::files::read(&ctx.db, ws(ctx)?, s(args, "path")?)?;
             if outside {
                 ctx.taint();
             }
             truncate(&text, 60_000)
         }
-        "file_write" => crate::files::write(&ctx.db, ctx.chat_id, s(args, "path")?, s(args, "content")?, s(args, "mode")?, ctx.is_tainted())?,
-        "file_export" => crate::files::export(&ctx.db, ctx.chat_id, s(args, "path")?, s(args, "dest")?, args["replace"].as_bool() == Some(true))?,
+        "file_write" => crate::files::write(&ctx.db, ws(ctx)?, s(args, "path")?, s(args, "content")?, s(args, "mode")?, ctx.is_tainted())?,
+        "file_export" => crate::files::export(&ctx.db, ws(ctx)?, s(args, "path")?, s(args, "dest")?, args["replace"].as_bool() == Some(true))?,
         "file_delete" => {
             let p = s(args, "path")?;
-            crate::files::delete(&ctx.db, ctx.chat_id, p)?;
+            crate::files::delete(&ctx.db, ws(ctx)?, p)?;
             format!("deleted {p}")
         }
         "send_file" => {
@@ -514,10 +514,10 @@ pub(super) async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<Stri
             } else {
                 let p = s(args, "path").map_err(|_| anyhow::anyhow!("give a workspace path, or screenshot=true"))?;
                 // A folder goes as one zip (a skill with its files, a site): one of the 5, whatever it holds.
-                match crate::files::zip_folder(&ctx.db, ctx.chat_id, p)? {
+                match crate::files::zip_folder(&ctx.db, ws(ctx)?, p)? {
                     Some(zipped) => zipped,
                     None => {
-                        let (text, _) = crate::files::read(&ctx.db, ctx.chat_id, p)?;
+                        let (text, _) = crate::files::read(&ctx.db, ws(ctx)?, p)?;
                         match args["format"].as_str() {
                             Some(f) => crate::office::make(f, p, &text)?,
                             None => (p.rsplit('/').next().unwrap_or(p).to_string(), text.into_bytes()),

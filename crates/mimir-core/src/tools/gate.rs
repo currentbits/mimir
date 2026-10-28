@@ -517,7 +517,7 @@ pub(super) fn describe(ctx: &ToolCtx, name: &str, args: &Value) -> String {
         "file_write" => format!("{} {}: {}", match args["mode"].as_str() { Some("append") => "Add to", Some("replace") => "Rewrite", _ => "Create" }, args["path"].as_str().unwrap_or("?"), truncate(args["content"].as_str().unwrap_or(""), 300)),
         "file_delete" => format!("Delete the file {}", args["path"].as_str().unwrap_or("?")),
         // Where first (in full), then what, and what it would overwrite.
-        "file_export" => match crate::files::export_plan(&ctx.db, ctx.chat_id, args["path"].as_str().unwrap_or(""), args["dest"].as_str().unwrap_or("")) {
+        "file_export" => match crate::files::export_plan(&ctx.db, ws(ctx).unwrap_or(ctx.chat_id), args["path"].as_str().unwrap_or(""), args["dest"].as_str().unwrap_or("")) {
             Ok((dir, files, there)) => format!(
                 "Copy to {} on {}: {}{}{}",
                 dir.display(),
@@ -732,7 +732,7 @@ pub(super) fn precheck(ctx: &ToolCtx, name: &str, args: &Value) -> Result<()> {
     match name {
         // Where it goes and what it would overwrite, before anyone is asked.
         "file_export" => {
-            let (dir, _, there) = crate::files::export_plan(&ctx.db, ctx.chat_id, s(args, "path")?, s(args, "dest")?)?;
+            let (dir, _, there) = crate::files::export_plan(&ctx.db, ws(ctx)?, s(args, "path")?, s(args, "dest")?)?;
             if there > 0 && args["replace"].as_bool() != Some(true) {
                 bail!("{there} of these already exist in {}; pass replace: true to overwrite them (the card will say so), or pick another folder", dir.display());
             }

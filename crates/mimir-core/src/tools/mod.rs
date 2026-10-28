@@ -265,6 +265,26 @@ fn lines(v: &[Entry]) -> String {
 /// Policy gate + dispatch + run-log entry. Every agent tool call goes through here.
 /// Pages, mail, files, tool servers: nothing the model reads back keeps characters hidden from the person, an error
 /// included (a tool server's error text is its own words, and one can repeat what came in).
+/// A delete, or a rewrite or append of a file that's there, in a working folder the person chose.
+fn user_file_change(ctx: &ToolCtx, name: &str, args: &Value) -> bool {
+    let Ok(ws) = ws(ctx) else { return false };
+    if !crate::files::is_users(&ctx.db, ws) {
+        return false;
+    }
+    let path = args["path"].as_str().unwrap_or("");
+    match name {
+        "file_delete" => true,
+        "file_write" => args["mode"].as_str() != Some("create") && crate::files::root(&ctx.db, ws).join(path.trim().trim_start_matches("./")).exists(),
+        _ => false,
+    }
+}
+
+/// The workspace this bot's file tools use here (files::workspace): its working folder, its own for another bot's
+/// task, or the chat's.
+pub(crate) fn ws(ctx: &ToolCtx) -> Result<i64> {
+    crate::files::workspace(&ctx.db, ctx.bot_id, ctx.chat_id, ctx.depth > 0)
+}
+
 pub async fn call(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
     gated(ctx, name, args).await.map(|r| crate::visible(&r)).map_err(|e| anyhow::anyhow!(crate::visible(&format!("{e:#}"))))
 }
@@ -278,6 +298,12 @@ async fn gated(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
     let enabled = usable(ctx, name) && ctx.db.bot(ctx.bot_id)?.allows(name);
     let site = site_of(name, args);
     let (decision, why) = if enabled { gate(&ctx.db, name, site.as_deref(), ctx.is_tainted())? } else { ("deny".to_string(), "rule") };
+    // This bot's own file_write setting (its settings page), over Permissions: ask, or allow (outside content still asks).
+    let (decision, why) = match (name, ctx.db.bot(ctx.bot_id).map(|b| b.file_write).unwrap_or_default().as_str()) {
+        ("file_write", "ask") if decision == "allow" => ("ask".to_string(), "rule"),
+        ("file_write", "allow") if decision == "ask" && why == "rule" => ("allow".to_string(), "rule"),
+        _ => (decision, why),
+    };
     // A new memory saved after outside content doesn't ask: it's kept unconfirmed (out of the bots' standing
     // instructions until you confirm it), and a rule becomes a suggestion anyway. Replacing one still asks, since the
     // replacement would take a confirmed memory out of the instructions.
@@ -312,6 +338,9 @@ async fn gated(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
     // Always, pressed on such a card: the person chose never to be asked before this again, whatever made it ask.
     let trusted = trusted(&ctx.db, name, site.as_deref());
     let (decision, why) = if decision == "ask" && trusted { ("allow".to_string(), "rule") } else { (decision, why) };
+    // In a folder the person chose, their files: deleting one, or changing one that's there, asks every time (no Always,
+    // no plan covers it).
+    let (decision, why) = if decision != "deny" && user_file_change(ctx, name, args) { ("ask".to_string(), "userfile") } else { (decision, why) };
     // A routine's write that looks unlike its earlier runs (somewhere new, far more of it, another unit) asks this once,
     // even under Always: what was allowed was the usual. Only ever allow → ask.
     let drift = if decision == "allow" { drift(ctx, name, args) } else { vec![] };
@@ -631,7 +660,7 @@ mod tests {
         let p = std::env::temp_dir().join(format!("mimir-askchat-{}.db", std::process::id()));
         let _ = std::fs::remove_file(&p);
         let db = Db::open(&p).unwrap();
-        let scout = crate::db::Bot { id: 0, name: "Scout".into(), persona: String::new(), provider: "openai".into(), model: "m".into(), base_url: String::new(), tools: String::new(), look: String::new() };
+        let scout = crate::db::Bot { id: 0, name: "Scout".into(), persona: String::new(), provider: "openai".into(), model: "m".into(), base_url: String::new(), tools: String::new(), look: String::new(), workdir: String::new(), file_write: String::new() };
         let scout = db.bot_save(&scout).unwrap();
         // Working in its app chat for a bot you asked on Telegram (chat 300): the card goes there, from that bot.
         let mut ctx = ToolCtx::new(db.clone(), scout, 0);
@@ -649,7 +678,7 @@ mod tests {
         let p = std::env::temp_dir().join(format!("mimir-helpercard-{}.db", std::process::id()));
         let _ = std::fs::remove_file(&p);
         let db = Db::open(&p).unwrap();
-        let scout = crate::db::Bot { id: 0, name: "Scout".into(), persona: String::new(), provider: "openai".into(), model: "m".into(), base_url: String::new(), tools: String::new(), look: String::new() };
+        let scout = crate::db::Bot { id: 0, name: "Scout".into(), persona: String::new(), provider: "openai".into(), model: "m".into(), base_url: String::new(), tools: String::new(), look: String::new(), workdir: String::new(), file_write: String::new() };
         let scout = db.bot_save(&scout).unwrap();
         let mut ctx = ToolCtx::new(db.clone(), scout, 0);
         assert_eq!(gate::for_helper(&ctx, "Open x.com".into()), "Open x.com", "its own ask");
@@ -2023,6 +2052,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_bots_working_folder_is_where_its_files_go_and_nowhere_else() {
+        let top = std::env::temp_dir().join(format!("mimir-workdir-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&top);
+        std::fs::create_dir_all(top.join("data")).unwrap();
+        let db = Db::open(&top.join("data").join("mimir.db")).unwrap();
+        let dir = top.join("folder");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut me = db.bot(1).unwrap();
+        me.workdir = crate::files::check_workdir(&db, dir.to_str().unwrap()).unwrap();
+        db.bot_save(&me).unwrap();
+        let real = std::path::PathBuf::from(&me.workdir);
+        let ctx = ToolCtx::new(db.clone(), 1, crate::host::LOCAL_CHAT);
+        // A nested file lands in the folder, at that path; file_list says where it is.
+        call(&ctx, "file_write", &json!({"path": "plans/q4/launch.md", "content": "# Launch", "mode": "create"})).await.unwrap();
+        assert_eq!(std::fs::read_to_string(real.join("plans/q4/launch.md")).unwrap(), "# Launch");
+        assert!(call(&ctx, "file_list", &json!({})).await.unwrap().contains(&me.workdir));
+        // The person's own file there is readable (as outside content: on a context of its own, so the writes below
+        // don't ask); nothing escapes the folder.
+        std::fs::write(real.join("theirs.txt"), "mine").unwrap();
+        assert!(call(&ToolCtx::new(db.clone(), 1, crate::host::LOCAL_CHAT), "file_read", &json!({"path": "theirs.txt"})).await.unwrap().contains("mine"));
+        for bad in ["../escape.md", "/etc/x", "plans/../../escape.md"] {
+            assert!(call(&ctx, "file_write", &json!({"path": bad, "content": "x", "mode": "create"})).await.is_err(), "{bad}");
+        }
+        #[cfg(unix)]
+        {
+            let outside = std::env::temp_dir().join(format!("mimir-workdir-outside-{}", std::process::id()));
+            std::fs::create_dir_all(&outside).unwrap();
+            std::os::unix::fs::symlink(&outside, real.join("out")).unwrap();
+            assert!(call(&ctx, "file_write", &json!({"path": "out/x.md", "content": "x", "mode": "create"})).await.is_err(), "no writing through a link");
+            assert!(!outside.join("x.md").exists());
+            let _ = std::fs::remove_dir_all(&outside);
+        }
+        // Changing a file of theirs asks, every time (no Always): here, nobody answers in a routine, so it's parked.
+        let mut later = ctx.clone();
+        later.unattended = true;
+        let parked = call(&later, "file_write", &json!({"path": "theirs.txt", "content": "x", "mode": "replace"})).await.unwrap();
+        assert!(parked.starts_with("Not done yet"), "{parked}");
+        assert!(db.approvals_pending().unwrap().iter().any(|a| a.kind == "userfile" && a.tool == "file_write"));
+        // Never the home folder itself or a system folder.
+        assert!(crate::files::check_workdir(&db, "~").is_err() && crate::files::check_workdir(&db, "/etc").is_err() && crate::files::check_workdir(&db, "/").is_err());
+        // The folder gone: a clear error, and nothing written anywhere else.
+        std::fs::remove_dir_all(&real).unwrap();
+        let e = call(&ctx, "file_write", &json!({"path": "a.md", "content": "x", "mode": "create"})).await.unwrap_err().to_string();
+        assert!(e.contains("working folder") && e.contains("missing"), "{e}");
+        assert!(!crate::files::root(&db, crate::host::LOCAL_CHAT).join("a.md").exists(), "not into the chat's workspace instead");
+        // Off for this bot: no file_write at all.
+        me.workdir = String::new();
+        me.file_write = "off".into();
+        db.bot_save(&me).unwrap();
+        assert!(!specs_for(&ctx).iter().any(|s| s.0 == "file_write"));
+        let _ = std::fs::remove_dir_all(&top);
+    }
+
+    #[tokio::test]
     async fn a_denial_says_which_rule_and_where_it_is_set() {
         let p = std::env::temp_dir().join(format!("mimir-denywhy-{}.db", std::process::id()));
         let _ = std::fs::remove_file(&p);
@@ -2239,7 +2322,7 @@ mod tests {
         db.set_setting("mcp_tools:notes", r#"[{"name":"append","read_only":false}]"#).unwrap();
         db.set_setting("email_accounts", r#"[{"host":"127.0.0.1","port":1143,"user":"me@example.com","oauth":"outlook"}]"#).unwrap();
         db.set_setting("searxng_url", "http://127.0.0.1:9").unwrap(); // nothing listens: a search fails at once
-        db.bot_save(&crate::db::Bot { id: 0, name: "Scout".into(), persona: String::new(), provider: "openai".into(), model: "m".into(), base_url: String::new(), tools: String::new(), look: String::new() }).unwrap();
+        db.bot_save(&crate::db::Bot { id: 0, name: "Scout".into(), persona: String::new(), provider: "openai".into(), model: "m".into(), base_url: String::new(), tools: String::new(), look: String::new(), workdir: String::new(), file_write: String::new() }).unwrap();
         db.set_setting("sensitive", r#"["bank"]"#).unwrap();
         db
     }

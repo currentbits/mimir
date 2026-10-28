@@ -489,7 +489,16 @@ impl Host {
                     }
                     crate::imessage::IMessage::new(chat)?;
                 }
+                // A working folder: checked and stored as it really is (links resolved); its files copied in if asked.
+                let mut bot = bot;
+                let was = (bot.id > 0).then(|| self.db.bot(bot.id).ok()).flatten().map(|b| b.workdir).unwrap_or_default();
+                if !bot.workdir.trim().is_empty() && bot.workdir != was {
+                    bot.workdir = crate::files::check_workdir(&self.db, &bot.workdir)?;
+                }
                 let id = self.db.bot_save(&bot)?;
+                if arg::<Option<bool>>(a, "copy_files")?.unwrap_or(false) && !bot.workdir.is_empty() && bot.workdir != was {
+                    crate::files::copy_into_workdir(&self.db, id, std::path::Path::new(&bot.workdir))?;
+                }
                 for (name, value) in
                     [(TG, secrets.telegram_token), (SLACK_BOT, secrets.slack_bot_token), (SLACK_APP, secrets.slack_app_token), (DISCORD, secrets.discord_token), (SIGNAL, secrets.signal_number),
                     (SIGNAL_API, secrets.signal_api),
@@ -865,6 +874,24 @@ impl Host {
                     bail!("the folder is on the server; open it there");
                 }
                 let root = crate::files::root(&self.db, arg(a, "chat_id")?);
+                std::fs::create_dir_all(&root)?;
+                ok(crate::files::reveal(&root)?)
+            }
+            // A bot's working folder: where (and on which machine), whether it's there, and open it on the desktop.
+            "bot_folder" => {
+                let bot = self.db.bot(arg(a, "bot_id")?)?;
+                let ws = crate::files::bot_ws(bot.id);
+                let root = crate::files::root(&self.db, ws);
+                let problem = crate::files::workspace(&self.db, bot.id, 0, true).err().map(|e| format!("{e:#}"));
+                ok(json!({"path": root.display().to_string(), "chosen": !bot.workdir.is_empty(), "machine": crate::files::machine(), "problem": problem, "can_open": is_desktop()}))
+            }
+            "open_bot_folder" => {
+                if !is_desktop() {
+                    bail!("the folder is on the server; open it there");
+                }
+                let bot: i64 = arg(a, "bot_id")?;
+                crate::files::workspace(&self.db, bot, 0, true)?;
+                let root = crate::files::root(&self.db, crate::files::bot_ws(bot));
                 std::fs::create_dir_all(&root)?;
                 ok(crate::files::reveal(&root)?)
             }

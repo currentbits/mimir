@@ -143,6 +143,10 @@ async fn api(app: AppHandle, host: State<'_, Host>, cmd: String, args: Value) ->
         }
         _ => {}
     }
+    // A folder on this computer, picked in the system's own dialog (a bot's working folder).
+    if cmd == "pick_folder" {
+        return Ok(json!(rfd::AsyncFileDialog::new().pick_folder().await.map(|f| f.path().display().to_string())));
+    }
     // Meeting transcription runs on this computer even when the app is connected to a server.
     if cmd == "meeting" {
         let m = app.state::<meeting::Meeting>();

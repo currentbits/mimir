@@ -11,8 +11,95 @@ const MAX_FILE: usize = 1_000_000;
 const MAX_CHAT: u64 = 50_000_000;
 const HISTORY: &str = ".history";
 
-pub fn root(db: &crate::db::Db, chat: i64) -> PathBuf {
-    db.dir().join("files").join(format!("chat-{chat}"))
+/// A workspace is a chat's, or a bot's own: its working folder if the person chose one, else files/bot-<id> (for the
+/// tasks other bots hand it). A bot's has an id far below any chat's, so marks and every function here take it like a
+/// chat's. See `workspace`.
+const BOT_WS: i64 = -(1 << 40);
+
+pub fn bot_ws(bot: i64) -> i64 {
+    BOT_WS - bot
+}
+
+fn ws_bot(ws: i64) -> Option<i64> {
+    (ws <= BOT_WS).then(|| BOT_WS - ws)
+}
+
+/// The working folder the person chose for this workspace's bot, if any.
+fn workdir(db: &crate::db::Db, ws: i64) -> Option<PathBuf> {
+    ws_bot(ws).and_then(|b| db.bot(b).ok()).map(|b| b.workdir).filter(|w| !w.trim().is_empty()).map(PathBuf::from)
+}
+
+pub fn root(db: &crate::db::Db, ws: i64) -> PathBuf {
+    if let Some(w) = workdir(db, ws) {
+        return w;
+    }
+    match ws_bot(ws) {
+        Some(bot) => db.dir().join("files").join(format!("bot-{bot}")),
+        None => db.dir().join("files").join(format!("chat-{ws}")),
+    }
+}
+
+/// Earlier versions of rewritten files: in the workspace, except for a folder of the person's (kept out of it, in
+/// Mimir's data).
+fn history(db: &crate::db::Db, ws: i64) -> PathBuf {
+    match (workdir(db, ws), ws_bot(ws)) {
+        (Some(_), Some(bot)) => db.dir().join("files").join(format!("bot-{bot}-history")),
+        _ => root(db, ws).join(HISTORY),
+    }
+}
+
+/// Whether this workspace is a folder the person chose (its files are theirs: overwriting or deleting always asks).
+pub fn is_users(db: &crate::db::Db, ws: i64) -> bool {
+    workdir(db, ws).is_some()
+}
+
+/// The workspace a bot's file tools use: its working folder if the person chose one (which must be there: never
+/// another folder instead), its own when it works on a task another bot handed it, else the chat's.
+pub fn workspace(db: &crate::db::Db, bot: i64, chat: i64, delegated: bool) -> Result<i64> {
+    let Ok(b) = db.bot(bot) else { return Ok(chat) };
+    if !b.workdir.trim().is_empty() {
+        if !Path::new(&b.workdir).is_dir() || std::fs::read_dir(&b.workdir).is_err() {
+            bail!(
+                "{}'s working folder {} is missing or can't be read on {} (moved or renamed, a drive that isn't connected, or \
+                 a path this machine doesn't have). Nothing was read or written anywhere else. Tell the user, so they can \
+                 reconnect it or choose another folder in {}'s settings.",
+                b.name,
+                b.workdir,
+                machine(),
+                b.name
+            );
+        }
+        return Ok(bot_ws(bot));
+    }
+    Ok(if delegated { bot_ws(bot) } else { chat })
+}
+
+/// A working folder the person picked, checked: a full path (~ is the home folder) to a folder that exists and can be
+/// read, not the disk's root, the home folder itself, system folders or Mimir's data. Returns it with links resolved.
+pub fn check_workdir(db: &crate::db::Db, dir: &str) -> Result<String> {
+    let real = export_dir(db, dir)?;
+    if !real.is_dir() || std::fs::read_dir(&real).is_err() {
+        bail!("{} isn't a folder that can be read on {}", real.display(), machine());
+    }
+    Ok(real.display().to_string())
+}
+
+/// Copy what a bot's workspaces hold (its own, and the app chat's) into its new working folder, keeping anything
+/// already there. Returns how many files were copied.
+pub fn copy_into_workdir(db: &crate::db::Db, bot: i64, dir: &Path) -> Result<usize> {
+    let mut n = 0;
+    for from in [db.dir().join("files").join(format!("bot-{bot}")), db.dir().join("files").join("chat-0")] {
+        for (rel, _) in list_in(&from, "")? {
+            let to = dir.join(&rel);
+            if to.symlink_metadata().is_ok() {
+                continue;
+            }
+            std::fs::create_dir_all(to.parent().context("no folder")?)?;
+            std::fs::copy(from.join(&rel), &to)?;
+            n += 1;
+        }
+    }
+    Ok(n)
 }
 
 /// The machine the workspaces are on, for a bot (or the app) to tell the person: its name, and in Docker that the path
@@ -92,7 +179,11 @@ fn size(dir: &Path) -> u64 {
 
 /// Files (relative paths and sizes) under `dir` in the workspace, folders first, at most 200.
 pub fn list(db: &crate::db::Db, chat: i64, dir: &str) -> Result<Vec<(String, u64)>> {
-    let root = root(db, chat);
+    list_in(&root(db, chat), dir)
+}
+
+fn list_in(root: &Path, dir: &str) -> Result<Vec<(String, u64)>> {
+    let root = root.to_path_buf();
     let base = if dir.trim().is_empty() { root.clone() } else { resolve(&root, dir)? };
     let mut out = vec![];
     fn walk(root: &Path, d: &Path, out: &mut Vec<(String, u64)>) {
@@ -261,7 +352,8 @@ pub fn write(db: &crate::db::Db, chat: i64, rel: &str, content: &str, mode: &str
     if new_len > MAX_FILE {
         bail!("a file can be up to 1 MB");
     }
-    if size(&root) + content.len() as u64 > MAX_CHAT {
+    // ponytail: no size cap in a folder of the person's (walking all of ~/Projects on each write would be slow; it's their disk).
+    if !is_users(db, chat) && size(&root) + content.len() as u64 > MAX_CHAT {
         bail!("this chat's workspace is full (50 MB); remove some files first");
     }
     std::fs::create_dir_all(path.parent().context("no folder")?)?;
@@ -273,7 +365,7 @@ pub fn write(db: &crate::db::Db, chat: i64, rel: &str, content: &str, mode: &str
             "appended to"
         }
         ("replace", true) => {
-            let keep = root.join(HISTORY).join(format!("{}.{}", rel.replace('/', "__"), crate::db::now()));
+            let keep = history(db, chat).join(format!("{}.{}", rel.replace('/', "__"), crate::db::now()));
             std::fs::create_dir_all(keep.parent().context("no folder")?)?;
             std::fs::copy(&path, &keep)?;
             std::fs::write(&path, content)?;

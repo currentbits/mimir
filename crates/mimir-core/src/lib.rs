@@ -1232,14 +1232,20 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
     };
     let missing = not_connected(ctx);
     // Where the workspace really is: the AI CLI may show a working directory of its own, which isn't it.
-    let workspace = if tools::specs_for(ctx).iter().any(|s| s.0 == "file_write") {
-        format!(
-            "\n\nYour workspace (file_list, file_read, file_write) for this chat is the folder {}. When the person asks where \
-             files are, give that path. Any other working directory your environment shows is not where files go.",
-            files::whereabouts(&files::root(&ctx.db, ctx.chat_id))
-        )
-    } else {
+    let workspace = if !tools::specs_for(ctx).iter().any(|s| s.0 == "file_write" || s.0 == "file_list") {
         String::new()
+    } else {
+        match tools::ws(ctx) {
+            Ok(ws) => format!(
+                "\n\nYour workspace (file_list, file_read, file_write) {} is the folder {}. When the person asks where files are, \
+                 give that path; paths you pass are relative to it. Any other working directory your environment shows is not \
+                 where files go.",
+                if files::is_users(&ctx.db, ws) { "is your working folder, which the person chose: their own files, so overwriting or deleting one always asks. It" } else { "for this chat" },
+                files::whereabouts(&files::root(&ctx.db, ws))
+            ),
+            // Its folder is gone: the bot says so before trying (and its file tools fail the same way).
+            Err(e) => format!("\n\nYour workspace isn't available: {e:#}"),
+        }
     };
     // The chat's goal, while it's on: what the bot keeps working towards here, turn after turn.
     let goal = match ctx.db.goal(ctx.chat_id)?.filter(|g| ["active", "blocked"].contains(&g.status.as_str()) && tools::specs_for(ctx).iter().any(|s| s.0 == "goal_update")) {

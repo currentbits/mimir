@@ -453,7 +453,7 @@ pub(crate) fn offers_all(a: &Approval) -> bool {
 /// …and "Always" on every card with something to allow, like the app. Not in a guest's chat (of any kind): the guest
 /// answers there, and Always would change your rules for every chat.
 pub(crate) fn offers_always(a: &Approval) -> bool {
-    !matches!(a.kind.as_str(), "signin" | "takeover" | "guest" | "drift") && !a.guest
+    !matches!(a.kind.as_str(), "signin" | "takeover" | "guest" | "drift" | "userfile") && !a.guest
 }
 
 /// Allowed the same plain ask a few times already: the card offers to stop asking.
@@ -2637,7 +2637,7 @@ mod tests {
         let _ = std::fs::remove_file(&p);
         let db = Db::open(&p).unwrap();
         let (base, asked) = recording_ai().await;
-        let scout = crate::db::Bot { id: 0, name: "Scout".into(), persona: String::new(), provider: "openai".into(), model: "m".into(), base_url: base.clone(), tools: String::new(), look: String::new() };
+        let scout = crate::db::Bot { id: 0, name: "Scout".into(), persona: String::new(), provider: "openai".into(), model: "m".into(), base_url: base.clone(), tools: String::new(), look: String::new(), workdir: String::new(), file_write: String::new() };
         let scout = db.bot_save(&scout).unwrap();
         let run = db.run_start(1, 0, "message", None, "test").unwrap();
         let ctx = ToolCtx::new(db.clone(), 1, 0).with_run(Some(run));
@@ -2680,7 +2680,7 @@ mod tests {
         let p = std::env::temp_dir().join(format!("mimir-later-limits-{}.db", std::process::id()));
         let _ = std::fs::remove_file(&p);
         let db = Db::open(&p).unwrap();
-        let scout = crate::db::Bot { id: 0, name: "Scout".into(), persona: String::new(), provider: "openai".into(), model: "m".into(), base_url: String::new(), tools: String::new(), look: String::new() };
+        let scout = crate::db::Bot { id: 0, name: "Scout".into(), persona: String::new(), provider: "openai".into(), model: "m".into(), base_url: String::new(), tools: String::new(), look: String::new(), workdir: String::new(), file_write: String::new() };
         db.bot_save(&scout).unwrap();
         db.pair(200, "Sam").unwrap();
         db.chat_set_guest(200, true).unwrap();
@@ -2702,7 +2702,7 @@ mod tests {
         let _ = std::fs::remove_file(&p);
         let db = Db::open(&p).unwrap();
         let (base, asked) = recording_ai().await;
-        let scout = crate::db::Bot { id: 0, name: "Scout".into(), persona: String::new(), provider: "openai".into(), model: "m".into(), base_url: base.clone(), tools: String::new(), look: String::new() };
+        let scout = crate::db::Bot { id: 0, name: "Scout".into(), persona: String::new(), provider: "openai".into(), model: "m".into(), base_url: base.clone(), tools: String::new(), look: String::new(), workdir: String::new(), file_write: String::new() };
         let scout = db.bot_save(&scout).unwrap();
         db.set_setting("public_url", "https://mimir.example").unwrap();
         // Asked from your Telegram chat: the task and its whole answer land in Scout's app chat, the asker gets a link.

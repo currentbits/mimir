@@ -16,6 +16,13 @@ pub struct Bot {
     /// How its creature looks, chosen by you: {"shape","eyes","extra","color"} as JSON. Empty = the look its id gives it.
     #[serde(default)]
     pub look: String,
+    /// The folder the person chose as its workspace (absolute, links resolved), on the machine Mimir runs on. Empty:
+    /// the workspaces Mimir keeps (files.rs).
+    #[serde(default)]
+    pub workdir: String,
+    /// How its file_write asks: empty (as Settings → Permissions says), ask, allow or off.
+    #[serde(default)]
+    pub file_write: String,
 }
 
 /// A bot's look: empty, or a small JSON object of short names and a #RRGGBB colour (the UI ignores names it doesn't know).
@@ -47,6 +54,9 @@ impl Bot {
         if tool == "email_hand_over" {
             return self.allows("email_read");
         }
+        if tool == "file_write" && self.file_write == "off" {
+            return false;
+        }
         self.tools.trim().is_empty()
             || self.tools.split(',').map(str::trim).any(|t| t == tool || t.strip_suffix('*').is_some_and(|p| !p.is_empty() && tool.starts_with(p)))
     }
@@ -57,7 +67,7 @@ impl Db {
 
     pub fn bots(&self) -> Result<Vec<Bot>> {
         let c = self.c();
-        let mut st = c.prepare("SELECT id, name, persona, provider, model, base_url, tools, look FROM bots ORDER BY id")?;
+        let mut st = c.prepare("SELECT id, name, persona, provider, model, base_url, tools, look, workdir, file_write FROM bots ORDER BY id")?;
         let v = st
             .query_map([], |r| {
                 Ok(Bot {
@@ -69,6 +79,8 @@ impl Db {
                     base_url: r.get(5)?,
                     tools: r.get(6)?,
                     look: r.get(7)?,
+                    workdir: r.get(8)?,
+                    file_write: r.get(9)?,
                 })
             })?
             .collect::<Result<_, _>>()?;
@@ -87,17 +99,20 @@ impl Db {
         if !valid_look(&b.look) {
             bail!("that look isn't valid");
         }
+        if !["", "ask", "allow", "off"].contains(&b.file_write.as_str()) {
+            bail!("file_write is ask, allow or off (or empty for Permissions)");
+        }
         let c = self.c();
         if b.id <= 0 {
             c.execute(
-                "INSERT INTO bots(name, persona, provider, model, base_url, tools, look, created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
-                params![b.name.trim(), b.persona, b.provider, b.model.trim(), b.base_url.trim(), b.tools, b.look, now()],
+                "INSERT INTO bots(name, persona, provider, model, base_url, tools, look, created_at, workdir, file_write) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+                params![b.name.trim(), b.persona, b.provider, b.model.trim(), b.base_url.trim(), b.tools, b.look, now(), b.workdir, b.file_write],
             )?;
             return Ok(c.last_insert_rowid());
         }
         let n = c.execute(
-            "UPDATE bots SET name=?2, persona=?3, provider=?4, model=?5, base_url=?6, tools=?7, look=?8 WHERE id=?1",
-            params![b.id, b.name.trim(), b.persona, b.provider, b.model.trim(), b.base_url.trim(), b.tools, b.look],
+            "UPDATE bots SET name=?2, persona=?3, provider=?4, model=?5, base_url=?6, tools=?7, look=?8, workdir=?9, file_write=?10 WHERE id=?1",
+            params![b.id, b.name.trim(), b.persona, b.provider, b.model.trim(), b.base_url.trim(), b.tools, b.look, b.workdir, b.file_write],
         )?;
         if n == 0 {
             bail!("no bot #{}", b.id);
