@@ -175,7 +175,8 @@ try:
     fail(method="sendMessage", match="Approve this action?", code=502, description="Bad Gateway")
     t = time.time(); msg(f"DELETE ROUTINE {rid}")
     check("the card's send failed", until(lambda: [c for c in calls(t) if "Approve this action?" in text(c) and c.get("failed")], 15), [c["method"] for c in calls(t)])
-    known(377, "a card whose send fails is sent again", until(lambda: [c for c in sent(t) if "Approve this action?" in text(c)], 15), [(c["method"], c.get("failed")) for c in calls(t)])
+    # Tried again 20 s later (runtime.rs CARD_RETRY), not marked sent after the failure (#377).
+    check("a card whose send fails is sent again", until(lambda: [c for c in sent(t) if "Approve this action?" in text(c)], 30), [(c["method"], c.get("failed")) for c in calls(t)])
 finally:
     for p in procs:
         p.kill()
