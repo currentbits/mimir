@@ -882,7 +882,7 @@ impl Host {
                 let bot = self.db.bot(arg(a, "bot_id")?)?;
                 let ws = crate::files::bot_ws(bot.id);
                 let root = crate::files::root(&self.db, ws);
-                let problem = crate::files::workspace(&self.db, bot.id, 0, true).err().map(|e| format!("{e:#}"));
+                let problem = crate::files::workspace(&self.db, bot.id, 0, true, true).err().map(|e| format!("{e:#}"));
                 ok(json!({"path": root.display().to_string(), "chosen": !bot.workdir.is_empty(), "machine": crate::files::machine(), "problem": problem, "can_open": is_desktop()}))
             }
             "open_bot_folder" => {
@@ -890,7 +890,7 @@ impl Host {
                     bail!("the folder is on the server; open it there");
                 }
                 let bot: i64 = arg(a, "bot_id")?;
-                crate::files::workspace(&self.db, bot, 0, true)?;
+                crate::files::workspace(&self.db, bot, 0, true, true)?;
                 let root = crate::files::root(&self.db, crate::files::bot_ws(bot));
                 std::fs::create_dir_all(&root)?;
                 ok(crate::files::reveal(&root)?)

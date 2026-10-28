@@ -54,9 +54,14 @@ pub fn is_users(db: &crate::db::Db, ws: i64) -> bool {
 }
 
 /// The workspace a bot's file tools use: its working folder if the person chose one (which must be there: never
-/// another folder instead), its own when it works on a task another bot handed it, else the chat's.
-pub fn workspace(db: &crate::db::Db, bot: i64, chat: i64, delegated: bool) -> Result<i64> {
+/// another folder instead), its own when it works on a task another bot handed it, else the chat's. A bot's own and
+/// chosen folders hold the person's files from every chat, so only for the person alone (`mine`: asked from their
+/// own chat or the app); for a guest or a group, the chat's workspace, as it always was.
+pub fn workspace(db: &crate::db::Db, bot: i64, chat: i64, delegated: bool, mine: bool) -> Result<i64> {
     let Ok(b) = db.bot(bot) else { return Ok(chat) };
+    if !mine {
+        return Ok(chat);
+    }
     if !b.workdir.trim().is_empty() {
         if !Path::new(&b.workdir).is_dir() || std::fs::read_dir(&b.workdir).is_err() {
             bail!(
@@ -88,7 +93,7 @@ pub fn check_workdir(db: &crate::db::Db, dir: &str) -> Result<String> {
 /// already there. Returns how many files were copied.
 pub fn copy_into_workdir(db: &crate::db::Db, bot: i64, dir: &Path) -> Result<usize> {
     let mut n = 0;
-    for from in [db.dir().join("files").join(format!("bot-{bot}")), db.dir().join("files").join("chat-0")] {
+    for from in [db.dir().join("files").join(format!("bot-{bot}")), root(db, 0)] {
         for (rel, _) in list_in(&from, "")? {
             let to = dir.join(&rel);
             if to.symlink_metadata().is_ok() {

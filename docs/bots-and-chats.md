@@ -234,6 +234,8 @@ that bot's `file_list`, `file_read`, `file_write` and `file_delete` then work th
 to it, so you see and edit its files in Finder or Explorer (**Reveal in Finder**). Its system prompt states the folder's
 real path, so it can tell you exactly where a file is.
 
+- **Only for you.** In a guest's chat, a group or a channel the bot uses that chat's own workspace, as before, so
+  nobody else reaches your folder (or files from your private chats).
 - **It stays inside.** `../`, absolute paths and links (to anywhere) are refused; the folder itself is stored with links
   resolved. The disk's root, your home folder itself, system folders and Mimir's data can't be chosen.
 - **Your files ask.** Deleting a file there, or rewriting or appending to one that's already there, asks every time (no

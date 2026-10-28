@@ -282,7 +282,12 @@ fn user_file_change(ctx: &ToolCtx, name: &str, args: &Value) -> bool {
 /// The workspace this bot's file tools use here (files::workspace): its working folder, its own for another bot's
 /// task, or the chat's.
 pub(crate) fn ws(ctx: &ToolCtx) -> Result<i64> {
-    crate::files::workspace(&ctx.db, ctx.bot_id, ctx.chat_id, ctx.depth > 0)
+    crate::files::workspace(&ctx.db, ctx.bot_id, ctx.chat_id, ctx.depth > 0, mine(ctx))
+}
+
+/// Asked by the person alone: from the app, or their own private chat (not a guest's, a group's or incognito).
+pub(crate) fn mine(ctx: &ToolCtx) -> bool {
+    !ctx.incognito() && (ctx.ask_chat == crate::host::LOCAL_CHAT || crate::runtime::decisions_ok(&ctx.db, ctx.ask_chat))
 }
 
 pub async fn call(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
@@ -2097,6 +2102,11 @@ mod tests {
         let e = call(&ctx, "file_write", &json!({"path": "a.md", "content": "x", "mode": "create"})).await.unwrap_err().to_string();
         assert!(e.contains("working folder") && e.contains("missing"), "{e}");
         assert!(!crate::files::root(&db, crate::host::LOCAL_CHAT).join("a.md").exists(), "not into the chat's workspace instead");
+        // A guest's chat never sees the person's folder: it gets that chat's own workspace.
+        db.pair(200, "Sam").unwrap();
+        db.chat_set_guest(200, true).unwrap();
+        let guest = ToolCtx::new(db.clone(), 1, 200);
+        assert_eq!(ws(&guest).unwrap(), 200);
         // Off for this bot: no file_write at all.
         me.workdir = String::new();
         me.file_write = "off".into();
