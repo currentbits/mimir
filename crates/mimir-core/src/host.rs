@@ -786,6 +786,9 @@ impl Host {
             // A Claude bot on the Anthropic API key (the monthly API credits): see api_credits.
             "api_credits" => self.api_credits(a),
             // The request-match check: off until false asks are measured (scripts/e2e-flows.py turns it on).
+            // Folders bots may copy files into with file_export (each asks); none: any folder of the person's.
+            "export_folders" => ok(crate::files::export_folders(&self.db)),
+            "set_export_folders" => ok(crate::files::set_export_folders(&self.db, &arg::<Vec<String>>(a, "folders")?)?),
             "set_ask_check" => ok(self.db.set_setting("ask_check", if arg(a, "on")? { "on" } else { "off" })?),
             "set_telegram_topics" => ok(self.db.set_setting(&format!("telegram_topics:{}", arg::<i64>(a, "bot_id")?), if arg(a, "on")? { "on" } else { "off" })?),
             // Has this conversation read untrusted content (so changes ask first)? And: start a fresh one.

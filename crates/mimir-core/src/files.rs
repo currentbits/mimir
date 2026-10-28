@@ -82,7 +82,7 @@ pub fn workspace(db: &crate::db::Db, bot: i64, chat: i64, delegated: bool, mine:
 /// A working folder the person picked, checked: a full path (~ is the home folder) to a folder that exists and can be
 /// read, not the disk's root, the home folder itself, system folders or Mimir's data. Returns it with links resolved.
 pub fn check_workdir(db: &crate::db::Db, dir: &str) -> Result<String> {
-    let real = export_dir(db, dir)?;
+    let real = real_dir(db, dir)?;
     if !real.is_dir() || std::fs::read_dir(&real).is_err() {
         bail!("{} isn't a folder that can be read on {}", real.display(), machine());
     }
@@ -247,8 +247,43 @@ const NO_EXPORT: [&str; 16] = [
 ];
 const NO_EXPORT_HOME: [&str; 7] = [".ssh", ".gnupg", ".aws", ".kube", "Library/LaunchAgents", ".config/autostart", ".mimir"];
 
-/// The folder an export goes to, as it really is (links resolved), or why not. `~` is the user's home.
+/// The folders the person allows exports into (Settings → Permissions → Export folders), as they really are. Empty:
+/// any folder `real_dir` allows.
+pub fn export_folders(db: &crate::db::Db) -> Vec<String> {
+    db.setting("export_folders").ok().flatten().and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default()
+}
+
+/// Set the export folders: each one checked like a destination and kept as it really is (links resolved).
+pub fn set_export_folders(db: &crate::db::Db, folders: &[String]) -> Result<Vec<String>> {
+    let mut kept = vec![];
+    for f in folders.iter().map(|f| f.trim()).filter(|f| !f.is_empty()) {
+        let real = real_dir(db, f)?.display().to_string();
+        if !kept.contains(&real) {
+            kept.push(real);
+        }
+    }
+    db.set_setting("export_folders", &serde_json::to_string(&kept)?)?;
+    Ok(kept)
+}
+
+/// The folder an export goes to, as it really is (links resolved), or why not: one `real_dir` allows, and inside an
+/// export folder when the person set any.
 pub fn export_dir(db: &crate::db::Db, dest: &str) -> Result<PathBuf> {
+    let real = real_dir(db, dest)?;
+    let allowed = export_folders(db);
+    if !allowed.is_empty() && !allowed.iter().any(|a| real.starts_with(a)) {
+        bail!(
+            "not into {}: the user allows exports only into {} (Settings → Permissions → Export folders). Pick one of those, or ask them to add it",
+            real.display(),
+            allowed.join(", ")
+        );
+    }
+    Ok(real)
+}
+
+/// A folder named by a full path (`~` is the user's home), as it really is (links resolved), or why it can't be
+/// used: the disk's root, the home folder itself, Mimir's data, system folders and ~/.ssh-style ones.
+fn real_dir(db: &crate::db::Db, dest: &str) -> Result<PathBuf> {
     let home = crate::user_home().context("no home folder")?;
     let dest = dest.trim();
     let p = match dest.strip_prefix('~') {
@@ -524,6 +559,13 @@ mod tests {
         }
         assert!(export_dir(&db, home.join("data").join("x").to_str().unwrap()).is_err(), "Mimir's data");
         assert!(export_dir(&db, &format!("{}/.claude/skills", me.display())).is_ok());
+        // Export folders set: only into one of those (and below), never elsewhere.
+        assert_eq!(set_export_folders(&db, &[out.display().to_string()]).unwrap().len(), 1);
+        assert!(export(&db, 3, "skills/seo", out.to_str().unwrap(), true).is_ok());
+        let e = export_dir(&db, &format!("{}/.claude/skills", me.display())).unwrap_err().to_string();
+        assert!(e.contains("Export folders"), "{e}");
+        assert!(set_export_folders(&db, &["/etc".into()]).is_err(), "not a system folder either");
+        set_export_folders(&db, &[]).unwrap();
         // A link to a system folder is followed to where it really goes, and refused there.
         #[cfg(unix)]
         {

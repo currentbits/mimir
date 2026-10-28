@@ -22,6 +22,7 @@ const SETTING_WORDS: Record<string, string> = {
   'Daily digest': 'quiet hours notifications summary weekly review do not disturb',
   'Limits': 'cap budget tokens cost usage limit plan subscription quota five hour weekly cheaper model haiku',
   'Permissions': 'allow ask deny approve rules tools safety always',
+  'Export folders': 'export copy files folder skills file_export',
   'Browser': 'playwright chromium saved logins passwords vault',
   'Tool servers': `mcp plugins integrations connectors apps browse directory ${DIRECTORY.map(d => d.name).join(' ')}`,
   'Sensitive sources': 'bank banking health medical private finance money leak',
@@ -111,6 +112,7 @@ export function SettingsView({ onComputer, find = '' }: { onComputer: () => void
       <ToolServerSettings onChange={toolsChanged} />
       <SensitiveSettings key={'s' + tools} />
       <Permissions key={tools} />
+      <ExportFolders />
       <WebhooksOutSettings />
       <DataSettings />
       {(!inDesktop || remoteServer()) && <ChatApiSettings />}
@@ -1202,6 +1204,30 @@ export const TOOL_LABEL: Record<string, string> = {
 
 /** "browser__browser_click" → "Click" (grouped under Browser) */
 export const toolLabel = (t: string) => TOOL_LABEL[t] ?? (t.includes('__') ? t.split('__')[1].replace(/^browser_/, '').replaceAll('_', ' ').replace(/^./, c => c.toUpperCase()) : t)
+
+/** Folders bots may copy files into (file_export, which asks every time). None: any folder of yours. */
+function ExportFolders() {
+  const folders = useLoad(() => invoke<string[]>('export_folders'), [], 60000)
+  const [add, setAdd] = useState('')
+  const [err, setErr] = useState<string | null>(null)
+  const all = folders.data ?? []
+  const save = (next: string[]) => invoke<string[]>('set_export_folders', { folders: next }).then(() => { setErr(null); setAdd(''); folders.reload() }, e => setErr(String(e)))
+  const pickHere = inDesktop && !remoteServer()
+  return (
+    <Group title="Export folders" note={err ?? `Where bots may copy files with file_export, on ${pickHere ? 'this computer' : 'the machine Mimir runs on'}; each copy still asks you. With none here, any folder of yours (never system folders, your home folder itself, or ~/.ssh-style ones).`}>
+      {all.map(f => (
+        <Row key={f} icon={<Icon name="file" size={15} />} title={f}>
+          <button type="button" className="btn btn-sm btn-ghost btn-danger" onClick={() => save(all.filter(x => x !== f))}>Remove</button>
+        </Row>
+      ))}
+      <form style={{ display: 'flex', gap: 8, alignItems: 'center' }} onSubmit={e => { e.preventDefault(); if (add.trim()) void save([...all, add.trim()]) }}>
+        <input className="input" aria-label="Add an export folder" placeholder="~/.claude/skills" value={add} onChange={e => setAdd(e.target.value)} autoComplete="off" spellCheck={false} />
+        {pickHere && <button type="button" className="btn btn-sm btn-ghost" onClick={() => localInvoke<string | null>('pick_folder').then(p => { if (p) void save([...all, p]) }, e => setErr(String(e)))}>Choose…</button>}
+        <button type="submit" className="btn btn-sm" disabled={!add.trim()}>Add</button>
+      </form>
+    </Group>
+  )
+}
 
 function Permissions() {
   const rules = useLoad(() => invoke<Rule[]>('rules'), [], 60000)
