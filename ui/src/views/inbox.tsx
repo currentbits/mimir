@@ -17,6 +17,7 @@ function approvalRisk(a: Approval): { icon: string; label: string; tone: string;
   if (a.kind === 'send') return { icon: 'send', label: 'Sends an email as you, to the address shown first. Each email asks you, until you choose Always.', tone: 'rule', always: true }
   if (a.kind === 'remind') return { icon: 'user', label: 'Sends to someone else’s chat in your household. Asked the first time for each person.', tone: 'rule', always: true }
   if (a.kind === 'bot') return { icon: 'user', label: 'Makes a new bot with this role, on the same AI account. Each new bot asks you, until you choose Always.', tone: 'rule', always: true }
+  if (a.kind === 'target') return { icon: 'shield', label: 'Asking because of one of your Ask first rules (named first). Change them in Settings → Permissions.', tone: 'guarded', always: false }
   if (a.kind === 'userfile') return { icon: 'file', label: 'Changes or deletes a file of yours, in the working folder you chose for this bot. Asks every time.', tone: 'rule', always: false }
   if (a.kind === 'plan') return { icon: 'check', label: 'One OK for the whole plan: these steps won\'t ask again during this reply.', tone: 'rule', always: true }
   if (a.kind === 'unasked') return { icon: 'shield', label: 'Asking because this doesn’t look like what you asked for (who or what it acts on wasn’t in your message).', tone: 'guarded', always: true }

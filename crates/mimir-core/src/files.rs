@@ -295,7 +295,7 @@ pub fn export_dir(db: &crate::db::Db, dest: &str) -> Result<PathBuf> {
 
 /// A folder named by a full path (`~` is the user's home), as it really is (links resolved), or why it can't be
 /// used: the disk's root, the home folder itself, Mimir's data, system folders and ~/.ssh-style ones.
-fn real_dir(db: &crate::db::Db, dest: &str) -> Result<PathBuf> {
+pub(crate) fn real_dir(db: &crate::db::Db, dest: &str) -> Result<PathBuf> {
     let home = crate::user_home().context("no home folder")?;
     let dest = dest.trim();
     let p = match dest.strip_prefix('~') {
