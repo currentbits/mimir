@@ -40,6 +40,9 @@ pub struct ToolCtx {
     pub read_only: bool,
     /// 1 inside a task handed over by another bot; ask_bot is off there (no delegation chains).
     pub depth: u8,
+    /// That task is done in this bot's own app chat (ask_bot's in_own_chat): its files stay with that chat, where the
+    /// person carries on with it.
+    pub own_chat: bool,
     /// The bot the user is actually talking to (for delegated turns): approval cards come from it.
     pub via_bot: Option<i64>,
     /// Set once this turn has read untrusted content (web pages, tool-server results); side-effect
@@ -90,6 +93,7 @@ impl ToolCtx {
             tools_off: false,
             read_only: false,
             depth: 0,
+            own_chat: false,
             via_bot: None,
             tainted: Arc::default(),
             private: Arc::default(),
@@ -214,6 +218,9 @@ impl ToolCtx {
         if self.depth > 0 {
             a.extend(["--depth".into(), self.depth.to_string()]);
         }
+        if self.own_chat {
+            a.push("--own-chat".into());
+        }
         if let Some(v) = self.via_bot {
             a.extend(["--via".into(), v.to_string()]);
         }
@@ -282,7 +289,7 @@ fn user_file_change(ctx: &ToolCtx, name: &str, args: &Value) -> bool {
 /// The workspace this bot's file tools use here (files::workspace): its working folder, its own for another bot's
 /// task, or the chat's.
 pub(crate) fn ws(ctx: &ToolCtx) -> Result<i64> {
-    crate::files::workspace(&ctx.db, ctx.bot_id, ctx.chat_id, ctx.depth > 0, mine(ctx))
+    crate::files::workspace(&ctx.db, ctx.bot_id, ctx.chat_id, ctx.depth > 0 && !ctx.own_chat, mine(ctx))
 }
 
 /// Asked by the person alone: from the app, or their own private chat (not a guest's, a group's or incognito).
@@ -2152,6 +2159,15 @@ mod tests {
         db.chat_set_guest(200, true).unwrap();
         let guest = ToolCtx::new(db.clone(), 1, 200);
         assert_eq!(ws(&guest).unwrap(), 200);
+        // A task handed to it: its own workspace; done in its own app chat: that chat's, where the person carries on.
+        me.workdir = String::new();
+        db.bot_save(&me).unwrap();
+        let mut helper = ToolCtx::new(db.clone(), 1, crate::host::LOCAL_CHAT);
+        helper.depth = 1;
+        assert_eq!(ws(&helper).unwrap(), crate::files::bot_ws(1));
+        helper.own_chat = true;
+        assert_eq!(ws(&helper).unwrap(), crate::host::LOCAL_CHAT, "the same workspace as its next turn there");
+        assert!(helper.mcp_args().contains(&"--own-chat".to_string()), "the tools process knows it too");
         // Off for this bot: no file_write at all.
         me.workdir = String::new();
         me.file_write = "off".into();

@@ -94,7 +94,7 @@ pub fn check_workdir(db: &crate::db::Db, dir: &str) -> Result<String> {
 pub fn copy_into_workdir(db: &crate::db::Db, bot: i64, dir: &Path) -> Result<usize> {
     let mut n = 0;
     for from in [db.dir().join("files").join(format!("bot-{bot}")), root(db, 0)] {
-        for (rel, _) in list_in(&from, "")? {
+        for (rel, _) in list_in(&from, "", usize::MAX)? {
             let to = dir.join(&rel);
             if to.symlink_metadata().is_ok() {
                 continue;
@@ -184,19 +184,31 @@ fn size(dir: &Path) -> u64 {
 
 /// Files (relative paths and sizes) under `dir` in the workspace, folders first, at most 200.
 pub fn list(db: &crate::db::Db, chat: i64, dir: &str) -> Result<Vec<(String, u64)>> {
-    list_in(&root(db, chat), dir)
+    list_in(&root(db, chat), dir, 200)
 }
 
-fn list_in(root: &Path, dir: &str) -> Result<Vec<(String, u64)>> {
+/// A folder that goes as a whole (an export, a zip) holds at most this many files: refused past it, never cut short.
+const WHOLE_MAX: usize = 2000;
+
+/// Every file under `dir` (relative paths), or why not: more than WHOLE_MAX.
+fn whole(db: &crate::db::Db, chat: i64, dir: &str) -> Result<Vec<(String, u64)>> {
+    let all = list_in(&root(db, chat), dir, WHOLE_MAX + 1)?;
+    if all.len() > WHOLE_MAX {
+        bail!("{dir} holds more than {WHOLE_MAX} files; pick a smaller folder");
+    }
+    Ok(all)
+}
+
+fn list_in(root: &Path, dir: &str, max: usize) -> Result<Vec<(String, u64)>> {
     let root = root.to_path_buf();
     let base = if dir.trim().is_empty() { root.clone() } else { resolve(&root, dir)? };
     let mut out = vec![];
-    fn walk(root: &Path, d: &Path, out: &mut Vec<(String, u64)>) {
+    fn walk(root: &Path, d: &Path, out: &mut Vec<(String, u64)>, max: usize) {
         let mut entries: Vec<_> = std::fs::read_dir(d).into_iter().flatten().flatten().collect();
         entries.sort_by_key(|e| e.file_name());
         for e in entries {
             let name = e.file_name().to_string_lossy().to_string();
-            if name.starts_with('.') || out.len() >= 200 {
+            if name.starts_with('.') || out.len() >= max {
                 continue;
             }
             let Ok(m) = e.metadata() else { continue };
@@ -207,13 +219,13 @@ fn list_in(root: &Path, dir: &str) -> Result<Vec<(String, u64)>> {
                 .map(|p| p.components().map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/"))
                 .unwrap_or(name);
             if m.is_dir() {
-                walk(root, &e.path(), out);
+                walk(root, &e.path(), out, max);
             } else if m.is_file() {
                 out.push((rel, m.len()));
             }
         }
     }
-    walk(&root, &base, &mut out);
+    walk(&root, &base, &mut out, max);
     Ok(out)
 }
 
@@ -224,7 +236,7 @@ pub fn zip_folder(db: &crate::db::Db, chat: i64, rel: &str) -> Result<Option<(St
     if !resolve(&root, rel)?.is_dir() {
         return Ok(None);
     }
-    let files = list(db, chat, rel)?;
+    let files = whole(db, chat, rel)?;
     if files.is_empty() {
         bail!("{rel} is an empty folder");
     }
@@ -327,7 +339,7 @@ pub fn export_plan(db: &crate::db::Db, chat: i64, rel: &str, dest: &str) -> Resu
     let base = rel.trim().trim_start_matches("./").trim_end_matches('/');
     let name = base.rsplit('/').next().unwrap_or(base);
     let files: Vec<(String, PathBuf)> = if src.is_dir() {
-        list(db, chat, rel)?
+        whole(db, chat, rel)?
             .into_iter()
             .map(|(p, _)| {
                 let to = dir.join(name).join(p.strip_prefix(base).unwrap_or(&p).trim_start_matches('/'));
@@ -342,8 +354,26 @@ pub fn export_plan(db: &crate::db::Db, chat: i64, rel: &str, dest: &str) -> Resu
     if files.is_empty() {
         bail!("{rel} is an empty folder");
     }
+    // A link anywhere below the destination (a folder in it pointing at ~/.ssh) would carry the copy somewhere else
+    // than the card says: refused before anyone is asked.
+    for (_, to) in &files {
+        no_link_below(&dir, to)?;
+    }
     let there = files.iter().filter(|(_, to)| to.symlink_metadata().is_ok()).count();
     Ok((dir, files, there))
+}
+
+/// Nothing between `dir` (already resolved) and `to`, `to` included, may be a link.
+fn no_link_below(dir: &Path, to: &Path) -> Result<()> {
+    let rest = to.strip_prefix(dir).context("outside the destination")?;
+    let mut at = dir.to_path_buf();
+    for c in rest.components() {
+        at.push(c);
+        if at.symlink_metadata().is_ok_and(|m| m.file_type().is_symlink()) {
+            bail!("{} is a link; not writing through it", at.display());
+        }
+    }
+    Ok(())
 }
 
 /// Copy a workspace file or folder (as a folder of that name) into `dest` on this machine. Refuses to replace what's
@@ -355,9 +385,8 @@ pub fn export(db: &crate::db::Db, chat: i64, rel: &str, dest: &str, replace: boo
     }
     let root = root(db, chat);
     for (from, to) in &files {
-        if to.symlink_metadata().is_ok_and(|m| m.file_type().is_symlink()) {
-            bail!("{} is a link; not writing through it", to.display());
-        }
+        // Again right before writing: something could have changed while the card waited.
+        no_link_below(&dir, to)?;
         std::fs::create_dir_all(to.parent().context("no folder")?)?;
         std::fs::copy(root.join(from), to).with_context(|| format!("couldn't write {}", to.display()))?;
     }
@@ -566,6 +595,25 @@ mod tests {
         assert!(e.contains("Export folders"), "{e}");
         assert!(set_export_folders(&db, &["/etc".into()]).is_err(), "not a system folder either");
         set_export_folders(&db, &[]).unwrap();
+        // A link below the destination (its "seo" folder pointing elsewhere) is refused, before and while copying.
+        #[cfg(unix)]
+        {
+            let (dest, elsewhere) = (home.join("dest"), home.join("elsewhere"));
+            std::fs::create_dir_all(&dest).unwrap();
+            std::fs::create_dir_all(&elsewhere).unwrap();
+            std::os::unix::fs::symlink(&elsewhere, dest.join("seo")).unwrap();
+            let e = export_plan(&db, 3, "skills/seo", dest.to_str().unwrap()).unwrap_err().to_string();
+            assert!(e.contains("is a link"), "{e}");
+            assert!(export(&db, 3, "skills/seo", dest.to_str().unwrap(), true).is_err());
+            assert_eq!(std::fs::read_dir(&elsewhere).unwrap().count(), 0, "nothing written through the link");
+        }
+        // A folder too big to go whole is refused, not cut short.
+        for i in 0..=WHOLE_MAX {
+            write(&db, 3, &format!("big/f{i}.md"), "x", "create", false).unwrap();
+        }
+        assert!(export_plan(&db, 3, "big", out.to_str().unwrap()).unwrap_err().to_string().contains("more than 2000"));
+        assert!(zip_folder(&db, 3, "big").is_err());
+        assert_eq!(list(&db, 3, "big").unwrap().len(), 200, "listing still shows the first 200");
         // A link to a system folder is followed to where it really goes, and refused there.
         #[cfg(unix)]
         {

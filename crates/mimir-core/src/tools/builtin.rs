@@ -935,7 +935,7 @@ pub(super) async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<Stri
             let mut task = task.to_string();
             let shared: Vec<&str> = args["files"].as_array().into_iter().flatten().filter_map(Value::as_str).take(20).collect();
             if !shared.is_empty() && !ctx.rehearsing() {
-                let (from, to) = (ws(ctx)?, crate::files::workspace(&ctx.db, target.id, ctx.chat_id, true, mine(ctx))?);
+                let (from, to) = (ws(ctx)?, helper_ws(ctx, target.id, own)?);
                 let mut given = vec![];
                 for p in shared {
                     let (text, outside) = crate::files::read(&ctx.db, from, p)?;
@@ -976,7 +976,7 @@ pub(super) async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<Stri
             }
             let reply = delegate(ctx, target, task, own).await?;
             // Where its files are: its own workspace, not this one.
-            let folder = crate::files::root(&ctx.db, crate::files::workspace(&ctx.db, target.id, ctx.chat_id, true, mine(ctx)).unwrap_or(ctx.chat_id));
+            let folder = crate::files::root(&ctx.db, helper_ws(ctx, target.id, own).unwrap_or(ctx.chat_id));
             let files = if folder.is_dir() { format!("\n(Files it wrote are in its own workspace: {}.)", crate::files::whereabouts(&folder)) } else { String::new() };
             if own {
                 return Ok(format!("{}{files}", own_chat_answer(&ctx.db, target, &reply)?));
@@ -985,6 +985,12 @@ pub(super) async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<Stri
         }
         _ => bail!("unknown tool {name}"),
     })
+}
+
+/// The workspace a helper's turn on this task uses (see delegate): in its own chat, that chat's; else its own.
+fn helper_ws(ctx: &ToolCtx, helper: i64, own: bool) -> Result<i64> {
+    let chat = if own { crate::host::LOCAL_CHAT } else { ctx.chat_id };
+    crate::files::workspace(&ctx.db, helper, chat, !own, mine(ctx))
 }
 
 /// `target`'s turn on a task from the bot of `ctx`, one level down (no chains), under the asking run.
@@ -1000,6 +1006,7 @@ pub(crate) async fn delegate(ctx: &ToolCtx, target: &crate::db::Bot, task: &str,
     sub.private = ctx.private.clone();
     sub.sensitive = ctx.sensitive.clone();
     sub.depth = ctx.depth + 1;
+    sub.own_chat = own;
     // Inside a routine, the helper's asks wait in the inbox too, rather than sending a live card.
     sub.unattended = ctx.unattended;
     // A rehearsal stays one in the helper.
