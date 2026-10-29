@@ -172,9 +172,15 @@ export function BotPage({ bot, status, canDelete, onSaved, onDeleted, onChat, on
   const RULE_WORDS: Record<string, string> = { always: 'never asks', allow: 'allowed', ask: 'asks you first', deny: 'denied' }
   const effective = (tool: string) => {
     const of = (r: Rule) => `${RULE_WORDS[r.action] ?? r.action}${r.action === r.default ? ' (default)' : ''}`
-    // Its own Writing files setting (below) wins over Permissions for file_write.
-    if (tool === 'file_write' && b.file_write) return { ask: 'asks you first (this bot’s setting)', allow: 'allowed (this bot’s setting)', off: 'off (this bot’s Writing files setting)' }[b.file_write]
-    if (!tool.endsWith('__*')) { const r = rules.data?.find(r => r.tool === tool); return r && of(r) }
+    if (!tool.endsWith('__*')) {
+      const r = rules.data?.find(r => r.tool === tool)
+      // Its own Writing files setting (below), as the gate applies it: off always; ask over allow; allow over ask. A
+      // deny in Permissions stays a deny.
+      if (tool === 'file_write' && b.file_write === 'off') return 'off (this bot’s Writing files setting)'
+      if (tool === 'file_write' && b.file_write === 'ask' && r?.action === 'allow') return 'asks you first (this bot’s setting)'
+      if (tool === 'file_write' && b.file_write === 'allow' && r?.action === 'ask') return 'allowed (this bot’s setting)'
+      return r && of(r)
+    }
     const rs = (rules.data ?? []).filter(r => r.tool.startsWith(tool.slice(0, -1)))
     const odd = rs.filter(r => r.action === 'deny' || r.action === 'ask')
     return rs.length ? odd.map(r => `${toolLabel(r.tool)}: ${of(r)}`).join(' · ') || 'all allowed' : undefined
