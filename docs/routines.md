@@ -141,6 +141,13 @@ Its routines show as *Paused*, not missed. When the pause ends (you resume, or i
 to its next time instead of catching up on the runs in between, so there's no burst of runs. A one-off reminder that
 fell inside the pause still runs, once.
 
+**While you're away.** If you haven't written to any bot for a week (change it, or turn it off, under **Settings →
+Daily digest → Pause routines when I'm away**), routines stop on their own, along with the digest, the weekly review
+and the memory tidy-up, so they don't use up your AI plan on results nobody reads. A bot tells you once, in the app and
+in your decisions chat, and **Needs you** shows it with **Resume**. Unlike a pause, bots still answer: your next
+message to any of them starts the routines again (the reply says so), each moving on to its next time. Messages from
+guests, routines and other bots don't count as you being back.
+
 ## Rehearse before it runs for real
 
 **Rehearse** on a routine (or on a skill, in the Skills tab) runs it once for real, except that every step that would

@@ -326,7 +326,9 @@ function DigestSettings() {
   const [msg, setMsg] = useState<string | null>(null)
   const [weekly, setWeekly] = useState<boolean | null>(null)
   const [quiet, setQuiet] = useState<string | null>(null)
+  const [away, setAway] = useState<number | null>(null)
   useEffect(() => {
+    invoke<number>('away_days').then(setAway, () => {})
     invoke<string>('digest_time').then(setAt, () => {})
     invoke<boolean>('weekly_review').then(setWeekly, () => {})
     invoke<string>('quiet_hours').then(setQuiet, () => {})
@@ -353,6 +355,13 @@ function DigestSettings() {
             <input className="input" type="time" aria-label="Quiet until" style={{ width: 'auto' }} value={qTo} onChange={e => e.target.value && saveQuiet(`${qFrom}-${e.target.value}`)} />
           </>}
           <Switch label="Quiet hours" checked={!!quiet} onChange={v => saveQuiet(v ? '22:00-07:00' : '')} />
+        </>}
+      </Row>
+      <Row icon={<Icon name="pause" size={15} />} title="Pause routines when I'm away"
+        desc={away ? `After ${away} days without a message from you to any bot, routines stop until you write again (or press Resume in Needs you), so they don't use up your AI plan on results nobody reads. Bots still answer.` : 'Off: routines keep running however long you are away.'}>
+        {away !== null && <>
+          {away > 0 && <><input className="input" type="number" min={1} max={365} aria-label="Days away" style={{ width: 72 }} value={away} onChange={e => { const d = Number(e.target.value); if (d >= 1 && d <= 365) { setAway(d); void invoke<number>('away_days', { days: d }).then(setAway, x => setMsg(String(x))) } }} /><span className="hint">days</span></>}
+          <Switch label="Pause routines when I'm away" checked={away > 0} onChange={v => { const d = v ? 7 : 0; setAway(d); void invoke<number>('away_days', { days: d }).then(setAway, x => setMsg(String(x))) }} />
         </>}
       </Row>
       <Row icon={<Icon name="memory" size={15} />} title="Weekly “what I learned”" desc="Once a week at that time, each Telegram, Slack or Discord chat gets a list of what your bots learned there on their own. Reply /undo with a number to take one back.">

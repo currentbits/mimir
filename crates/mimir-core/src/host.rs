@@ -1710,6 +1710,8 @@ impl Host {
                     "goals": self.db.goals_waiting()?,
                     // Replies to a bot's email that it handed to you instead of answering.
                     "mail": crate::email::handed_over(&self.db),
+                    // Routines paused because the person was away (since when), until they write or press Resume.
+                    "away": self.db.away(),
                     // The daily check found the database damaged: restore a backup.
                     "damage": self.db.setting(crate::backup::DAMAGE)?,
                     // Plain asks you keep allowing: stop asking?
@@ -1747,6 +1749,22 @@ impl Host {
                     bail!("not a hold");
                 }
                 ok(self.db.hold_clear(&key, true)?)
+            }
+            // Routines paused while the person was away: resume them (as their first message back would).
+            "away_resume" => ok(self.db.away_end()?),
+            // Days without a word before routines pause (0: never); without `days`, the current value.
+            "away_days" => {
+                if let Some(d) = arg::<Option<i64>>(a, "days")? {
+                    if !(0..=365).contains(&d) {
+                        bail!("days is 0 (never) to 365");
+                    }
+                    self.db.set_setting("away_days", &d.to_string())?;
+                    // Turned off: a pause it already made ends too (routines keep running from now on).
+                    if d == 0 {
+                        self.db.away_end()?;
+                    }
+                }
+                ok(self.db.away_days())
             }
             // Pause all bots (no bot_id) or one, until a time (or until resumed); on: false resumes. Without `on`, what's paused.
             "pause" => {

@@ -316,7 +316,18 @@ pub async fn turn(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) -> R
     // A checklist is the run's own: none left from before, none after (progress_set).
     let progress = tools::progress_key(ctx.bot_id, ctx.chat_id);
     let _ = ctx.db.setting_take(&progress);
+    // The person is back (their own message, not a guest's or a rehearsal): routines paused while they were away go on.
+    let back = kind == "message" && ctx.person.is_none() && !ctx.rehearsal && ctx.db.away_end().unwrap_or(false);
     let out = turn_inner(provider, &ctx, trigger).await;
+    let out = match out {
+        Ok((text, usage)) if back => {
+            let note = format!("\n\n_{}_", say::tr("Welcome back: I'd paused your routines while you were away. They're running again."));
+            // Also in the saved reply, which the app's chat shows (it reloads what was saved, not what's returned).
+            let _ = ctx.db.amend_last_reply(ctx.bot_id, ctx.conv, &note);
+            Ok((format!("{}{note}", text.trim_end()), usage))
+        }
+        out => out,
+    };
     let _ = ctx.db.setting_take(&progress);
     if ctx.stream {
         live::end(ctx.bot_id, ctx.chat_id);
