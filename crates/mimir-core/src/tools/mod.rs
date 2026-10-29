@@ -2246,6 +2246,15 @@ mod tests {
         let e = call(&ctx, "file_export", &json!({"path": "plan.md", "dest": blocked.join("in").display().to_string()})).await.unwrap_err().to_string();
         assert!(e.contains("Files copied into"), "{e}");
         assert!(!blocked.join("in/plan.md").exists());
+        // A folder named after the protected one, exported into its parent, lands inside it: the rule holds there too.
+        let parent = home.join(format!(".mimir-test-target-parent-{}", std::process::id()));
+        std::fs::create_dir_all(&parent).unwrap();
+        set_target_rules(&db, &[TargetRule { kind: "folder".into(), pattern: parent.join("private").display().to_string(), action: "deny".into() }]).unwrap();
+        crate::files::write(&db, crate::host::LOCAL_CHAT, "private/notes.md", "x", "replace", false).unwrap();
+        let e = call(&ctx, "file_export", &json!({"path": "private", "dest": parent.display().to_string()})).await.unwrap_err().to_string();
+        assert!(e.contains("Files copied into"), "{e}");
+        assert!(!parent.join("private/notes.md").exists());
+        let _ = std::fs::remove_dir_all(&parent);
         let _ = std::fs::remove_dir_all(&blocked);
         // Bad patterns are refused.
         assert!(set_target_rules(&db, &[TargetRule { kind: "email".into(), pattern: "nobody".into(), action: "ask".into() }]).is_err());

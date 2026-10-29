@@ -510,10 +510,16 @@ impl TargetRule {
                     None => to.iter().any(|a| at(p.trim_start_matches('@'), a)),
                 }
             }
-            ("folder", "file_export") => args["dest"]
-                .as_str()
-                .and_then(|d| crate::files::real_dir(&ctx.db, d).ok())
-                .is_some_and(|d| d.starts_with(&self.pattern)),
+            // Where each file really lands (a folder exported into ~/Documents lands in ~/Documents/<its name>), not just
+            // the folder named: a rule for ~/Documents/private holds for an export of "private" into ~/Documents.
+            ("folder", "file_export") => {
+                let (path, dest) = (args["path"].as_str().unwrap_or(""), args["dest"].as_str().unwrap_or(""));
+                match ws(ctx).and_then(|w| crate::files::export_plan(&ctx.db, w, path, dest)) {
+                    Ok((dir, files, _)) => dir.starts_with(&self.pattern) || files.iter().any(|(_, to)| to.starts_with(&self.pattern)),
+                    // Can't tell where it would go: it won't go anywhere either (the export fails the same way).
+                    Err(_) => crate::files::real_dir(&ctx.db, dest).is_ok_and(|d| d.starts_with(&self.pattern)),
+                }
+            }
             _ => false,
         }
     }
