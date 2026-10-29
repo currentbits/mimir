@@ -394,6 +394,15 @@ pub fn export(db: &crate::db::Db, chat: i64, rel: &str, dest: &str, replace: boo
     Ok(format!("Copied {} file(s) to {} on {}", files.len(), dir.join(base.rsplit('/').next().unwrap_or(base)).display(), machine()))
 }
 
+/// A workspace file's full path, checked like reading it: inside the workspace, no links, and a plain file.
+pub fn path_of(db: &crate::db::Db, chat: i64, rel: &str) -> Result<PathBuf> {
+    let p = resolve(&root(db, chat), rel)?;
+    if !p.is_file() {
+        bail!("no file {rel} in the workspace");
+    }
+    Ok(p)
+}
+
 /// A file's text, and whether it's outside content (written after reading some, or not written by Mimir at all).
 pub fn read(db: &crate::db::Db, chat: i64, rel: &str) -> Result<(String, bool)> {
     let path = resolve(&root(db, chat), rel)?;

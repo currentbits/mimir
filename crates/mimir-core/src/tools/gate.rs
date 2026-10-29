@@ -59,6 +59,8 @@ pub(super) fn usable(ctx: &ToolCtx, tool: &str) -> bool {
         && (!tool.starts_with("meeting_") || (ctx.db.has_meetings() && ctx.db.chat_private(ctx.chat_id)))
         // Your email, once an account is set up, and only in a conversation with you alone.
         && (!tool.starts_with("email_") || (crate::email::account(&ctx.db).is_some() && ctx.db.chat_private(ctx.chat_id)))
+        // The Mac's own apps: only from the desktop app on a Mac, in a chat with the person alone, never incognito.
+        && (!matches!(tool, "mail_send" | "messages_send" | "app_open") || (crate::mac::here(&ctx.db) && ctx.db.chat_private(ctx.chat_id) && !ctx.incognito()))
         // The workspace keeps files on disk: not in incognito.
         && !(ctx.incognito() && tool.starts_with("file_"))
         // Web search once a search service is set up.
@@ -83,7 +85,7 @@ pub const READ_ONLY: [&str; 16] = [
 pub fn default_action(tool: &str) -> &'static str {
     match tool {
         // Opening a site asks, like the browser's (with "always on this site"); looking, clicking and typing don't.
-        "memory_forget" | "routine_delete" | "computer_open" | "bot_create" | "file_delete" | "file_export" | "email_send" | "calendar_create" => "ask",
+        "memory_forget" | "routine_delete" | "computer_open" | "bot_create" | "file_delete" | "file_export" | "email_send" | "calendar_create" | "mail_send" | "messages_send" | "app_open" => "ask",
         _ => "allow",
     }
 }
@@ -425,7 +427,7 @@ pub fn looks_sensitive(name: &str) -> bool {
 pub(super) fn sends_out(ctx: &ToolCtx, name: &str, args: &Value) -> bool {
     match name {
         // A sign-in types a login into a site, like typing does.
-        "email_send" | "web_fetch" | "web_search" | "x_search" | "ask_bot" | "computer_open" | "computer_type" | "computer_signin" => true,
+        "email_send" | "mail_send" | "messages_send" | "web_fetch" | "web_search" | "x_search" | "ask_bot" | "computer_open" | "computer_type" | "computer_signin" => true,
         "routine_create" => args["for"].as_str().is_some_and(|f| !f.trim().is_empty()),
         "memory_store" => args["household"].as_bool() == Some(true),
         "send_file" => ctx.db.chat_guest(ctx.chat_id) || !ctx.db.chat_private(ctx.chat_id),
@@ -527,6 +529,16 @@ pub(super) fn describe(ctx: &ToolCtx, name: &str, args: &Value) -> String {
         "file_read" => format!("Read {}", args["path"].as_str().unwrap_or("?")),
         "file_write" => format!("{} {}: {}", match args["mode"].as_str() { Some("append") => "Add to", Some("replace") => "Rewrite", _ => "Create" }, args["path"].as_str().unwrap_or("?"), truncate(args["content"].as_str().unwrap_or(""), 300)),
         "file_delete" => format!("Delete the file {}", args["path"].as_str().unwrap_or("?")),
+        // Who first, in full; then the whole text.
+        "mail_send" => format!(
+            "Send from Mail on this Mac to {}{}\nSubject: {}\n\n{}",
+            args["to"].as_str().unwrap_or("?"),
+            args["cc"].as_str().filter(|c| !c.trim().is_empty()).map(|c| format!(" (cc {c})")).unwrap_or_default(),
+            args["subject"].as_str().unwrap_or(""),
+            truncate(args["body"].as_str().unwrap_or(""), 2000)
+        ),
+        "messages_send" => format!("Send from Messages on this Mac to {}:\n{}", args["to"].as_str().unwrap_or("?"), truncate(args["text"].as_str().unwrap_or(""), 2000)),
+        "app_open" => format!("Open {} on this Mac{}", args["app"].as_str().unwrap_or("?"), args["path"].as_str().map(|p| format!(" with {p}")).unwrap_or_default()),
         // Where first (in full), then what, and what it would overwrite.
         "file_export" => match crate::files::export_plan(&ctx.db, ws(ctx).unwrap_or(ctx.chat_id), args["path"].as_str().unwrap_or(""), args["dest"].as_str().unwrap_or("")) {
             Ok((dir, files, there)) => format!(
@@ -741,6 +753,25 @@ pub(super) fn always_ask(name: &str, decision: String, why: &'static str, tainte
 pub(super) fn precheck(ctx: &ToolCtx, name: &str, args: &Value) -> Result<()> {
     let len = |k: &str| args[k].as_str().map_or(0, |s| s.chars().count());
     match name {
+        // Who and what, before anyone is asked: the card must show all of it.
+        "mail_send" => {
+            crate::mac::mail_args(args["to"].as_str().unwrap_or(""), args["cc"].as_str().unwrap_or(""), "", "")?;
+            if len("body") > 2000 || len("subject") > 200 {
+                bail!("an email from Mail can be up to 2000 characters (subject up to 200): the whole text goes on the card");
+            }
+            if ctx.db.sent_today(ctx.chat_id, "mail_send")? >= 20 {
+                bail!("20 emails were sent from Mail in this chat in the last day; that's the limit");
+            }
+        }
+        "messages_send" => {
+            crate::mac::handle(args["to"].as_str().unwrap_or(""))?;
+            if len("text") == 0 || len("text") > 2000 {
+                bail!("a message is 1 to 2000 characters");
+            }
+        }
+        "app_open" => {
+            crate::mac::app_name(args["app"].as_str().unwrap_or(""))?;
+        }
         // Where it goes and what it would overwrite, before anyone is asked.
         "file_export" => {
             let (dir, _, there) = crate::files::export_plan(&ctx.db, ws(ctx)?, s(args, "path")?, s(args, "dest")?)?;
@@ -942,6 +973,9 @@ pub(crate) fn describe_tool(name: &str) -> String {
         "email_send" => "send emails",
         "file_delete" => "delete files",
         "file_export" => "copy files to your folders",
+        "mail_send" => "send emails from Mail on your Mac",
+        "messages_send" => "send messages from your Mac",
+        "app_open" => "open apps on your Mac",
         "file_list" => "list files",
         "file_read" => "read files",
         "file_write" => "write files",

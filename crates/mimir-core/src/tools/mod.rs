@@ -2197,6 +2197,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_macs_own_apps_only_from_the_desktop_app_and_always_on_a_card() {
+        let p = std::env::temp_dir().join(format!("mimir-mac-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = Db::open(&p).unwrap();
+        let mut ctx = ToolCtx::new(db.clone(), 1, crate::host::LOCAL_CHAT);
+        let offered = |c: &ToolCtx| specs_for(c).iter().any(|s| s.0 == "mail_send");
+        // A server (or a tools process whose host didn't say): not offered.
+        db.set_setting("host_mode", "server").unwrap();
+        assert!(!offered(&ctx));
+        db.set_setting("host_mode", "desktop").unwrap();
+        assert_eq!(offered(&ctx), cfg!(target_os = "macos"), "the desktop app, on a Mac only");
+        if !cfg!(target_os = "macos") {
+            return;
+        }
+        // Not in a guest's chat, not incognito.
+        db.pair(200, "Sam").unwrap();
+        db.chat_set_guest(200, true).unwrap();
+        assert!(!offered(&ToolCtx::new(db.clone(), 1, 200)) && !offered(&ToolCtx::new(db.clone(), 1, crate::INCOGNITO_CHAT)));
+        // Refused before anyone is asked: no address, an odd handle, an app name that isn't one.
+        assert!(call(&ctx, "mail_send", &json!({"to": "", "subject": "x", "body": "y"})).await.is_err());
+        assert!(call(&ctx, "messages_send", &json!({"to": "0612", "text": "hi"})).await.is_err());
+        assert!(call(&ctx, "app_open", &json!({"app": "Terminal; rm -rf ~"})).await.is_err());
+        assert!(db.approvals_pending().unwrap().is_empty());
+        // A good one asks (parked here, nothing is sent), showing who it's to and the whole text.
+        ctx.unattended = true;
+        let out = call(&ctx, "messages_send", &json!({"to": "+31 6 12345678", "text": "On my way"})).await.unwrap();
+        assert!(out.starts_with("Not done yet"), "{out}");
+        let a = db.approvals_pending().unwrap().pop().unwrap();
+        assert!(a.summary.contains("Send from Messages on this Mac to +31 6 12345678") && a.summary.contains("On my way"), "{}", a.summary);
+    }
+
+    #[tokio::test]
     async fn a_denial_says_which_rule_and_where_it_is_set() {
         let p = std::env::temp_dir().join(format!("mimir-denywhy-{}.db", std::process::id()));
         let _ = std::fs::remove_file(&p);

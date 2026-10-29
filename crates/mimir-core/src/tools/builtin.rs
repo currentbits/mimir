@@ -505,6 +505,16 @@ pub(super) async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<Stri
             truncate(&text, 60_000)
         }
         "file_write" => crate::files::write(&ctx.db, ws(ctx)?, s(args, "path")?, s(args, "content")?, s(args, "mode")?, ctx.is_tainted())?,
+        "mail_send" => crate::mac::mail_send(s(args, "to")?, args["cc"].as_str().unwrap_or(""), s(args, "subject")?, s(args, "body")?).await?,
+        "messages_send" => crate::mac::messages_send(s(args, "to")?, s(args, "text")?).await?,
+        "app_open" => {
+            // A workspace file, by the same path checks as reading it (inside, no links).
+            let file = match args["path"].as_str().filter(|p| !p.trim().is_empty()) {
+                Some(p) => Some(crate::files::path_of(&ctx.db, ws(ctx)?, p)?),
+                None => None,
+            };
+            crate::mac::app_open(s(args, "app")?, file).await?
+        }
         "file_export" => crate::files::export(&ctx.db, ws(ctx)?, s(args, "path")?, s(args, "dest")?, args["replace"].as_bool() == Some(true))?,
         "file_delete" => {
             let p = s(args, "path")?;

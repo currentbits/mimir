@@ -180,6 +180,36 @@ pub fn specs() -> Vec<(&'static str, &'static str, Value)> {
             },"required":["path","dest"]}),
         ),
         (
+            "mail_send",
+            "Send an email from the Mail app on the user's Mac, from their own account in it (only in the Mimir app on a \
+             Mac). The user approves it on a card that shows who it's to and the whole text. For their connected email \
+             account use email_send instead.",
+            json!({"type":"object","properties":{
+                "to":{"type":"string","description":"addresses, comma-separated (up to 10)"},
+                "cc":{"type":"string"},
+                "subject":{"type":"string"},
+                "body":{"type":"string","description":"plain text"}
+            },"required":["to","subject","body"]}),
+        ),
+        (
+            "messages_send",
+            "Send an iMessage from the Messages app on the user's Mac (only in the Mimir app on a Mac). The user approves \
+             it on a card that shows who it's to and the text.",
+            json!({"type":"object","properties":{
+                "to":{"type":"string","description":"a phone number with country code (+31…) or an Apple ID email"},
+                "text":{"type":"string","description":"up to 2000 characters"}
+            },"required":["to","text"]}),
+        ),
+        (
+            "app_open",
+            "Open an app on the user's Mac, or one of your workspace files in it (only in the Mimir app on a Mac): a \
+             spreadsheet in Numbers, a draft in Pages. Asks first.",
+            json!({"type":"object","properties":{
+                "app":{"type":"string","description":"its name as in Finder, like Numbers"},
+                "path":{"type":"string","description":"a workspace file to open in it"}
+            },"required":["app"]}),
+        ),
+        (
             "file_delete",
             "Delete a file from this chat's workspace.",
             json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}),
