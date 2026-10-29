@@ -2226,6 +2226,10 @@ mod tests {
         assert!(out.starts_with("Not done yet"), "{out}");
         let a = db.approvals_pending().unwrap().pop().unwrap();
         assert!(a.summary.contains("Send from Messages on this Mac to +31 6 12345678") && a.summary.contains("On my way"), "{}", a.summary);
+        // Longer than the card shows whole: refused, never sent half-seen.
+        let long = "word ".repeat(260);
+        assert!(call(&ctx, "messages_send", &json!({"to": "+31612345678", "text": long})).await.unwrap_err().to_string().contains("approval card"));
+        assert!(call(&ctx, "mail_send", &json!({"to": "a@b.com", "subject": "x", "body": long})).await.unwrap_err().to_string().contains("approval card"));
     }
 
     #[tokio::test]

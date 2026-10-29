@@ -42,10 +42,17 @@ pub(crate) fn mail_args(to: &str, cc: &str, subject: &str, body: &str) -> Result
 }
 
 /// Who a message can go to: a phone number (+31…) or an Apple ID email.
+/// An email is kept exactly as written (a hyphen is part of it); only a phone number loses its spaces and dashes.
 pub(crate) fn handle(to: &str) -> Result<String> {
-    let t: String = to.trim().chars().filter(|c| !c.is_whitespace() && !"()-".contains(*c)).collect();
-    let phone = t.starts_with('+') && t.len() > 6 && t[1..].chars().all(|c| c.is_ascii_digit());
-    if !phone && crate::email::addresses(&t).map(|a| a != t).unwrap_or(true) {
+    let to = to.trim();
+    if to.contains('@') {
+        return match crate::email::addresses(to) {
+            Ok(a) if a == to && !a.contains(',') => Ok(a),
+            _ => bail!("{to} isn't one Apple ID email"),
+        };
+    }
+    let t: String = to.chars().filter(|c| !c.is_whitespace() && !"()-".contains(*c)).collect();
+    if !(t.starts_with('+') && t.len() > 6 && t[1..].chars().all(|c| c.is_ascii_digit())) {
         bail!("send it to a phone number with its country code (+31…) or an Apple ID email");
     }
     Ok(t)
@@ -107,6 +114,9 @@ mod tests {
         assert!(super::mail_args("", "", "x", "y").is_err() && super::mail_args("not an address", "", "x", "y").is_err());
         assert_eq!(super::handle("+31 6 1234-5678").unwrap(), "+31612345678");
         assert!(super::handle("dana@icloud.com").is_ok() && super::handle("0612").is_err() && super::handle("x\"y").is_err());
+        // An email is sent to exactly what the card shows: its hyphens stay.
+        assert_eq!(super::handle("jane-doe@my-mail.com").unwrap(), "jane-doe@my-mail.com");
+        assert!(super::handle("a@b.com, c@d.com").is_err(), "one at a time");
         assert_eq!(super::app_name("Numbers.app").unwrap(), "Numbers");
         assert!(super::app_name("Terminal; rm -rf ~").is_err() && super::app_name("").is_err());
     }

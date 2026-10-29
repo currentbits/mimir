@@ -535,9 +535,9 @@ pub(super) fn describe(ctx: &ToolCtx, name: &str, args: &Value) -> String {
             args["to"].as_str().unwrap_or("?"),
             args["cc"].as_str().filter(|c| !c.trim().is_empty()).map(|c| format!(" (cc {c})")).unwrap_or_default(),
             args["subject"].as_str().unwrap_or(""),
-            truncate(args["body"].as_str().unwrap_or(""), 2000)
+            args["body"].as_str().unwrap_or("")
         ),
-        "messages_send" => format!("Send from Messages on this Mac to {}:\n{}", args["to"].as_str().unwrap_or("?"), truncate(args["text"].as_str().unwrap_or(""), 2000)),
+        "messages_send" => format!("Send from Messages on this Mac to {}:\n{}", args["to"].as_str().unwrap_or("?"), args["text"].as_str().unwrap_or("")),
         "app_open" => format!("Open {} on this Mac{}", args["app"].as_str().unwrap_or("?"), args["path"].as_str().map(|p| format!(" with {p}")).unwrap_or_default()),
         // Where first (in full), then what, and what it would overwrite.
         "file_export" => match crate::files::export_plan(&ctx.db, ws(ctx).unwrap_or(ctx.chat_id), args["path"].as_str().unwrap_or(""), args["dest"].as_str().unwrap_or("")) {
@@ -756,8 +756,8 @@ pub(super) fn precheck(ctx: &ToolCtx, name: &str, args: &Value) -> Result<()> {
         // Who and what, before anyone is asked: the card must show all of it.
         "mail_send" => {
             crate::mac::mail_args(args["to"].as_str().unwrap_or(""), args["cc"].as_str().unwrap_or(""), "", "")?;
-            if len("body") > 2000 || len("subject") > 200 {
-                bail!("an email from Mail can be up to 2000 characters (subject up to 200): the whole text goes on the card");
+            if len("subject") > 200 || describe(ctx, name, args).chars().count() > CARD_FITS {
+                bail!("too long to show whole on the approval card (about 1100 characters with who it's to): shorten it, or save it as a file and send that");
             }
             if ctx.db.sent_today(ctx.chat_id, "mail_send")? >= 20 {
                 bail!("20 emails were sent from Mail in this chat in the last day; that's the limit");
@@ -765,8 +765,8 @@ pub(super) fn precheck(ctx: &ToolCtx, name: &str, args: &Value) -> Result<()> {
         }
         "messages_send" => {
             crate::mac::handle(args["to"].as_str().unwrap_or(""))?;
-            if len("text") == 0 || len("text") > 2000 {
-                bail!("a message is 1 to 2000 characters");
+            if len("text") == 0 || describe(ctx, name, args).chars().count() > CARD_FITS {
+                bail!("a message is 1 to about 1100 characters: the whole text has to fit on the approval card");
             }
         }
         "app_open" => {
@@ -922,6 +922,9 @@ pub(super) fn precheck(ctx: &ToolCtx, name: &str, args: &Value) -> Result<()> {
 
 /// What an approval card shows: all of it up to a size every chat app can display, and if it's longer, a plain note
 /// that it was cut (memories, routine prompts and hand-offs are capped below that, so theirs is always whole).
+/// What a card may hold for a send that must show whole (with room for a helper's "for X" line): see card_text.
+const CARD_FITS: usize = 1150;
+
 fn card_text(summary: &str) -> String {
     const MAX: usize = 1200;
     // Characters that silently reverse or reorder the text after them show as what they are, so the card reads the

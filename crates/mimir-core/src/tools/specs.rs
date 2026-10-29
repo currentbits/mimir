@@ -110,7 +110,7 @@ pub fn specs() -> Vec<(&'static str, &'static str, Value)> {
                 "to":{"type":"string","description":"addresses, comma-separated"},
                 "cc":{"type":"string"},
                 "subject":{"type":"string"},
-                "body":{"type":"string","description":"plain text"},
+                "body":{"type":"string","description":"plain text; with who it's to, up to about 1100 characters (it all goes on the card)"},
                 "reply_to":{"type":"integer","description":"id of the email it answers"}
             },"required":["to","subject","body"]}),
         ),
@@ -197,7 +197,7 @@ pub fn specs() -> Vec<(&'static str, &'static str, Value)> {
              it on a card that shows who it's to and the text.",
             json!({"type":"object","properties":{
                 "to":{"type":"string","description":"a phone number with country code (+31…) or an Apple ID email"},
-                "text":{"type":"string","description":"up to 2000 characters"}
+                "text":{"type":"string","description":"up to about 1100 characters (it all goes on the card)"}
             },"required":["to","text"]}),
         ),
         (
