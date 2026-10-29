@@ -135,6 +135,12 @@ static NL: &[(&str, &str)] = &[
     ("{n} hours ago", "{n} uur geleden"),
     ("yesterday", "gisteren"),
     ("{n} days ago", "{n} dagen geleden"),
+    // Away.
+    (
+        "I paused your routines because you've been away for over {days} days, so they don't use up your AI plan on results nobody reads. Write to me, or press Resume in Mimir's Needs you, and they start again.",
+        "Ik heb je routines gepauzeerd omdat je al meer dan {days} dagen weg bent, zodat ze je AI-abonnement niet opmaken aan resultaten die niemand leest. Stuur me een bericht, of druk op Resume bij Needs you in Mimir, en ze gaan weer verder.",
+    ),
+    ("Welcome back: I'd paused your routines while you were away. They're running again.", "Welkom terug: ik had je routines gepauzeerd terwijl je weg was. Ze lopen weer."),
     // Files and voice notes.
     (
         "I can read text, photos, voice notes, PDFs, Word and Excel files and text files, but not this kind of file yet. Could you describe it or send a photo?",

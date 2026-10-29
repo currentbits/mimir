@@ -234,7 +234,7 @@ export function SignInForm({ onClose }: { onClose: () => void }) {
 /** One item per usage limit: every bot on that AI login waits for the same reset. */
 const holdGroups = (hs: Hold[]) => Object.values(hs.reduce<Record<string, Hold[]>>((g, h) => { const k = h.cap || h.routine_id ? h.key : `limit:${h.until}`; (g[k] ??= []).push(h); return g }, {}))
 
-export const inboxCount = (i: Inbox | null) => i ? (i.server_update ? 1 : 0) + (i.damage ? 1 : 0) + i.approvals.length + i.missed.length + i.failed.length + holdGroups(i.holds ?? []).length + (i.goals ?? []).length + (i.mail ?? []).length + i.suggestions.reduce((n, s) => n + s.count, 0) + (i.unconfirmed ?? []).reduce((n, s) => n + s.count, 0) + (i.rule_hints ?? []).length : 0
+export const inboxCount = (i: Inbox | null) => i ? (i.server_update ? 1 : 0) + (i.damage ? 1 : 0) + (i.away ? 1 : 0) + i.approvals.length + i.missed.length + i.failed.length + holdGroups(i.holds ?? []).length + (i.goals ?? []).length + (i.mail ?? []).length + i.suggestions.reduce((n, s) => n + s.count, 0) + (i.unconfirmed ?? []).reduce((n, s) => n + s.count, 0) + (i.rule_hints ?? []).length : 0
 
 /** A failed run in plain words, with the fix that most likely helps. */
 export function failure(error: string | null, status?: Run['status'], delivered?: string | null): { title: string; fix: 'bot' | 'chat' | 'routines' | null; fixLabel?: string } {
@@ -274,6 +274,19 @@ export function InboxView({ data, troubled, reload, chats, chatName, openBot, op
               <div className="inbox-desc selectable">Today's check found: {data.damage}. No backup was taken over the good ones; restore the latest from Settings.</div>
             </div>
             <div className="row-ctl"><button className="btn btn-sm" onClick={openSettings}>Restore a backup…</button></div>
+          </div>
+        </div>
+      </>}
+      {data.away && <>
+        <div className="section-title" style={{ marginTop: 0 }}><h2>Routines</h2></div>
+        <div className="group">
+          <div className="inbox-row">
+            <span className="row-icon"><Icon name="pause" size={15} /></span>
+            <div className="inbox-main">
+              <div className="inbox-title">Your routines are paused while you were away</div>
+              <div className="inbox-desc">Since {new Date(data.away * 1000).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })}, so they don't use up your AI plan on results nobody reads. Your next message to any bot starts them again too. Change after how many days in Settings → Daily digest.</div>
+            </div>
+            <div className="row-ctl"><button className="btn btn-sm" onClick={() => invoke('away_resume').then(reload, e => tell(String(e)))}>Resume</button></div>
           </div>
         </div>
       </>}

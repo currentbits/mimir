@@ -15,6 +15,11 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
   **Open workspace folder** opens it.
 - **Folders as a zip:** `send_file` sends a whole folder as one zip.
 
+### Routines
+- **Paused while you're away:** after a week without a message from you (change it under Settings → Daily digest),
+  routines stop so they don't use up your AI plan on results nobody reads. Bots still answer; your next message, or
+  **Resume** in Needs you, starts them again without a burst of catch-up runs.
+
 ### Approvals
 - **Ask first rules:** rules about who or where, in Settings → Permissions: emails to an address, anyone at a domain
   or anyone outside it (`!acme.com`), and files copied into a folder. Each asks or never lets it happen, for every bot,

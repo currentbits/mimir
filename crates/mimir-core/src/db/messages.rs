@@ -109,6 +109,15 @@ impl Db {
             .unwrap_or(false))
     }
 
+    /// Add to this bot's last saved reply in a chat (a note that came after it was saved).
+    pub fn amend_last_reply(&self, bot: i64, chat: i64, more: &str) -> Result<()> {
+        self.c().execute(
+            "UPDATE messages SET content = rtrim(content) || ?3 WHERE id = (SELECT max(id) FROM messages WHERE bot_id=?1 AND chat_id=?2 AND role='assistant')",
+            params![bot, chat, more],
+        )?;
+        Ok(())
+    }
+
     pub fn log(&self, bot: i64, chat: i64, role: &str, content: &str, run: Option<i64>) -> Result<()> {
         self.c().execute(
             "INSERT INTO messages(bot_id, chat_id, role, content, ts, run_id) VALUES (?1,?2,?3,?4,?5,?6)",
