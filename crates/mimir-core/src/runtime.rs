@@ -2071,6 +2071,18 @@ impl Core {
                     Ok(Ok(_)) => {}
                 }
             }
+            // Away: no word from the person in a while, so nothing runs on its own (it would only spend their usage on
+            // results nobody reads). Unlike a pause, bots still answer, and the first message back ends it (turn()).
+            if self.db.away_check(now).unwrap_or_else(|e| { eprintln!("away: {e:#}"); false }) {
+                let days = self.db.away_days();
+                let text = trf("I paused your routines because you've been away for over {days} days, so they don't use up your AI plan on results nobody reads. Write to me, or press Resume in Mimir's Needs you, and they start again.", &[("days", &days.to_string())]);
+                let _ = self.db.log(self.bot, crate::host::LOCAL_CHAT, "assistant", &text, None);
+                self.tell_decisions(&chans, None, &text).await;
+            }
+            if self.db.away().is_some() {
+                tokio::time::sleep(Duration::from_secs(30)).await;
+                continue;
+            }
             // Paused by you: nothing runs on its own (routines, digest, weekly review, tidy-up) until it ends.
             if self.db.paused(self.bot, now).unwrap_or_else(|e| { eprintln!("pause: {e:#}"); None }).is_some() {
                 tokio::time::sleep(Duration::from_secs(30)).await;

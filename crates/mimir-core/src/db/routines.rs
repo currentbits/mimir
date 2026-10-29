@@ -779,13 +779,57 @@ impl Db {
     /// they'd run: no rush of catch-up runs, and nothing shows as missed. A one-off (a reminder) still runs once.
     // ponytail: a slot due after a timed pause ended, while the computer slept, is skipped too, not run late
     pub fn pause_end(&self, bot: Option<i64>) -> Result<()> {
+        self.skip_missed(bot)?;
+        // Moved on first, then unpaused: a scheduler pass in between still sees the pause.
+        self.c().execute("DELETE FROM settings WHERE key=?1", [pause_key(bot)])?;
+        Ok(())
+    }
+
+    /// Repeating routines that came due while they couldn't run move on to their next time, as if they'd run.
+    fn skip_missed(&self, bot: Option<i64>) -> Result<()> {
         let t = now();
         for r in self.routines_where("(?1 IS NULL OR bot_id = ?1) AND next_fire <= ?2 AND once = 0", params![bot, t])? {
             self.c().execute("UPDATE routines SET next_fire=?2, retries=0 WHERE id=?1", params![r.id, next_fire(&r.cron, t)?])?;
         }
-        // Moved on first, then unpaused: a scheduler pass in between still sees the pause.
-        self.c().execute("DELETE FROM settings WHERE key=?1", [pause_key(bot)])?;
         Ok(())
+    }
+
+    // ---------- away ----------
+
+    /// When the person last wrote to any bot themselves (not a guest, a routine or another bot). None: never yet.
+    pub fn last_seen(&self) -> Result<Option<i64>> {
+        Ok(self.c().query_row("SELECT max(started_at) FROM runs WHERE trigger = 'message' AND person IS NULL", [], |r| r.get(0))?)
+    }
+
+    /// Days without a word from the person before routines pause (setting away_days; 0: never). Default a week.
+    pub fn away_days(&self) -> i64 {
+        self.setting("away_days").ok().flatten().and_then(|v| v.parse().ok()).unwrap_or(AWAY_DAYS)
+    }
+
+    /// Since when routines are paused because the person has been away, if they are. Unlike a pause, bots still answer.
+    pub fn away(&self) -> Option<i64> {
+        self.setting(AWAY_KEY).ok().flatten().and_then(|v| v.parse().ok())
+    }
+
+    /// Pause routines if the person has been away longer than away_days. True only for the call that paused them (one
+    /// bot's scheduler of several), so the person is told once.
+    pub fn away_check(&self, now: i64) -> Result<bool> {
+        let days = self.away_days();
+        if days <= 0 || self.away().is_some() || self.last_seen()?.is_none_or(|t| now - t <= days * 86400) {
+            return Ok(false);
+        }
+        Ok(self.c().execute("INSERT OR IGNORE INTO settings(key, value) VALUES (?1, ?2)", params![AWAY_KEY, now.to_string()])? == 1)
+    }
+
+    /// They're back (they wrote, or pressed Resume): routines go on from their next time, without a rush of catch-ups.
+    /// True if they were paused.
+    pub fn away_end(&self) -> Result<bool> {
+        if self.away().is_none() {
+            return Ok(false);
+        }
+        self.skip_missed(None)?;
+        self.c().execute("DELETE FROM settings WHERE key=?1", [AWAY_KEY])?;
+        Ok(true)
     }
 
     /// Pauses that haven't ended: (the bot, or None for all; until, 0 for until resumed).
@@ -819,6 +863,9 @@ impl Db {
     }
 }
 
+
+const AWAY_KEY: &str = "away_since";
+const AWAY_DAYS: i64 = 7;
 
 fn pause_key(bot: Option<i64>) -> String {
     bot.map_or("pause:all".into(), |b| format!("pause:{b}"))
