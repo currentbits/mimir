@@ -1712,6 +1712,8 @@ impl Host {
                     "goals": self.db.goals_waiting()?,
                     // Replies to a bot's email that it handed to you instead of answering.
                     "mail": crate::email::handed_over(&self.db),
+                    // Routines paused because the person was away (since when), until they write or press Resume.
+                    "away": self.db.away(),
                     // The daily check found the database damaged: restore a backup.
                     "damage": self.db.setting(crate::backup::DAMAGE)?,
                     // Plain asks you keep allowing: stop asking?
@@ -1749,6 +1751,22 @@ impl Host {
                     bail!("not a hold");
                 }
                 ok(self.db.hold_clear(&key, true)?)
+            }
+            // Routines paused while the person was away: resume them (as their first message back would).
+            "away_resume" => ok(self.db.away_end()?),
+            // Days without a word before routines pause (0: never); without `days`, the current value.
+            "away_days" => {
+                if let Some(d) = arg::<Option<i64>>(a, "days")? {
+                    if !(0..=365).contains(&d) {
+                        bail!("days is 0 (never) to 365");
+                    }
+                    self.db.set_setting("away_days", &d.to_string())?;
+                    // Turned off: a pause it already made ends too (routines keep running from now on).
+                    if d == 0 {
+                        self.db.away_end()?;
+                    }
+                }
+                ok(self.db.away_days())
             }
             // Pause all bots (no bot_id) or one, until a time (or until resumed); on: false resumes. Without `on`, what's paused.
             "pause" => {
@@ -1802,6 +1820,13 @@ impl Host {
             "rule_hint_dismiss" => ok(tools::rule_hint_dismiss(&self.db, &arg::<String>(a, "tool")?, arg::<Option<String>>(a, "site")?.as_deref())?),
             "site_rules" => ok(self.db.site_rules()?.into_iter().map(|(tool, host, action)| json!({"tool": tool, "host": host, "action": action})).collect::<Vec<_>>()),
             "set_site_rule" => ok(self.db.set_site_rule(&arg::<String>(a, "tool")?, &arg::<String>(a, "host")?, &arg::<String>(a, "action")?)?),
+            // Ask first rules about what an action is for (emails to…, files into…); with `rules`, replace them.
+            "target_rules" => {
+                if let Some(rules) = arg::<Option<Vec<tools::TargetRule>>>(a, "rules")? {
+                    tools::set_target_rules(&self.db, &rules)?;
+                }
+                ok(tools::target_rules(&self.db).into_iter().map(|r| json!({"label": r.label(), "kind": r.kind, "pattern": r.pattern, "action": r.action})).collect::<Vec<_>>())
+            }
             "rules" => ok(tools::all_specs(&self.db)
                 .into_iter()
                 .map(|(tool, description, _)| {

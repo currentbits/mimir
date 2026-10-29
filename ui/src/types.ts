@@ -34,7 +34,7 @@ export type Run = {
   delivered?: string | null; repeats?: number; cache_read?: number; cache_write?: number; estimated?: boolean
 }
 
-export type Approval = { id: number; bot_id: number; chat_id: number; tool: string; summary: string; created_at: number; expires_at: number; kind?: 'rule' | 'guarded' | 'guest' | 'login' | 'plan' | 'bot' | 'send' | 'takeover' | 'signin' | 'remind' | 'unasked' | 'loop' | 'sensitive' | 'drift' | 'userfile'; site?: string | null; parked?: boolean; allowed_before?: number
+export type Approval = { id: number; bot_id: number; chat_id: number; tool: string; summary: string; created_at: number; expires_at: number; kind?: 'rule' | 'guarded' | 'guest' | 'login' | 'plan' | 'bot' | 'send' | 'takeover' | 'signin' | 'remind' | 'unasked' | 'loop' | 'sensitive' | 'drift' | 'userfile' | 'target'; site?: string | null; parked?: boolean; allowed_before?: number
   /** A card whose text you can edit before it goes: its fields (subject and body editable; to, cc and account shown). */
   draft?: Record<string, string> | null
   /** shown:<where> once a card or the app showed it; failed:<error> (or shown:app; card failed:…) if its chat-app card couldn't be sent. */
@@ -53,7 +53,9 @@ export type Goal = { id: number; bot_id: number; chat_id: number; text: string; 
 
 /** A plain ask you keep allowing (5 times in 30 days, never denied): Needs you offers to stop asking. */
 export type RuleHint = { tool: string; site: string | null; times: number; bot_id: number }
-export type Inbox = { approvals: Approval[]; missed: Approval[]; failed: Run[]; holds?: Hold[]; goals?: Goal[]; suggestions: { chat_id: number; count: number }[]; unconfirmed?: { chat_id: number; count: number }[]; rule_hints?: RuleHint[]; mail?: HandedOver[]; server_update?: { current: string; latest: string; how: string } | null; damage?: string | null }
+export type Inbox = { approvals: Approval[]; missed: Approval[]; failed: Run[]; holds?: Hold[]; goals?: Goal[]; suggestions: { chat_id: number; count: number }[]; unconfirmed?: { chat_id: number; count: number }[]; rule_hints?: RuleHint[]; mail?: HandedOver[]; server_update?: { current: string; latest: string; how: string } | null; damage?: string | null
+  /** Routines paused since then because you were away; your next message (or Resume) starts them again. */
+  away?: number | null }
 
 /** A reply to a bot's email it handed to you instead of answering: who, what, and the bot's one line. */
 export type HandedOver = { id: number; bot_id: number; chat_id: number; account: string; from: string; subject: string; summary: string; at: number }

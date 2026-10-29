@@ -1703,6 +1703,38 @@ mod tests {
     }
 
     #[test]
+    fn routines_pause_while_the_person_is_away_and_go_on_when_they_write() {
+        let d = db();
+        let r = d.routine_create(2, 7, "0 9 * * *", "brief", false).unwrap();
+        // Never written yet (a new install): never "away".
+        assert!(!d.away_check(now()).unwrap() && d.away().is_none());
+        // Last wrote 8 days ago (a guest since, and routines, don't count).
+        let mine = d.run_start(2, 7, "message", None, "test").unwrap();
+        d.c().execute("UPDATE runs SET started_at=?1 WHERE id=?2", params![now() - 8 * 86400, mine]).unwrap();
+        let guest = d.run_start(2, 9, "message", None, "test").unwrap();
+        d.run_person(guest, 9).unwrap();
+        d.run_start(2, 7, "routine", Some(r.id), "test").unwrap();
+        assert!(d.away_check(now()).unwrap(), "paused, and this caller tells the person");
+        assert!(!d.away_check(now()).unwrap(), "only once, whichever bot checks next");
+        assert!(d.away().is_some());
+        // Back: due slots move on instead of catching up all at once.
+        d.c().execute("UPDATE routines SET next_fire=?1", [now() - 3 * 86400]).unwrap();
+        assert!(d.away_end().unwrap() && d.away().is_none() && !d.away_end().unwrap());
+        assert!(d.due(2, now()).unwrap().is_empty());
+        // Resumed without writing: that counts as back, so the next pass doesn't pause again straight away.
+        assert!(!d.away_check(now()).unwrap() && d.away().is_none());
+        // A note after the reply was saved goes into the saved reply too.
+        d.log(2, 7, "assistant", "Done.", None).unwrap();
+        d.amend_last_reply(2, 7, "\n\n_Welcome back_").unwrap();
+        assert!(d.messages(7, 5).unwrap().iter().any(|m| m.content == "Done.\n\n_Welcome back_"));
+        // Off (0 days), or a shorter wait than the absence: as set.
+        d.set_setting("away_days", "0").unwrap();
+        assert!(!d.away_check(now()).unwrap());
+        d.set_setting("away_days", "30").unwrap();
+        assert!(!d.away_check(now()).unwrap(), "8 days isn't 30");
+    }
+
+    #[test]
     fn pause_and_resume() {
         let d = db();
         let r = d.routine_create(2, 7, "0 9 * * *", "brief", false).unwrap();

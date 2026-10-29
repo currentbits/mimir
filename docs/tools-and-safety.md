@@ -147,11 +147,18 @@ then on that tool, or that tool on that website, runs without asking, also after
 card it's that site's login; on a plan's card, plans no longer ask. In a guest's chat it's Allow (it still asks after
 outside content). Change it back in **Settings → Permissions**.
 
+**Ask first rules.** Rules about *who* or *where*, on top of the rules per tool: **Settings → Permissions → Ask first
+rules**. *Emails to* an address (`dana@acme.com`), anyone at a domain (`acme.com`, subdomains included) or anyone
+outside one (`!acme.com`), for sending (also from Mail on your Mac) and drafting; *Files copied into* a folder (`file_export`). Each one asks, or
+never lets it happen. They hold for every bot, over Always and "Don't ask me first", and no plan covers them; the card
+starts with the rule ("Your rule “Emails to dana@acme.com” asks.") and offers no Always, and a refused call tells the
+bot which rule stopped it.
+
 **A bot that never asks.** On a bot's page, **What it can do → Don't ask me first** lets that bot act without any
 approval card: whatever would ask (a rule, outside content, a sensitive source, a loop, a routine's drift, a saved
 login, a plan) just runs, and an instruction it saves to memory ("reply in Dutch") is kept right away instead of
 waiting in Memory for you to accept (one picked up from outside content stays unconfirmed), and so is a skill it
-saves. Deny rules still hold, signing in and taking over the computer still need you, so does deleting or changing a file
+saves. Deny rules and Ask first rules still hold, signing in and taking over the computer still need you, so does deleting or changing a file
 of yours in a [working folder](bots-and-chats.md#a-bots-working-folder) you chose, and a guest's
 chat still asks the guest. A task one bot hands another only skips the asks if both bots are set so. **Settings → Your
 data → Check everything** lists the bots set this way.
