@@ -320,7 +320,12 @@ pub async fn turn(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) -> R
     let back = kind == "message" && ctx.person.is_none() && !ctx.rehearsal && ctx.db.away_end().unwrap_or(false);
     let out = turn_inner(provider, &ctx, trigger).await;
     let out = match out {
-        Ok((text, usage)) if back => Ok((format!("{}\n\n_{}_", text.trim_end(), say::tr("Welcome back: I'd paused your routines while you were away. They're running again.")), usage)),
+        Ok((text, usage)) if back => {
+            let note = format!("\n\n_{}_", say::tr("Welcome back: I'd paused your routines while you were away. They're running again."));
+            // Also in the saved reply, which the app's chat shows (it reloads what was saved, not what's returned).
+            let _ = ctx.db.amend_last_reply(ctx.bot_id, ctx.conv, &note);
+            Ok((format!("{}{note}", text.trim_end()), usage))
+        }
         out => out,
     };
     let _ = ctx.db.setting_take(&progress);

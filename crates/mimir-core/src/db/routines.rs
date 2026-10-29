@@ -796,9 +796,12 @@ impl Db {
 
     // ---------- away ----------
 
-    /// When the person last wrote to any bot themselves (not a guest, a routine or another bot). None: never yet.
+    /// When the person last wrote to any bot themselves (not a guest, a routine or another bot), or pressed Resume.
+    /// None: never yet.
     pub fn last_seen(&self) -> Result<Option<i64>> {
-        Ok(self.c().query_row("SELECT max(started_at) FROM runs WHERE trigger = 'message' AND person IS NULL", [], |r| r.get(0))?)
+        let wrote: Option<i64> = self.c().query_row("SELECT max(started_at) FROM runs WHERE trigger = 'message' AND person IS NULL", [], |r| r.get(0))?;
+        let resumed = self.setting(SEEN_KEY)?.and_then(|v| v.parse::<i64>().ok());
+        Ok(wrote.max(resumed))
     }
 
     /// Days without a word from the person before routines pause (setting away_days; 0: never). Default a week.
@@ -828,6 +831,8 @@ impl Db {
             return Ok(false);
         }
         self.skip_missed(None)?;
+        // Being back starts the wait over, also when they pressed Resume without writing (else the next pass pauses again).
+        self.set_setting(SEEN_KEY, &now().to_string())?;
         self.c().execute("DELETE FROM settings WHERE key=?1", [AWAY_KEY])?;
         Ok(true)
     }
@@ -865,6 +870,7 @@ impl Db {
 
 
 const AWAY_KEY: &str = "away_since";
+const SEEN_KEY: &str = "away_resumed";
 const AWAY_DAYS: i64 = 7;
 
 fn pause_key(bot: Option<i64>) -> String {

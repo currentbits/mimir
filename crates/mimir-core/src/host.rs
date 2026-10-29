@@ -1759,6 +1759,10 @@ impl Host {
                         bail!("days is 0 (never) to 365");
                     }
                     self.db.set_setting("away_days", &d.to_string())?;
+                    // Turned off: a pause it already made ends too (routines keep running from now on).
+                    if d == 0 {
+                        self.db.away_end()?;
+                    }
                 }
                 ok(self.db.away_days())
             }
