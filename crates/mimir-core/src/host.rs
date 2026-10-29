@@ -888,7 +888,10 @@ impl Host {
                 let bot = self.db.bot(arg(a, "bot_id")?)?;
                 let ws = crate::files::bot_ws(bot.id);
                 let root = crate::files::root(&self.db, ws);
-                let problem = crate::files::workspace(&self.db, bot.id, 0, true, true).err().map(|e| format!("{e:#}"));
+                // In the person's words (the bot's own error tells it what to tell them).
+                let problem = crate::files::workspace(&self.db, bot.id, 0, true, true).err().map(|_| {
+                    format!("{} is missing or can't be read on {}: moved or renamed, or a drive that isn't connected. {} can't read or write files until you reconnect it or choose another folder.", bot.workdir, crate::files::machine(), bot.name)
+                });
                 ok(json!({"path": root.display().to_string(), "chosen": !bot.workdir.is_empty(), "machine": crate::files::machine(), "problem": problem, "can_open": is_desktop()}))
             }
             "open_bot_folder" => {

@@ -172,6 +172,8 @@ export function BotPage({ bot, status, canDelete, onSaved, onDeleted, onChat, on
   const RULE_WORDS: Record<string, string> = { always: 'never asks', allow: 'allowed', ask: 'asks you first', deny: 'denied' }
   const effective = (tool: string) => {
     const of = (r: Rule) => `${RULE_WORDS[r.action] ?? r.action}${r.action === r.default ? ' (default)' : ''}`
+    // Its own Writing files setting (below) wins over Permissions for file_write.
+    if (tool === 'file_write' && b.file_write) return { ask: 'asks you first (this bot’s setting)', allow: 'allowed (this bot’s setting)', off: 'off (this bot’s Writing files setting)' }[b.file_write]
     if (!tool.endsWith('__*')) { const r = rules.data?.find(r => r.tool === tool); return r && of(r) }
     const rs = (rules.data ?? []).filter(r => r.tool.startsWith(tool.slice(0, -1)))
     const odd = rs.filter(r => r.action === 'deny' || r.action === 'ask')
