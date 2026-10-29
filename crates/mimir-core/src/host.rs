@@ -1800,6 +1800,13 @@ impl Host {
             "rule_hint_dismiss" => ok(tools::rule_hint_dismiss(&self.db, &arg::<String>(a, "tool")?, arg::<Option<String>>(a, "site")?.as_deref())?),
             "site_rules" => ok(self.db.site_rules()?.into_iter().map(|(tool, host, action)| json!({"tool": tool, "host": host, "action": action})).collect::<Vec<_>>()),
             "set_site_rule" => ok(self.db.set_site_rule(&arg::<String>(a, "tool")?, &arg::<String>(a, "host")?, &arg::<String>(a, "action")?)?),
+            // Ask first rules about what an action is for (emails to…, files into…); with `rules`, replace them.
+            "target_rules" => {
+                if let Some(rules) = arg::<Option<Vec<tools::TargetRule>>>(a, "rules")? {
+                    tools::set_target_rules(&self.db, &rules)?;
+                }
+                ok(tools::target_rules(&self.db).into_iter().map(|r| json!({"label": r.label(), "kind": r.kind, "pattern": r.pattern, "action": r.action})).collect::<Vec<_>>())
+            }
             "rules" => ok(tools::all_specs(&self.db)
                 .into_iter()
                 .map(|(tool, description, _)| {

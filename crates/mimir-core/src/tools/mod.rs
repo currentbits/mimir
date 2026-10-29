@@ -355,6 +355,14 @@ async fn gated(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
     // In a folder the person chose, their files: deleting one, or changing one that's there, asks every time (no Always,
     // no plan covers it, not even "Don't ask me first": that would lose their own files without a word).
     let (decision, why) = if decision != "deny" && user_file_change(ctx, name, args) { ("ask".to_string(), "userfile") } else { (decision, why) };
+    // The person's own rule about what it's for (emails outside acme.com, files into a folder): over Always and "Don't
+    // ask me first" too, and no plan covers it.
+    let target = if decision != "deny" { target_rule(ctx, name, args) } else { None };
+    let (decision, why) = match &target {
+        Some(r) if r.action == "deny" => ("deny".to_string(), "target"),
+        Some(_) => ("ask".to_string(), "target"),
+        None => (decision, why),
+    };
     // A routine's write that looks unlike its earlier runs (somewhere new, far more of it, another unit) asks this once,
     // even under Always: what was allowed was the usual. Only ever allow → ask.
     let drift = if decision == "allow" && !free { drift(ctx, name, args) } else { vec![] };
@@ -378,6 +386,10 @@ async fn gated(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
         None => summary.clone(),
     };
     let card = if drift.is_empty() { card } else { format!("Unlike this routine's earlier runs ({}). {card}", drift.join("; ")) };
+    let card = match &target {
+        Some(r) => format!("Your rule “{}” asks. {card}", r.label()),
+        None => card,
+    };
     // Ticking the checklist again is progress, not a loop.
     if matches!(decision.as_str(), "allow" | "plan") && !trusted && name != "progress_set" && looping(ctx, name, &summary) {
         decision = "loop".into();
@@ -391,6 +403,10 @@ async fn gated(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
     let out = match decision.as_str() {
         "deny" if !enabled && ctx.incognito() => Err(anyhow::anyhow!("{name} isn't available in an incognito chat. Tell the user it works in a normal chat.")),
         "deny" if !enabled => Err(anyhow::anyhow!("{name} isn't enabled for this bot. Tell the user it can't be done here.")),
+        "deny" if why == "target" => Err(anyhow::anyhow!(
+            "blocked by the user's rule “{}” (Settings → Permissions → Ask first rules). Tell the user it wasn't done, and why.",
+            target.as_ref().map(TargetRule::label).unwrap_or_default()
+        )),
         "deny" => Err(anyhow::anyhow!(
             "blocked: {name} is set to deny by {}. Tell the user it can't be done, and where that's set if they want to change it.",
             rule_source(&ctx.db, name, site.as_deref())
@@ -2194,6 +2210,46 @@ mod tests {
         db.approval_decide(a.id, false, None).unwrap();
         let e = waiting.await.unwrap().unwrap_err().to_string();
         assert!(e.contains("wasn't saved anywhere") && e.contains("in your reply"), "{e}");
+    }
+
+    #[tokio::test]
+    async fn ask_first_rules_about_who_hold_even_when_a_bot_never_asks() {
+        let db = sensitive_db("target");
+        db.set_hands_off(1, true).unwrap();
+        let mut ctx = ToolCtx::new(db.clone(), 1, crate::host::LOCAL_CHAT);
+        ctx.unattended = true; // an ask is parked, so it shows here without waiting
+        let rules = set_target_rules(&db, &[
+            TargetRule { kind: "email".into(), pattern: "!Acme.com".into(), action: "deny".into() },
+            TargetRule { kind: "email".into(), pattern: "dana@acme.com".into(), action: "ask".into() },
+        ]).unwrap();
+        assert_eq!(rules[0].label(), "Emails to anyone outside acme.com");
+        assert_eq!(rules[1].label(), "Emails to dana@acme.com");
+        let draft = |to: &str| json!({"to": to, "subject": "Hi", "body": "Hello"});
+        // Outside the domain (even one of several): never, and the bot is told which rule.
+        let e = call(&ctx, "email_draft", &draft("sam@acme.com, eve@evil.example")).await.unwrap_err().to_string();
+        assert!(e.contains("“Emails to anyone outside acme.com”") && e.contains("Ask first rules"), "{e}");
+        // Dana: asks, though this bot is set to never ask; the card names the rule and offers no Always.
+        let out = call(&ctx, "email_draft", &draft("Dana@Acme.com")).await.unwrap();
+        assert!(out.starts_with("Not done yet"), "{out}");
+        let a = db.approvals_pending().unwrap().into_iter().find(|a| a.tool == "email_draft").unwrap();
+        assert!(a.kind == "target" && a.summary.starts_with("Your rule “Emails to dana@acme.com” asks."), "{a:?}");
+        assert!(!crate::runtime::offers_always(&a));
+        // Anyone else at acme.com: no rule matches, so the bot's own setting (never ask) holds.
+        assert!(target_rule(&ctx, "email_draft", &draft("sam@acme.com")).is_none());
+        assert!(target_rule(&ctx, "email_draft", &draft("sam@mail.acme.com")).is_none(), "a subdomain is inside");
+        // A folder: files copied into it (or below) are never copied there; elsewhere the export's own ask holds.
+        let home = crate::user_home().unwrap();
+        let blocked = home.join(format!(".mimir-test-target-{}", std::process::id()));
+        std::fs::create_dir_all(blocked.join("in")).unwrap();
+        set_target_rules(&db, &[TargetRule { kind: "folder".into(), pattern: blocked.display().to_string(), action: "deny".into() }]).unwrap();
+        crate::files::write(&db, crate::host::LOCAL_CHAT, "plan.md", "x", "replace", false).unwrap();
+        let e = call(&ctx, "file_export", &json!({"path": "plan.md", "dest": blocked.join("in").display().to_string()})).await.unwrap_err().to_string();
+        assert!(e.contains("Files copied into"), "{e}");
+        assert!(!blocked.join("in/plan.md").exists());
+        let _ = std::fs::remove_dir_all(&blocked);
+        // Bad patterns are refused.
+        assert!(set_target_rules(&db, &[TargetRule { kind: "email".into(), pattern: "nobody".into(), action: "ask".into() }]).is_err());
+        assert!(set_target_rules(&db, &[TargetRule { kind: "email".into(), pattern: "a.com".into(), action: "maybe".into() }]).is_err());
     }
 
     #[tokio::test]

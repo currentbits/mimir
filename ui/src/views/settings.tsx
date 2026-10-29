@@ -23,6 +23,7 @@ const SETTING_WORDS: Record<string, string> = {
   'Limits': 'cap budget tokens cost usage limit plan subscription quota five hour weekly cheaper model haiku',
   'Permissions': 'allow ask deny approve rules tools safety always',
   'Export folders': 'export copy files folder skills file_export',
+  'Ask first rules': 'email domain outside recipient folder ask deny rule target',
   'Browser': 'playwright chromium saved logins passwords vault',
   'Tool servers': `mcp plugins integrations connectors apps browse directory ${DIRECTORY.map(d => d.name).join(' ')}`,
   'Sensitive sources': 'bank banking health medical private finance money leak',
@@ -112,6 +113,7 @@ export function SettingsView({ onComputer, find = '' }: { onComputer: () => void
       <ToolServerSettings onChange={toolsChanged} />
       <SensitiveSettings key={'s' + tools} />
       <Permissions key={tools} />
+      <AskFirstRules />
       <ExportFolders />
       <WebhooksOutSettings />
       <DataSettings />
@@ -1217,6 +1219,36 @@ export const TOOL_LABEL: Record<string, string> = {
 
 /** "browser__browser_click" → "Click" (grouped under Browser) */
 export const toolLabel = (t: string) => TOOL_LABEL[t] ?? (t.includes('__') ? t.split('__')[1].replace(/^browser_/, '').replaceAll('_', ' ').replace(/^./, c => c.toUpperCase()) : t)
+
+type TargetRule = { kind: 'email' | 'folder'; pattern: string; action: 'ask' | 'deny'; label?: string }
+
+/** Rules about what an action is for: emails to someone, or files copied into a folder. They hold over Always and "Don't ask me first". */
+function AskFirstRules() {
+  const rules = useLoad(() => invoke<TargetRule[]>('target_rules'), [], 60000)
+  const [draft, setDraft] = useState<TargetRule>({ kind: 'email', pattern: '', action: 'ask' })
+  const [err, setErr] = useState<string | null>(null)
+  const all = rules.data ?? []
+  const save = (next: TargetRule[]) => invoke<TargetRule[]>('target_rules', { rules: next.map(({ kind, pattern, action }) => ({ kind, pattern, action })) })
+    .then(() => { setErr(null); setDraft(d => ({ ...d, pattern: '' })); rules.reload() }, e => setErr(String(e)))
+  return (
+    <Group title="Ask first rules" note={err ?? 'Rules about who or where, on top of Permissions: every bot asks (or never does it) when one matches, even with Always or “Don’t ask me first”. For emails: an address (dana@acme.com), a domain (acme.com), or !acme.com for anyone outside it.'}>
+      {all.map((r, i) => (
+        <Row key={r.kind + r.pattern + r.action} icon={<Icon name="shield" size={15} />} title={r.label ?? r.pattern} desc={r.action === 'deny' ? 'Never done' : 'Asks you first'}>
+          <button type="button" className="btn btn-sm btn-ghost btn-danger" onClick={() => save(all.filter((_, j) => j !== i))}>Remove</button>
+        </Row>
+      ))}
+      <form style={{ display: 'flex', gap: 8, alignItems: 'center' }} onSubmit={e => { e.preventDefault(); if (draft.pattern.trim()) void save([...all, draft]) }}>
+        <select className="select" style={{ width: 'auto' }} aria-label="Rule about" value={draft.kind} onChange={e => setDraft({ ...draft, kind: e.target.value as TargetRule['kind'] })}>
+          <option value="email">Emails to</option>
+          <option value="folder">Files copied into</option>
+        </select>
+        <input className="input" aria-label="Who or where" placeholder={draft.kind === 'email' ? '!acme.com' : '~/Documents'} value={draft.pattern} onChange={e => setDraft({ ...draft, pattern: e.target.value })} autoComplete="off" spellCheck={false} />
+        <Segmented size="sm" label="Action" value={draft.action} onChange={v => setDraft({ ...draft, action: v })} options={[{ id: 'ask', label: 'Ask' }, { id: 'deny', label: 'Never' }]} />
+        <button type="submit" className="btn btn-sm" disabled={!draft.pattern.trim()}>Add</button>
+      </form>
+    </Group>
+  )
+}
 
 /** Folders bots may copy files into (file_export, which asks every time). None: any folder of yours. */
 function ExportFolders() {

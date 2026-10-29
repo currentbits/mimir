@@ -16,6 +16,9 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 - **Folders as a zip:** `send_file` sends a whole folder as one zip.
 
 ### Approvals
+- **Ask first rules:** rules about who or where, in Settings → Permissions: emails to an address, anyone at a domain
+  or anyone outside it (`!acme.com`), and files copied into a folder. Each asks or never lets it happen, for every bot,
+  also with Always or "Don't ask me first"; the card says which rule asked.
 - **Cards that didn't arrive:** a chat-app card that fails to send is tried again, and a timed-out ask tells the bot
   whether you saw it or it never reached you. The app shows when a card couldn't be sent.
 - **Clearer denials:** a blocked tool says which rule blocked it (yours, a site's, or Mimir's default) and where to

@@ -474,6 +474,101 @@ pub(super) fn site_of(name: &str, args: &Value) -> Option<String> {
     (!host.is_empty()).then_some(host)
 }
 
+/// A rule about what an action is for (Settings → Permissions → Ask first rules): emails to an address, to anyone at a
+/// domain or anyone outside it (`!acme.com`), or files copied into a folder. It asks (or denies) whatever the tool's
+/// rule, Always or "Don't ask me first" say. Kept in the setting target_rules.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct TargetRule {
+    /// email | folder
+    pub kind: String,
+    pub pattern: String,
+    /// ask | deny
+    pub action: String,
+}
+
+impl TargetRule {
+    /// The rule in words, for the card, a denial and Settings.
+    pub fn label(&self) -> String {
+        let p = self.pattern.trim_start_matches(['!', '@']);
+        match (self.kind.as_str(), self.pattern.starts_with('!'), self.pattern.contains('@') && !self.pattern.starts_with('@')) {
+            ("email", true, _) => format!("Emails to anyone outside {p}"),
+            ("email", false, true) => format!("Emails to {p}"),
+            ("email", ..) => format!("Emails to anyone at {p}"),
+            _ => format!("Files copied into {}", self.pattern),
+        }
+    }
+
+    fn matches(&self, ctx: &ToolCtx, name: &str, args: &Value) -> bool {
+        match (self.kind.as_str(), name) {
+            ("email", "email_send" | "email_draft") => {
+                let to = recipients(args);
+                let p = self.pattern.to_lowercase();
+                let at = |d: &str, a: &str| a.rsplit_once('@').is_some_and(|(_, h)| h == d || h.ends_with(&format!(".{d}")));
+                match p.strip_prefix('!') {
+                    Some(d) => to.iter().any(|a| !at(d.trim_start_matches('@'), a)),
+                    None if p.contains('@') && !p.starts_with('@') => to.contains(&p),
+                    None => to.iter().any(|a| at(p.trim_start_matches('@'), a)),
+                }
+            }
+            ("folder", "file_export") => args["dest"]
+                .as_str()
+                .and_then(|d| crate::files::real_dir(&ctx.db, d).ok())
+                .is_some_and(|d| d.starts_with(&self.pattern)),
+            _ => false,
+        }
+    }
+}
+
+/// Every address an email goes to (to and cc), in lower case.
+fn recipients(args: &Value) -> Vec<String> {
+    ["to", "cc"]
+        .iter()
+        .filter_map(|k| args[*k].as_str())
+        .flat_map(|s| s.split([',', ';', ' ', '<', '>', '"']))
+        .map(|a| a.trim().trim_matches(['\'', '(', ')']).to_lowercase())
+        .filter(|a| a.contains('@'))
+        .collect()
+}
+
+pub fn target_rules(db: &Db) -> Vec<TargetRule> {
+    db.setting("target_rules").ok().flatten().and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default()
+}
+
+/// Save the rules, each checked: an email pattern is an address, a domain or !domain; a folder is a real one (kept with
+/// links resolved, like an export's destination).
+pub fn set_target_rules(db: &Db, rules: &[TargetRule]) -> Result<Vec<TargetRule>> {
+    let mut kept: Vec<TargetRule> = vec![];
+    for r in rules {
+        let pattern = r.pattern.trim().to_string();
+        if !["ask", "deny"].contains(&r.action.as_str()) {
+            bail!("a rule asks or denies");
+        }
+        let pattern = match r.kind.as_str() {
+            "email" => {
+                let d = pattern.trim_start_matches(['!', '@']);
+                if d.is_empty() || !d.contains('.') || d.contains(char::is_whitespace) || d.matches('@').count() > 1 {
+                    bail!("an email rule takes an address (dana@acme.com), a domain (acme.com) or !acme.com for anyone outside it");
+                }
+                pattern.to_lowercase()
+            }
+            "folder" => crate::files::real_dir(db, &pattern)?.display().to_string(),
+            _ => bail!("a rule is about emails or folders"),
+        };
+        let rule = TargetRule { kind: r.kind.clone(), pattern, action: r.action.clone() };
+        if !kept.contains(&rule) {
+            kept.push(rule);
+        }
+    }
+    db.set_setting("target_rules", &serde_json::to_string(&kept)?)?;
+    Ok(kept)
+}
+
+/// The rule that applies to this call, if any: a deny before an ask.
+pub(super) fn target_rule(ctx: &ToolCtx, name: &str, args: &Value) -> Option<TargetRule> {
+    let hits: Vec<TargetRule> = target_rules(&ctx.db).into_iter().filter(|r| r.matches(ctx, name, args)).collect();
+    hits.iter().find(|r| r.action == "deny").or(hits.first()).cloned()
+}
+
 /// Human-readable one-liner for an approval card.
 pub(super) fn describe(ctx: &ToolCtx, name: &str, args: &Value) -> String {
     let id = args.get("id").and_then(Value::as_i64).unwrap_or(0);
