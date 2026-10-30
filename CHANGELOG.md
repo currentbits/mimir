@@ -21,6 +21,10 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
   once to let Mimir control Mail or Messages.
 
 ### Routines
+- **A short rate limit isn't a used-up plan:** a bare "429 Too Many Requests", a rate limit or an overloaded AI is now
+  tried again in 5, 15 and 30 minutes, instead of holding every bot on that login for an hour. The plan's own limit
+  ("usage limit", out of quota, or a 429 that says when it resets) still waits for the reset. A reply hit by one says
+  the AI is busy, not that the plan is used up.
 - **Paused while you're away:** after a week without a message from you (change it under Settings → Daily digest),
   routines stop so they don't use up your AI plan on results nobody reads. Bots still answer; your next message, or
   **Resume** in Needs you, starts them again without a burst of catch-up runs.

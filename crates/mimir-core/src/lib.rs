@@ -931,7 +931,12 @@ pub fn with_document(said: &str, name: &str, text: &str) -> String {
     )
 }
 
-const QUOTA: &[&str] = &["extra usage", "usage limit", "rate limit", "quota", "429"];
+/// The plan itself is used up (until it resets): Claude's and Codex's "usage limit", ChatGPT's usage_limit_reached,
+/// an API's insufficient_quota.
+const QUOTA: &[&str] = &["extra usage", "usage limit", "usage_limit", "quota"];
+/// Too many requests right now (an API's rate limit, an overloaded service): gone in a minute or so, unless it says
+/// when it resets (#408).
+const RATE: &[&str] = &["rate limit", "rate_limit", "429", "too many requests", "overloaded", "529"];
 const SIGNED_OUT: &[&str] = &["isn't signed in", "not signed in", "not logged in", "log in", "sign in", "unauthor", "401", "rejected", "api key", "failed to authenticate"];
 const NOT_STARTED: &[&str] = &["failed to start", "not installed", "no such file"];
 const NETWORK: &[&str] = &["error sending request", "connection refused", "connection reset", "connection error", "dns", "unreachable", "couldn't connect", "network"];
@@ -948,11 +953,20 @@ pub enum Cause {
     Other,
 }
 
+/// A reset time an error carries (Claude's "…limit reached|1791650400"): a Unix time after one of its | separators.
+pub(crate) fn reset_in(error: &str) -> Option<i64> {
+    error.split('|').filter_map(|p| p.trim().get(..10)).find_map(|d| d.parse::<i64>().ok().filter(|t| *t > 1_600_000_000))
+}
+
 pub fn cause(e: &str) -> Cause {
     let l = e.to_lowercase();
     let has = |words: &[&str]| words.iter().any(|w| l.contains(w));
-    if has(QUOTA) {
+    // A bare 429 is the plan's limit only when it says when that resets; otherwise it's tried again soon, like a
+    // network error, instead of holding every bot on the login for an hour.
+    if has(QUOTA) || (has(RATE) && reset_in(e).is_some()) {
         Cause::Quota
+    } else if has(RATE) {
+        Cause::Network
     } else if has(SIGNED_OUT) || has(NOT_STARTED) || has(&["pick a model"]) {
         Cause::Setup
     } else if has(NETWORK) {
@@ -968,8 +982,10 @@ pub fn friendly_error(e: &str) -> String {
     // Anthropic bills some use of a Claude plan outside its own apps as paid "extra usage" (since April 2026).
     let (what, fix) = if has(&["extra usage"]) {
         (say::tr("My Claude plan won't cover this: Anthropic is counting it as paid extra usage, and there's none left."), say::tr("Turn on or top up extra usage in your Claude account, or give me another AI account in Mimir (ChatGPT, or an API key)."))
-    } else if has(QUOTA) {
+    } else if cause(e) == Cause::Quota {
         (say::tr("I've hit the AI plan's usage limit."), say::tr("Try again later, or give me another AI account or model in Mimir."))
+    } else if has(RATE) {
+        (say::tr("My AI is busy right now (too many requests at once)."), say::tr("Try again in a minute."))
     } else if has(SIGNED_OUT) {
         (say::tr("My AI account isn't signed in, or its key was rejected."), say::tr("Open Mimir and check my AI account (Settings, or my page)."))
     } else if has(NOT_STARTED) {
@@ -1869,7 +1885,14 @@ echo '{{"type":"result","result":"ok","session_id":"s1","usage":{{"input_tokens"
         assert!(super::friendly_error("claude error: You've hit your usage limit").starts_with("⚠️ I've hit the AI plan's usage limit."));
         use super::{Cause, cause};
         assert_eq!(cause("claude error: Claude AI usage limit reached|1791650400"), Cause::Quota);
-        assert_eq!(cause("provider 429 Too Many Requests: slow down"), Cause::Quota);
+        // A short-lived 429 (#408): tried again soon, not held as the plan's limit; with a reset time it is the limit.
+        assert_eq!(cause("provider 429 Too Many Requests: slow down"), Cause::Network);
+        assert_eq!(cause("API Error: 529 {\"type\":\"overloaded_error\"}"), Cause::Network);
+        assert_eq!(cause("Rate limit reached for gpt-5-mini on tokens per min"), Cause::Network);
+        assert_eq!(cause("provider 429: rate limited|1791650400"), Cause::Quota);
+        assert_eq!(cause("chatgpt 429: {\"type\":\"usage_limit_reached\"}"), Cause::Quota, "ChatGPT's plan limit");
+        assert_eq!(cause("openai 429: insufficient_quota"), Cause::Quota, "an API account out of credit");
+        assert!(super::friendly_error("provider 429 Too Many Requests").contains("busy right now"));
         assert_eq!(cause("error sending request for url (http://localhost:11434/v1/chat/completions)"), Cause::Network);
         assert_eq!(cause("claude isn't signed in, so the routine didn't run"), Cause::Setup);
         assert_eq!(cause("failed to start `codex` — is the Codex CLI installed"), Cause::Setup);
