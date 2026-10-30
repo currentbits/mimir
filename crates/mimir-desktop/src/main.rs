@@ -114,6 +114,30 @@ impl SecretStore for Keychain {
     }
 }
 
+/// The person, there: Touch ID, or the Mac's password where there's no Touch ID. Blocks until they answer (2 minutes
+/// at most).
+#[cfg(target_os = "macos")]
+fn touch_id(reason: &str) -> Result<(), String> {
+    use objc2_foundation::{NSError, NSString};
+    use objc2_local_authentication::{LAContext, LAPolicy};
+    let ctx = unsafe { LAContext::new() };
+    let (tx, rx) = std::sync::mpsc::channel::<bool>();
+    let reply = block2::RcBlock::new(move |ok: objc2::runtime::Bool, _err: *mut NSError| {
+        let _ = tx.send(ok.as_bool());
+    });
+    unsafe { ctx.evaluatePolicy_localizedReason_reply(LAPolicy::DeviceOwnerAuthentication, &NSString::from_str(reason), &reply) };
+    match rx.recv_timeout(std::time::Duration::from_secs(120)) {
+        Ok(true) => Ok(()),
+        Ok(false) => Err("not approved (Touch ID was cancelled or didn't match)".into()),
+        Err(_) => Err("Touch ID wasn't answered in time".into()),
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn touch_id(_reason: &str) -> Result<(), String> {
+    Err("purchases are approved with Touch ID, in the Mimir app on a Mac".into())
+}
+
 /// Every UI command goes through here. `local_bots` is desktop-only: turn the in-app
 /// runtime off while the UI is pointed at a server (two runtimes on one Telegram token conflict).
 #[tauri::command]
@@ -142,6 +166,19 @@ async fn api(app: AppHandle, host: State<'_, Host>, cmd: String, args: Value) ->
             std::process::exit(if args["errors"].as_array().is_some_and(|e| e.is_empty()) { 0 } else { 1 });
         }
         _ => {}
+    }
+    // A purchase: approved here only, after Touch ID (or the Mac's password), showing what the request kept (not what
+    // the page or the bot says). Not reachable from the web UI or a server's API.
+    if cmd == "purchase_approve" {
+        let id = args["id"].as_i64().ok_or("which purchase?")?;
+        let db = host.db.clone();
+        let reason = mimir_core::cards::reason(&db, id).ok_or("this purchase isn't waiting any more")?;
+        return tauri::async_runtime::spawn_blocking(move || {
+            touch_id(&format!("approve this purchase: {reason}"))?;
+            mimir_core::cards::approve(&db, id).map(|r| json!(r.status)).map_err(|e| format!("{e:#}"))
+        })
+        .await
+        .map_err(|e| e.to_string())?;
     }
     // A folder on this computer, picked in the system's own dialog (a bot's working folder).
     if cmd == "pick_folder" {

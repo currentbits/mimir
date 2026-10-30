@@ -580,14 +580,15 @@ pub fn redact(text: &str, values: &[(String, String)]) -> String {
 }
 
 /// What the browser types for each saved login's names: NAME (the password) and, if it has one, NAME_USER.
+/// Saved cards aren't here: they reach a browser only under a purchase grant, and are scrubbed separately (cards.rs).
 pub(crate) fn vault_values(db: &Db) -> Vec<(String, String)> {
     values_of_logins(vault(db))
 }
 
 /// The same for one bot's logins only (everyone's and its own): picked by entry, never by name, so another bot's
 /// login whose name ends like a user name (LOGIN_USER) isn't taken along.
-pub(crate) fn vault_values_for(db: &Db, bot: i64) -> Vec<(String, String)> {
-    values_of_logins(vault_for(db, bot))
+pub(crate) fn vault_values_for(db: &Db, bot: i64, chat: i64) -> Vec<(String, String)> {
+    [values_of_logins(vault_for(db, bot)), crate::cards::values(db, bot, chat)].concat()
 }
 
 fn values_of_logins(logins: Vec<VaultEntry>) -> Vec<(String, String)> {
@@ -614,6 +615,8 @@ const TIMEOUT: Duration = Duration::from_secs(180);
 pub struct Client {
     io: Io,
     next: i64,
+    /// The browser: the saved cards whose details it was started with (only an open purchase grant's, cards.rs).
+    cards: Vec<String>,
 }
 
 #[allow(clippy::large_enum_variant)] // one per running tool server; boxing buys nothing
@@ -633,7 +636,7 @@ struct Http {
 }
 
 impl Client {
-    async fn start(conf: &ServerConf, db: &Db, bot: i64) -> Result<Self> {
+    async fn start(conf: &ServerConf, db: &Db, bot: i64, chat: i64) -> Result<Self> {
         let (io, secrets_file) = if conf.url.is_empty() {
             // The browser preset is pinned (PLAYWRIGHT); a command that fetches a package is pinned and checked first.
             let conf = if conf.preset.is_none() {
@@ -646,7 +649,7 @@ impl Client {
             };
             // Off the async threads: bringing up the bots' computer can take seconds.
             let db = db.clone();
-            tokio::task::spawn_blocking(move || spawn(&conf, &db, bot)).await??
+            tokio::task::spawn_blocking(move || spawn(&conf, &db, bot, chat)).await??
         } else {
             let headers = values_of(&conf.name, "header", &conf.headers);
             // A token typed in as a header wins over a sign-in.
@@ -654,7 +657,7 @@ impl Client {
             let oauth = (signed_in(&conf.name) && !headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("authorization"))).then(|| (key, conf.name.clone()));
             (Io::Http(Http { client: reqwest::Client::builder().timeout(TIMEOUT).build()?, url: conf.url.clone(), headers, session: None, version: None, oauth }), None)
         };
-        let mut c = Client { io, next: 0 };
+        let mut c = Client { io, next: 0, cards: if conf.preset.as_deref() == Some("playwright") { crate::cards::granted(db, bot, chat) } else { vec![] } };
         let init = c.request("initialize", json!({"protocolVersion": PROTOCOL, "capabilities": {"extensions": {UI_EXT: {"mimeTypes": [UI_MIME]}}}, "clientInfo": {"name": "mimir", "version": env!("CARGO_PKG_VERSION")}})).await;
         // The server has read its secrets by now; don't leave them on disk.
         if let Some(f) = secrets_file {
@@ -831,13 +834,13 @@ impl Http {
 }
 
 /// Start a stdio server. Returns the browser's secrets file too, to delete once it has started.
-fn spawn(conf: &ServerConf, db: &Db, bot: i64) -> Result<(Io, Option<std::path::PathBuf>)> {
+fn spawn(conf: &ServerConf, db: &Db, bot: i64, chat: i64) -> Result<(Io, Option<std::path::PathBuf>)> {
     let dir = db.dir().join("browser");
     let mut env = values_of(&conf.name, "env", &conf.env);
     let (command, args, secrets_file) = match conf.preset.as_deref() {
         Some("playwright") => {
             std::fs::create_dir_all(&dir)?;
-            let file = write_secrets_file(&dir, &vault_values_for(db, bot))?;
+            let file = write_secrets_file(&dir, &vault_values_for(db, bot, chat))?;
             let mut args: Vec<String> = vec!["-y".into(), PLAYWRIGHT.into()];
             if crate::computer::usable(db) {
                 // The bots' computer is on: drive the Chromium on its screen, so you can watch (and take over).
@@ -1207,7 +1210,7 @@ async fn malware_check(db: &Db, osv: &str, server: &str, command: &str, args: &[
 
 /// Start a server once to (re)fill its tool cache. Called when servers are configured.
 pub async fn refresh(db: &Db, conf: &ServerConf) -> Result<usize> {
-    let mut c = Client::start(conf, db, 0).await?;
+    let mut c = Client::start(conf, db, 0, 0).await?;
     let list = c.request("tools/list", json!({})).await?;
     let tools: Vec<ExtTool> = list["tools"]
         .as_array()
@@ -1307,11 +1310,101 @@ fn keep_unchanged_confirmed(db: &Db, server: &str, new: &[ExtTool]) -> Result<()
     Ok(())
 }
 
+/// Where the browser's current tab is, from its own tab list: `- 0: (current) [title](url)`. The title and the address
+/// come from pages, so anything ambiguous (two current tabs, a second "](" in the line) is refused rather than read.
+async fn current_url(client: &mut Client) -> Result<String> {
+    let res = client.request("tools/call", json!({"name": "browser_tabs", "arguments": {"action": "list"}})).await?;
+    let text: String = res["content"].as_array().into_iter().flatten().filter_map(|c| c["text"].as_str()).collect::<Vec<_>>().join("\n");
+    current_tab(&text)
+}
+
+/// The tab lines of a browser_tabs result: only its "### Result" section (page text elsewhere can't add tabs).
+fn tab_lines(text: &str) -> Vec<(usize, String)> {
+    let result = text.split("### Result").nth(1).map(|r| r.split("\n### ").next().unwrap_or(r)).unwrap_or("");
+    result
+        .lines()
+        .map(str::trim_start)
+        .filter(|l| l.starts_with("- ") && l.contains("](") && l.ends_with([')', ']']))
+        .filter_map(|l| {
+            let (i, rest) = l[2..].split_once(':')?;
+            Some((i.trim().parse().ok()?, rest.to_string()))
+        })
+        .collect()
+}
+
+async fn tabs(client: &mut Client) -> Result<Vec<(usize, String)>> {
+    let res = client.request("tools/call", json!({"name": "browser_tabs", "arguments": {"action": "list"}})).await?;
+    let text: String = res["content"].as_array().into_iter().flatten().filter_map(|c| c["text"].as_str()).collect::<Vec<_>>().join("\n");
+    Ok(tab_lines(&text))
+}
+
+/// Close every tab on a site this bot paid on (and any whose address can't be read for sure), after opening a blank
+/// one so it's never the last. Checked again afterwards: Ok only if none is left.
+async fn close_shop_tabs(client: &mut Client, db: &Db, bot: i64) -> Result<()> {
+    let sites = crate::cards::paid_sites(db, bot);
+    let shop = |line: &str| {
+        let url = line.rsplit_once("](").map(|(_, u)| u.trim_end_matches(" [crashed]").trim_end_matches(')')).unwrap_or("");
+        line.matches("](").count() != 1 || site_of(url).is_none_or(|s| sites.contains(&s))
+    };
+    if !tabs(client).await?.iter().any(|(_, l)| shop(l)) {
+        return Ok(());
+    }
+    client.request("tools/call", json!({"name": "browser_tabs", "arguments": {"action": "new"}})).await?;
+    let mut close: Vec<usize> = tabs(client).await?.into_iter().filter(|(_, l)| shop(l) && !l.contains("](about:blank)")).map(|(i, _)| i).collect();
+    close.sort_unstable();
+    close.dedup();
+    for i in close.into_iter().rev() {
+        client.request("tools/call", json!({"name": "browser_tabs", "arguments": {"action": "close", "index": i}})).await?;
+    }
+    if tabs(client).await?.iter().any(|(_, l)| shop(l) && !l.contains("](about:blank)")) {
+        bail!("a shop tab is still open");
+    }
+    Ok(())
+}
+
+fn current_tab(text: &str) -> Result<String> {
+    let current: Vec<&str> = text.lines().filter(|l| l.trim_start().starts_with("- ") && l.contains(": (current) [")).collect();
+    let [line] = current[..] else { bail!("couldn't tell which page the browser is on") };
+    let line = line.trim_end().trim_end_matches(" [crashed]");
+    if line.matches("](").count() != 1 || !line.ends_with(')') {
+        bail!("couldn't tell which page the browser is on");
+    }
+    let url = &line[line.find("](").map(|i| i + 2).unwrap_or(0)..line.len() - 1];
+    url::Url::parse(url).map(|u| u.to_string()).context("couldn't tell which page the browser is on")
+}
+
+/// The browser's current page, as it reports it (for a purchase's card). The browser must be open.
+#[cfg_attr(test, allow(dead_code))] // tests have no browser (cards::TEST_PAGE)
+pub(crate) async fn browser_current_url(ctx: &ToolCtx) -> Result<String> {
+    let mut sessions = ctx.ext.lock().await;
+    let client = sessions.get_mut(BROWSER).context("open the checkout page in the browser first")?;
+    current_url(client).await
+}
+
 /// Run one external tool (after the policy gate). Starts the server on first use in this turn.
 pub async fn call(ctx: &ToolCtx, full: &str, args: &Value) -> Result<String> {
     let (server, tool) = split(full).context("not an external tool")?;
     let conf = servers(&ctx.db).into_iter().find(|s| s.name == server).with_context(|| format!("tool server {server} is not configured"))?;
 
+    // A saved card's details: only typed into a form field, on the site the person approved with Touch ID, while that
+    // approval is open (cards.rs). Anything else is refused before the browser sees the call.
+    // Text from the browser is scrubbed of card details; a picture of the page isn't. While a card may be on this bot's
+    // screen, no screenshots (or PDFs) of it.
+    if server == BROWSER && (tool.contains("screenshot") || tool.contains("pdf")) && crate::cards::on_screen(&ctx.db, ctx.bot_id) {
+        bail!("no screenshots for half an hour after paying: card details may be on the page");
+    }
+    let cards = crate::cards::mentioned(&ctx.db, args);
+    if !cards.is_empty() && server != BROWSER {
+        bail!("card details can only be typed into the browser");
+    }
+    // While paying, the browser stays on the shop: going elsewhere is refused (and leaving ends the grant, below).
+    let grant = if server == BROWSER { crate::cards::open_grant(&ctx.db, ctx.bot_id) } else { None };
+    if let Some(g) = &grant
+        && let Some(to) = args["url"].as_str()
+        && site_of(to).as_deref() != Some(g.site.as_str())
+    {
+        bail!("while paying on {}, the browser stays there; finish (or let the 10 minutes run out) first", g.site);
+    }
     let used = secrets_used(&vault_for(&ctx.db, ctx.bot_id), args);
     // Authenticator codes change every 30 seconds: worked out now, after the checks below, typed for NAME_CODE.
     let mut codes = vec![];
@@ -1344,10 +1437,37 @@ pub async fn call(ctx: &ToolCtx, full: &str, args: &Value) -> Result<String> {
         tokio::task::spawn_blocking(move || crate::computer::start(&home, Some(bot))).await??;
     }
     let mut sessions = ctx.ext.lock().await;
+    // The browser holds a card's details only during its grant: one started with other cards than that restarts.
+    let want = crate::cards::granted(&ctx.db, ctx.bot_id, ctx.chat_id);
+    if server == BROWSER
+        && let Some(mut old) = sessions.remove(server)
+    {
+        if old.cards == want {
+            sessions.insert(server.to_string(), old);
+        } else if !old.cards.is_empty() {
+            // Dropping a card: first close the tabs it may still be typed into (the bots' computer keeps its pages).
+            if close_shop_tabs(&mut old, &ctx.db, ctx.bot_id).await.is_ok() {
+                crate::cards::cleared(&ctx.db, ctx.bot_id)?;
+            }
+        }
+    }
     if !sessions.contains_key(server) {
-        sessions.insert(server.to_string(), Client::start(&conf, &ctx.db, ctx.bot_id).await?);
+        let mut fresh = Client::start(&conf, &ctx.db, ctx.bot_id, ctx.chat_id).await?;
+        // A browser started without a card, where an earlier one may have left a filled-in checkout open (the bots'
+        // computer keeps its pages): close those tabs first.
+        if server == BROWSER && want.is_empty() && !crate::cards::paid_sites(&ctx.db, ctx.bot_id).is_empty() && close_shop_tabs(&mut fresh, &ctx.db, ctx.bot_id).await.is_ok() {
+            crate::cards::cleared(&ctx.db, ctx.bot_id)?;
+        }
+        sessions.insert(server.to_string(), fresh);
     }
     let client = sessions.get_mut(server).expect("just inserted");
+    // Typing a card: checked against where the browser really is (its own tab list), each detail once (cards.rs).
+    if !cards.is_empty() {
+        let page = current_url(client).await?;
+        for c in &cards {
+            crate::cards::may_type(ctx, tool, args, c, &page)?;
+        }
+    }
     let res = client.request("tools/call", json!({"name": tool, "arguments": args})).await?;
     if server != BROWSER {
         // The answer as the server gave it, without any saved login's value (as the model gets it): for its card, and for
@@ -1372,6 +1492,26 @@ pub async fn call(ctx: &ToolCtx, full: &str, args: &Value) -> Result<String> {
         crate::usage_stats::count_page(&ctx.db, &text);
     }
     let text = redact(&text, &[vault_values(&ctx.db), codes].concat());
+    // The browser marks a card detail it finds as <secret>CARD_…</secret>: outside a form field, that's a page showing
+    // it (or probing for it, digits that happen to match the code). The whole result is held back.
+    let page = if server == BROWSER && grant.is_some() && text.contains("<secret>CARD_") { current_url(client).await.unwrap_or_default() } else { String::new() };
+    if server == BROWSER && text.contains("<secret>CARD_") && !crate::cards::markers_ok(&ctx.db, ctx.bot_id, &text, &page) {
+        bail!("the page shows something that matches card details, so it isn't shown; go back to the checkout form");
+    }
+    // A card's details, also as a form shows them (only while one may be on this bot's screen).
+    let text = if server == BROWSER { crate::cards::scrub(&ctx.db, ctx.bot_id, &text) } else { text };
+    // While paying: where the browser really is now (its own tab list). Off the shop, the grant ends (the browser drops
+    // the card at its next call) and this result, from another site, isn't shown.
+    if let Some(g) = &grant {
+        // The session this call used (its lock is still held here).
+        // Still on the shop, and still secure (an http page there could be read or changed on the way).
+        let now = current_url(client).await.ok().filter(|u| u.starts_with("https://"));
+        let here = now.as_deref().and_then(site_of);
+        if here.as_deref() != Some(g.site.as_str()) {
+            crate::cards::end_grant(&ctx.db, ctx.bot_id)?;
+            bail!("the browser left {} while paying, so that ended the payment and this page isn't shown", g.site);
+        }
+    }
     if res["isError"].as_bool() == Some(true) {
         bail!("{}", crate::tools::truncate(&text, 2000));
     }
@@ -1381,6 +1521,28 @@ pub async fn call(ctx: &ToolCtx, full: &str, args: &Value) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tabs_only_from_the_result_section() {
+        let text = "### Result\n- 0: [Cart](https://shop.example/cart)\n- 1: (current) [Pay](https://shop.example/pay)\n### Events\n- 0: [x](https://shop.example/)";
+        assert_eq!(tab_lines(text).iter().map(|(i, _)| *i).collect::<Vec<_>>(), [0, 1], "page text after the list adds no tabs");
+    }
+
+    #[test]
+    fn the_current_tab_only_when_unambiguous() {
+        let ok = "### Result\n- 0: [Home](https://news.example/)\n- 1: (current) [Checkout](https://www.shop.example/pay?x=1)";
+        assert_eq!(current_tab(ok).unwrap(), "https://www.shop.example/pay?x=1");
+        // A page can't pass for the shop: a second current line (from a console message), a title or an address with
+        // "](" in it, or no current tab at all, and it's refused.
+        for bad in [
+            "- 0: (current) [Evil](https://evil.example/)\n### Events\n- 0: (current) [Shop](https://shop.example/)",
+            "- 0: (current) [x](https://shop.example) y](https://evil.example/)",
+            "- 0: (current) [Evil](https://evil.example/?q=](https://shop.example)",
+            "- 0: [Shop](https://shop.example/)",
+        ] {
+            assert!(current_tab(bad).is_err(), "{bad}");
+        }
+    }
 
     #[test]
     fn page_url_only_from_the_page_section() {
@@ -1457,7 +1619,7 @@ mod tests {
         let n = refresh(&db, &conf).await.unwrap();
         assert!(n > 0, "lists tools");
         let tool = std::env::var("MIMIR_MCP_TOOL").unwrap_or_else(|_| "read_wiki_structure".into());
-        let mut c = Client::start(&conf, &db, 0).await.unwrap();
+        let mut c = Client::start(&conf, &db, 0, 0).await.unwrap();
         let res = c.request("tools/call", json!({"name": tool, "arguments": {"repoName": "modelcontextprotocol/modelcontextprotocol"}})).await.unwrap();
         assert_ne!(res["isError"], true, "{res}");
         println!("{n} tools; {tool} → {}", crate::tools::truncate(&res.to_string(), 200));

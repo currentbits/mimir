@@ -901,10 +901,62 @@ function BrowserSettings({ onChange }: { onChange: () => void }) {
             </div></div>
           </form>
           {on && <ImportLogins onDone={vault.reload} />}
+          {on && <PayCards />}
         </>
       )}
       {err && <div className="row-block"><p className="error" style={{ margin: 0 }}>{err}</p></div>}
     </Group>
+  )
+}
+
+type PayCard = { name: string; label: string; last4: string; currency: string; max_cents: number; day_cents: number; sites: string[] }
+type Purchase = { approval: number; card: string; site: string; cents: number; currency: string; what: string; asked_at: number; status: string }
+const money = (c: number, cur: string) => `${cur} ${(c / 100).toFixed(2)}`
+
+/** Cards bots may pay with: added and approved only in the Mac app (Touch ID for every purchase), details never shown. */
+function PayCards() {
+  const data = useLoad(() => invoke<{ cards: PayCard[]; log: Purchase[]; here: boolean }>('pay_cards'), [], 60000)
+  const blank = { label: '', number: '', exp: '', cvc: '', holder: '', zip: '', currency: 'EUR', max: '50', day: '100', sites: '' }
+  const [f, setF] = useState(blank)
+  const [adding, setAdding] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+  const here = !!data.data?.here && inDesktop && !remoteServer()
+  const toCents = (s: string) => Math.round(parseFloat(s.replace(',', '.')) * 100)
+  const save = () => invoke('pay_card_save', {
+    card: { label: f.label || 'Card', currency: f.currency, max_cents: toCents(f.max), day_cents: toCents(f.day), sites: f.sites.split(/[,\s]+/).filter(Boolean) },
+    secret: { number: f.number, exp: f.exp, cvc: f.cvc, holder: f.holder, zip: f.zip },
+  }).then(() => { setF(blank); setAdding(false); setErr(null); data.reload() }, e => setErr(String(e)))
+  const cards = data.data?.cards ?? []
+  if (!here && !cards.length) return null
+  return (
+    <div className="row-block">
+      <Row icon={<Icon name="shield" size={15} />} title="Cards to pay with" desc={here
+        ? 'Bots never see the details: the browser gets them only after you approve a purchase with Touch ID, types each once, only into the shop’s own page, for 10 minutes. The limits count what the bot asked to pay, not what the shop charges: use a virtual card, or one with a low limit set by your bank. Any field on the approved site can take it, so approve only a site you trust. Checkouts that take the card in a payment provider’s box aren’t supported yet; the bot hands those to you.'
+        : 'Cards are added and purchases approved only in the Mimir app on a Mac (Touch ID).'} />
+      {cards.map(c => (
+        <Row key={c.name} title={`${c.label} •••• ${c.last4}`} desc={`${c.name} · up to ${money(c.max_cents, c.currency)} a purchase, ${money(c.day_cents, c.currency)} a day${c.sites.length ? ` · only on ${c.sites.join(', ')}` : ''}`}>
+          <button className="btn btn-sm btn-ghost btn-danger" onClick={() => ask(`Remove ${c.label} •••• ${c.last4}? Its details are deleted from this Mac.`, 'Remove', true).then(ok => { if (ok) void invoke('pay_card_delete', { name: c.name }).then(data.reload, e => setErr(String(e))) })}>Remove</button>
+        </Row>
+      ))}
+      {here && (adding ? <form onSubmit={e => { e.preventDefault(); void save() }} style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8, marginTop: 8 }}>
+        <input className="input" aria-label="Name for this card" placeholder="Name (e.g. Visa personal)" value={f.label} onChange={e => setF({ ...f, label: e.target.value })} />
+        <input className="input" aria-label="Card number" placeholder="Card number" inputMode="numeric" autoComplete="off" value={f.number} onChange={e => setF({ ...f, number: e.target.value })} />
+        <input className="input" aria-label="Expiry" placeholder="MM/YY" autoComplete="off" value={f.exp} onChange={e => setF({ ...f, exp: e.target.value })} />
+        <input className="input" aria-label="Security code" type="password" placeholder="CVC" autoComplete="off" value={f.cvc} onChange={e => setF({ ...f, cvc: e.target.value })} />
+        <input className="input" aria-label="Name on the card" placeholder="Name on the card" autoComplete="off" value={f.holder} onChange={e => setF({ ...f, holder: e.target.value })} />
+        <input className="input" aria-label="Postcode" placeholder="Billing postcode" autoComplete="off" value={f.zip} onChange={e => setF({ ...f, zip: e.target.value })} />
+        <input className="input" aria-label="Currency" placeholder="EUR" value={f.currency} onChange={e => setF({ ...f, currency: e.target.value })} />
+        <input className="input" aria-label="Only on these sites" placeholder="Only on sites (optional)" value={f.sites} onChange={e => setF({ ...f, sites: e.target.value })} />
+        <label className="hint">Most per purchase <input className="input" inputMode="decimal" aria-label="Most per purchase" value={f.max} onChange={e => setF({ ...f, max: e.target.value })} /></label>
+        <label className="hint">Most per day <input className="input" inputMode="decimal" aria-label="Most per day" value={f.day} onChange={e => setF({ ...f, day: e.target.value })} /></label>
+        <button type="button" className="btn btn-sm btn-ghost" onClick={() => { setF(blank); setAdding(false) }}>Cancel</button>
+        <button className="btn btn-sm" disabled={!f.number || !f.exp || !f.cvc || !f.holder}>Save card</button>
+      </form> : <button type="button" className="btn btn-sm btn-ghost" onClick={() => setAdding(true)}>Add a card…</button>)}
+      {!!data.data?.log.length && <details style={{ marginTop: 8 }}><summary className="hint">Purchases ({data.data.log.length})</summary>
+        {data.data.log.map((p, i) => <Row key={i} title={`${money(p.cents, p.currency)} at ${p.site}`} desc={`${p.what} · ${p.card} · ${p.status} · ${fullTime(p.asked_at)}`} />)}
+      </details>}
+      {err && <p className="error" style={{ margin: '8px 0 0' }}>{err}</p>}
+    </div>
   )
 }
 
