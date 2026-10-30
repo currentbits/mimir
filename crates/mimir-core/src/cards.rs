@@ -254,6 +254,9 @@ pub(crate) async fn request(ctx: &crate::tools::ToolCtx, args: &serde_json::Valu
     let page = TEST_PAGE.lock().unwrap().clone().context("no page")?;
     #[cfg(not(test))]
     let page = crate::ext::browser_current_url(ctx).await?;
+    if !page.starts_with("https://") {
+        bail!("this checkout page isn't secure (no https): don't pay here; tell the person");
+    }
     let site = crate::ext::site_of(&page).context("the checkout page has no website address")?;
     let c = card(&ctx.db, &name)?;
     within(&c, &site, cents, &currency, spent_today(&ctx.db.c(), &name)?)?;
@@ -406,6 +409,9 @@ pub(crate) fn mentioned(db: &crate::db::Db, args: &serde_json::Value) -> Vec<Str
 /// Card details may be typed by this call, or why not; recorded as typed (each detail once). `site`: where the
 /// browser is, from its own tab list.
 pub(crate) fn may_type(ctx: &crate::tools::ToolCtx, tool: &str, args: &serde_json::Value, card: &str, page: &str) -> Result<()> {
+    if !page.starts_with("https://") {
+        bail!("card details only go into a secure page (https)");
+    }
     let site = crate::ext::site_of(page);
     let site = site.as_deref();
     if !matches!(tool, "browser_type" | "browser_fill_form") {
@@ -437,6 +443,12 @@ pub(crate) fn may_type(ctx: &crate::tools::ToolCtx, tool: &str, args: &serde_jso
     let fields: Vec<&str> = all.iter().flat_map(|s| placeholders(s, &names)).filter(|(c, f)| c == card && !f.is_empty()).map(|(_, f)| f).collect();
     if fields.is_empty() {
         bail!("type a card detail by its placeholder, like {card}_NUMBER");
+    }
+    let mut seen = fields.clone();
+    seen.sort_unstable();
+    seen.dedup();
+    if seen.len() != fields.len() {
+        bail!("each card detail goes into one field only");
     }
     let typed: Vec<&str> = p.typed.split(',').filter(|t| !t.is_empty()).collect();
     if let Some(again) = fields.iter().find(|f| typed.contains(f)) {
@@ -488,6 +500,40 @@ pub(crate) fn marker_allowed(db: &crate::db::Db, bot: i64, line: &str, page: &st
         && v.starts_with("<secret>CARD_")
         && v.ends_with("</secret>")
         && v.matches("<secret>").count() == 1
+}
+
+/// Every card marker in a browser result is where it may be: on a field this bot typed into (on this page), or as the
+/// value shown nested under such a field ("- text: <secret>…</secret>"). Anything else is a page showing (or probing
+/// for) a detail.
+pub(crate) fn markers_ok(db: &crate::db::Db, bot: i64, text: &str, page: &str) -> bool {
+    let indent = |l: &str| l.len() - l.trim_start().len();
+    let mut field: Option<(usize, &str)> = None;
+    for l in text.lines() {
+        if field_line(l) {
+            field = Some((indent(l), l));
+        } else if field.is_some_and(|(f, _)| indent(l) <= f) {
+            field = None;
+        }
+        if !l.contains("<secret>CARD_") {
+            continue;
+        }
+        let ok = if field_line(l) {
+            marker_allowed(db, bot, l, page)
+        } else {
+            // A value under its field: judged as that field's value.
+            match (field, l.trim_start().strip_prefix("- text: ")) {
+                (Some((_, parent)), Some(value)) => {
+                    let head = parent.trim_end().trim_end_matches(':').rsplit_once(": ").map_or(parent.trim_end().trim_end_matches(':'), |(h, _)| h);
+                    marker_allowed(db, bot, &format!("{head}: {value}"), page)
+                }
+                _ => false,
+            }
+        };
+        if !ok {
+            return false;
+        }
+    }
+    true
 }
 
 /// A line of the browser's page snapshot that is a form field itself.
@@ -700,6 +746,14 @@ mod tests {
         assert!(super::marker_allowed(&db, 1, "- textbox \"Card number\" [ref=e12]: <secret>CARD_4444_NUMBER</secret>", PAY));
         assert!(super::marker_allowed(&db, 1, "  - textbox \"CVC\" [ref=e14]: <secret>CARD_4444_CVC</secret>", PAY));
         assert!(super::marker_allowed(&db, 1, "  - textbox \"CVC\" [ref=e14]: <secret>CARD_4444_CVC</secret>", &format!("{PAY}#step-2")), "the same page at another step");
+        // A value shown under its field counts as that field's; page text with a marker doesn't.
+        assert!(super::markers_ok(&db, 1, "- textbox \"CVC\" [ref=e14]:\n  - /placeholder: CVC\n  - text: <secret>CARD_4444_CVC</secret>", PAY));
+        assert!(!super::markers_ok(&db, 1, "- paragraph:\n  - text: <secret>CARD_4444_CVC</secret>", PAY));
+        assert!(!super::markers_ok(&db, 1, "- textbox \"kq\" [ref=e5]:\n  - text: <secret>CARD_4444_CVC</secret>", PAY));
+        // Not over plain http, and each detail into one field only.
+        assert!(super::may_type(&ctx, "browser_type", &type_("ZIP"), "CARD_4444", "http://www.shop.example/checkout").is_err());
+        let twice = serde_json::json!({"fields": [{"target": "e30", "value": "CARD_4444_NAME"}, {"target": "e31", "value": "CARD_4444_NAME"}]});
+        assert!(super::may_type(&ctx, "browser_fill_form", &twice, "CARD_4444", PAY).unwrap_err().to_string().contains("one field only"));
         // The same ref on another page of the shop (refs restart per page) isn't that field.
         assert!(!super::marker_allowed(&db, 1, "  - textbox \"CVC\" [ref=e14]: <secret>CARD_4444_CVC</secret>", "https://www.shop.example/listing/9"));
         for bad in [

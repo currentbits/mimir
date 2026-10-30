@@ -1495,7 +1495,7 @@ pub async fn call(ctx: &ToolCtx, full: &str, args: &Value) -> Result<String> {
     // The browser marks a card detail it finds as <secret>CARD_…</secret>: outside a form field, that's a page showing
     // it (or probing for it, digits that happen to match the code). The whole result is held back.
     let page = if server == BROWSER && grant.is_some() && text.contains("<secret>CARD_") { current_url(client).await.unwrap_or_default() } else { String::new() };
-    if server == BROWSER && text.lines().any(|l| l.contains("<secret>CARD_") && !crate::cards::marker_allowed(&ctx.db, ctx.bot_id, l, &page)) {
+    if server == BROWSER && text.contains("<secret>CARD_") && !crate::cards::markers_ok(&ctx.db, ctx.bot_id, &text, &page) {
         bail!("the page shows something that matches card details, so it isn't shown; go back to the checkout form");
     }
     // A card's details, also as a form shows them (only while one may be on this bot's screen).
@@ -1504,7 +1504,9 @@ pub async fn call(ctx: &ToolCtx, full: &str, args: &Value) -> Result<String> {
     // the card at its next call) and this result, from another site, isn't shown.
     if let Some(g) = &grant {
         // The session this call used (its lock is still held here).
-        let here = current_url(client).await.ok().and_then(|u| site_of(&u));
+        // Still on the shop, and still secure (an http page there could be read or changed on the way).
+        let now = current_url(client).await.ok().filter(|u| u.starts_with("https://"));
+        let here = now.as_deref().and_then(site_of);
         if here.as_deref() != Some(g.site.as_str()) {
             crate::cards::end_grant(&ctx.db, ctx.bot_id)?;
             bail!("the browser left {} while paying, so that ended the payment and this page isn't shown", g.site);
