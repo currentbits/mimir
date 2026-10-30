@@ -22,6 +22,7 @@ const SETTING_WORDS: Record<string, string> = {
   'Daily digest': 'quiet hours notifications summary weekly review do not disturb',
   'Limits': 'cap budget tokens cost usage limit plan subscription quota five hour weekly cheaper model haiku',
   'Permissions': 'allow ask deny approve rules tools safety always',
+  'Main bot': 'main primary first contact coordinator team bots tidy',
   'Export folders': 'export copy files folder skills file_export',
   'Ask first rules': 'email domain outside recipient folder ask deny rule target',
   'Browser': 'playwright chromium saved logins passwords vault',
@@ -98,6 +99,7 @@ export function SettingsView({ onComputer, find = '' }: { onComputer: () => void
       {inDesktop && !remoteServer() && <AppSettings />}
       {inDesktop && <UpdateSettings />}
       <DigestSettings />
+      <MainBotSettings />
       <DecisionsSettings />
       <LanguageSettings />
       <LimitsSettings />
@@ -368,6 +370,23 @@ function DigestSettings() {
       </Row>
       <Row icon={<Icon name="memory" size={15} />} title="Weekly “what I learned”" desc="Once a week at that time, each Telegram, Slack or Discord chat gets a list of what your bots learned there on their own. Reply /undo with a number to take one back.">
         {weekly !== null && <Switch label="Weekly what I learned" checked={weekly} onChange={v => { setWeekly(v); invoke<boolean>('weekly_review', { on: v }).then(setWeekly, () => setWeekly(!v)) }} />}
+      </Row>
+    </Group>
+  )
+}
+
+/** The bot that's your first point of contact: it sees how the others are doing, and runs the daily memory tidy-up. */
+function MainBotSettings() {
+  const bots = useLoad(() => invoke<Bot[]>('bots'), [], 60000)
+  const main = useLoad(() => invoke<number | null>('main_bot'), [], 60000)
+  const [msg, setMsg] = useState<string | null>(null)
+  if ((bots.data ?? []).length < 2) return null
+  return (
+    <Group title="Main bot" note="Your first point of contact when you have several bots: it hands work to the one that fits, tells you when another bot's runs fail or it's waiting for you, and runs the daily memory tidy-up. Ask it to check in every morning if you'd like that.">
+      <Row icon={<Icon name="user" size={15} />} title="Main bot" desc={msg ?? 'The others know to point you there for how things are going.'}>
+        <select className="select" style={{ width: 'auto' }} aria-label="Main bot" value={main.data ?? ''} onChange={e => invoke<number>('main_bot', { botId: Number(e.target.value) }).then(() => { setMsg(null); main.reload() }, x => setMsg(String(x)))}>
+          {(bots.data ?? []).map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+        </select>
       </Row>
     </Group>
   )

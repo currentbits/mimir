@@ -1002,6 +1002,47 @@ pub fn friendly_error(e: &str) -> String {
     format!("⚠️ {what} {fix}\n\n_{}_", tools::truncate(e.lines().next().unwrap_or(e), 160))
 }
 
+/// For a team of bots: the main one (setting memory_bot, else the first: Settings → Main bot) is the person's first
+/// point of contact and sees how the others are doing (failed runs and waiting asks in the last day, from Needs you);
+/// the others know who it is. Only in a chat with the person alone.
+fn main_bot_note(ctx: &ToolCtx, bot: &db::Bot) -> Result<String> {
+    let Some(main) = tidy::memory_bot(&ctx.db) else { return Ok(String::new()) };
+    if ctx.depth > 0 || ctx.incognito() || ctx.db.chat_guest(ctx.chat_id) || !ctx.db.chat_private(ctx.chat_id) {
+        return Ok(String::new());
+    }
+    let bots = ctx.db.bots()?;
+    if main != bot.id {
+        let name = bots.iter().find(|b| b.id == main).map(|b| b.name.as_str()).unwrap_or("");
+        return Ok(format!("\n{name} is the person's main bot: if they ask what all their bots are up to, point them there."));
+    }
+    let since = db::now() - 86400;
+    let failed = ctx.db.runs_failed(since)?;
+    let asks = ctx.db.approvals_pending()?;
+    let status: Vec<String> = bots
+        .iter()
+        .filter(|b| b.id != bot.id)
+        .filter_map(|b| {
+            let f: Vec<&db::Run> = failed.iter().filter(|r| r.bot_id == b.id).collect();
+            let a = asks.iter().filter(|x| x.bot_id == b.id).count();
+            let mut parts = vec![];
+            if let Some(last) = f.first() {
+                parts.push(format!("{} run(s) didn't work (latest: {})", f.len(), tools::truncate(last.error.as_deref().unwrap_or(&last.status).lines().next().unwrap_or(""), 120)));
+            }
+            if a > 0 {
+                parts.push(format!("{a} ask(s) waiting for the person"));
+            }
+            (!parts.is_empty()).then(|| format!("- {}: {}", b.name, parts.join("; ")))
+        })
+        .collect();
+    Ok(format!(
+        "\n\n<main_bot>\nYou're the person's main bot: their first point of contact for everything. When a request fits another \
+         bot's job better, hand it over with ask_bot (in_own_chat when they'll want to see that bot's work) and say so. When \
+         they ask how things are going, or something below needs them, tell them in a line or two.\nThe other bots, last \
+         24 hours: {}\n</main_bot>",
+        if status.is_empty() { "all fine, nothing waiting.".to_string() } else { format!("\n{}", status.join("\n")) }
+    ))
+}
+
 /// What the person hasn't connected yet, and where to: asked for one, a bot says so in the setting's own words (the app
 /// turns "Settings → Email" into a button) instead of guessing, and tries again once it's connected. Only where those
 /// would be offered at all: a chat with the person alone, not a guest's, not incognito, not a task from another bot.
@@ -1204,7 +1245,7 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
             .filter(|b| b.id != bot.id)
             .map(|b| format!("- {}: {}", b.name, if b.persona.trim().is_empty() { "general assistant" } else { b.persona.lines().next().unwrap_or("") }))
             .collect();
-        if others.is_empty() { String::new() } else { format!("\n\n<team>\nOther bots you can hand tasks to with ask_bot:\n{}\n</team>", others.join("\n")) }
+        if others.is_empty() { String::new() } else { format!("\n\n<team>\nOther bots you can hand tasks to with ask_bot:\n{}\n</team>{}", others.join("\n"), main_bot_note(ctx, &bot)?) }
     } else {
         String::new()
     };
@@ -1697,6 +1738,28 @@ echo '{{"type":"result","result":"ok","session_id":"s1","usage":{{"input_tokens"
         let now = super::db::now();
         assert_eq!(super::late(now - 60, now), "", "on time");
         assert!(super::late(now - 3 * 3600, now).starts_with(", due at "), "hours late");
+    }
+
+    #[test]
+    fn the_main_bot_hears_how_the_others_are_doing() {
+        let p = std::env::temp_dir().join(format!("mimir-mainbot-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let d = super::db::Db::open(&p).unwrap();
+        let me = d.bot(1).unwrap();
+        let scout = d.bot_save(&super::db::Bot { id: 0, name: "Scout".into(), persona: String::new(), provider: "openai".into(), model: "m".into(), base_url: String::new(), tools: String::new(), look: String::new(), workdir: String::new(), file_write: String::new() }).unwrap();
+        let run = d.run_start(scout, 0, "routine", None, "test").unwrap();
+        d.run_finish(run, Err("provider 500: the AI fell over")).unwrap();
+        d.approval_create(scout, 0, "email_send", "Send it", 300, "rule", None).unwrap();
+        let ctx = super::ToolCtx::new(d.clone(), 1, super::host::LOCAL_CHAT);
+        let note = super::main_bot_note(&ctx, &me).unwrap();
+        assert!(note.contains("You're the person's main bot") && note.contains("- Scout: 1 run(s) didn't work (latest: provider 500") && note.contains("1 ask(s) waiting"), "{note}");
+        // The other bot only learns who the main one is; another main bot moves it.
+        let s = d.bot(scout).unwrap();
+        assert!(super::main_bot_note(&super::ToolCtx::new(d.clone(), scout, super::host::LOCAL_CHAT), &s).unwrap().contains(&format!("{} is the person's main bot", me.name)));
+        d.set_setting("memory_bot", &scout.to_string()).unwrap();
+        assert!(super::main_bot_note(&ctx, &me).unwrap().contains("Scout is the person's main bot"));
+        // Not in a group, nor on another bot's task.
+        assert_eq!(super::main_bot_note(&super::ToolCtx::new(d.clone(), 1, -42), &me).unwrap(), "");
     }
 
     #[test]

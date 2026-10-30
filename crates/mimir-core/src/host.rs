@@ -1250,6 +1250,14 @@ impl Host {
                 ok(true)
             }
             "vault" => ok(ext::vault(&self.db)),
+            // The main bot (first point of contact; runs the memory tidy-up): with `bot_id`, set it.
+            "main_bot" => {
+                if let Some(id) = arg::<Option<i64>>(a, "bot_id")? {
+                    self.db.bot(id)?;
+                    self.db.set_setting("memory_bot", &id.to_string())?;
+                }
+                ok(crate::tidy::memory_bot(&self.db))
+            }
             "vault_save" => ok(ext::vault_save(&self.db, arg(a, "entry")?, arg::<Option<String>>(a, "value")?.as_deref(), arg::<Option<String>>(a, "totp").unwrap_or(None).as_deref())?),
             // The masked form a bot's sign-in card links to. What you type goes from here into the page on the
             // computer's screen (only while it's on the card's site) and into the secret store as that bot's login
