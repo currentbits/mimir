@@ -193,6 +193,34 @@ user name and `GITHUB_COM_CODE` if the export has an authenticator key), for eve
 saved login: only on their own site, and you approve each use. Delete the export afterwards: it holds every password in
 plain text.
 
+## Paying with a saved card
+
+In the Mimir app on a Mac, **Settings → Browser → Cards to pay with** keeps cards a bot may pay with. The card's
+details are stored in the Mac's Keychain only; bots see a label and the last 4 digits. Each card has a most per purchase
+and per day (your local day), a currency, and optionally the only sites it may be used on.
+
+How a purchase goes, and what stops it going wrong:
+
+- **It asks, and only Touch ID says yes.** On the checkout page, the bot calls `purchase_request` with the card, the total
+  and what it's for. The card shows the amount, the card, the site and page (as the browser itself reports them, not
+  the page's text), and warns when the address looks like another site or uses letters from another alphabet. Only
+  **Approve with Touch ID** in the Mac app approves it (or your Mac's password without Touch ID): not a chat app's
+  buttons, the web app, Always, a plan, "Don't ask me first" or a routine. Limits are checked when it asks and again,
+  with the day's total, when you approve.
+- **The browser only has the card for 10 minutes, in that chat.** Until you approve, no browser has the card's details
+  at all (so a page can't probe for them). After, that bot's browser in that chat gets them: each detail typed once,
+  only into a field of the shop's own page (not a frame inside it), only on that site; the browser can't go to another
+  site, and leaving it ends the payment. Card details are scrubbed from everything the browser returns, also as a
+  form formats them, and a page showing them is held back.
+- **No pictures of it.** For half an hour after typing, and until the shop's tabs are closed, no screenshots (browser or
+  the bots' computer).
+- **Everything is logged** under Settings → Browser → Cards to pay with → Purchases.
+
+Limits: the amounts are what the bot asked to pay, not what the shop charges, so use a virtual card or one with a low
+limit set by your bank. Any field on the approved site can take the card, so approve only shops you trust. Checkouts
+that take the card inside a payment provider's box (Stripe, Adyen) aren't supported yet: the bot hands those to you. A
+server (or the web app) can't add cards or approve payments.
+
 ## Tool servers (MCP)
 
 **Settings → Tool servers** adds any MCP server: one that runs as a command (your files, GitHub, a database…) or one

@@ -21,6 +21,13 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
   which to save; each works only on its own site and asks before every use. User names are typed for `NAME_USER`, so
   the AI never sees those either.
 
+### Paying
+- **Pay with a saved card, approved with Touch ID:** in the Mac app, save a card (kept in the Keychain; bots only see the
+  last 4 digits) with a most per purchase and per day. A bot asks with the amount and the shop; only Touch ID approves.
+  For 10 minutes, in that chat, the browser may type each detail once into the shop's own page, never anywhere else;
+  details are scrubbed from what it reads, and no screenshots are taken while they may be on screen. Every purchase is
+  logged.
+
 ### Working folders
 - **Commands:** a bot with a working folder can run a command there once you turn it on in its settings (build, test,
   convert). Every command asks you, showing exactly what runs, and runs sandboxed: no network, nothing written outside

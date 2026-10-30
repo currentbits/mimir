@@ -69,6 +69,15 @@ pub(super) fn usable(ctx: &ToolCtx, tool: &str) -> bool {
         // Commands: only for a bot with a working folder whose person turned them on, where a sandbox exists, in a chat
         // with the person alone.
         && (tool != "shell_run" || (crate::shell::available() && shell_on(ctx) && ctx.db.chat_private(ctx.chat_id) && !ctx.incognito()))
+        // Paying: saved cards, the browser, the Mac app (Touch ID), the person there, in a chat with them alone.
+        && (tool != "purchase_request"
+            || (!crate::cards::cards(&ctx.db).is_empty()
+                && crate::mac::here(&ctx.db)
+                && ctx.db.chat_private(ctx.chat_id)
+                && !ctx.db.chat_guest(ctx.chat_id)
+                && !ctx.incognito()
+                && !ctx.unattended
+                && ctx.depth == 0))
         // The workspace keeps files on disk: not in incognito.
         && !(ctx.incognito() && tool.starts_with("file_"))
         // Web search once a search service is set up.
@@ -150,7 +159,8 @@ pub(super) fn gate(db: &Db, tool: &str, site: Option<&str>, tainted: bool) -> Re
     // progress_set only ticks the run's own checklist.
     // An ask after outside content is guarded too, so it never offers "always" (a page could be asking).
     // email_hand_over only puts an email in front of the person, in Needs you.
-    let exempt = is_read_only(db, tool) || matches!(tool, "plan_propose" | "skill_save" | "ask_choice" | "send_file" | "progress_set" | "email_hand_over");
+    // purchase_request asks on its own, always (Touch ID); asking first as well would be a double ask.
+    let exempt = is_read_only(db, tool) || matches!(tool, "purchase_request" | "plan_propose" | "skill_save" | "ask_choice" | "send_file" | "progress_set" | "email_hand_over");
     Ok(if tainted && !exempt && ((action == "allow" && !browser) || action == "ask") { ("ask".into(), "guarded") } else { (action, "rule") })
 }
 
@@ -1093,6 +1103,7 @@ pub(crate) fn describe_tool(name: &str) -> String {
         "email_send" => "send emails",
         "file_delete" => "delete files",
         "file_export" => "copy files to your folders",
+        "purchase_request" => "pay with your saved cards",
         "shell_run" => "run commands in its working folder",
         "mail_send" => "send emails from Mail on your Mac",
         "messages_send" => "send messages from your Mac",
@@ -1206,14 +1217,24 @@ pub(crate) fn unanswered(delivery: &str) -> String {
 /// `kind` says why it asks (rule | guarded | login); `site` is the website, for a per-site "always".
 /// Approved, it gives back the call's arguments with any text you edited on the card (`args` itself otherwise).
 pub(crate) async fn wait_for_approval_with(ctx: &ToolCtx, name: &str, args: &Value, summary: &str, kind: &str, site: Option<&str>) -> Result<Value> {
+    wait_for_approval_hooked(ctx, name, args, summary, kind, site, |_| Ok(())).await
+}
+
+/// The same, calling `on_created` with the approval's id as soon as it exists (before anyone can answer it).
+pub(crate) async fn wait_for_approval_hooked(ctx: &ToolCtx, name: &str, args: &Value, summary: &str, kind: &str, site: Option<&str>, on_created: impl FnOnce(i64) -> Result<()>) -> Result<Value> {
     // "Don't ask me first" skips a card, but never one that must always be asked: a command, a change to the person's own
-    // files, or one of their Ask first rules.
-    if hands_off(ctx) && !matches!(kind, "shell" | "userfile" | "target") {
+    // files, one of their Ask first rules, or a purchase.
+    if hands_off(ctx) && !matches!(kind, "shell" | "userfile" | "target" | "purchase") {
         return Ok(args.clone());
     }
+    // A purchase's card says exactly what's paid where: it must fit whole (a page can't push the amount off it).
+    if kind == "purchase" && summary.chars().count() > CARD_FITS {
+        bail!("this purchase's details are too long to show whole on the approval card; shorten what it's for");
+    }
     let summary = for_helper(ctx, card_text(summary));
-    let kind = guest_kind(ctx, kind);
+    let kind = if kind == "purchase" { kind } else { guest_kind(ctx, kind) };
     let id = ctx.db.approval_create(ctx.via_bot.unwrap_or(ctx.bot_id), ctx.ask_chat, name, &summary, APPROVAL_TTL_SECS, kind, site)?;
+    on_created(id)?;
     if let Some(d) = draft_of(name, args) {
         ctx.db.approval_set_draft(id, &d)?;
     }

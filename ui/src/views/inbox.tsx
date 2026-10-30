@@ -1,5 +1,5 @@
 import { useContext, useEffect, useState } from 'react'
-import { invoke } from '../api'
+import { inDesktop, invoke, localInvoke, remoteServer } from '../api'
 import { ago, ahead, fullTime, IDLE } from '../format'
 import { Markdown, openLink } from '../markdown'
 import { ask, tell, Avatar, Empty, Icon, Row } from '../ui'
@@ -17,6 +17,7 @@ function approvalRisk(a: Approval): { icon: string; label: string; tone: string;
   if (a.kind === 'send') return { icon: 'send', label: 'Sends an email as you, to the address shown first. Each email asks you, until you choose Always.', tone: 'rule', always: true }
   if (a.kind === 'remind') return { icon: 'user', label: 'Sends to someone else’s chat in your household. Asked the first time for each person.', tone: 'rule', always: true }
   if (a.kind === 'bot') return { icon: 'user', label: 'Makes a new bot with this role, on the same AI account. Each new bot asks you, until you choose Always.', tone: 'rule', always: true }
+  if (a.kind === 'purchase') return { icon: 'alert', label: 'A payment with your saved card. Check the site and amount: once you approve with Touch ID, the bot can type the card there for 10 minutes.', tone: 'login', always: false }
   if (a.kind === 'shell') return { icon: 'alert', label: 'Runs this exact command in the bot’s working folder, sandboxed: no network, nothing written outside the folder. Asks every time.', tone: 'rule', always: false }
   if (a.kind === 'target') return { icon: 'shield', label: 'Asking because of one of your Ask first rules (named first). Change them in Settings → Permissions.', tone: 'guarded', always: false }
   if (a.kind === 'userfile') return { icon: 'file', label: 'Changes or deletes a file of yours, in the working folder you chose for this bot. Asks every time.', tone: 'rule', always: false }
@@ -95,7 +96,12 @@ function ApprovalCard({ a, where, leaving, decide, inline }: {
         {a.delivery?.includes('failed:') && <div className="parked">Its card couldn't be sent on {a.delivery.split('failed:')[1].split(':')[0]}, so answer it here.</div>}
         {a.parked && <div className="parked">From a routine. It runs when you approve; it waits {((w: string) => w.startsWith('in ') ? `for ${w.slice(3)}` : `until ${w}`)(ahead(a.expires_at))}.</div>}
       </div>
-      {a.kind === 'signin' ? <div className="choices">
+      {a.kind === 'purchase' ? <div className="choices">
+        <button className="btn" onClick={() => decide(a.id, false)}>Deny</button>
+        {inDesktop && !remoteServer()
+          ? <button className="btn btn-primary" onClick={() => localInvoke('purchase_approve', { id: a.id }).then(() => {}, e => tell(String(e)))}>Approve with Touch ID</button>
+          : <span className="hint">Approve it in the Mimir app on your Mac (Touch ID).</span>}
+      </div> : a.kind === 'signin' ? <div className="choices">
         <button className="btn" onClick={() => decide(a.id, false)}>Can’t now</button>
         <a className="btn btn-primary" href="#signin">Sign in</a>
       </div> : a.kind === 'takeover' ? <div className="choices">
@@ -136,8 +142,8 @@ function useDecide(onDecided: () => unknown) {
   return { err, leaving, decide }
 }
 
-/** Asks you can answer all at once: every one but signing in and taking over, which need you to do something. */
-const bulkable = (a: Approval) => a.kind !== 'signin' && a.kind !== 'takeover'
+/** Asks you can answer all at once: every one but signing in, taking over and paying, which need you to do something. */
+const bulkable = (a: Approval) => a.kind !== 'signin' && a.kind !== 'takeover' && a.kind !== 'purchase'
 
 function DecideAll({ list, decide }: { list: Approval[]; decide: (id: number, approve: boolean) => unknown }) {
   const botOf = useContext(Bots)

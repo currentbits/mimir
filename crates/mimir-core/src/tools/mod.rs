@@ -315,6 +315,10 @@ async fn gated(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
     } else {
         args
     };
+    // A picture of the screen isn't scrubbed like text: none while a card may be on it (cards.rs).
+    if name.starts_with("computer_") && name != "computer_handoff" && crate::cards::on_screen(&ctx.db, ctx.bot_id) {
+        bail!("no screenshots for half an hour after paying: card details may be on the screen");
+    }
     // Limits first, so nobody is asked to approve something that would then fail.
     precheck(ctx, name, args)?;
     let enabled = usable(ctx, name) && ctx.db.bot(ctx.bot_id)?.allows(name);
