@@ -2458,8 +2458,20 @@ mod tests {
         assert_eq!((failed.len(), failed[0].repeats), (1, 2), "one item for the same failure");
         assert!(failed[0].error.as_deref().unwrap().contains("Trying again at"), "{:?}", failed[0].error);
 
+        // Just too many requests right now (#408): another routine is tried again soon; nobody is held.
+        let busy = core_on(&db, &fake_ai("429 Too Many Requests", r#"{"error":{"message":"Rate limit reached for gpt-5-mini on tokens per min"}}"#).await);
+        let r2 = db.routine_create(1, 0, "0 9 * * *", "news", false).unwrap();
+        busy.run_routine(&[], db.routines(0).unwrap().into_iter().find(|x| x.id == r2.id).unwrap(), None).await.unwrap();
+        let after = db.routines(0).unwrap().into_iter().find(|x| x.id == r2.id).unwrap();
+        assert!(after.retries == 1 && after.next_fire <= now + 400, "{after:?}");
+        assert!(db.hold("hold:1").unwrap().is_none(), "a rate limit holds nobody");
+        db.routine_delete(0, r2.id).unwrap();
+        for f in db.runs_failed(0).unwrap().iter().filter(|f| f.error.as_deref().is_some_and(|e| e.contains("Rate limit"))) {
+            db.inbox_dismiss("run", f.id).unwrap();
+        }
+
         // The plan's usage limit: the bot's routines wait (an hour, when nobody says when it resets), this one runs then.
-        let limited = core_on(&db, &fake_ai("429 Too Many Requests", r#"{"error":{"message":"Rate limit reached"}}"#).await);
+        let limited = core_on(&db, &fake_ai("429 Too Many Requests", r#"{"error":{"message":"You exceeded your current quota","type":"insufficient_quota"}}"#).await);
         limited.run_routine(&[], fresh(&db), None).await.unwrap();
         let h = db.hold("hold:1").unwrap().expect("held");
         assert!(h.until > now + 3000 && h.until <= now + 3700 && fresh(&db).next_fire <= h.until, "{h:?}");
