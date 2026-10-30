@@ -269,6 +269,14 @@ The mask button in the app's chat starts an incognito chat: the bot can't see or
 and nothing is kept: no chat history, run log or tool log, and the AI CLIs are told not to save the session. The
 conversation exists only in the window. Photos are off there (they'd be saved to disk).
 
+## Your main bot
+
+With two or more bots, one is your **main bot** (Settings → Main bot; the first one unless you pick another). It's
+your first point of contact: it hands work to the bot whose job fits (with `ask_bot`) and says so, and in a chat with
+you alone it knows how the others did in the last day: runs that didn't work and asks waiting for you, from Needs you.
+Ask it "how are my bots doing?", or to check in every morning with a routine. The other bots know which one it is. It
+also runs the daily memory tidy-up.
+
 ## Handing tasks to another bot
 
 A bot can pass a task to another of your bots with the `ask_bot` tool ("ask Researcher to…"). It runs with that bot's

@@ -47,6 +47,8 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
 - **Plans after outside content:** a plan proposed after a web page no longer fails; each step asks instead.
 
 ### Bots working together
+- **Main bot:** with several bots, one is your first point of contact (Settings → Main bot). It hands work to the bot
+  that fits, knows when another bot's runs failed or it's waiting for you, and the others point you to it.
 - A task handed to another bot keeps its files in that bot's own workspace, its answer is kept in its own chat too,
   and `ask_bot` can share files with it. A save that's denied or times out no longer loses its text.
 - Tool names work as the bot sees them (`WebSearch`, `mcp__mimir__web_fetch`), a new bot is only offered tools that

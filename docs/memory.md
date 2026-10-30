@@ -118,7 +118,7 @@ instructions until you mark one **Looks right**.
 
 ## The daily tidy-up
 
-Once a day, after a quiet half hour, your first bot (setting `memory_bot`) reviews memory against recent conversations
+Once a day, after a quiet half hour, your main bot (Settings → Main bot; the first bot unless you pick another) reviews memory against recent conversations
 and **suggests** changes: remember a new fact or habit, update an outdated one, forget a finished task or a duplicate,
 move something rarely relevant to the background. Suggestions appear at the top of the Memory tab with a reason;
 nothing changes until you accept. *Tidy up now* runs it on demand; a dismissed suggestion isn't proposed again for 90
