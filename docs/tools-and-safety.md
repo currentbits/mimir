@@ -20,6 +20,9 @@ Bots act through **tools**. Every tool call is checked against your rules before
 | `email_draft` | Write an email (or a reply in its thread) into your Drafts folder; nothing is sent, you send it from your mail app. After reading outside content (an email included) it asks, with the recipient first on the card | allow |
 | `file_list`, `file_read`, `file_write` | A text-file workspace per chat (notes, lists, drafts, research), shown under Memory → Files. Paths stay inside it (no `..`, no links); rewriting keeps the previous version; a file written after outside content (or dropped in by hand) counts as outside content when read. Not in incognito | allow |
 | `file_delete` | Delete a workspace file | **ask** |
+| `mail_send` | Send an email from the Mail app on your Mac, from your own account in it. The card shows who it's to and the whole text (it has to fit on the card: about 1100 characters); at most 20 a day from a chat. Mimir app on a Mac only, in a chat with you alone | **ask** |
+| `messages_send` | Send an iMessage from the Messages app on your Mac, to a phone number (+31…) or Apple ID. Mimir app on a Mac only, in a chat with you alone | **ask** |
+| `app_open` | Open an app on your Mac, or a workspace file in it (a spreadsheet in Numbers). Mimir app on a Mac only | **ask** |
 | `file_export` | Copy a workspace file or folder to a folder on the machine Mimir runs on (`~/.claude/skills`, say). The card shows the destination, the files and how many it would replace (only with `replace`). Never into system folders, the home folder itself, Mimir's data, or `~/.ssh`-style folders; links are resolved first and never written through. With folders under **Settings → Permissions → Export folders**, only into those | **ask** |
 | `send_file` | Send a workspace file, or a screenshot of the bots' computer, to this chat with the reply ([Photos, voice notes and files](bots-and-chats.md#photos-voice-notes-and-files)). Not in incognito or for a bot working on another's task | allow in your own direct chat; **ask** in a group, channel or guest's chat |
 | `email_send` | Send an email as you, after you approve it: every email asks (until you press "Always" on one), with who it's to first and the whole text on the card; one too long for the card has to be a draft instead; at most 20 a day from a chat. Sent through your outgoing server (worked out from the incoming one, or set in Settings → Email), with a copy in your Sent folder | **asks, every time** |
@@ -146,7 +149,7 @@ outside content). Change it back in **Settings → Permissions**.
 
 **Ask first rules.** Rules about *who* or *where*, on top of the rules per tool: **Settings → Permissions → Ask first
 rules**. *Emails to* an address (`dana@acme.com`), anyone at a domain (`acme.com`, subdomains included) or anyone
-outside one (`!acme.com`), for sending and drafting; *Files copied into* a folder (`file_export`). Each one asks, or
+outside one (`!acme.com`), for sending (also from Mail on your Mac) and drafting; *Files copied into* a folder (`file_export`). Each one asks, or
 never lets it happen. They hold for every bot, over Always and "Don't ask me first", and no plan covers them; the card
 starts with the rule ("Your rule “Emails to dana@acme.com” asks.") and offers no Always, and a refused call tells the
 bot which rule stopped it.

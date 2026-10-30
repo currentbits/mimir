@@ -241,6 +241,8 @@ pub fn is_api_chat(chat: i64) -> bool {
 impl Host {
     pub fn new(db: Db, home: PathBuf, secrets: Arc<dyn SecretStore>, rt: tokio::runtime::Handle, mode: &'static str) -> Self {
         let _ = MODE.set(mode);
+        // For the tools process this host spawns (mac.rs: the Mac's own apps only from the desktop app).
+        let _ = db.set_setting("host_mode", mode);
         install_secrets(secrets.clone());
         crate::say::load(&db);
         if let Err(e) = db.incognito_leftovers().and_then(|_| db.prune_old()).and_then(|_| db.close_interrupted()) {

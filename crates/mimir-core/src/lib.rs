@@ -101,6 +101,7 @@ pub mod files;
 pub mod office;
 pub mod library;
 pub mod lookalike;
+pub mod mac;
 pub mod transcribe;
 pub mod ocr;
 

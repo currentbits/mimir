@@ -15,6 +15,11 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
   **Open workspace folder** opens it.
 - **Folders as a zip:** `send_file` sends a whole folder as one zip.
 
+### Your Mac
+- **Mail, Messages and apps:** in the Mimir app on a Mac, bots can send an email from Mail, an iMessage from Messages,
+  or open an app (with a workspace file in it). Each asks first, showing who it's to and the whole text. macOS asks
+  once to let Mimir control Mail or Messages.
+
 ### Routines
 - **Paused while you're away:** after a week without a message from you (change it under Settings → Daily digest),
   routines stop so they don't use up your AI plan on results nobody reads. Bots still answer; your next message, or
