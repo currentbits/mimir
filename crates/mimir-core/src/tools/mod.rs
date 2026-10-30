@@ -305,6 +305,16 @@ async fn gated(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
     if !specs().iter().any(|(n, ..)| *n == name) && crate::ext::find(&ctx.db, name).is_none() {
         bail!("unknown tool {name}");
     }
+    // A command carries the folder its card shows, set here (never the model's), so an approval can't run it elsewhere.
+    let with_folder;
+    let args = if name == "shell_run" {
+        let mut a = args.clone();
+        a["folder"] = json!(ctx.db.bot(ctx.bot_id)?.workdir);
+        with_folder = a;
+        &with_folder
+    } else {
+        args
+    };
     // Limits first, so nobody is asked to approve something that would then fail.
     precheck(ctx, name, args)?;
     let enabled = usable(ctx, name) && ctx.db.bot(ctx.bot_id)?.allows(name);
@@ -2332,6 +2342,25 @@ mod tests {
         assert!(a.kind == "shell" && a.summary.contains(&format!("Run in {}:\n$ ls -la", me.workdir)), "{a:?}");
         assert!(!crate::runtime::offers_always(&a));
         assert!(call(&ctx, "shell_run", &json!({"command": ""})).await.is_err());
+        // Too long to show whole on the card: refused before anyone is asked.
+        assert!(call(&ctx, "shell_run", &json!({"command": format!("echo ok; {}", "true; ".repeat(250))})).await.unwrap_err().to_string().contains("approval card"));
+        // Live, with "Don't ask me first": still a card (not skipped), and the model can't name another folder.
+        ctx.unattended = false;
+        let c = ctx.clone();
+        let waiting = tokio::spawn(async move { call(&c, "shell_run", &json!({"command": "pwd", "folder": "/"})).await });
+        let a = loop {
+            if let Some(a) = db.approvals_pending().unwrap().into_iter().find(|a| !a.parked && a.tool == "shell_run") {
+                break a;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        };
+        assert!(a.summary.contains(&format!("Run in {}:", me.workdir)), "the card shows its own folder: {}", a.summary);
+        // The folder changes while the card waits: approved, it still doesn't run there.
+        std::fs::create_dir_all(top.join("other")).unwrap();
+        me.workdir = crate::files::check_workdir(&db, top.join("other").to_str().unwrap()).unwrap();
+        db.bot_save(&me).unwrap();
+        db.approval_decide(a.id, true, None).unwrap();
+        assert!(waiting.await.unwrap().unwrap_err().to_string().contains("working folder changed"));
         // Not in a guest's chat.
         db.pair(200, "Sam").unwrap();
         db.chat_set_guest(200, true).unwrap();

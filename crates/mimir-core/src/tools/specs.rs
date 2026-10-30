@@ -216,7 +216,7 @@ pub fn specs() -> Vec<(&'static str, &'static str, Value)> {
              nothing written outside the folder, the rest of their home folder unreadable, 60 seconds at most. Paths are \
              relative to the folder.",
             json!({"type":"object","properties":{
-                "command":{"type":"string","description":"one shell command line (sh), up to 2000 characters"}
+                "command":{"type":"string","description":"one shell command line (sh), up to about 1000 characters (it goes on the card whole)"}
             },"required":["command"]}),
         ),
         (

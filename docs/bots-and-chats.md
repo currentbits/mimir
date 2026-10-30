@@ -249,7 +249,7 @@ real path, so it can tell you exactly where a file is.
   convert files). Each one asks you first, showing exactly what runs, also with Always or "Don't ask me first". It runs
   sandboxed: no network, nothing written outside the folder, the rest of your home folder unreadable, no Mimir secrets
   in its environment, and it stops after a minute; what it prints counts as outside content. macOS uses its built-in
-  sandbox; Linux needs bubblewrap (`bwrap`), and in Docker that usually needs extra privileges, so it's often not there.
+  sandbox; Linux needs bubblewrap (`bwrap`) that's allowed to run (Mimir tries it once: some systems, and Docker, don't let it), else the switch says it's not available. The command must fit on the card whole.
 - **Copy its files there** (when you set the folder) copies what it has in Mimir's workspace, its own and the app chat's,
   without replacing anything already there.
 

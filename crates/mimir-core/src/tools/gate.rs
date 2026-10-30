@@ -640,7 +640,7 @@ pub(super) fn describe(ctx: &ToolCtx, name: &str, args: &Value) -> String {
         "file_delete" => format!("Delete the file {}", args["path"].as_str().unwrap_or("?")),
         "shell_run" => format!(
             "Run in {}:\n$ {}",
-            ctx.db.bot(ctx.bot_id).map(|b| b.workdir).unwrap_or_default(),
+            args["folder"].as_str().map(String::from).unwrap_or_else(|| ctx.db.bot(ctx.bot_id).map(|b| b.workdir).unwrap_or_default()),
             args["command"].as_str().unwrap_or("?")
         ),
         // Who first, in full; then the whole text.
@@ -867,7 +867,9 @@ pub(super) fn always_ask(name: &str, decision: String, why: &'static str, tainte
 pub(super) fn precheck(ctx: &ToolCtx, name: &str, args: &Value) -> Result<()> {
     let len = |k: &str| args[k].as_str().map_or(0, |s| s.chars().count());
     match name {
-        "shell_run" if len("command") == 0 || len("command") > 2000 => bail!("one command line, up to 2000 characters"),
+        "shell_run" if len("command") == 0 || describe(ctx, name, args).chars().count() > CARD_FITS => {
+            bail!("one command line that fits on the approval card whole (about 1000 characters): split it, or put it in a script file in the folder and run that")
+        }
         // Who and what, before anyone is asked: the card must show all of it.
         "mail_send" => {
             crate::mac::mail_args(args["to"].as_str().unwrap_or(""), args["cc"].as_str().unwrap_or(""), "", "")?;
@@ -1204,7 +1206,9 @@ pub(crate) fn unanswered(delivery: &str) -> String {
 /// `kind` says why it asks (rule | guarded | login); `site` is the website, for a per-site "always".
 /// Approved, it gives back the call's arguments with any text you edited on the card (`args` itself otherwise).
 pub(crate) async fn wait_for_approval_with(ctx: &ToolCtx, name: &str, args: &Value, summary: &str, kind: &str, site: Option<&str>) -> Result<Value> {
-    if hands_off(ctx) {
+    // "Don't ask me first" skips a card, but never one that must always be asked: a command, a change to the person's own
+    // files, or one of their Ask first rules.
+    if hands_off(ctx) && !matches!(kind, "shell" | "userfile" | "target") {
         return Ok(args.clone());
     }
     let summary = for_helper(ctx, card_text(summary));

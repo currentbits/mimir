@@ -12,13 +12,22 @@ const MAX_OUT: usize = 20_000;
 
 /// Whether commands can be run sandboxed here at all.
 pub fn available() -> bool {
-    if cfg!(target_os = "macos") {
-        Path::new("/usr/bin/sandbox-exec").exists()
-    } else if cfg!(target_os = "linux") {
-        std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| d.join("bwrap").is_file()))
-    } else {
-        false
-    }
+    static OK: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *OK.get_or_init(|| {
+        if cfg!(target_os = "macos") {
+            Path::new("/usr/bin/sandbox-exec").exists()
+        } else if cfg!(target_os = "linux") {
+            // Installed isn't enough: some systems (Ubuntu 24.04's AppArmor, Docker) don't let it make its sandbox. Tried once.
+            std::process::Command::new("bwrap")
+                .args(["--ro-bind", "/", "/", "--dev", "/dev", "--unshare-net", "--unshare-pid", "--die-with-parent", "/bin/true"])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .is_ok_and(|s| s.success())
+        } else {
+            false
+        }
+    })
 }
 
 /// The sandbox's rules on macOS, for a folder given as its real path (links resolved: /tmp is /private/tmp).
@@ -57,17 +66,45 @@ pub async fn run(dir: &Path, command: &str) -> Result<String> {
     };
     // Nothing of Mimir's environment (API keys, tokens) reaches it.
     cmd.current_dir(&dir).env_clear().env("PATH", "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin").env("HOME", &dir).env("TMPDIR", &tmp).env("LANG", "en_US.UTF-8");
-    cmd.stdin(std::process::Stdio::null()).kill_on_drop(true);
-    let out = match tokio::time::timeout(LIMIT, cmd.output()).await {
-        Ok(o) => o.context("couldn't start the command")?,
+    cmd.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).kill_on_drop(true);
+    let mut child = cmd.spawn().context("couldn't start the command")?;
+    let (mut so, mut se) = (child.stdout.take().context("no output")?, child.stderr.take().context("no output")?);
+    // Kept only up to a bound while it runs (a command printing forever can't fill Mimir's memory); past it, stopped.
+    let cap = (MAX_OUT * 4) as u64;
+    let run = async {
+        use tokio::io::AsyncReadExt;
+        let (mut out, mut err, mut over) = (vec![], vec![], false);
+        let (mut b1, mut b2) = ([0u8; 8192], [0u8; 8192]);
+        let (mut o_done, mut e_done) = (false, false);
+        while !(o_done && e_done) {
+            tokio::select! {
+                n = so.read(&mut b1), if !o_done => match n {
+                    Ok(0) | Err(_) => o_done = true,
+                    Ok(n) => out.extend_from_slice(&b1[..n]),
+                },
+                n = se.read(&mut b2), if !e_done => match n {
+                    Ok(0) | Err(_) => e_done = true,
+                    Ok(n) => err.extend_from_slice(&b2[..n]),
+                },
+            }
+            if (out.len() + err.len()) as u64 > cap {
+                over = true;
+                let _ = child.start_kill();
+                break;
+            }
+        }
+        (out, err, over, child.wait().await)
+    };
+    let (out, err, over, status) = match tokio::time::timeout(LIMIT, run).await {
+        Ok(r) => r,
         Err(_) => bail!("the command took more than a minute and was stopped"),
     };
-    let mut text = String::from_utf8_lossy(&out.stdout).to_string();
-    let err = String::from_utf8_lossy(&out.stderr);
+    let mut text = String::from_utf8_lossy(&out).to_string();
+    let err = String::from_utf8_lossy(&err);
     if !err.trim().is_empty() {
         text.push_str(&format!("\n[stderr]\n{err}"));
     }
-    let code = out.status.code().map_or("stopped".to_string(), |c| c.to_string());
+    let code = if over { "stopped: too much output".to_string() } else { status.ok().and_then(|s| s.code()).map_or("stopped".to_string(), |c| c.to_string()) };
     Ok(format!("exit {code}\n{}", crate::tools::truncate(text.trim_end(), MAX_OUT)))
 }
 
@@ -98,6 +135,9 @@ mod tests {
             let out = super::run(&dir, "curl -s -m 5 https://example.com").await.unwrap();
             assert!(!out.starts_with("exit 0"), "no network: {out}");
         }
+        // Endless output: stopped at the bound, not kept in memory.
+        let out = super::run(&dir, "yes").await.unwrap();
+        assert!(out.starts_with("exit stopped: too much output"), "{}", &out[..60.min(out.len())]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

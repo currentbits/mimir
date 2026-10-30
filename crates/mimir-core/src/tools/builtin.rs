@@ -517,6 +517,10 @@ pub(super) async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<Stri
         }
         "shell_run" => {
             let dir = ctx.db.bot(ctx.bot_id)?.workdir;
+            // Only in the folder its card showed: if it changed while the card waited, nothing runs.
+            if args["folder"].as_str() != Some(dir.as_str()) {
+                bail!("the working folder changed after this command was approved; ask again for the new folder");
+            }
             // Checked again here: the folder must still be there (never another one instead).
             crate::files::workspace(&ctx.db, ctx.bot_id, ctx.chat_id, false, true)?;
             let out = crate::shell::run(std::path::Path::new(&dir), s(args, "command")?).await?;
