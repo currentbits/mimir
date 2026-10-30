@@ -15,6 +15,12 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
   **Open workspace folder** opens it.
 - **Folders as a zip:** `send_file` sends a whole folder as one zip.
 
+### Saved logins
+- **Import from a password manager:** Settings → Browser → Saved logins reads a CSV export from 1Password, Chrome,
+  Edge, Safari / Passwords, Firefox, Bitwarden or LastPass. You see sites and user names (never the passwords) and pick
+  which to save; each works only on its own site and asks before every use. User names are typed for `NAME_USER`, so
+  the AI never sees those either.
+
 ### Your Mac
 - **Mail, Messages and apps:** in the Mimir app on a Mac, bots can send an email from Mail, an iMessage from Messages,
   or open an app (with a workspace file in it). Each asks first, showing who it's to and the whole text. macOS asks

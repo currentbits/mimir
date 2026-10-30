@@ -1258,6 +1258,15 @@ impl Host {
                 }
                 ok(crate::tidy::memory_bot(&self.db))
             }
+            // A password manager's CSV export: without `pick`, what's in it (sites and user names, no passwords); with
+            // `pick` (row numbers), save those as logins, everyone's or one bot's.
+            "logins_import" => {
+                let text: String = arg(a, "csv")?;
+                match arg::<Option<Vec<usize>>>(a, "pick")? {
+                    Some(pick) => ok(json!({"saved": crate::passwords::import(&self.db, &text, &pick, arg(a, "bot_id")?)?})),
+                    None => ok(crate::passwords::read(&self.db, &text)?),
+                }
+            }
             "vault_save" => ok(ext::vault_save(&self.db, arg(a, "entry")?, arg::<Option<String>>(a, "value")?.as_deref(), arg::<Option<String>>(a, "totp").unwrap_or(None).as_deref())?),
             // The masked form a bot's sign-in card links to. What you type goes from here into the page on the
             // computer's screen (only while it's on the card's site) and into the secret store as that bot's login
@@ -2062,12 +2071,55 @@ mod tests {
         ext::login_failed_set(db, &e.name).unwrap();
         assert!(ext::signin_login(db, 3, url).is_none());
         // What they sign in with on the card replaces it (and an older one of this bot's for the site under another name).
-        let old = ext::VaultEntry { name: "GH_OLD".into(), domains: vec!["github.com".into()], bot: Some(3), totp: false };
+        let old = ext::VaultEntry { name: "GH_OLD".into(), domains: vec!["github.com".into()], bot: Some(3), totp: false, user: false };
         ext::vault_save(db, old, Some("older-pass"), None).unwrap();
         ext::vault_save_signin(db, 3, "github.com", "me", "new-pass", None).unwrap();
         assert_eq!(ext::signin_login(db, 3, url).map(|e| e.name).as_deref(), Some("GITHUB_COM_BOT3"));
         assert_eq!(secret_get("vault:GITHUB_COM_BOT3").as_deref(), Some("new-pass"));
         assert_eq!(ext::vault(db).iter().map(|e| e.name.as_str()).collect::<Vec<_>>(), ["GITHUB_COM_BOT3"]);
+    }
+
+    #[tokio::test]
+    async fn logins_come_in_from_a_password_managers_export() {
+        let home = Home::new("logins-csv");
+        let host = Host::new(Db::open(&home.0.join("mimir.db")).unwrap(), home.0.clone(), Arc::new(Mem(Default::default())), tokio::runtime::Handle::current(), "server");
+        let csv = "name,url,username,password,note\n\
+                   GitHub,https://github.com/login,dana,gh-secret,\n\
+                   GitHub again,https://www.github.com/session,dana,gh-secret,\n\
+                   Shop,shop.example,sam@x.com,\"s,hop\",\n\
+                   No password,https://bank.example,me,,\n";
+        // The preview: sites and user names, no passwords anywhere in it.
+        let preview = host.call("logins_import", &json!({"csv": csv})).await.unwrap();
+        let text = preview.to_string();
+        assert!(!text.contains("gh-secret") && !text.contains("s,hop"), "{text}");
+        let rows = preview.as_array().unwrap();
+        assert_eq!(rows.iter().map(|r| r["site"].as_str().unwrap()).collect::<Vec<_>>(), ["github.com", "shop.example"], "one per site and user; no password, no row");
+        assert_eq!(rows[0]["name"], "GITHUB_COM");
+        // Only what was picked is saved: the password and user name in the secret store, NAME_USER for the browser.
+        let pick: Vec<i64> = vec![rows[0]["i"].as_i64().unwrap()];
+        assert_eq!(host.call("logins_import", &json!({"csv": csv, "pick": pick})).await.unwrap()["saved"], 1);
+        assert_eq!(secret_get("vault:GITHUB_COM").as_deref(), Some("gh-secret"));
+        let v = ext::vault(&host.db);
+        assert!(v.len() == 1 && v[0].user && v[0].domains == ["github.com"] && v[0].bot.is_none(), "{v:?}");
+        assert!(ext::vault_values(&host.db).contains(&("GITHUB_COM_USER".to_string(), "dana".to_string())));
+        // Again: already saved, so marked and not saved twice.
+        let again = host.call("logins_import", &json!({"csv": csv})).await.unwrap();
+        assert_eq!(again[0]["exists"], true);
+        assert_eq!(host.call("logins_import", &json!({"csv": csv, "pick": pick})).await.unwrap()["saved"], 0);
+        // One bot's own login doesn't stop the same one being saved for everyone; a password keeps its spaces.
+        crate::ext::vault_delete(&host.db, "GITHUB_COM").unwrap();
+        assert_eq!(host.call("logins_import", &json!({"csv": csv, "pick": pick, "bot_id": 1})).await.unwrap()["saved"], 1);
+        assert_eq!(host.call("logins_import", &json!({"csv": csv, "pick": pick, "bot_id": 1})).await.unwrap()["saved"], 0, "that bot has it");
+        assert_eq!(host.call("logins_import", &json!({"csv": csv})).await.unwrap()[0]["exists"], false);
+        assert_eq!(host.call("logins_import", &json!({"csv": csv, "pick": pick})).await.unwrap()["saved"], 1);
+        let spaced = "url,username,password\nhttps://pad.example,me,\"  two spaces  \"\n";
+        host.call("logins_import", &json!({"csv": spaced, "pick": [0]})).await.unwrap();
+        assert_eq!(secret_get("vault:PAD_EXAMPLE").as_deref(), Some("  two spaces  "));
+        // Another bot's login named like a user name (X_USER) never reaches this bot's browser.
+        crate::ext::vault_save(&host.db, ext::VaultEntry { name: "PAD_EXAMPLE_USER".into(), domains: vec!["pad.example".into()], bot: Some(99), totp: false, user: false }, Some("not-yours"), None).unwrap();
+        assert!(!ext::vault_values_for(&host.db, 1).iter().any(|(_, v)| v == "not-yours"));
+        // Not a password export: said plainly.
+        assert!(host.call("logins_import", &json!({"csv": "a,b\n1,2\n"})).await.unwrap_err().to_string().contains("password export"));
     }
 
     #[tokio::test]
@@ -2088,7 +2140,7 @@ mod tests {
             ..Default::default()
         };
         crate::ext::set_servers(&host.db, &[server]).unwrap();
-        crate::ext::vault_save(&host.db, crate::ext::VaultEntry { name: "SHOP_PASSWORD".into(), domains: vec!["shop.example".into()], bot: None, totp: false }, Some("hunter2-shop"), None).unwrap();
+        crate::ext::vault_save(&host.db, crate::ext::VaultEntry { name: "SHOP_PASSWORD".into(), domains: vec!["shop.example".into()], bot: None, totp: false, user: false }, Some("hunter2-shop"), None).unwrap();
         host.db.routine_create(id, 0, "0 9 * * 1", "Check the status page", false).unwrap();
         host.db.routine_create(id, 0, "0 9 * * 2", "Log in with hunter2-shop and check orders", false).unwrap();
         host.call("skill_add", &json!({"chat_id": 0, "slug": "summarize-link", "bot_id": id})).await.unwrap();
