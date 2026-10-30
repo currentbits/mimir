@@ -581,8 +581,18 @@ pub fn redact(text: &str, values: &[(String, String)]) -> String {
 
 /// What the browser types for each saved login's names: NAME (the password) and, if it has one, NAME_USER.
 pub(crate) fn vault_values(db: &Db) -> Vec<(String, String)> {
+    values_of_logins(vault(db))
+}
+
+/// The same for one bot's logins only (everyone's and its own): picked by entry, never by name, so another bot's
+/// login whose name ends like a user name (LOGIN_USER) isn't taken along.
+pub(crate) fn vault_values_for(db: &Db, bot: i64) -> Vec<(String, String)> {
+    values_of_logins(vault_for(db, bot))
+}
+
+fn values_of_logins(logins: Vec<VaultEntry>) -> Vec<(String, String)> {
     let mut out = vec![];
-    for e in vault(db) {
+    for e in logins {
         if let Some(v) = crate::host::secret_get(&format!("vault:{}", e.name)) {
             out.push((e.name.clone(), v));
         }
@@ -827,8 +837,7 @@ fn spawn(conf: &ServerConf, db: &Db, bot: i64) -> Result<(Io, Option<std::path::
     let (command, args, secrets_file) = match conf.preset.as_deref() {
         Some("playwright") => {
             std::fs::create_dir_all(&dir)?;
-            let mine: Vec<String> = vault_for(db, bot).into_iter().map(|e| e.name).collect();
-            let file = write_secrets_file(&dir, &vault_values(db).into_iter().filter(|(n, _)| mine.iter().any(|m| n == m || n.strip_suffix("_USER") == Some(m.as_str()))).collect::<Vec<_>>())?;
+            let file = write_secrets_file(&dir, &vault_values_for(db, bot))?;
             let mut args: Vec<String> = vec!["-y".into(), PLAYWRIGHT.into()];
             if crate::computer::usable(db) {
                 // The bots' computer is on: drive the Chromium on its screen, so you can watch (and take over).

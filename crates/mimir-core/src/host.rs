@@ -2098,6 +2098,18 @@ mod tests {
         let again = host.call("logins_import", &json!({"csv": csv})).await.unwrap();
         assert_eq!(again[0]["exists"], true);
         assert_eq!(host.call("logins_import", &json!({"csv": csv, "pick": pick})).await.unwrap()["saved"], 0);
+        // One bot's own login doesn't stop the same one being saved for everyone; a password keeps its spaces.
+        crate::ext::vault_delete(&host.db, "GITHUB_COM").unwrap();
+        assert_eq!(host.call("logins_import", &json!({"csv": csv, "pick": pick, "bot_id": 1})).await.unwrap()["saved"], 1);
+        assert_eq!(host.call("logins_import", &json!({"csv": csv, "pick": pick, "bot_id": 1})).await.unwrap()["saved"], 0, "that bot has it");
+        assert_eq!(host.call("logins_import", &json!({"csv": csv})).await.unwrap()[0]["exists"], false);
+        assert_eq!(host.call("logins_import", &json!({"csv": csv, "pick": pick})).await.unwrap()["saved"], 1);
+        let spaced = "url,username,password\nhttps://pad.example,me,\"  two spaces  \"\n";
+        host.call("logins_import", &json!({"csv": spaced, "pick": [0]})).await.unwrap();
+        assert_eq!(secret_get("vault:PAD_EXAMPLE").as_deref(), Some("  two spaces  "));
+        // Another bot's login named like a user name (X_USER) never reaches this bot's browser.
+        crate::ext::vault_save(&host.db, ext::VaultEntry { name: "PAD_EXAMPLE_USER".into(), domains: vec!["pad.example".into()], bot: Some(99), totp: false, user: false }, Some("not-yours"), None).unwrap();
+        assert!(!ext::vault_values_for(&host.db, 1).iter().any(|(_, v)| v == "not-yours"));
         // Not a password export: said plainly.
         assert!(host.call("logins_import", &json!({"csv": "a,b\n1,2\n"})).await.unwrap_err().to_string().contains("password export"));
     }

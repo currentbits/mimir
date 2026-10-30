@@ -71,18 +71,12 @@ pub fn read(db: &crate::db::Db, text: &str) -> Result<Vec<Row>> {
         bail!("more than {MAX_ROWS} logins in one file; export a folder or a part of them");
     }
     let saved = crate::ext::vault(db);
-    // Each saved login's site and user name, read once (the keychain is slow to ask thousands of times).
-    let known: Vec<(String, String)> = saved
-        .iter()
-        .flat_map(|e| {
-            let u = if e.user { crate::host::secret_get(&format!("vault:{}:user", e.name)).unwrap_or_default() } else { String::new() };
-            e.domains.iter().map(move |d| (d.clone(), u.clone()))
-        })
-        .collect();
+    let known = known(&saved);
     let mut out: Vec<Row> = vec![];
     for (i, r) in body.iter().enumerate() {
         let get = |c: Option<usize>| c.and_then(|c| r.get(c)).map(|v| v.trim().to_string()).unwrap_or_default();
-        let (u, password) = (get(Some(url)), get(Some(pass)));
+        // The password exactly as exported: spaces at either end are part of it.
+        let (u, password) = (get(Some(url)), r.get(pass).cloned().unwrap_or_default());
         let raw = if u.contains("://") { u.clone() } else { format!("https://{u}") };
         let Some(site) = crate::ext::site_of(&raw) else { continue };
         if password.is_empty() {
@@ -96,7 +90,8 @@ pub fn read(db: &crate::db::Db, text: &str) -> Result<Vec<Row>> {
         let base = site.to_uppercase().replace(|c: char| !c.is_ascii_alphanumeric(), "_");
         let taken = |n: &str| saved.iter().any(|e| e.name == n) || out.iter().any(|o| o.name == n);
         let name = (1..).map(|k| if k == 1 { base.clone() } else { format!("{base}_{k}") }).find(|n| !taken(n)).unwrap_or(base);
-        let exists = known.iter().any(|(d, u)| *d == site && *u == user);
+        // Already there for every bot (one bot's own login doesn't stop it being saved for others).
+        let exists = known.iter().any(|(d, u, b)| *d == site && *u == user && b.is_none());
         let otp = get(otp);
         out.push(Row { i, site, user, totp: !otp.is_empty(), name, exists, password, otp });
     }
@@ -106,10 +101,26 @@ pub fn read(db: &crate::db::Db, text: &str) -> Result<Vec<Row>> {
     Ok(out)
 }
 
-/// Save the picked rows (by `i`) as saved logins: everyone's, or one bot's. Returns how many.
+/// Each saved login's site, user name and whose it is, read once (the keychain is slow to ask thousands of times).
+fn known(saved: &[crate::ext::VaultEntry]) -> Vec<(String, String, Option<i64>)> {
+    saved
+        .iter()
+        .flat_map(|e| {
+            let u = if e.user { crate::host::secret_get(&format!("vault:{}:user", e.name)).unwrap_or_default() } else { String::new() };
+            e.domains.iter().map(move |d| (d.clone(), u.clone(), e.bot))
+        })
+        .collect()
+}
+
+/// Save the picked rows (by `i`) as saved logins: everyone's, or one bot's. Returns how many. A login that bot (or
+/// every bot) already has is skipped.
 pub fn import(db: &crate::db::Db, text: &str, pick: &[usize], bot: Option<i64>) -> Result<usize> {
+    let have = known(&crate::ext::vault(db));
     let mut n = 0;
-    for r in read(db, text)?.into_iter().filter(|r| pick.contains(&r.i) && !r.exists) {
+    for r in read(db, text)?.into_iter().filter(|r| pick.contains(&r.i)) {
+        if have.iter().any(|(d, u, b)| *d == r.site && *u == r.user && (b.is_none() || *b == bot)) {
+            continue;
+        }
         // An authenticator key that doesn't parse is left out, not the whole login.
         let otp = Some(r.otp.as_str()).filter(|o| !o.is_empty() && crate::totp::parse(o).is_ok());
         let entry = crate::ext::VaultEntry { name: r.name.clone(), domains: vec![r.site], bot, totp: false, user: !r.user.is_empty() };
