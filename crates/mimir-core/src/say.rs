@@ -135,6 +135,8 @@ static NL: &[(&str, &str)] = &[
     ("{n} hours ago", "{n} uur geleden"),
     ("yesterday", "gisteren"),
     ("{n} days ago", "{n} dagen geleden"),
+    ("My AI is busy right now (too many requests at once).", "Mijn AI heeft het nu te druk (te veel verzoeken tegelijk)."),
+    ("Try again in a minute.", "Probeer het over een minuut opnieuw."),
     // Away.
     (
         "I paused your routines because you've been away for over {days} days, so they don't use up your AI plan on results nobody reads. Write to me, or press Resume in Mimir's Needs you, and they start again.",
