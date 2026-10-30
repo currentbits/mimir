@@ -1172,7 +1172,7 @@ mod tests {
         assert!(builtin::steered(&ToolCtx::new(db.clone(), 1, 0).with_run(Some(task))), "another bot's task");
 
         // A look-alike of a site with a saved login, or one signed in to before; the full address either way.
-        let e = crate::ext::VaultEntry { name: "GH".into(), domains: vec!["github.com".into()], bot: None, totp: false };
+        let e = crate::ext::VaultEntry { name: "GH".into(), domains: vec!["github.com".into()], bot: None, totp: false, user: false };
         db.set_setting("vault", &serde_json::to_string(&[e]).unwrap()).unwrap();
         let w = crate::ext::signin_warnings(&db, "https://login.github-login.example/session", "github-login.example", true);
         assert_eq!((w["host"].as_str(), w["lookalike"].as_str(), w["steered"].as_bool()), (Some("login.github-login.example"), Some("github.com"), Some(true)));

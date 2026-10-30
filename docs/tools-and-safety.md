@@ -185,6 +185,13 @@ A login can have an authenticator key too: a bot types `NAME_CODE` and Mimir fil
 login's sites. On the bots' computer, a bot can also ask you to sign in with a masked form in Mimir instead of the
 chat ([Signing in from your phone](computer.md#signing-in-from-your-phone)); that login is kept for that bot and site.
 
+**Import from a password manager.** Under **Settings → Browser → Saved logins**, *Import from a password manager…*
+reads a CSV export from 1Password, Chrome, Edge, Safari / Passwords, Firefox, Bitwarden or LastPass. The preview shows
+sites and user names only; the logins you tick are saved one per site (`GITHUB_COM`, with `GITHUB_COM_USER` for its
+user name and `GITHUB_COM_CODE` if the export has an authenticator key), for every bot or just one. They work like any
+saved login: only on their own site, and you approve each use. Delete the export afterwards: it holds every password in
+plain text.
+
 ## Tool servers (MCP)
 
 **Settings → Tool servers** adds any MCP server: one that runs as a command (your files, GitHub, a database…) or one

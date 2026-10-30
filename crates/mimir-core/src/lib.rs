@@ -102,6 +102,7 @@ pub mod office;
 pub mod library;
 pub mod lookalike;
 pub mod mac;
+pub mod passwords;
 pub mod transcribe;
 pub mod ocr;
 
@@ -1201,7 +1202,16 @@ async fn turn_inner(provider: &Provider, ctx: &ToolCtx, trigger: Trigger<'_>) ->
         } else {
             howto.to_string() + &format!(
                 "\n\n<saved_logins>\nTo enter one in the browser, type its NAME exactly as the text; the browser fills in the real value and you never see it. Each only works on its sites, and the user approves each use.\n{}\n</saved_logins>",
-                v.iter().map(|e| format!("- {} ({}){}", e.name, e.domains.join(", "), if e.totp { format!("; its authenticator code: {}_CODE", e.name) } else { String::new() })).collect::<Vec<_>>().join("\n")
+                v.iter()
+                    .map(|e| format!(
+                        "- {} ({}){}{}",
+                        e.name,
+                        e.domains.join(", "),
+                        if e.user { format!("; its user name: {}_USER", e.name) } else { String::new() },
+                        if e.totp { format!("; its authenticator code: {}_CODE", e.name) } else { String::new() }
+                    ))
+                    .collect::<Vec<_>>()
+                    .join("\n")
             )
         }
     } else {
