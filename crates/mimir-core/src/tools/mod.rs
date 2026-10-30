@@ -305,6 +305,16 @@ async fn gated(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
     if !specs().iter().any(|(n, ..)| *n == name) && crate::ext::find(&ctx.db, name).is_none() {
         bail!("unknown tool {name}");
     }
+    // A command carries the folder its card shows, set here (never the model's), so an approval can't run it elsewhere.
+    let with_folder;
+    let args = if name == "shell_run" {
+        let mut a = args.clone();
+        a["folder"] = json!(ctx.db.bot(ctx.bot_id)?.workdir);
+        with_folder = a;
+        &with_folder
+    } else {
+        args
+    };
     // Limits first, so nobody is asked to approve something that would then fail.
     precheck(ctx, name, args)?;
     let enabled = usable(ctx, name) && ctx.db.bot(ctx.bot_id)?.allows(name);
@@ -355,6 +365,8 @@ async fn gated(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
     // In a folder the person chose, their files: deleting one, or changing one that's there, asks every time (no Always,
     // no plan covers it, not even "Don't ask me first": that would lose their own files without a word).
     let (decision, why) = if decision != "deny" && user_file_change(ctx, name, args) { ("ask".to_string(), "userfile") } else { (decision, why) };
+    // A command asks every time, whatever Always, a plan or "Don't ask me first" say: the card shows exactly what runs.
+    let (decision, why) = if decision != "deny" && name == "shell_run" { ("ask".to_string(), "shell") } else { (decision, why) };
     // The person's own rule about what it's for (emails outside acme.com, files into a folder): over Always and "Don't
     // ask me first" too, and no plan covers it.
     let target = if decision != "deny" { target_rule(ctx, name, args) } else { None };
@@ -2299,6 +2311,61 @@ mod tests {
         // Bad patterns are refused.
         assert!(set_target_rules(&db, &[TargetRule { kind: "email".into(), pattern: "nobody".into(), action: "ask".into() }]).is_err());
         assert!(set_target_rules(&db, &[TargetRule { kind: "email".into(), pattern: "a.com".into(), action: "maybe".into() }]).is_err());
+    }
+
+    #[tokio::test]
+    async fn commands_only_when_switched_on_and_always_on_a_card() {
+        let top = std::env::temp_dir().join(format!("mimir-shellgate-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&top);
+        std::fs::create_dir_all(top.join("data")).unwrap();
+        std::fs::create_dir_all(top.join("folder")).unwrap();
+        let db = Db::open(&top.join("data").join("mimir.db")).unwrap();
+        let mut ctx = ToolCtx::new(db.clone(), 1, crate::host::LOCAL_CHAT);
+        let offered = |c: &ToolCtx| specs_for(c).iter().any(|s| s.0 == "shell_run");
+        // Off by default, also with everything else allowed; and switched on without a working folder, still off.
+        assert!(!offered(&ctx));
+        db.set_setting("shell:1", "on").unwrap();
+        assert!(!offered(&ctx), "no working folder");
+        let mut me = db.bot(1).unwrap();
+        me.workdir = crate::files::check_workdir(&db, top.join("folder").to_str().unwrap()).unwrap();
+        db.bot_save(&me).unwrap();
+        assert_eq!(offered(&ctx), crate::shell::available());
+        if !crate::shell::available() {
+            return;
+        }
+        // Asks every time, even for a bot set to never ask, showing the folder and the exact command; no Always.
+        db.set_hands_off(1, true).unwrap();
+        ctx.unattended = true;
+        let out = call(&ctx, "shell_run", &json!({"command": "ls -la"})).await.unwrap();
+        assert!(out.starts_with("Not done yet"), "{out}");
+        let a = db.approvals_pending().unwrap().pop().unwrap();
+        assert!(a.kind == "shell" && a.summary.contains(&format!("Run in {}:\n$ ls -la", me.workdir)), "{a:?}");
+        assert!(!crate::runtime::offers_always(&a));
+        assert!(call(&ctx, "shell_run", &json!({"command": ""})).await.is_err());
+        // Too long to show whole on the card: refused before anyone is asked.
+        assert!(call(&ctx, "shell_run", &json!({"command": format!("echo ok; {}", "true; ".repeat(250))})).await.unwrap_err().to_string().contains("approval card"));
+        // Live, with "Don't ask me first": still a card (not skipped), and the model can't name another folder.
+        ctx.unattended = false;
+        let c = ctx.clone();
+        let waiting = tokio::spawn(async move { call(&c, "shell_run", &json!({"command": "pwd", "folder": "/"})).await });
+        let a = loop {
+            if let Some(a) = db.approvals_pending().unwrap().into_iter().find(|a| !a.parked && a.tool == "shell_run") {
+                break a;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        };
+        assert!(a.summary.contains(&format!("Run in {}:", me.workdir)), "the card shows its own folder: {}", a.summary);
+        // The folder changes while the card waits: approved, it still doesn't run there.
+        std::fs::create_dir_all(top.join("other")).unwrap();
+        me.workdir = crate::files::check_workdir(&db, top.join("other").to_str().unwrap()).unwrap();
+        db.bot_save(&me).unwrap();
+        db.approval_decide(a.id, true, None).unwrap();
+        assert!(waiting.await.unwrap().unwrap_err().to_string().contains("working folder changed"));
+        // Not in a guest's chat.
+        db.pair(200, "Sam").unwrap();
+        db.chat_set_guest(200, true).unwrap();
+        assert!(!offered(&ToolCtx::new(db.clone(), 1, 200)));
+        let _ = std::fs::remove_dir_all(&top);
     }
 
     #[tokio::test]

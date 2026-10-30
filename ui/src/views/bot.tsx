@@ -198,6 +198,8 @@ export function BotPage({ bot, status, canDelete, onSaved, onDeleted, onChat, on
   // to copy its files in when you set one.
   const folder = useLoad(() => bot ? invoke<{ path: string; chosen: boolean; machine: string; problem: string | null; can_open: boolean }>('bot_folder', { botId: bot.id }) : Promise.resolve(null), [bot?.id, bot?.workdir], 60000)
   const [copyFiles, setCopyFiles] = useState(true)
+  const shell = useLoad(() => bot ? invoke<{ available: boolean; on: boolean }>('bot_shell', { botId: bot.id }) : Promise.resolve(null), [bot?.id], 60000)
+  const setShell = (on: boolean) => bot && invoke('bot_shell', { botId: bot.id, on }).then(shell.reload, e => setErr(String(e)))
   const newFolder = !!b.workdir?.trim() && b.workdir !== (bot?.workdir ?? '')
   const pickHere = inDesktop && !remoteServer()
   const pick = () => localInvoke<string | null>('pick_folder').then(p => { if (p) edit({ workdir: p }) }, e => setErr(String(e)))
@@ -345,6 +347,11 @@ export function BotPage({ bot, status, canDelete, onSaved, onDeleted, onChat, on
         {newFolder && <Row title="Copy its files there" desc="What it has in Mimir’s workspace (its own, and the app chat’s) is copied in when you save; nothing there is replaced."><Switch label="Copy its files there" checked={copyFiles} onChange={() => setCopyFiles(c => !c)} /></Row>}
         {folder.data && !newFolder && <Row title={folder.data.chosen ? 'Its folder' : 'Its own workspace (for tasks other bots hand it)'} desc={folder.data.problem ?? `${folder.data.path} on ${folder.data.machine}`}>
           {folder.data.can_open && !folder.data.problem && <button type="button" className="btn btn-sm btn-ghost" onClick={() => invoke('open_bot_folder', { botId: bot!.id }).catch(e => setErr(String(e)))}>{platform === 'mac' ? 'Reveal in Finder' : 'Show in Explorer'}</button>}
+        </Row>}
+        {folder.data?.chosen && shell.data && <Row title="Let it run commands here" desc={shell.data.available
+          ? 'Build, test or convert files in this folder. Each command asks you first, showing exactly what runs; it can’t use the network, write outside the folder or read the rest of your home folder, and stops after a minute.'
+          : 'Not on this machine: commands need a sandbox (macOS, or Linux with bubblewrap installed).'}>
+          <Switch label="Let it run commands here" checked={shell.data.on} disabled={!shell.data.available} onChange={v => void setShell(v)} />
         </Row>}
         <Row title="Writing files" desc="Whether file_write asks you first, for this bot. Deleting a file, or changing one already in a folder you chose, always asks.">
           <Segmented size="sm" label="Writing files" value={b.file_write || 'default'} onChange={v => edit({ file_write: v === 'default' ? '' : v })}

@@ -21,6 +21,11 @@ What changed for people using Mimir. The newest release is at the top; "Unreleas
   which to save; each works only on its own site and asks before every use. User names are typed for `NAME_USER`, so
   the AI never sees those either.
 
+### Working folders
+- **Commands:** a bot with a working folder can run a command there once you turn it on in its settings (build, test,
+  convert). Every command asks you, showing exactly what runs, and runs sandboxed: no network, nothing written outside
+  the folder, the rest of your home folder unreadable, a minute at most. macOS, or Linux with bubblewrap.
+
 ### Your Mac
 - **Mail, Messages and apps:** in the Mimir app on a Mac, bots can send an email from Mail, an iMessage from Messages,
   or open an app (with a workspace file in it). Each asks first, showing who it's to and the whole text. macOS asks

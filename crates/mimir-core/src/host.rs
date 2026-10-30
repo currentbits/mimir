@@ -886,6 +886,17 @@ impl Host {
                 ok(crate::files::reveal(&root)?)
             }
             // A bot's working folder: where (and on which machine), whether it's there, and open it on the desktop.
+            // Commands in a bot's working folder: whether this machine can sandbox them, and (with `on`) switch them.
+            "bot_shell" => {
+                let bot: i64 = arg(a, "bot_id")?;
+                if let Some(on) = arg::<Option<bool>>(a, "on")? {
+                    if on && !crate::shell::available() {
+                        bail!("commands can't be sandboxed on this machine (macOS, or Linux with bubblewrap installed)");
+                    }
+                    self.db.set_setting(&format!("shell:{bot}"), if on { "on" } else { "off" })?;
+                }
+                ok(json!({"available": crate::shell::available(), "on": self.db.setting(&format!("shell:{bot}"))?.as_deref() == Some("on")}))
+            }
             "bot_folder" => {
                 let bot = self.db.bot(arg(a, "bot_id")?)?;
                 let ws = crate::files::bot_ws(bot.id);

@@ -33,6 +33,11 @@ pub(super) const GUEST_TOOLS: [&str; 27] = [
     "file_list", "file_read", "file_write", "file_delete", "skill_view", "skill_save", "calendar_add", "plan_propose", "ask_bot", "ask_choice", "send_file", "card_read", "card_write", "progress_set",
 ];
 
+/// This bot may run commands: it has a working folder and the person switched commands on for it.
+pub(crate) fn shell_on(ctx: &ToolCtx) -> bool {
+    ctx.db.bot(ctx.bot_id).is_ok_and(|b| !b.workdir.is_empty()) && ctx.db.setting(&format!("shell:{}", ctx.bot_id)).ok().flatten().as_deref() == Some("on")
+}
+
 pub(super) fn usable(ctx: &ToolCtx, tool: &str) -> bool {
     !ctx.tools_off
         && (GUEST_TOOLS.contains(&tool) || !ctx.db.chat_guest(ctx.chat_id))
@@ -61,6 +66,9 @@ pub(super) fn usable(ctx: &ToolCtx, tool: &str) -> bool {
         && (!tool.starts_with("email_") || (crate::email::account(&ctx.db).is_some() && ctx.db.chat_private(ctx.chat_id)))
         // The Mac's own apps: only from the desktop app on a Mac, in a chat with the person alone, never incognito.
         && (!matches!(tool, "mail_send" | "messages_send" | "app_open") || (crate::mac::here(&ctx.db) && ctx.db.chat_private(ctx.chat_id) && !ctx.incognito()))
+        // Commands: only for a bot with a working folder whose person turned them on, where a sandbox exists, in a chat
+        // with the person alone.
+        && (tool != "shell_run" || (crate::shell::available() && shell_on(ctx) && ctx.db.chat_private(ctx.chat_id) && !ctx.incognito()))
         // The workspace keeps files on disk: not in incognito.
         && !(ctx.incognito() && tool.starts_with("file_"))
         // Web search once a search service is set up.
@@ -630,6 +638,11 @@ pub(super) fn describe(ctx: &ToolCtx, name: &str, args: &Value) -> String {
         "file_read" => format!("Read {}", args["path"].as_str().unwrap_or("?")),
         "file_write" => format!("{} {}: {}", match args["mode"].as_str() { Some("append") => "Add to", Some("replace") => "Rewrite", _ => "Create" }, args["path"].as_str().unwrap_or("?"), truncate(args["content"].as_str().unwrap_or(""), 300)),
         "file_delete" => format!("Delete the file {}", args["path"].as_str().unwrap_or("?")),
+        "shell_run" => format!(
+            "Run in {}:\n$ {}",
+            args["folder"].as_str().map(String::from).unwrap_or_else(|| ctx.db.bot(ctx.bot_id).map(|b| b.workdir).unwrap_or_default()),
+            args["command"].as_str().unwrap_or("?")
+        ),
         // Who first, in full; then the whole text.
         "mail_send" => format!(
             "Send from Mail on this Mac to {}{}\nSubject: {}\n\n{}",
@@ -854,6 +867,9 @@ pub(super) fn always_ask(name: &str, decision: String, why: &'static str, tainte
 pub(super) fn precheck(ctx: &ToolCtx, name: &str, args: &Value) -> Result<()> {
     let len = |k: &str| args[k].as_str().map_or(0, |s| s.chars().count());
     match name {
+        "shell_run" if len("command") == 0 || describe(ctx, name, args).chars().count() > CARD_FITS => {
+            bail!("one command line that fits on the approval card whole (about 1000 characters): split it, or put it in a script file in the folder and run that")
+        }
         // Who and what, before anyone is asked: the card must show all of it.
         "mail_send" => {
             crate::mac::mail_args(args["to"].as_str().unwrap_or(""), args["cc"].as_str().unwrap_or(""), "", "")?;
@@ -1077,6 +1093,7 @@ pub(crate) fn describe_tool(name: &str) -> String {
         "email_send" => "send emails",
         "file_delete" => "delete files",
         "file_export" => "copy files to your folders",
+        "shell_run" => "run commands in its working folder",
         "mail_send" => "send emails from Mail on your Mac",
         "messages_send" => "send messages from your Mac",
         "app_open" => "open apps on your Mac",
@@ -1189,7 +1206,9 @@ pub(crate) fn unanswered(delivery: &str) -> String {
 /// `kind` says why it asks (rule | guarded | login); `site` is the website, for a per-site "always".
 /// Approved, it gives back the call's arguments with any text you edited on the card (`args` itself otherwise).
 pub(crate) async fn wait_for_approval_with(ctx: &ToolCtx, name: &str, args: &Value, summary: &str, kind: &str, site: Option<&str>) -> Result<Value> {
-    if hands_off(ctx) {
+    // "Don't ask me first" skips a card, but never one that must always be asked: a command, a change to the person's own
+    // files, or one of their Ask first rules.
+    if hands_off(ctx) && !matches!(kind, "shell" | "userfile" | "target") {
         return Ok(args.clone());
     }
     let summary = for_helper(ctx, card_text(summary));
