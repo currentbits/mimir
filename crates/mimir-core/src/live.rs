@@ -157,6 +157,7 @@ pub fn step_label(tool: &str) -> String {
         "file_write" => "Writing a file".into(),
         "file_delete" => "Deleting a file".into(),
         "file_export" => "Copying files to your folder".into(),
+        "shell_run" => "Running a command".into(),
         "mail_send" => "Sending an email from Mail".into(),
         "messages_send" => "Sending a message".into(),
         "app_open" => "Opening an app".into(),

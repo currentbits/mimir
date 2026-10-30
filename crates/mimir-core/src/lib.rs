@@ -103,6 +103,7 @@ pub mod library;
 pub mod lookalike;
 pub mod mac;
 pub mod passwords;
+pub mod shell;
 pub mod transcribe;
 pub mod ocr;
 

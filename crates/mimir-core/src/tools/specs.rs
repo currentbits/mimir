@@ -210,6 +210,16 @@ pub fn specs() -> Vec<(&'static str, &'static str, Value)> {
             },"required":["app"]}),
         ),
         (
+            "shell_run",
+            "Run a command in your working folder (only if the user turned it on for you): build, test, convert or tidy \
+             files there. The user approves each command on a card that shows it exactly. It runs sandboxed: no network, \
+             nothing written outside the folder, the rest of their home folder unreadable, 60 seconds at most. Paths are \
+             relative to the folder.",
+            json!({"type":"object","properties":{
+                "command":{"type":"string","description":"one shell command line (sh), up to 2000 characters"}
+            },"required":["command"]}),
+        ),
+        (
             "file_delete",
             "Delete a file from this chat's workspace.",
             json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}),

@@ -515,6 +515,15 @@ pub(super) async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<Stri
             };
             crate::mac::app_open(s(args, "app")?, file).await?
         }
+        "shell_run" => {
+            let dir = ctx.db.bot(ctx.bot_id)?.workdir;
+            // Checked again here: the folder must still be there (never another one instead).
+            crate::files::workspace(&ctx.db, ctx.bot_id, ctx.chat_id, false, true)?;
+            let out = crate::shell::run(std::path::Path::new(&dir), s(args, "command")?).await?;
+            // What a command prints can be anything (a file someone else wrote, a web page saved earlier).
+            ctx.taint();
+            out
+        }
         "file_export" => crate::files::export(&ctx.db, ws(ctx)?, s(args, "path")?, s(args, "dest")?, args["replace"].as_bool() == Some(true))?,
         "file_delete" => {
             let p = s(args, "path")?;
