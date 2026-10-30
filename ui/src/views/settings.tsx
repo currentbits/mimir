@@ -881,10 +881,59 @@ function BrowserSettings({ onChange }: { onChange: () => void }) {
               <button className="btn" disabled={!draft.name.trim() || !(draft.value || (exists && draft.totp)) || !draft.domains.trim()}>Save</button>
             </div></div>
           </form>
+          {on && <ImportLogins onDone={vault.reload} />}
         </>
       )}
       {err && <div className="row-block"><p className="error" style={{ margin: 0 }}>{err}</p></div>}
     </Group>
+  )
+}
+
+type ImportRow = { i: number; site: string; user: string; totp: boolean; name: string; exists: boolean }
+
+/** Saved logins from a password manager's CSV export: a preview (sites and user names only), then the ones you tick. */
+function ImportLogins({ onDone }: { onDone: () => void }) {
+  const [csv, setCsv] = useState<string | null>(null)
+  const [rows, setRows] = useState<ImportRow[]>([])
+  const [pick, setPick] = useState<Set<number>>(new Set())
+  const [bot, setBot] = useState<number>(0)
+  const [msg, setMsg] = useState<string | null>(null)
+  const bots = useLoad(() => invoke<Bot[]>('bots'), [], 60000)
+  const open = (f: File | undefined) => f && f.text().then(text => invoke<ImportRow[]>('logins_import', { csv: text }).then(r => {
+    setCsv(text); setRows(r); setPick(new Set(r.filter(x => !x.exists).map(x => x.i))); setMsg(null)
+  }, e => setMsg(String(e))))
+  const save = () => csv && invoke<{ saved: number }>('logins_import', { csv, pick: [...pick], botId: bot || null }).then(r => {
+    setCsv(null); setRows([]); onDone()
+    setMsg(`Saved ${r.saved} login${r.saved === 1 ? '' : 's'}. Delete the export file now: it has every password in plain text.`)
+  }, e => setMsg(String(e)))
+  const toggle = (i: number) => setPick(p => { const n = new Set(p); if (n.has(i)) n.delete(i); else n.add(i); return n })
+  return (
+    <div className="row-block">
+      {!csv ? <label className="btn btn-sm btn-ghost" style={{ cursor: 'pointer' }}>
+        Import from a password manager…
+        <input type="file" accept=".csv,text/csv" style={{ display: 'none' }} onChange={e => { void open(e.target.files?.[0]); e.target.value = '' }} />
+      </label> : <>
+        <p className="hint" style={{ margin: '0 0 8px' }}>Export as CSV from 1Password, Chrome, Edge, Safari / Passwords, Firefox, Bitwarden or LastPass. Only sites and user names are shown here; each login works only on its site, and you approve every use.</p>
+        <div style={{ maxHeight: 280, overflow: 'auto' }}>
+          {rows.map(r => (
+            <label key={r.i} className="row" style={{ cursor: r.exists ? 'default' : 'pointer' }}>
+              <input type="checkbox" checked={pick.has(r.i)} disabled={r.exists} onChange={() => toggle(r.i)} />
+              <div className="row-main"><div className="row-title">{r.site}</div>
+                <div className="row-desc">{r.user || 'no user name'}{r.totp ? ' · authenticator codes' : ''}{r.exists ? ' · already saved' : ` · saved as ${r.name}`}</div></div>
+            </label>
+          ))}
+        </div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 }}>
+          <select className="select" style={{ width: 'auto' }} aria-label="For which bot" value={bot} onChange={e => setBot(Number(e.target.value))}>
+            <option value={0}>For every bot</option>
+            {(bots.data ?? []).map(b => <option key={b.id} value={b.id}>Only {b.name}</option>)}
+          </select>
+          <button type="button" className="btn btn-sm" disabled={!pick.size} onClick={() => void save()}>Import {pick.size}</button>
+          <button type="button" className="btn btn-sm btn-ghost" onClick={() => { setCsv(null); setRows([]) }}>Cancel</button>
+        </div>
+      </>}
+      {msg && <p className="hint" style={{ margin: '8px 0 0' }}>{msg}</p>}
+    </div>
   )
 }
 
