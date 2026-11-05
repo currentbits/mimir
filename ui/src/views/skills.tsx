@@ -30,8 +30,6 @@ export function SkillsView({ chatId }: { chatId: number }) {
   const [added, setAdded] = useState(0)
   return (
     <>
-      <div className="page-head"><div><h1 className="display">Skills</h1>
-        <p className="lead">Step-by-step procedures your bots follow for a task. Add one from the library, teach one, or let a bot learn one from a task that went well. Use one on purpose by typing <code>/</code> in a chat.</p></div></div>
       <Skills key={added} chatId={chatId} />
       <SkillLibrary chatId={chatId} onAdded={() => setAdded(n => n + 1)} />
     </>
@@ -139,6 +137,9 @@ function Skills({ chatId }: { chatId: number }) {
   }
   return (
     <>
+      <div className="page-head"><div><h1 className="display">Skills</h1>
+        <p className="lead">Step-by-step procedures your bots follow for a task. Add one from the library, teach one, or let a bot learn one from a task that went well. Use one on purpose by typing <code>/</code> in a chat.</p></div>
+        {!teaching && <button className="btn btn-primary head-action" onClick={() => setTeaching({ source: '', bot: bots[0]?.id ?? 1, busy: false })}><Icon name="bolt" size={14} />Teach a skill</button>}</div>
       <div className={'teach' + (active.length || teaching ? '' : ' teach-empty')}>
         {!active.length && !teaching && <span><b>No skills of your own yet</b>Teach one from a link or a few lines of text, or add one from the library below.</span>}
         {teaching ? <form className="er" onSubmit={e => { e.preventDefault(); teach() }}>
@@ -146,7 +147,7 @@ function Skills({ chatId }: { chatId: number }) {
           <input className="input" autoFocus placeholder="A link, the text (how our expense process works, a checklist…), or a SKILL.md" aria-label="What to learn from" value={teaching.source} onChange={e => setTeaching({ ...teaching, source: e.target.value })} />
           <button className="btn btn-sm btn-ghost" type="button" onClick={() => setTeaching(null)}>Cancel</button>
           <button className="btn btn-sm" disabled={teaching.busy || !teaching.source.trim()}>{teaching.busy ? 'Learning…' : 'Learn'}</button>
-        </form> : <button className="btn btn-sm btn-primary" onClick={() => setTeaching({ source: '', bot: bots[0]?.id ?? 1, busy: false })}><Icon name="bolt" size={14} />Teach a skill</button>}
+        </form> : null}
       </div>
       {proposed.length > 0 && (
         <section className="suggest" aria-label="Suggested skills">

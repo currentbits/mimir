@@ -234,7 +234,8 @@ export function RoutinesView({ chatId, bots }: { chatId: number; bots: Bot[] }) 
   return (
     <>
       <div className="page-head"><div><h1 className="display">Routines</h1>
-        <p className="lead">What your bots do on a schedule, and what they keep an eye on for you.</p></div></div>
+        <p className="lead">What your bots do on a schedule, and what they keep an eye on for you.</p></div>
+        {!draft && <button className="btn btn-primary head-action" onClick={() => start('0 8 * * *', '', false)}><Icon name="plus" size={14} />New routine</button>}</div>
       {err && <p className="error">{err}</p>}
       {list.length === 0 ? (
         <Empty icon="clock" title="Nothing scheduled">
@@ -283,8 +284,7 @@ export function RoutinesView({ chatId, bots }: { chatId: number; bots: Bot[] }) 
                       ...(r.once ? [] : [['pencil', 'Edit', () => { setMore(null); setEditing({ id: r.id, draft: { prompt: r.prompt, quiet: r.quiet, botId: r.bot_id, when: toWhen(r.cron), delivery: r.delivery ?? 'now', watch: r.watch ?? '', urgent: r.urgent ?? '', until: dayOf(r.ends) } }) }] as [string, string, () => void]]),
                       ['trash', 'Delete…', () => { setMore(null); void ask('Delete this routine?', 'Delete', true).then(ok => { if (ok) void invoke('delete_routine', { chatId, id: r.id }).then(rows.reload, e => setErr(String(e))) }) }],
                     ]} /> })()}
-      <div className="section-title"><h2>Add a routine</h2><span className="grow" />
-        {!draft && <button className="btn btn-sm btn-primary" onClick={() => start('0 8 * * *', '', false)}><Icon name="plus" size={14} />New routine</button>}</div>
+      <div className="section-title"><h2>Add a routine</h2></div>
       <p className="hint" style={{ margin: '-4px 0 12px' }}>Anything a bot should do on a schedule. Quiet ones only message you when something needs your attention.</p>
       {draft ? <RoutineForm skills={skillRows.data ?? []} draft={draft} setDraft={setDraft} bots={bots} onCancel={() => setDraft(null)} onSave={add} /> : (
         <div className="presets four">
