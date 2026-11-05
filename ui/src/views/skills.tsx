@@ -91,13 +91,13 @@ function SkillLibrary({ chatId, onAdded }: { chatId: number; onAdded: () => void
                 <p className="mem-body">{k.description}</p>
                 {open === k.slug && <div className="skill-steps selectable"><Markdown text={k.body} /></div>}
                 <div className="mem-meta">
-                  <button type="button" className="linkish" aria-expanded={open === k.slug} onClick={() => setOpen(open === k.slug ? null : k.slug)}>{open === k.slug ? 'Hide steps' : 'See the steps'}</button>
                   {missing.length > 0 && <span className="badge needs" title="It can be added now; it works once these are there.">Needs {[...new Set(missing.map(t => NEED[t] ?? t))].join(', ')}</span>}
                   {/* A habit: once added, run it on a schedule in one click (a routine whose prompt is the skill's command). */}
                   {has && k.schedule && (scheduled.includes(k.slug)
                     ? <span>scheduled {k.schedule.label.toLowerCase()} · change it in Routines</span>
                     : <><button type="button" className="linkish" disabled={busy === k.slug} onClick={() => schedule(k)}>Schedule it</button>
                       <span className="sched-when">{k.schedule.label.toLowerCase()}</span></>)}
+                  <button type="button" className="linkish" aria-expanded={open === k.slug} onClick={() => setOpen(open === k.slug ? null : k.slug)}>{open === k.slug ? 'Hide steps' : 'See the steps'}</button>
                 </div>
               </article>
             )
@@ -193,7 +193,6 @@ function Skills({ chatId }: { chatId: number }) {
               {shown === k.id && <div className="skill-steps selectable"><Markdown text={k.body} /></div>}
               {rehearsal?.id === k.id && (rehearsal.r ? <RehearsalResult r={rehearsal.r} onClose={() => setRehearsal(null)} /> : <p className="hint">Rehearsing… it runs for real, but anything it would send or change is only described.</p>)}
               <div className="mem-meta">
-                <button type="button" className="linkish" aria-expanded={shown === k.id} onClick={() => setShown(shown === k.id ? null : k.id)}>{shown === k.id ? 'Hide steps' : 'See the steps'}</button>
                 {bots.length > 1
                   ? <select className="select select-inline" value={k.bot_id} aria-label={`Which bots use ${k.name}`}
                       onChange={e => invoke('share_skill', { chatId, id: k.id, botId: Number(e.target.value) }).then(() => { setErr(null); list.reload() }, er => setErr(String(er)))}>
@@ -201,7 +200,8 @@ function Skills({ chatId }: { chatId: number }) {
                     </select>
                   : <span>{who(k.bot_id)}</span>}
                 <span>{ago(k.created_at)}</span>
-                <span>{k.uses ? `used ${k.uses}× · last ${ago(k.last_used ?? k.created_at)}` : 'not used yet'}</span></div>
+                <span>{k.uses ? `used ${k.uses}× · last ${ago(k.last_used ?? k.created_at)}` : 'not used yet'}</span>
+                <button type="button" className="linkish" aria-expanded={shown === k.id} onClick={() => setShown(shown === k.id ? null : k.id)}>{shown === k.id ? 'Hide steps' : 'See the steps'}</button></div>
             </article>
           ))}</div>
         </section>
