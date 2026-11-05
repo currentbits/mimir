@@ -231,6 +231,8 @@ export function RoutinesView({ chatId, bots }: { chatId: number; bots: Bot[] }) 
     .then(() => { setDraft(null); setErr(null); rows.reload() }, e => setErr(String(e)))
   return (
     <>
+      <div className="page-head"><div><h1 className="display">Routines</h1>
+        <p className="lead">What your bots do on a schedule, and what they keep an eye on for you.</p></div></div>
       {err && <p className="error">{err}</p>}
       {list.length === 0 ? (
         <Empty icon="clock" title="Nothing scheduled">

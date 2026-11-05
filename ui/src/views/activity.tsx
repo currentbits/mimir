@@ -27,11 +27,13 @@ export function ActivityView({ chatId }: { chatId: number }) {
   if (!list.length) return <Empty icon="activity" title="No activity yet">Each reply, routine and tidy-up shows up here with its model, tokens, cost and every tool it used.</Empty>
   return (
     <>
+      <div className="page-head"><div><h1 className="display">Activity</h1>
+        <p className="lead">Every run in this chat over the last 30 days. The cost is what the same use would cost on the API; subscriptions aren’t billed per token.</p></div></div>
       {t && (
         <dl className="stats" aria-label="Last 30 days">
           <div className="stat"><dt>Runs · 30 days</dt><dd>{t.runs}{t.errors ? <small className="bad"> · {t.errors} failed</small> : null}</dd></div>
           <div className="stat"><dt>Tokens in / out</dt><dd>{tok(t.tokens_in)} <small>/ {tok(t.tokens_out)}</small></dd></div>
-          <div className="stat"><dt>API-equivalent cost</dt><dd>{usd(t.cost_usd)}</dd><p>Subscriptions aren’t billed per token; this is what the same use would cost on the API.</p></div>
+          <div className="stat"><dt>API-equivalent cost</dt><dd>{usd(t.cost_usd)}</dd></div>
         </dl>
       )}
       <div className="group">

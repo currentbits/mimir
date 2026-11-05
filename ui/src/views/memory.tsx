@@ -64,6 +64,8 @@ export function MemoryView({ chatId, onChange }: { chatId: number; onChange: () 
 
   return (
     <>
+      <div className="page-head"><div><h1 className="display">Memory</h1>
+        <p className="lead">What your bots know about you here. Correct it, pin it, or forget it anytime.</p></div></div>
       <div className="searchbar">
         <label className="search"><Icon name="search" size={15} /><input className="input" placeholder="Search memory" aria-label="Search memory" value={query} onChange={e => setQuery(e.target.value)} /></label>
         <Segmented size="sm" label="Which memories" value={history} onChange={setHistory}

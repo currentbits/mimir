@@ -394,7 +394,7 @@ function Main() {
         ) : (
           // Keyed: each view starts at the top (the scroller used to keep the last view's position).
           <div className="page" key={`${view}-${chat.chat_id}-${botId}`}>
-            <div className={'col fade-in' + (view === 'activity' || view === 'computer' ? ' wide' : '')}>
+            <div className={'col fade-in' + (view === 'computer' ? ' wide' : '')}>
               {view === 'memory' && <MemoryView chatId={chat.chat_id} onChange={chats.reload} />}
               {view === 'skills' && <SkillsView chatId={chat.chat_id} />}
               {view === 'routines' && <RoutinesView chatId={chat.chat_id} bots={botList} />}
