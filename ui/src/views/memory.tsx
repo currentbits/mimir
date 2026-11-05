@@ -72,7 +72,7 @@ export function MemoryView({ chatId, onChange }: { chatId: number; onChange: () 
           options={[{ id: 'now', label: 'Current' }, { id: 'all', label: `History${inactive ? ` · ${inactive}` : ''}` }, { id: 'timeline', label: 'Timeline' }]} />
         {/* The tidy-up reads a chat's conversations; the household has none. */}
         {chatId !== HOUSEHOLD && <TidyButton chatId={chatId} onDone={refresh} />}
-        <button className="btn btn-ghost" onClick={() => setAdding(a => a === 'import' ? null : 'import')} title="Bring in what another assistant remembers about you"><Icon name="archive" size={14} />Import</button>
+        <button className="btn" onClick={() => setAdding(a => a === 'import' ? null : 'import')} title="Bring in what another assistant remembers about you"><Icon name="archive" size={14} />Import</button>
         <button className="btn btn-primary" onClick={() => setAdding(a => a === 'one' ? null : 'one')}><Icon name="plus" size={14} />Add</button>
       </div>
       {(err || rows.error) && <p className="error">{err || rows.error}</p>}
@@ -126,7 +126,7 @@ function TidyButton({ chatId, onDone }: { chatId: number; onDone: () => void }) 
     )
   }
   return (
-    <button className="btn btn-ghost" onClick={run} disabled={state === 'Reviewing…'} title="Review memory against recent conversations. Runs by itself once a day when the chat is quiet.">
+    <button className="btn" onClick={run} disabled={state === 'Reviewing…'} title="Review memory against recent conversations. Runs by itself once a day when the chat is quiet.">
       <Icon name="wand" size={14} />{state ?? 'Tidy up'}
     </button>
   )

@@ -264,7 +264,7 @@ export function RoutinesView({ chatId, bots }: { chatId: number; bots: Bot[] }) 
                   </div>
                   <div className="routine-actions">
                     <Switch label={r.paused ? `Resume: ${when(r)}` : `Pause: ${when(r)}`} checked={!r.paused} onChange={on => update(r, { paused: !on })} />
-                    <button className="btn btn-ghost btn-sm run-now" disabled={runningId === r.id} title="Run it once now; the result goes to the chat"
+                    <button className="btn btn-sm run-now" disabled={runningId === r.id} title="Run it once now; the result goes to the chat"
                       onClick={() => { setRunningId(r.id); invoke<string>('run_routine', { chatId, id: r.id }).then(() => setErr(null), e => setErr(String(e))).finally(() => { setRunningId(null); rows.reload(); stats.reload() }) }}>
                       {runningId === r.id ? 'Running…' : 'Run now'}
                     </button>
