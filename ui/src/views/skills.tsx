@@ -138,7 +138,7 @@ function Skills({ chatId }: { chatId: number }) {
   return (
     <>
       <div className="page-head"><div><h1 className="display">Skills</h1>
-        <p className="lead">Step-by-step procedures your bots follow for a task. Add one from the library, teach one, or let a bot learn one from a task that went well. Use one on purpose by <span style={{ whiteSpace: 'nowrap' }}>typing <code>/</code></span> in a chat.</p></div>
+        <p className="lead">Step-by-step procedures your bots follow. Add one from the library, teach one, or let a bot learn one from a task that went well. <span style={{ whiteSpace: 'nowrap' }}>Type <code>/</code></span> in a chat to use one.</p></div>
         {!teaching && <button className="btn btn-primary head-action" onClick={() => setTeaching({ source: '', bot: bots[0]?.id ?? 1, busy: false })}><Icon name="bolt" size={14} />Teach a skill</button>}</div>
       <div className={'teach' + (active.length || teaching ? '' : ' teach-empty')}>
         {!active.length && !teaching && <span><b>No skills of your own yet</b>Teach one from a link or a few lines of text, or add one from the library below.</span>}

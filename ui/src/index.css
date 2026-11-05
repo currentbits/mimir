@@ -156,7 +156,7 @@ a.btn { text-decoration: none; }
 .rail-item .ri-sub.busy { color: var(--text-2); }
 .rail-item .ri-count { font-size: 11px; color: var(--text-3); opacity: 0; transition: opacity 160ms ease; font-variant-numeric: tabular-nums; }
 .rail-item .ri-glyph { width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; color: var(--text-2); background: var(--hover); flex: none; }
-.rail-hint { padding: 6px 8px; text-wrap: pretty; font-size: 13px; opacity: .8; color: var(--text-3); line-height: 1.4; }
+.rail-hint { padding: 6px 8px; text-wrap: pretty; font-size: 13px; line-height: 1.4; color: var(--text-3); line-height: 1.4; }
 .rail-foot { padding: 8px 10px 12px; border-top: 0.5px solid var(--line); }
 .rail-foot .rail-item { color: var(--text-2); padding: 9px 8px; }
 .rail-foot .badge { margin-left: auto; }
@@ -294,7 +294,7 @@ a.btn { text-decoration: none; }
 .group-head { display: flex; align-items: center; justify-content: space-between; margin: 0 0 8px; }
 .group-head h3 { margin: 0; font: 600 17px/1.25 var(--serif); letter-spacing: -0.005em; color: var(--text); }
 .group { background: var(--surface); border-radius: 12px; box-shadow: var(--shadow-sm); overflow: hidden; }
-.group-note { margin: 10px 0 0; max-width: 62ch; font-size: 13px; color: var(--text-3); line-height: 1.55; text-wrap: pretty; }
+.group-note { margin: 8px 0 0; max-width: 62ch; font-size: 13px; color: var(--text-3); line-height: 1.55; text-wrap: pretty; }
 .row { display: flex; align-items: center; gap: 12px; padding: 10px 14px; min-height: 44px; }
 .row + .row, .row + .row-block, .row-block + .row, .row-block + .row-block { border-top: 0.5px solid var(--line); }
 .row-icon { width: 26px; height: 26px; border-radius: 7px; display: grid; place-items: center; background: none; color: var(--text-2); flex: none; }
@@ -517,7 +517,7 @@ a.btn { text-decoration: none; }
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03), 0 8px 24px -14px rgba(0, 0, 0, 0.14);
 }
 .composer:focus-within { border-color: color-mix(in srgb, var(--text) 22%, transparent); }
-.composer textarea { flex: 1; border: 0; background: none; resize: none; padding: 5px 4px; font-size: 14px; line-height: 1.45; max-height: 160px; outline: none; }
+.composer textarea { flex: 1; border: 0; background: none; resize: none; padding: 5px 4px 5px 8px; font-size: 14px; line-height: 1.45; max-height: 160px; outline: none; }
 .composer textarea::placeholder { color: var(--text-3); }
 .composer .send { width: 30px; height: 30px; border-radius: 50%; border: 0; display: grid; place-items: center; background: var(--accent-fill); color: #fff; flex: none; transition: transform 90ms ease, opacity 120ms; }
 .composer .send:disabled { opacity: 1; background: var(--selected); color: var(--text-3); }
@@ -628,7 +628,7 @@ a.btn { text-decoration: none; }
 .routine .ri { width: 26px; height: 22px; display: grid; place-items: center; color: var(--text-2); }
 .routine .ri.quiet { color: var(--text-2); }
 .routine .rt { font-weight: 500; color: var(--text-2); display: inline-flex; align-items: center; gap: 6px; }
-.routine .rp { margin-top: 1px; font-size: 14.5px; font-weight: 500; text-wrap: pretty; color: var(--text); line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.routine .rp { margin-top: 1px; font-size: 14.5px; font-weight: 500; color: var(--text); line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .routine .rm { margin-top: 6px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; font-size: 13px; color: var(--text-3); }
 .routine .rh { margin-top: 4px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font-size: 13px; color: var(--text-3); }
 .routine .rh .bad { color: var(--danger); }
@@ -672,7 +672,7 @@ a.btn { text-decoration: none; }
 
 /* ---------------- activity ---------------- */
 
-.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 16px; }
+.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 12px; }
 .stat { padding: 14px 16px; border-radius: 12px; background: var(--surface); box-shadow: var(--shadow-sm); }
 .stat dt { font-size: 12px; color: var(--text-3); font-weight: 500; }
 .stat dd { margin: 6px 0 0; font: 600 28px/1.1 var(--sans); letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
@@ -1087,7 +1087,7 @@ kbd, .keys { font: 500 11.5px var(--sans); color: var(--text-2); padding: 3px 7p
 .link-real { opacity: 0.7; font-size: 0.86em; }
 .why.warn-line { color: var(--pending); display: flex; gap: 5px; align-items: center; }
 .clear-history { display: flex; gap: 10px; align-items: center; margin-top: 18px; }
-.clear-history > .btn-ghost:first-child { margin-left: -10px; }
+.clear-history > .btn-ghost:first-child { margin-left: -11px; }
 
 /* A bot's right-click menu in the sidebar, and the gear by the composer's bot picker. */
 .ctx-menu { position: fixed; z-index: 60; display: grid; gap: 2px; min-width: 190px; padding: 5px; border-radius: 10px; background: var(--surface); border: 0.5px solid var(--line-strong); box-shadow: var(--shadow-md, var(--shadow-sm)); animation: fade-in 120ms var(--ease-out) both; }
@@ -1165,12 +1165,12 @@ kbd, .keys { font: 500 11.5px var(--sans); color: var(--text-2); padding: 3px 7p
 .sched-when { color: var(--text-3); }
 /* Chat search: a quiet icon until you reach for it (⌘F opens it too). */
 .chat-search .search { width: 44px; max-width: 240px; transition: width 260ms var(--spring); }
-.chat-search .search:not(:hover):not(:focus-within):has(input:placeholder-shown) .icon { left: 14px; }
+.chat-search .search:not(:hover):not(:focus-within):has(input:placeholder-shown) .icon { left: 22px; }
 .chat-search .search:hover, .chat-search .search:focus-within, .chat-search .search:has(input:not(:placeholder-shown)) { width: 240px; }
 .chat-search .search:not(:hover):not(:focus-within):has(input:placeholder-shown) .input { border-color: transparent; color: transparent; }
 .chat-search .search:not(:hover):not(:focus-within):has(input:placeholder-shown) .input::placeholder { color: transparent; }
 
-@media (prefers-color-scheme: dark) { .provider-card:not(.on) { border-color: var(--line-strong); } .provider-card.on { background: color-mix(in srgb, var(--accent) 9%, var(--surface)); box-shadow: inset 0 0 0 1px var(--accent); } }
+@media (prefers-color-scheme: dark) { .provider-card:not(.on) { border-color: var(--line-strong); } .provider-card.on { background: color-mix(in srgb, var(--accent) 15%, var(--surface)); box-shadow: inset 0 0 0 1px var(--accent); } }
 .searchbar .btn:not(.btn-primary) { border-color: var(--line); }
 .searchbar .segmented { background: color-mix(in srgb, var(--text) 3%, transparent); }
 /* Library cards: "Added" and "Add" share one size and line; the state is neutral, not a second accent. */
@@ -1185,7 +1185,7 @@ kbd, .keys { font: 500 11.5px var(--sans); color: var(--text-2); padding: 3px 7p
 .chat-search .search .icon { color: var(--text-2); }
 
 /* Light: an off switch you can see on white. */
-@media (prefers-color-scheme: light) { .switch:not(:checked) { background: #D1D1D6; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.04); } }
+@media (prefers-color-scheme: light) { .switch:not(:checked) { background: #C4C4CA; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.04); } }
 /* Selects in a row size to their text, the same everywhere. */
 .row-ctl .select { width: auto; min-width: 140px; max-width: 240px; }
 /* The bot page's header reads as the page head, not part of Identity. */
@@ -1209,3 +1209,7 @@ kbd, .keys { font: 500 11.5px var(--sans); color: var(--text-2); padding: 3px 7p
 .mem-meta > :has(+ select)::after { content: none; }
 /* One selected-row treatment in both themes: fill only. */
 @media (prefers-color-scheme: dark) { .rail-glide { box-shadow: none; } }
+
+/* Library cards you already have step back, so the ones you can add lead. */
+.library .mem:has(.badge.live) .mem-title { color: var(--text-2); }
+.library .mem:has(.badge.live) .mem-body { color: var(--text-3); }
