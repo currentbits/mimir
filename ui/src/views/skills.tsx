@@ -124,6 +124,8 @@ function Skills({ chatId }: { chatId: number }) {
   const bots = useLoad(() => invoke<Bot[]>('bots'), []).data ?? []
   const [teaching, setTeaching] = useState<{ source: string; bot: number; busy: boolean } | null>(null)
   const [rehearsal, setRehearsal] = useState<{ id: number; r: Rehearsed | null } | null>(null)
+  // A skill's steps open in place, as in the library (a list of full procedures is a wall of text).
+  const [shown, setShown] = useState<number | null>(null)
   const rehearse = (k: Skill) => {
     setRehearsal({ id: k.id, r: null })
     invoke<Rehearsed>('rehearse', { chatId, botId: k.bot_id || bots[0]?.id || 1, skillId: k.id }).then(r => setRehearsal({ id: k.id, r }), e => { setRehearsal(null); setErr(String(e)) })
@@ -186,9 +188,10 @@ function Skills({ chatId }: { chatId: number }) {
               </div>
               <div className="mem-title">{k.name}</div>
               <p className="mem-body">{k.description}</p>
-              <div className="skill-steps selectable"><Markdown text={k.body} /></div>
+              {shown === k.id && <div className="skill-steps selectable"><Markdown text={k.body} /></div>}
               {rehearsal?.id === k.id && (rehearsal.r ? <RehearsalResult r={rehearsal.r} onClose={() => setRehearsal(null)} /> : <p className="hint">Rehearsing… it runs for real, but anything it would send or change is only described.</p>)}
               <div className="mem-meta">
+                <button type="button" className="linkish" aria-expanded={shown === k.id} onClick={() => setShown(shown === k.id ? null : k.id)}>{shown === k.id ? 'Hide steps' : 'See the steps'}</button>
                 {bots.length > 1
                   ? <select className="select select-inline" value={k.bot_id} aria-label={`Which bots use ${k.name}`}
                       onChange={e => invoke('share_skill', { chatId, id: k.id, botId: Number(e.target.value) }).then(() => { setErr(null); list.reload() }, er => setErr(String(er)))}>

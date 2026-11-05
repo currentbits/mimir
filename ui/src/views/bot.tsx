@@ -180,7 +180,7 @@ export function BotPage({ bot, status, canDelete, onSaved, onDeleted, onChat, on
   const on = online(status)
 
   return (
-    <form onSubmit={e => { e.preventDefault(); save(sec) }} style={{ '--pig': pigment(b.id || 99, look) } as React.CSSProperties}>
+    <form className="bot-form" onSubmit={e => { e.preventDefault(); save(sec) }} style={{ '--pig': pigment(b.id || 99, look) } as React.CSSProperties}>
       <div className="page-head">
         <button type="button" className="look-avatar" onClick={() => setStyling(s => !s)} aria-expanded={styling} title="Change how it looks">
           <Avatar id={b.id || 99} name={b.name || '?'} size={56} alive look={look} presence={isNew ? undefined : presenceOf(status)} />

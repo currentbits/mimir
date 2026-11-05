@@ -36,8 +36,9 @@ export function ActivityView({ chatId }: { chatId: number }) {
           <div className="stat"><dt>API-equivalent cost</dt><dd>{usd(t.cost_usd)}</dd></div>
         </dl>
       )}
-      <div className="group">
-        {list.length > 0 && <div className="runhead" aria-hidden="true"><span /><span>Run</span><span>Bot</span><span className="num">Tokens in → out</span><span className="num">Cost</span><span className="num">{list.some(r => r.tool_calls) ? 'Tools' : ''}</span><span /></div>}
+      {/* No run used a tool: the Tools column goes, and the run gets its width. */}
+      <div className={'group' + (list.some(r => r.tool_calls) ? '' : ' no-tools')}>
+        {list.length > 0 && <div className="runhead" aria-hidden="true"><span /><span>Run</span><span>Bot</span><span className="num">Tokens in → out</span><span className="num">Cost</span><span className="num">Tools</span><span /></div>}
         {list.map(r => {
           const b = botOf(r.bot_id)
           return (
