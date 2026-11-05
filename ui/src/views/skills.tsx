@@ -72,7 +72,7 @@ function SkillLibrary({ chatId, onAdded }: { chatId: number; onAdded: () => void
   return (
     <section className="library" aria-label="Skill library">
       <div className="section-title"><h2>From the library</h2><span className="count">{lib.data.length}</span>
-        {bots.length > 1 && <select className="select select-inline" value={target} aria-label="Add skills for" onChange={e => setTarget(Number(e.target.value))}>
+        {bots.length > 1 && <select className="select" style={{ width: 'auto' }} value={target} aria-label="Add skills for" onChange={e => setTarget(Number(e.target.value))}>
           <option value={0}>For all bots</option>{bots.map(b => <option key={b.id} value={b.id}>For {b.name}</option>)}
         </select>}</div>
       <p className="hint">Written for Mimir's tools. Adding one gives it to {target === 0 ? 'all your bots' : botOf(target).name} in this chat; you can change or remove it like any skill.</p>

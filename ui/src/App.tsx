@@ -185,7 +185,8 @@ function Main() {
   // Clicking a bot opens a chat with it (on this computer); its settings are a right-click (or the gear by the
   // composer's bot picker) away.
   const talkTo = (id: number) => { setChatBot(id); setChatId(LOCAL); setIncognito(false); setViaBot(true); setView('chat'); setMenu(null) }
-  const botChat = viaBot && view === 'chat' && chat.chat_id === LOCAL
+  // Opened from a bot: it stays that bot's chat across the section tabs, so the header and sidebar don't jump.
+  const botChat = viaBot && inChat && chat.chat_id === LOCAL
   // A bot's right-click menu, or pause choices (for one bot, or all of them: id null).
   const [menu, setMenu] = useState<{ x: number; y: number; id: number | null; pick?: boolean } | null>(null)
   // A bot file being read before it's added (from a file, or a bot's own for Duplicate).

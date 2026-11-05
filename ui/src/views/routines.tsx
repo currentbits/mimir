@@ -284,13 +284,11 @@ export function RoutinesView({ chatId, bots }: { chatId: number; bots: Bot[] }) 
                       ...(r.once ? [] : [['pencil', 'Edit', () => { setMore(null); setEditing({ id: r.id, draft: { prompt: r.prompt, quiet: r.quiet, botId: r.bot_id, when: toWhen(r.cron), delivery: r.delivery ?? 'now', watch: r.watch ?? '', urgent: r.urgent ?? '', until: dayOf(r.ends) } }) }] as [string, string, () => void]]),
                       ['trash', 'Delete…', () => { setMore(null); void ask('Delete this routine?', 'Delete', true).then(ok => { if (ok) void invoke('delete_routine', { chatId, id: r.id }).then(rows.reload, e => setErr(String(e))) }) }],
                     ]} /> })()}
-      <div className="section-title"><h2>Add a routine</h2></div>
+      <div className="section-title"><h2>Add a routine</h2><span className="grow" />
+        {!draft && <button className="btn btn-sm" onClick={() => start('0 8 * * *', '', false)}><Icon name="plus" size={14} />New routine</button>}</div>
       <p className="hint" style={{ margin: '-4px 0 12px' }}>Anything a bot should do on a schedule. Quiet ones only message you when something needs your attention.</p>
       {draft ? <RoutineForm skills={skillRows.data ?? []} draft={draft} setDraft={setDraft} bots={bots} onCancel={() => setDraft(null)} onSave={add} /> : (
         <div className="presets four">
-          <button className="preset new" onClick={() => start('0 8 * * *', '', false)}>
-            <Icon name="plus" size={18} /><b>New routine</b><span>Pick what and when</span>
-          </button>
           {CHECKINS.map(c => (
             <button key={c.title} className="preset" onClick={() => start(c.cron, c.prompt, true, c.watch)}>
               <Icon name={c.icon} size={18} /><b>{c.title}</b><span>{c.hint ?? schedule(c.cron)}</span>
