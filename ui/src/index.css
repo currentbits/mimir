@@ -9,7 +9,7 @@
   --serif: ui-serif, "New York", "Iowan Old Style", "Charter", Cambria, "Noto Serif", Georgia, serif;
   --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, "Cascadia Mono", Consolas, "JetBrains Mono", "DejaVu Sans Mono", monospace;
 
-  --bg: #F8F8F6;
+  --bg: #F5F5F3;
   --rail: #F0F0EE;
   --rail-glass: rgba(236, 236, 234, 0.74);
   --surface: #FFFFFF;
@@ -518,10 +518,10 @@ a.btn { text-decoration: none; }
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03), 0 8px 24px -14px rgba(0, 0, 0, 0.14);
 }
 .composer:focus-within { border-color: color-mix(in srgb, var(--accent) 60%, var(--line-strong)); }
-.composer textarea { flex: 1; border: 0; background: none; resize: none; padding: 5px 4px 5px 8px; font-size: 14px; line-height: 1.45; max-height: 160px; outline: none; }
+.composer textarea { flex: 1; border: 0; background: none; resize: none; padding: 5px 4px 5px 4px; font-size: 14px; line-height: 1.45; max-height: 160px; outline: none; }
 .composer textarea::placeholder { color: var(--text-3); }
 .composer .send { width: 30px; height: 30px; border-radius: 50%; border: 0; display: grid; place-items: center; background: var(--accent-fill); color: #fff; flex: none; transition: transform 90ms ease, opacity 120ms; }
-.composer .send:disabled { opacity: 1; background: var(--selected); color: var(--text-3); }
+.composer .send:disabled { opacity: 1; background: color-mix(in srgb, var(--text) 14%, transparent); color: var(--text-3); }
 .composer .send:active { transform: scale(0.92); }
 .bot-pick { position: relative; flex: none; }
 .bot-pick select { position: absolute; inset: 0; opacity: 0; }
@@ -540,7 +540,7 @@ a.btn { text-decoration: none; }
 /* ---------------- memory ---------------- */
 
 .searchbar { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
-.searchbar .segmented { margin-right: 8px; }
+.searchbar .segmented { margin-right: 14px; }
 .search { position: relative; flex: 1; }
 .search .icon { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--text-3); }
 .search .input { padding-left: 32px; border-radius: 9px; }
@@ -680,11 +680,11 @@ a.btn { text-decoration: none; }
 .stat dd small { font-size: 20px; font-weight: 400; color: var(--text-3); margin: 0 3px; vertical-align: 2px; }
 .stat dd small.bad { color: var(--danger); }
 .stat p { margin: 4px 0 0; font-size: 11px; color: var(--text-3); line-height: 1.35; }
-.runrow { width: 100%; display: grid; grid-template-columns: 8px minmax(0, 1fr) 104px 104px 56px 52px 14px; gap: 14px; align-items: center; padding: 8px 14px; border: 0; background: none; text-align: left; transition: background-color 120ms ease; }
+.runrow { width: 100%; display: grid; grid-template-columns: 24px minmax(0, 1fr) 104px 104px 56px 52px 14px; gap: 14px; align-items: center; padding: 8px 14px; border: 0; background: none; text-align: left; transition: background-color 120ms ease; }
 .runrow:hover { background: var(--hover); }
-.runhead { display: grid; grid-template-columns: 8px minmax(0, 1fr) 104px 104px 56px 52px 14px; gap: 14px; padding: 9px 14px 8px; border-bottom: 1px solid var(--line); font-size: 11px; font-weight: 600; color: var(--text-2); }
+.runhead { display: grid; grid-template-columns: 24px minmax(0, 1fr) 104px 104px 56px 52px 14px; background: var(--hover); gap: 14px; padding: 9px 14px 8px; border-bottom: 1px solid var(--line); font-size: 11px; font-weight: 600; color: var(--text-2); }
 .runhead .num { font-size: 11px; color: var(--text-2); }
-.no-tools .runrow, .no-tools .runhead { grid-template-columns: 8px minmax(0, 1fr) 104px 104px 56px 14px; }
+.no-tools .runrow, .no-tools .runhead { grid-template-columns: 24px minmax(0, 1fr) 104px 104px 56px 14px; }
 .no-tools .runrow > :nth-child(6), .no-tools .runhead > :nth-child(6) { display: none; }
 .runrow + .run-detail, .run + .run { border-top: 0.5px solid var(--line); }
 .run-t { display: grid; min-width: 0; }
@@ -817,7 +817,7 @@ kbd, .keys { font: 500 11.5px var(--sans); color: var(--text-2); padding: 3px 7p
   .tabbar .badge { position: absolute; top: 6px; left: calc(50% + 8px); }
   .presets, .stats, .provider-cards, .tool-grid { grid-template-columns: 1fr; }
   .tool-grid .row:nth-child(odd) { border-right: 0; }
-  .runrow { grid-template-columns: 8px 1fr 70px 14px; }
+  .runrow { grid-template-columns: 16px 1fr 70px 14px; }
   .runhead { display: none; }
   /* A routine's actions go under its text, so the task gets the width. */
   .routine { grid-template-columns: 26px 1fr; }
@@ -1106,7 +1106,7 @@ kbd, .keys { font: 500 11.5px var(--sans); color: var(--text-2); padding: 3px 7p
 .lib-cat h3 { font-size: 12.5px; font-weight: 600; color: var(--text-3); margin: 26px 0 6px; }
 /* Adding is the point of a library card: always shown, not only on hover. */
 .library .mem-actions.lib-add { opacity: 1; transform: none; }
-.library .mem .mem-body { padding-right: 72px; }
+.library .mem .mem-title { padding-right: 80px; }
 .file-text { white-space: pre-wrap; font: 12px var(--mono); margin: 0; }
 .toolbar .guest-on { color: var(--pending); background: var(--pending-soft); }
 
@@ -1171,7 +1171,7 @@ kbd, .keys { font: 500 11.5px var(--sans); color: var(--text-2); padding: 3px 7p
 .chat-search .search:not(:hover):not(:focus-within):has(input:placeholder-shown) .input { border-color: transparent; color: transparent; }
 .chat-search .search:not(:hover):not(:focus-within):has(input:placeholder-shown) .input::placeholder { color: transparent; }
 
-@media (prefers-color-scheme: dark) { .provider-card:not(.on) { border-color: var(--line-strong); } .provider-card.on { background: color-mix(in srgb, var(--accent) 15%, var(--surface)); box-shadow: inset 0 0 0 1px var(--accent); } }
+@media (prefers-color-scheme: dark) { .provider-card:not(.on) { border-color: var(--line-strong); } .provider-card.on { background: color-mix(in srgb, var(--accent) 20%, var(--surface)); box-shadow: inset 0 0 0 1px var(--accent); } }
 .searchbar .btn-ghost { border-color: transparent; color: var(--text-2); }
 .searchbar .segmented { background: color-mix(in srgb, var(--text) 3%, transparent); }
 /* Library cards: "Added" and "Add" share one size and line; the state is neutral, not a second accent. */
@@ -1179,7 +1179,7 @@ kbd, .keys { font: 500 11.5px var(--sans); color: var(--text-2); padding: 3px 7p
 .library .mem-actions.lib-add .badge.live .icon { color: var(--text-3); }
 /* Chat search overlays the top of the thread instead of taking a row. */
 .chat-search { height: 0; padding-top: 0; overflow: visible; }
-.chat-search .search { position: relative; top: 8px; }
+.chat-search .search { position: relative; top: 24px; }
 .so-far { padding-right: 52px; }
 .chat-search .search:not(:hover):not(:focus-within):has(input:placeholder-shown) .input { background: none; }
 .chat-search .search:hover .input { background: var(--hover); }
@@ -1218,7 +1218,7 @@ kbd, .keys { font: 500 11.5px var(--sans); color: var(--text-2); padding: 3px 7p
 .library .mem-title { font-weight: 500; }
 .library .mem-body { color: var(--text-3); }
 /* Activity: the status dot sits on the title line. */
-.runrow > .dot { align-self: start; margin-top: 7px; }
+.runrow > .dot { align-self: start; justify-self: center; margin-top: 7px; }
 @media (prefers-color-scheme: dark) { .provider-card.on { border-color: var(--accent-fill); box-shadow: inset 0 0 0 1px var(--accent-fill); } }
 
 /* Every standalone paragraph in a column keeps one measure. */
@@ -1237,3 +1237,9 @@ kbd, .keys { font: 500 11.5px var(--sans); color: var(--text-2); padding: 3px 7p
 /* The last ghost button's text lines up with the column edge. */
 .searchbar .btn-ghost:last-child { margin-right: -13px; }
 .bot-form .group-wrap:has(.field-label) > .group-head { margin-bottom: 12px; }
+
+/* Sidebar rows share one height, one- or two-line. */
+.rail-item { min-height: 46px; }
+/* Routine health: the dots hang in the gutter so the text lines up with the line above. */
+.routine .rh { position: relative; }
+.routine .rh .rh-dots { position: absolute; right: calc(100% + 8px); top: 50%; transform: translateY(-50%); }
