@@ -184,7 +184,7 @@ a.btn { text-decoration: none; }
 
 .page-head { display: flex; align-items: center; gap: 16px; margin: 4px 0 28px; }
 .display { margin: 0; font: 600 26px/1.15 var(--serif); letter-spacing: -0.018em; }
-.lead { margin: 6px 0 0; max-width: 62ch; text-wrap: pretty; color: var(--text-2); font-size: 14px; line-height: 1.5; }
+.lead { margin: 6px 0 0; max-width: 560px; text-wrap: pretty; color: var(--text-2); font-size: 14px; line-height: 1.5; }
 .section-title { display: flex; align-items: baseline; gap: 8px; margin: 28px 0 10px; }
 .section-title h2 { margin: 0; font: 600 19px/1.2 var(--serif); letter-spacing: -0.01em; }
 .section-title .count { font-size: 12px; font-weight: 500; color: var(--text-3); font-variant-numeric: tabular-nums; }
@@ -294,7 +294,7 @@ a.btn { text-decoration: none; }
 .group-head { display: flex; align-items: center; justify-content: space-between; margin: 0 0 8px; }
 .group-head h3 { margin: 0; font: 600 17px/1.25 var(--serif); letter-spacing: -0.005em; color: var(--text); }
 .group { background: var(--surface); border-radius: 12px; box-shadow: var(--shadow-sm); overflow: hidden; }
-.group-note { margin: 8px 0 0; max-width: 62ch; font-size: 13px; color: var(--text-3); line-height: 1.55; text-wrap: pretty; }
+.group-note { margin: 8px 0 0; max-width: 560px; font-size: 13px; color: var(--text-3); line-height: 1.55; text-wrap: pretty; }
 .row { display: flex; align-items: center; gap: 12px; padding: 10px 14px; min-height: 44px; }
 .row + .row, .row + .row-block, .row-block + .row, .row-block + .row-block { border-top: 0.5px solid var(--line); }
 .row-icon { width: 26px; height: 26px; border-radius: 7px; display: grid; place-items: center; background: none; color: var(--text-2); flex: none; }
@@ -516,7 +516,7 @@ a.btn { text-decoration: none; }
   border-radius: 16px; background: var(--surface); border: 1px solid color-mix(in srgb, var(--line-strong) 75%, transparent);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03), 0 8px 24px -14px rgba(0, 0, 0, 0.14);
 }
-.composer:focus-within { border-color: color-mix(in srgb, var(--text) 22%, transparent); }
+.composer:focus-within { border-color: color-mix(in srgb, var(--accent) 45%, var(--line-strong)); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03), 0 8px 24px -14px rgba(0, 0, 0, 0.14), 0 0 0 3px var(--accent-soft); }
 .composer textarea { flex: 1; border: 0; background: none; resize: none; padding: 5px 4px 5px 8px; font-size: 14px; line-height: 1.45; max-height: 160px; outline: none; }
 .composer textarea::placeholder { color: var(--text-3); }
 .composer .send { width: 30px; height: 30px; border-radius: 50%; border: 0; display: grid; place-items: center; background: var(--accent-fill); color: #fff; flex: none; transition: transform 90ms ease, opacity 120ms; }
@@ -627,10 +627,10 @@ a.btn { text-decoration: none; }
 .routine + .routine { border-top: 0.5px solid var(--line); }
 .routine .ri { width: 26px; height: 22px; display: grid; place-items: center; color: var(--text-2); }
 .routine .ri.quiet { color: var(--text-2); }
-.routine .rt { font-weight: 500; color: var(--text-2); display: inline-flex; align-items: center; gap: 6px; }
+.routine .rt { font-weight: 400; color: var(--text-2); display: inline-flex; align-items: center; gap: 6px; }
 .routine .rp { margin-top: 1px; font-size: 14.5px; font-weight: 500; color: var(--text); line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .routine .rm { margin-top: 6px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; font-size: 13px; color: var(--text-3); }
-.routine .rh { margin-top: 4px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font-size: 13px; color: var(--text-3); }
+.routine .rh { margin-top: 4px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font-size: 12.5px; color: var(--text-3); opacity: .85; margin-top: 6px; }
 .routine .rh .bad { color: var(--danger); }
 .rh-dots { display: inline-flex; gap: 3px; }
 .dot.missed { background: none; box-shadow: inset 0 0 0 1.5px var(--pending); }
@@ -672,7 +672,7 @@ a.btn { text-decoration: none; }
 
 /* ---------------- activity ---------------- */
 
-.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 12px; }
+.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 20px; }
 .stat { padding: 14px 16px; border-radius: 12px; background: var(--surface); box-shadow: var(--shadow-sm); }
 .stat dt { font-size: 12px; color: var(--text-3); font-weight: 500; }
 .stat dd { margin: 6px 0 0; font: 600 28px/1.1 var(--sans); letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
@@ -1086,7 +1086,7 @@ kbd, .keys { font: 500 11.5px var(--sans); color: var(--text-2); padding: 3px 7p
 .look-opt small { font-size: 10.5px; }
 .link-real { opacity: 0.7; font-size: 0.86em; }
 .why.warn-line { color: var(--pending); display: flex; gap: 5px; align-items: center; }
-.clear-history { display: flex; gap: 10px; align-items: center; margin-top: 18px; }
+.clear-history { display: flex; gap: 10px; align-items: center; margin-top: 28px; }
 .clear-history > .btn-ghost:first-child { margin-left: -11px; }
 
 /* A bot's right-click menu in the sidebar, and the gear by the composer's bot picker. */
@@ -1101,8 +1101,8 @@ kbd, .keys { font: 500 11.5px var(--sans); color: var(--text-2); padding: 3px 7p
 .page-head .head-action { margin-left: auto; align-self: flex-start; margin-top: 2px; display: inline-flex; align-items: center; gap: 6px; }
 .library { margin-top: 28px; }
 .library .section-title .select { margin-left: auto; }
-.library .hint { margin: 0 0 6px; max-width: 62ch; font-size: 13px; color: var(--text-3); }
-.lib-cat h3 { font-size: 12.5px; font-weight: 600; color: var(--text-3); margin: 22px 0 8px; }
+.library .hint { margin: -4px 0 6px; max-width: 560px; font-size: 13px; color: var(--text-3); }
+.lib-cat h3 { font-size: 12.5px; font-weight: 600; color: var(--text-3); margin: 26px 0 6px; }
 /* Adding is the point of a library card: always shown, not only on hover. */
 .library .mem-actions.lib-add { opacity: 1; transform: none; }
 .library .mem .mem-body { padding-right: 72px; }
@@ -1155,7 +1155,7 @@ kbd, .keys { font: 500 11.5px var(--sans); color: var(--text-2); padding: 3px 7p
 .bot-form .group:has(> .row-block > .field-label) > .row-block { padding: 0; }
 /* A select can't draw the dot before itself: the item ahead of it draws one after. */
 .mem-meta > :has(+ select)::after { content: "·"; margin: 0 7px; color: var(--text-3); opacity: .7; display: inline-block; }
-.mem-meta > select { padding: 1px 20px 1px 8px; border-radius: 6px; background-color: var(--hover); background-position: calc(100% - 6px) 50%; }
+.mem-meta > select { padding: 0 20px 0 8px; line-height: 20px; border-radius: 6px; background-color: var(--hover); background-position: calc(100% - 6px) 50%; }
 
 
 /* The bot page: its fields stand off the page in dark, and the hero line is one line. */
@@ -1220,3 +1220,8 @@ kbd, .keys { font: 500 11.5px var(--sans); color: var(--text-2); padding: 3px 7p
 /* Activity: the status dot sits on the title line. */
 .runrow > .dot { align-self: start; margin-top: 7px; }
 @media (prefers-color-scheme: dark) { .provider-card.on { border-color: var(--accent-fill); box-shadow: inset 0 0 0 1px var(--accent-fill); } }
+
+/* Every standalone paragraph in a column keeps one measure. */
+.col > .hint { max-width: 560px; }
+.routine-actions .run-now { color: var(--text-2); }
+.routine-actions .run-now .icon { color: var(--text-3); }

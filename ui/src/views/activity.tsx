@@ -31,7 +31,7 @@ export function ActivityView({ chatId }: { chatId: number }) {
         <p className="lead">Every run here in the last 30 days, and what it would cost on the API.</p></div></div>
       {t && (
         <dl className="stats" aria-label="Last 30 days">
-          <div className="stat"><dt>AI runs · 30 days</dt><dd>{t.runs}{t.errors ? <small className="bad"> · {t.errors} failed</small> : null}</dd></div>
+          <div className="stat"><dt>AI runs</dt><dd>{t.runs}{t.errors ? <small className="bad"> · {t.errors} failed</small> : null}</dd></div>
           <div className="stat"><dt>Tokens in → out</dt><dd>{tok(t.tokens_in)} <small aria-hidden="true">→</small> {tok(t.tokens_out)}</dd></div>
           <div className="stat"><dt>API-equivalent cost</dt><dd>{usd(t.cost_usd)}</dd></div>
         </dl>

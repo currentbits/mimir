@@ -266,7 +266,7 @@ export function RoutinesView({ chatId, bots }: { chatId: number; bots: Bot[] }) 
                     <Switch label={r.paused ? `Resume: ${when(r)}` : `Pause: ${when(r)}`} checked={!r.paused} onChange={on => update(r, { paused: !on })} />
                     <button className="btn btn-sm run-now" disabled={runningId === r.id} title="Run it once now; the result goes to the chat"
                       onClick={() => { setRunningId(r.id); invoke<string>('run_routine', { chatId, id: r.id }).then(() => setErr(null), e => setErr(String(e))).finally(() => { setRunningId(null); rows.reload(); stats.reload() }) }}>
-                      {runningId === r.id ? 'Running…' : 'Run now'}
+                      <Icon name="play" size={12} />{runningId === r.id ? 'Running…' : 'Run now'}
                     </button>
                     <button className="btn btn-ghost btn-sm icon-btn" title="Rehearse, edit or delete" aria-label="More for this routine" aria-haspopup="menu"
                       onClick={e => { const b = e.currentTarget.getBoundingClientRect(); setMore({ x: b.right - 190, y: b.bottom + 4, id: r.id }) }}><Icon name="more" size={16} /></button>
