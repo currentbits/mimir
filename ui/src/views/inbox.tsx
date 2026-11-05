@@ -278,7 +278,7 @@ export function InboxView({ data, troubled, reload, chats, chatName, openBot, op
         <div className="section-title" style={{ marginTop: 0 }}><h2>Update your server</h2></div>
         <div className="group">
           <div className="inbox-row">
-            <span className="row-icon"><Icon name="server" size={15} /></span>
+            <span className="row-icon"><Icon name="server" size={16} /></span>
             <div className="inbox-main">
               <div className="inbox-title">Mimir {data.server_update.latest} is out (your server runs {data.server_update.current})</div>
               <div className="inbox-desc selectable"><Markdown text={data.server_update.how} /></div>
