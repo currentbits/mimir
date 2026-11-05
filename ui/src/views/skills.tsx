@@ -142,7 +142,7 @@ function Skills({ chatId }: { chatId: number }) {
           <input className="input" autoFocus placeholder="A link, the text (how our expense process works, a checklist…), or a SKILL.md" aria-label="What to learn from" value={teaching.source} onChange={e => setTeaching({ ...teaching, source: e.target.value })} />
           <button className="btn btn-sm btn-ghost" type="button" onClick={() => setTeaching(null)}>Cancel</button>
           <button className="btn btn-sm" disabled={teaching.busy || !teaching.source.trim()}>{teaching.busy ? 'Learning…' : 'Learn'}</button>
-        </form> : <button className="btn btn-sm btn-ghost" onClick={() => setTeaching({ source: '', bot: bots[0]?.id ?? 1, busy: false })}><Icon name="bolt" size={14} />Teach a skill</button>}
+        </form> : <button className="btn btn-sm" onClick={() => setTeaching({ source: '', bot: bots[0]?.id ?? 1, busy: false })}><Icon name="bolt" size={14} />Teach a skill</button>}
       </div>
       {proposed.length > 0 && (
         <section className="suggest" aria-label="Suggested skills">

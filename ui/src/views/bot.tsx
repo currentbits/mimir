@@ -311,7 +311,7 @@ export function BotPage({ bot, status, canDelete, onSaved, onDeleted, onChat, on
         </Group>
       )}
 
-      <div className="savebar">
+      <div className={'savebar' + (dirty || isNew ? ' stuck' : '')}>
         {!isNew && canDelete && <button type="button" className="btn btn-ghost btn-danger" onClick={() => {
           ask(`Delete ${bot.name}? Its routines, conversations and run log go with it. Memories stay: they belong to you.`, 'Delete bot', true).then(ok => { if (ok) invoke('delete_bot', { id: bot.id }).then(onDeleted, e => setErr(String(e))) })
         }}><Icon name="trash" size={14} />Delete bot</button>}

@@ -259,6 +259,8 @@ export function InboxView({ data, troubled, reload, chats, chatName, openBot, op
   )
   return (
     <div className="inbox">
+      <div className="page-head"><div><h1 className="display">Needs you</h1>
+        <p className="lead">What your bots are waiting on, and anything that stopped working.</p></div></div>
       {data.damage && <>
         <div className="section-title" style={{ marginTop: 0 }}><h2>Your data</h2></div>
         <div className="group">
