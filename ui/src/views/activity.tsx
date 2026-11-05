@@ -53,7 +53,7 @@ export function ActivityView({ chatId }: { chatId: number }) {
                 <span className="run-bot"><Avatar id={b.id} name={b.name} size={20} still /><span>{b.name}</span></span>
                 <span className="num">{r.status === 'running' ? '…' : r.status === 'error' || r.status === 'missed' || r.status === 'unchanged' ? '—' : <span title={r.estimated ? 'Estimated from the text: this AI doesn’t say what it used' : r.cache_read || r.cache_write ? `${tok(r.cache_read ?? 0)} of the input came from the AI’s cache, ${tok(r.cache_write ?? 0)} was written to it` : undefined}>{r.estimated ? '≈ ' : ''}{tok(r.tokens_in)} → {tok(r.tokens_out)}</span>}</span>
                 <span className="num">{r.cost_usd != null ? usd(r.cost_usd) : '—'}</span>
-                <span className="num">{r.tool_calls} {r.tool_calls === 1 ? 'tool' : 'tools'}</span>
+                <span className="num">{r.tool_calls ? `${r.tool_calls} ${r.tool_calls === 1 ? 'tool' : 'tools'}` : ''}</span>
                 <Icon name="chevron" size={14} />
               </button>
               {open === r.id && <RunDetail run={r} />}
