@@ -28,7 +28,7 @@ export function ActivityView({ chatId }: { chatId: number }) {
   return (
     <>
       <div className="page-head"><div><h1 className="display">Activity</h1>
-        <p className="lead">Every run here in the last 30 days, and what it would cost on the API.</p></div></div>
+        <p className="lead">Every run in this chat, by any of your bots, in the last 30 days.</p></div></div>
       {t && (
         <dl className="stats" aria-label="Last 30 days">
           <div className="stat"><dt>AI runs</dt><dd>{t.runs}{t.errors ? <small className="bad"> · {t.errors} failed</small> : null}</dd></div>

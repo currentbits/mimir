@@ -32,7 +32,7 @@ const CHECKINS = [
   { title: 'Morning task check', cron: '30 8 * * Mon-Fri', icon: 'check', prompt: 'Look at my open tasks in memory. If any are due today or overdue, remind me which and why. Otherwise say nothing.' },
   { title: 'Evening look-ahead', cron: '0 19 * * Sun-Thu', icon: 'moon', prompt: 'Check my memory for anything happening tomorrow (appointments, deadlines, people to contact). If there is something, give me a short heads-up.' },
   { title: 'Watch a web page', cron: '0 */3 * * *', icon: 'globe', prompt: 'Tell me if the page reports a problem, or what changed if it matters.', watch: 'https://example.com/status' },
-  { title: 'A second look', cron: 'mail:subject:confirm|booking|reservation|itinerary|quote|quotation|invoice|bevestig|boeking|reservering|offerte|factuur', icon: 'search', hint: 'Each confirmation, quote or invoice',
+  { title: 'A second look', cron: 'mail:subject:confirm|booking|reservation|itinerary|quote|quotation|invoice|bevestig|boeking|reservering|offerte|factuur', icon: 'search', hint: 'Each quote or invoice',
     prompt: 'This email may be a confirmation, quote, invoice or booking. Find what was agreed: the earlier emails with this sender or about this, my calendar around those dates, my memory and our chats. Compare the key details (dates, times, amounts, names, quantities, addresses), and look for duplicate lines. Only if something differs, tell me in one line what it says and what was agreed, e.g. "Hotel confirmation says 12–14 Nov; your calendar says 13–15." If it all matches, or there is nothing to compare it with, say nothing.' },
 ]
 

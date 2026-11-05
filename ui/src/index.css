@@ -1087,7 +1087,7 @@ kbd, .keys { font: 500 11.5px var(--sans); color: var(--text-2); padding: 3px 7p
 .look-opt small { font-size: 10.5px; }
 .link-real { opacity: 0.7; font-size: 0.86em; }
 .why.warn-line { color: var(--pending); display: flex; gap: 5px; align-items: center; }
-.clear-history { display: flex; gap: 10px; align-items: center; margin-top: 32px; padding-top: 14px; border-top: 1px solid var(--line); }
+.clear-history { display: flex; gap: 10px; align-items: center; margin-top: 40px; padding-top: 14px; border-top: 1px solid var(--line); }
 .clear-history > .btn-ghost:first-child { margin-left: -11px; }
 
 /* A bot's right-click menu in the sidebar, and the gear by the composer's bot picker. */
@@ -1160,7 +1160,6 @@ kbd, .keys { font: 500 11.5px var(--sans); color: var(--text-2); padding: 3px 7p
 
 
 /* The bot page: its fields stand off the page in dark, and the hero line is one line. */
-@media (prefers-color-scheme: dark) { .bot-form .input, .bot-form .textarea { background: var(--surface); } }
 .bot-form .group:has(> .row-block > .field-label) { margin-top: 4px; }
 .bot-lead { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 520px; }
 .sched-when { color: var(--text-3); }
@@ -1171,7 +1170,7 @@ kbd, .keys { font: 500 11.5px var(--sans); color: var(--text-2); padding: 3px 7p
 .chat-search .search:not(:hover):not(:focus-within):has(input:placeholder-shown) .input { border-color: transparent; color: transparent; }
 .chat-search .search:not(:hover):not(:focus-within):has(input:placeholder-shown) .input::placeholder { color: transparent; }
 
-@media (prefers-color-scheme: dark) { .provider-card:not(.on) { border-color: var(--line-strong); } .provider-card.on { background: color-mix(in srgb, var(--accent) 20%, var(--surface)); box-shadow: inset 0 0 0 1px var(--accent); } }
+@media (prefers-color-scheme: dark) { .provider-card:not(.on) { border-color: var(--line); } .provider-card.on { background: color-mix(in srgb, var(--accent) 20%, var(--surface)); box-shadow: inset 0 0 0 1px var(--accent); } }
 .searchbar .btn-ghost { border-color: transparent; color: var(--text-2); }
 .searchbar .segmented { background: color-mix(in srgb, var(--text) 3%, transparent); }
 /* Library cards: "Added" and "Add" share one size and line; the state is neutral, not a second accent. */
@@ -1179,7 +1178,7 @@ kbd, .keys { font: 500 11.5px var(--sans); color: var(--text-2); padding: 3px 7p
 .library .mem-actions.lib-add .badge.live .icon { color: var(--text-3); }
 /* Chat search overlays the top of the thread instead of taking a row. */
 .chat-search { height: 0; padding-top: 0; overflow: visible; }
-.chat-search .search { position: relative; top: 24px; }
+.chat-search .search { position: relative; top: 4px; }
 .so-far { padding-right: 52px; }
 .chat-search .search:not(:hover):not(:focus-within):has(input:placeholder-shown) .input { background: none; }
 .chat-search .search:hover .input { background: var(--hover); }
@@ -1242,4 +1241,11 @@ kbd, .keys { font: 500 11.5px var(--sans); color: var(--text-2); padding: 3px 7p
 .rail-item { min-height: 46px; }
 /* Routine health: the dots hang in the gutter so the text lines up with the line above. */
 .routine .rh { position: relative; }
-.routine .rh .rh-dots { position: absolute; right: calc(100% + 8px); top: 50%; transform: translateY(-50%); }
+.routine .rh .rh-dots { position: absolute; right: calc(100% + 21px); top: 50%; transform: translateY(-50%); }
+
+/* Library offers: one line each; ones you already have fade back. */
+.library .mem .mem-body { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
+.library .mem:has(.badge.live) .mem-title, .library .mem:has(.badge.live) .mem-body { opacity: .6; }
+/* A card's note is its muted footer row, not a paragraph floating under it. */
+.group-wrap:not(:has(.field-label)) > .group:has(+ .group-note) { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+.group-wrap:not(:has(.field-label)) > .group-note { margin: 0; max-width: none; padding: 10px 14px 11px 52px; background: color-mix(in srgb, var(--text) 2.5%, var(--surface)); box-shadow: var(--shadow-sm); border-radius: 0 0 12px 12px; border-top: 1px solid var(--line); text-wrap: pretty; }
