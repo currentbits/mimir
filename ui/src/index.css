@@ -69,7 +69,7 @@
     --accent-fill: #4268D4;
     --accent-soft: rgba(128, 159, 242, 0.13);
     --focus: rgba(128, 159, 242, 0.5);
-    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(255, 255, 255, 0.11), inset 0 1px 0 rgba(255, 255, 255, 0.03);
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(255, 255, 255, 0.14), inset 0 1px 0 rgba(255, 255, 255, 0.03);
     --shadow-md: 0 8px 24px -8px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.07), inset 0 1px 0 rgba(255, 255, 255, 0.03);
     --shadow-lg: 0 22px 50px -12px rgba(0, 0, 0, 0.65), 0 0 0 0.5px rgba(255, 255, 255, 0.08);
   }
@@ -152,7 +152,7 @@ a.btn { text-decoration: none; }
 @media (prefers-color-scheme: dark) { .rail-glide { box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05); } }
 .rail-item .ri-text { flex: 1; min-width: 0; display: grid; gap: 1px; }
 .rail-item .ri-name { font-size: 14px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.rail-item .ri-sub { font-size: 13px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rail-item .ri-sub { font-size: 12.5px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rail-item .ri-sub.busy { color: var(--text-2); }
 .rail-item .ri-count { font-size: 11px; color: var(--text-3); opacity: 0; transition: opacity 160ms ease; font-variant-numeric: tabular-nums; }
 .rail-item .ri-glyph { width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; color: var(--text-2); background: var(--hover); flex: none; }
@@ -517,7 +517,7 @@ a.btn { text-decoration: none; }
   border-radius: 16px; background: var(--surface); border: 1px solid color-mix(in srgb, var(--line-strong) 75%, transparent);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03), 0 8px 24px -14px rgba(0, 0, 0, 0.14);
 }
-.composer:focus-within { border-color: color-mix(in srgb, var(--accent) 45%, var(--line-strong)); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03), 0 8px 24px -14px rgba(0, 0, 0, 0.14), 0 0 0 3px var(--accent-soft); }
+.composer:focus-within { border-color: color-mix(in srgb, var(--accent) 60%, var(--line-strong)); }
 .composer textarea { flex: 1; border: 0; background: none; resize: none; padding: 5px 4px 5px 8px; font-size: 14px; line-height: 1.45; max-height: 160px; outline: none; }
 .composer textarea::placeholder { color: var(--text-3); }
 .composer .send { width: 30px; height: 30px; border-radius: 50%; border: 0; display: grid; place-items: center; background: var(--accent-fill); color: #fff; flex: none; transition: transform 90ms ease, opacity 120ms; }
@@ -564,7 +564,7 @@ a.btn { text-decoration: none; }
 .mem-title { font: 600 14.5px/1.35 var(--sans); letter-spacing: -0.006em; padding-right: 92px; }
 .mem-title .icon { display: inline-block; margin-right: 5px; color: var(--text-3); vertical-align: -1px; }
 .mem-actions .icon-btn.on { color: var(--text); }
-.mem-meta .linkish { font: inherit; font-weight: 500; color: var(--text); text-decoration: underline; text-decoration-color: color-mix(in srgb, currentColor 45%, transparent); text-decoration-thickness: 1px; text-underline-offset: 3px; background: none; border: 0; padding: 0; cursor: pointer; }
+.mem-meta .linkish { font: inherit; font-weight: 500; color: var(--text); text-decoration: underline; text-decoration-color: color-mix(in srgb, currentColor 35%, transparent); text-decoration-thickness: 1px; text-underline-offset: 3px; background: none; border: 0; padding: 0; cursor: pointer; }
 .mem-meta .linkish:hover { color: var(--text); text-decoration-color: currentColor; text-decoration: underline; text-underline-offset: 2px; }
 .versions { list-style: none; margin: 10px 0 0; padding: 8px 0 0 12px; border-top: 0.5px solid var(--line); display: grid; gap: 6px; }
 .versions li { display: grid; gap: 1px; font-size: 12.5px; color: var(--text-2); border-left: 2px solid var(--line-strong); padding-left: 10px; }
@@ -573,7 +573,7 @@ a.btn { text-decoration: none; }
 .editor-card.import .er { display: flex; align-items: center; gap: 10px; }
 .editor-card.import .grow { flex: 1; }
 .mem-body { margin: 3px 0 7px; font-size: 13.5px; line-height: 1.55; color: var(--text-2); white-space: pre-wrap; }
-.mem-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 0; font-size: 13px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.mem-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 0; font-size: 12.5px; color: var(--text-3); font-variant-numeric: tabular-nums; }
 .mem-meta .lineage { color: var(--pending); }
 .mem-meta .mem-id { opacity: 0; transition: opacity 160ms ease; }
 .mem:hover .mem-meta .mem-id, .mem:focus-within .mem-meta .mem-id { opacity: .6; }
@@ -1226,7 +1226,14 @@ kbd, .keys { font: 500 11.5px var(--sans); color: var(--text-2); padding: 3px 7p
 .routine-actions .run-now { color: var(--text-2); }
 .routine-actions .run-now .icon { color: var(--text-3); }
 
-/* Toggles in a list are state, not the call to action: a softer blue than the primary button. */
-.routine-actions .switch:checked { background: color-mix(in srgb, var(--accent-fill) 72%, var(--surface)); }
 /* Secondary toolbar actions: ghost until pointed at, like Run now. */
 .searchbar .btn-ghost:hover { border-color: var(--line-strong); }
+
+.clear-history { max-width: none !important; }
+/* Short helper paragraphs balance their lines (no lone last word); headings too. */
+.col > .hint, .library .hint, .group-note, .lead { text-wrap: balance; }
+.display, .section-title h2, .group-head h3 { text-wrap: balance; }
+.mem-list .mem-body { max-width: 68ch; }
+/* The last ghost button's text lines up with the column edge. */
+.searchbar .btn-ghost:last-child { margin-right: -13px; }
+.bot-form .group-wrap:has(.field-label) > .group-head { margin-bottom: 12px; }

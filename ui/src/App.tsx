@@ -339,7 +339,7 @@ function Main() {
         </div>
         <div className="rail-foot">
           <button className={'rail-item' + (view === 'settings' ? ' on' : '')} onClick={() => setView('settings')} title={`Settings  ${shortcut(',')}`}>
-            <Icon name="settings" /> <span className="ri-text"><span className="ri-name">Settings</span></span>
+            <span className="ri-glyph"><Icon name="settings" size={15} /></span><span className="ri-text"><span className="ri-name">Settings</span></span>
           </button>
         </div>
       </aside>
