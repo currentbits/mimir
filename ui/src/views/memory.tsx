@@ -456,7 +456,8 @@ function MemoryCard({ r, versions, act, chatId, showKind }: { r: EntryRow; versi
       )}
       <div className="mem-meta">
         {showKind && <span>{KIND_SINGULAR[r.kind]}</span>}
-        <span>{who}</span>
+        {/* Where it came from, unless it's the usual: you. */}
+        {r.origin !== 'you' && <span>{who}</span>}
         {r.tainted && <span className="warn" title="A bot saved this in a conversation that had read outside content (a web page, a file, a tool’s result). Check it says what you meant; until you confirm it, your bots don't keep it in mind (they only see it, labelled, if they search for it).">after reading outside content</span>}
         {r.tainted && r.status === 'active' && <button type="button" className="linkish" onClick={() => act(invoke('confirm_memory', { chatId, id: r.id }))}>Looks right</button>}
         <span>{ago(r.created_at)}</span>

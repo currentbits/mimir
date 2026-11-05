@@ -295,7 +295,7 @@ a.btn { text-decoration: none; }
 .group-head h3 { margin: 0; font: 600 19px/1.2 var(--serif); letter-spacing: -0.005em; color: var(--text); }
 .group { background: var(--surface); border-radius: 12px; box-shadow: var(--shadow-sm); overflow: hidden; }
 .group-note { margin: 8px 0 0; max-width: 560px; font-size: 12.5px; color: var(--text-3); line-height: 1.55; text-wrap: pretty; }
-.row { display: flex; align-items: center; gap: 12px; padding: 10px 14px; min-height: 44px; }
+.row { display: flex; align-items: center; gap: 12px; padding: 10px 16px; min-height: 44px; }
 .row + .row, .row + .row-block, .row-block + .row, .row-block + .row-block { border-top: 0.5px solid var(--line); }
 .row-icon { width: 26px; height: 26px; border-radius: 7px; display: grid; place-items: center; background: none; color: var(--text-2); flex: none; }
 /* Icons sit on the title line, as in Routines and Needs you. */
@@ -343,11 +343,11 @@ a.btn { text-decoration: none; }
 .approval .learned { margin-top: 3px; font-size: 11.5px; color: var(--text-2); font-weight: 500; }
 .inbox-list { display: grid; gap: 10px; }
 .inbox-item .badge.count { margin-left: auto; animation: pop 360ms var(--spring-soft) both; }
-.inbox-row { display: grid; grid-template-columns: 26px 1fr auto; gap: 12px; align-items: start; padding: 12px 14px; }
+.inbox-row { display: grid; grid-template-columns: 26px 1fr auto; gap: 12px; align-items: start; padding: 12px 16px; }
 .inbox-row + .inbox-row { border-top: 0.5px solid var(--line); }
 .inbox-row.leaving { animation: fade-out 240ms var(--ease-out) both; }
 .inbox-title { font-size: 14.5px; font-weight: 600; }
-.inbox-desc { font-size: 13px; color: var(--text-3); margin-top: 3px; line-height: 1.8; }
+.inbox-desc { font-size: 13px; color: var(--text-3); margin-top: 3px; line-height: 1.6; }
 .inbox-row .row-ctl { margin-top: -4px; }
 .inbox-raw { margin-top: 6px; font-size: 12px; color: var(--text-3); }
 .inbox-raw summary { cursor: default; }
@@ -589,7 +589,7 @@ a.btn { text-decoration: none; }
 .composer.incog { background: color-mix(in srgb, var(--surface) 82%, var(--ink) 18%); }
 .guarded.incog { background: color-mix(in srgb, var(--surface) 86%, var(--ink) 14%); color: var(--text); }
 .guarded.incog .icon { color: var(--text-2); }
-.mem-actions { position: absolute; top: 11px; right: 12px; display: flex; gap: 2px; opacity: 0; transition: opacity 120ms ease; }
+.mem-actions { position: absolute; top: 6px; right: 16px; display: flex; gap: 2px; opacity: 0; transition: opacity 120ms ease; }
 .mem:hover .mem-actions, .mem:focus-within .mem-actions { opacity: 1; }
 @media (hover: none) { .mem-actions { opacity: 1; } }
 .editor { display: grid; gap: 8px; margin: 8px 0 4px; }
@@ -624,12 +624,12 @@ a.btn { text-decoration: none; }
 
 /* ---------------- routines ---------------- */
 
-.routine { display: grid; grid-template-columns: 26px 1fr auto; gap: 12px; align-items: start; padding: 14px 14px; }
+.routine { display: grid; grid-template-columns: 26px 1fr auto; gap: 12px; align-items: start; padding: 14px 16px; }
 .routine + .routine { border-top: 0.5px solid var(--line); }
 .routine .ri { width: 26px; height: 22px; display: grid; place-items: center; color: var(--text-2); }
 .routine .ri.quiet { color: var(--text-2); }
 .routine .rt { font-weight: 400; color: var(--text-2); display: inline-flex; align-items: center; gap: 6px; }
-.routine .rp { margin-top: 1px; font-size: 14.5px; font-weight: 600; text-wrap: pretty; color: var(--text); line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.routine .rp { margin-top: 1px; font-size: 14.5px; font-weight: 600; color: var(--text); line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .routine .rm { margin-top: 6px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; font-size: 13px; color: var(--text-3); }
 .routine .rh { margin-top: 4px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font-size: 12.5px; color: var(--text-3); opacity: .85; margin-top: 6px; }
 .routine .rh .bad { color: var(--danger); }
@@ -680,9 +680,9 @@ a.btn { text-decoration: none; }
 .stat dd small { font-size: 20px; font-weight: 400; color: var(--text-3); margin: 0 3px; vertical-align: 2px; }
 .stat dd small.bad { color: var(--danger); }
 .stat p { margin: 4px 0 0; font-size: 11px; color: var(--text-3); line-height: 1.35; }
-.runrow { width: 100%; display: grid; grid-template-columns: 24px minmax(0, 1fr) 104px 104px 56px 52px 14px; gap: 14px; align-items: center; padding: 8px 14px; border: 0; background: none; text-align: left; transition: background-color 120ms ease; }
+.runrow { width: 100%; display: grid; grid-template-columns: 24px minmax(0, 1fr) 104px 104px 56px 52px 14px; gap: 14px; align-items: center; padding: 8px 16px; border: 0; background: none; text-align: left; transition: background-color 120ms ease; }
 .runrow:hover { background: var(--hover); }
-.runhead { display: grid; grid-template-columns: 24px minmax(0, 1fr) 104px 104px 56px 52px 14px; background: var(--hover); gap: 14px; padding: 9px 14px 8px; border-bottom: 1px solid var(--line); font-size: 11px; font-weight: 600; color: var(--text-2); }
+.runhead { display: grid; grid-template-columns: 24px minmax(0, 1fr) 104px 104px 56px 52px 14px; background: var(--hover); gap: 14px; padding: 9px 16px 8px; border-bottom: 1px solid var(--line); font-size: 11px; font-weight: 600; color: var(--text-2); }
 .runhead .num { font-size: 11px; color: var(--text-2); }
 .no-tools .runrow, .no-tools .runhead { grid-template-columns: 24px minmax(0, 1fr) 104px 104px 56px 14px; }
 .no-tools .runrow > :nth-child(6), .no-tools .runhead > :nth-child(6) { display: none; }
@@ -1253,3 +1253,8 @@ kbd, .keys { font: 500 11.5px var(--sans); color: var(--text-2); padding: 3px 7p
 
 @media (prefers-color-scheme: dark) { .group-wrap:not(:has(.field-label)) > .group-note { background: color-mix(in srgb, var(--text) 4%, var(--surface)); } }
 .inbox-row .row-icon { color: var(--text-2); }
+
+/* A bot's chat open: its chat row shows softly where you are, too. */
+.rail-item.near { background: var(--hover); }
+.bot-form .row-block:has(> .field-label) { gap: 18px; }
+.routine-actions { margin-right: -6px; }
