@@ -1178,7 +1178,7 @@ kbd, .keys { font: 500 11.5px var(--sans); color: var(--text-2); padding: 3px 7p
 .library .mem-actions.lib-add .badge.live .icon { color: var(--text-3); }
 /* Chat search overlays the top of the thread instead of taking a row. */
 .chat-search { height: 0; padding-top: 0; overflow: visible; }
-.chat-search .search { position: relative; top: 30px; }
+.chat-search .search { position: relative; top: 38px; }
 
 .chat-search .search:not(:hover):not(:focus-within):has(input:placeholder-shown) .input { background: none; }
 .chat-search .search:hover .input { background: var(--hover); }
@@ -1254,7 +1254,5 @@ kbd, .keys { font: 500 11.5px var(--sans); color: var(--text-2); padding: 3px 7p
 @media (prefers-color-scheme: dark) { .group-wrap:not(:has(.field-label)) > .group-note { background: color-mix(in srgb, var(--text) 4%, var(--surface)); } }
 .inbox-row .row-icon { color: var(--text-2); }
 
-/* A bot's chat open: its chat row shows softly where you are, too. */
-.rail-item.near { background: var(--hover); }
 .bot-form .row-block:has(> .field-label) { gap: 18px; }
 .routine-actions { margin-right: -6px; }
