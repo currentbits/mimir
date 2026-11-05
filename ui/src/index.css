@@ -132,7 +132,7 @@ a.btn { text-decoration: none; }
 :root[data-shell="mac"] .brand { display: none; }
 
 .rail-label { display: flex; align-items: center; justify-content: space-between; padding: 20px 8px 6px; font-size: 11.5px; font-weight: 600; color: var(--text-3); }
-.rail-label button { border: 0; background: none; color: var(--text-3); width: 20px; height: 20px; border-radius: 5px; display: grid; place-items: center; }
+.rail-label button { border: 0; background: none; color: var(--text-2); width: 20px; height: 20px; border-radius: 5px; display: grid; place-items: center; }
 .rail-label button:hover { background: var(--hover); color: var(--text); }
 .rail-label span { display: flex; gap: 2px; }
 /* Pausing everything is a rare act: its button shows when you reach for the header. */
@@ -184,7 +184,7 @@ a.btn { text-decoration: none; }
 
 .page-head { display: flex; align-items: center; gap: 16px; margin: 4px 0 26px; }
 .display { margin: 0; font: 600 26px/1.15 var(--serif); letter-spacing: -0.018em; }
-.lead { margin: 6px 0 0; max-width: 560px; text-wrap: pretty; color: var(--text-2); font-size: 14px; line-height: 1.5; }
+.lead { margin: 6px 0 0; max-width: 62ch; text-wrap: pretty; color: var(--text-2); font-size: 14px; line-height: 1.5; }
 .section-title { display: flex; align-items: baseline; gap: 8px; margin: 28px 0 10px; }
 .section-title h2 { margin: 0; font: 600 19px/1.2 var(--serif); letter-spacing: -0.01em; }
 .section-title .count { font-size: 12px; font-weight: 500; color: var(--text-3); font-variant-numeric: tabular-nums; }
@@ -294,7 +294,7 @@ a.btn { text-decoration: none; }
 .group-head { display: flex; align-items: center; justify-content: space-between; margin: 0 0 8px; }
 .group-head h3 { margin: 0; font: 600 17px/1.25 var(--serif); letter-spacing: -0.005em; color: var(--text); }
 .group { background: var(--surface); border-radius: 12px; box-shadow: var(--shadow-sm); overflow: hidden; }
-.group-note { margin: 10px 0 0; max-width: 36em; font-size: 13px; color: var(--text-3); line-height: 1.55; text-wrap: pretty; }
+.group-note { margin: 10px 0 0; max-width: 62ch; font-size: 13px; color: var(--text-3); line-height: 1.55; text-wrap: pretty; }
 .row { display: flex; align-items: center; gap: 12px; padding: 10px 14px; min-height: 44px; }
 .row + .row, .row + .row-block, .row-block + .row, .row-block + .row-block { border-top: 0.5px solid var(--line); }
 .row-icon { width: 26px; height: 26px; border-radius: 7px; display: grid; place-items: center; background: none; color: var(--text-2); flex: none; }
@@ -346,8 +346,8 @@ a.btn { text-decoration: none; }
 .inbox-row { display: grid; grid-template-columns: 26px 1fr auto; gap: 12px; align-items: start; padding: 12px 14px; }
 .inbox-row + .inbox-row { border-top: 0.5px solid var(--line); }
 .inbox-row.leaving { animation: fade-out 240ms var(--ease-out) both; }
-.inbox-title { font-size: 13.5px; font-weight: 600; }
-.inbox-desc { font-size: 12.5px; color: var(--text-3); margin-top: 3px; line-height: 1.8; }
+.inbox-title { font-size: 14.5px; font-weight: 600; }
+.inbox-desc { font-size: 13px; color: var(--text-3); margin-top: 3px; line-height: 1.8; }
 .inbox-row .row-ctl { margin-top: -4px; }
 .inbox-raw { margin-top: 6px; font-size: 12px; color: var(--text-3); }
 .inbox-raw summary { cursor: default; }
@@ -476,8 +476,8 @@ a.btn { text-decoration: none; }
 .composer .send.stop { background: var(--text); }
 .composer .send.stop .stop-square { width: 10px; height: 10px; border-radius: 2.5px; background: var(--bg); }
 .day-sep { display: flex; align-items: center; gap: 12px; margin: 6px 0 -4px; font-size: 11.5px; font-weight: 600; color: var(--text-3); }
-.day-sep::before, .day-sep::after { content: ""; flex: 1; height: 1px; background: linear-gradient(to right, transparent, var(--line)); }
-.day-sep::after { background: linear-gradient(to left, transparent, var(--line)); }
+.day-sep::before, .day-sep::after { content: ""; flex: 1; height: 1px; background: linear-gradient(to right, color-mix(in srgb, var(--line) 30%, transparent), var(--line) 40%); }
+.day-sep::after { background: linear-gradient(to left, color-mix(in srgb, var(--line) 30%, transparent), var(--line) 40%); }
 .msg-copy { margin-left: auto; width: 22px; height: 22px; border: 0; border-radius: 6px; background: none; color: var(--text-3); display: grid; place-items: center; opacity: 0; transform: scale(0.9); transition: opacity 160ms ease, transform 300ms var(--spring), background-color 120ms ease, color 120ms ease; }
 .msg-bot:hover .msg-copy, .msg-copy:focus-visible, .msg-copy.done { opacity: 1; transform: none; }
 .msg-copy:hover { background: var(--hover); color: var(--text); }
@@ -560,10 +560,10 @@ a.btn { text-decoration: none; }
 .mem.superseded, .mem.forgotten { background: none; box-shadow: inset 0 0 0 0.5px var(--line-strong); }
 .mem.superseded .mem-title, .mem.superseded .mem-body, .mem.forgotten .mem-title, .mem.forgotten .mem-body { color: var(--text-3); }
 .mem.forgotten .mem-title { text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--danger) 60%, transparent); }
-.mem-title { font: 600 15px/1.35 var(--sans); letter-spacing: -0.006em; padding-right: 92px; }
+.mem-title { font: 600 14.5px/1.35 var(--sans); letter-spacing: -0.006em; padding-right: 92px; }
 .mem-title .icon { display: inline-block; margin-right: 5px; color: var(--text-3); vertical-align: -1px; }
 .mem-actions .icon-btn.on { color: var(--text); }
-.mem-meta .linkish { font: inherit; font-weight: 500; color: var(--text); text-decoration: underline; text-decoration-color: color-mix(in srgb, currentColor 40%, transparent); text-underline-offset: 3px; background: none; border: 0; padding: 0; cursor: pointer; text-decoration: none; }
+.mem-meta .linkish { font: inherit; font-weight: 500; color: var(--text); text-decoration: underline; text-decoration-color: color-mix(in srgb, currentColor 45%, transparent); text-decoration-thickness: 1px; text-underline-offset: 3px; background: none; border: 0; padding: 0; cursor: pointer; text-decoration: none; }
 .mem-meta .linkish:hover { color: var(--text); text-decoration-color: currentColor; text-decoration: underline; text-underline-offset: 2px; }
 .versions { list-style: none; margin: 10px 0 0; padding: 8px 0 0 12px; border-top: 0.5px solid var(--line); display: grid; gap: 6px; }
 .versions li { display: grid; gap: 1px; font-size: 12.5px; color: var(--text-2); border-left: 2px solid var(--line-strong); padding-left: 10px; }
@@ -628,9 +628,9 @@ a.btn { text-decoration: none; }
 .routine .ri { width: 26px; height: 22px; display: grid; place-items: center; color: var(--text-2); }
 .routine .ri.quiet { color: var(--text-2); }
 .routine .rt { font-weight: 500; color: var(--text-2); display: inline-flex; align-items: center; gap: 6px; }
-.routine .rp { margin-top: 1px; font-size: 14px; font-weight: 600; color: var(--text); line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.routine .rp { margin-top: 1px; font-size: 14.5px; font-weight: 600; color: var(--text); line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .routine .rm { margin-top: 6px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; font-size: 13px; color: var(--text-3); }
-.routine .rh { margin-top: 4px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font-size: 12.5px; color: var(--text-3); opacity: .8; }
+.routine .rh { margin-top: 4px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font-size: 13px; color: var(--text-3); }
 .routine .rh .bad { color: var(--danger); }
 .rh-dots { display: inline-flex; gap: 3px; }
 .dot.missed { background: none; box-shadow: inset 0 0 0 1.5px var(--pending); }
@@ -1101,7 +1101,7 @@ kbd, .keys { font: 500 11.5px var(--sans); color: var(--text-2); padding: 3px 7p
 .page-head .head-action { margin-left: auto; align-self: flex-start; margin-top: 2px; display: inline-flex; align-items: center; gap: 6px; }
 .library { margin-top: 28px; }
 .library .section-title .select { margin-left: auto; }
-.library .hint { margin: 0 0 6px; max-width: 600px; font-size: 13px; color: var(--text-3); }
+.library .hint { margin: 0 0 6px; max-width: 62ch; font-size: 13px; color: var(--text-3); }
 .lib-cat h3 { font-size: 12.5px; font-weight: 600; color: var(--text-3); margin: 22px 0 8px; }
 /* Adding is the point of a library card: always shown, not only on hover. */
 .library .mem-actions.lib-add { opacity: 1; transform: none; }
@@ -1155,7 +1155,7 @@ kbd, .keys { font: 500 11.5px var(--sans); color: var(--text-2); padding: 3px 7p
 .bot-form .group:has(> .row-block > .field-label) > .row-block { padding: 0; }
 /* A select can't draw the dot before itself: the item ahead of it draws one after. */
 .mem-meta > :has(+ select)::after { content: "·"; margin: 0 7px; color: var(--text-3); opacity: .7; display: inline-block; }
-.mem-meta > select { padding-left: 0; padding-right: 14px; background-position: right 50%; }
+.mem-meta > select { padding: 1px 20px 1px 8px; border-radius: 6px; background-color: var(--hover); background-position: calc(100% - 6px) 50%; }
 
 
 /* The bot page: its fields stand off the page in dark, and the hero line is one line. */
@@ -1170,7 +1170,7 @@ kbd, .keys { font: 500 11.5px var(--sans); color: var(--text-2); padding: 3px 7p
 .chat-search .search:not(:hover):not(:focus-within):has(input:placeholder-shown) .input { border-color: transparent; color: transparent; }
 .chat-search .search:not(:hover):not(:focus-within):has(input:placeholder-shown) .input::placeholder { color: transparent; }
 
-@media (prefers-color-scheme: dark) { .provider-card:not(.on) { border-color: var(--line-strong); } .provider-card.on { background: color-mix(in srgb, var(--accent) 13%, var(--surface)); } }
+@media (prefers-color-scheme: dark) { .provider-card:not(.on) { border-color: var(--line-strong); } .provider-card.on { background: color-mix(in srgb, var(--accent-fill) 24%, var(--surface)); } }
 .searchbar .btn:not(.btn-primary) { border-color: var(--line); }
 .searchbar .segmented { background: color-mix(in srgb, var(--text) 3%, transparent); }
 /* Library cards: "Added" and "Add" share one size and line; the state is neutral, not a second accent. */
@@ -1180,7 +1180,8 @@ kbd, .keys { font: 500 11.5px var(--sans); color: var(--text-2); padding: 3px 7p
 .chat-search { height: 0; padding-top: 0; overflow: visible; }
 .chat-search .search { position: relative; top: 16px; }
 .so-far { padding-right: 52px; }
-.chat-search .search:not(:hover):not(:focus-within):has(input:placeholder-shown) .input { background: none; }
+.chat-search .search:not(:hover):not(:focus-within):has(input:placeholder-shown) .input { background: var(--hover); }
+.chat-search .search .icon { color: var(--text-2); }
 
 /* Light: an off switch you can see on white. */
 @media (prefers-color-scheme: light) { .switch:not(:checked) { background: #D1D1D6; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.04); } }

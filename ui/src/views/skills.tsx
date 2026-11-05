@@ -95,8 +95,8 @@ function SkillLibrary({ chatId, onAdded }: { chatId: number; onAdded: () => void
                   {/* A habit: once added, run it on a schedule in one click (a routine whose prompt is the skill's command). */}
                   {has && k.schedule && (scheduled.includes(k.slug)
                     ? <span>scheduled {k.schedule.label.toLowerCase()} · change it in Routines</span>
-                    : <><button type="button" className="linkish" disabled={busy === k.slug} onClick={() => schedule(k)}>Schedule it</button>
-                      <span className="sched-when">{k.schedule.label.toLowerCase()}</span></>)}
+                    : <><span className="sched-when">{k.schedule.label}</span>
+                      <button type="button" className="linkish" disabled={busy === k.slug} onClick={() => schedule(k)}>Schedule it</button></>)}
                   <button type="button" className="linkish" aria-expanded={open === k.slug} onClick={() => setOpen(open === k.slug ? null : k.slug)}>{open === k.slug ? 'Hide steps' : 'See the steps'}</button>
                 </div>
               </article>
@@ -138,7 +138,7 @@ function Skills({ chatId }: { chatId: number }) {
   return (
     <>
       <div className="page-head"><div><h1 className="display">Skills</h1>
-        <p className="lead">Step-by-step procedures your bots follow for a task. Add one from the library, teach one, or let a bot learn one from a task that went well. Use one on purpose by typing <code>/</code> in a chat.</p></div>
+        <p className="lead">Step-by-step procedures your bots follow for a task. Add one from the library, teach one, or let a bot learn one from a task that went well. Use one on purpose by <span style={{ whiteSpace: 'nowrap' }}>typing <code>/</code></span> in a chat.</p></div>
         {!teaching && <button className="btn btn-primary head-action" onClick={() => setTeaching({ source: '', bot: bots[0]?.id ?? 1, busy: false })}><Icon name="bolt" size={14} />Teach a skill</button>}</div>
       <div className={'teach' + (active.length || teaching ? '' : ' teach-empty')}>
         {!active.length && !teaching && <span><b>No skills of your own yet</b>Teach one from a link or a few lines of text, or add one from the library below.</span>}
