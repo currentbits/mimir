@@ -73,7 +73,7 @@ export function MemoryView({ chatId, onChange }: { chatId: number; onChange: () 
         {/* The tidy-up reads a chat's conversations; the household has none. */}
         {chatId !== HOUSEHOLD && <TidyButton chatId={chatId} onDone={refresh} />}
         <button className="btn" onClick={() => setAdding(a => a === 'import' ? null : 'import')} title="Bring in what another assistant remembers about you">Import</button>
-        <button className="btn" onClick={() => setAdding(a => a === 'one' ? null : 'one')}><Icon name="plus" size={14} />Add</button>
+        <button className="btn btn-primary" onClick={() => setAdding(a => a === 'one' ? null : 'one')}><Icon name="plus" size={14} />Add</button>
       </div>
       {(err || rows.error) && <p className="error">{err || rows.error}</p>}
       {standing.data && standing.data.count > 0 && (() => {
@@ -489,7 +489,7 @@ function MemoryCard({ r, versions, act, chatId, showKind }: { r: EntryRow; versi
           {showVersions ? 'hide' : versions.length === 1 ? 'earlier version' : `${versions.length} earlier versions`}</button>}
         {r.status === 'superseded' && <span className="lineage">replaced by #{r.superseded_by}</span>}
         {r.status === 'forgotten' && <span className="gone">forgotten</span>}
-        <span>#{r.id}</span>
+        <span className="mem-id">#{r.id}</span>
       </div>
       {check.busy && <p className="mem-check"><span className="typing" aria-hidden="true"><i /><i /><i /></span>Replaying past corrections…</p>}
       {check.note && (
