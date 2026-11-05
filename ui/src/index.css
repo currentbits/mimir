@@ -21,8 +21,8 @@
   --line: rgba(24, 24, 32, 0.085);
   --line-strong: rgba(24, 24, 32, 0.19);
   --text: #1C1C1E;
-  --text-2: #48484F;
-  --text-3: #64646C;
+  --text-2: #46464D;
+  --text-3: #5E5E66;
   --ink: #1C1C1E;
   --on-ink: #FFFFFF;
   --live: #2E9D62;
@@ -182,7 +182,7 @@ a.btn { text-decoration: none; }
 .fade-in { animation: fade-in 220ms cubic-bezier(.2, .8, .2, 1); }
 @keyframes fade-in { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: none; } }
 
-.page-head { display: flex; align-items: center; gap: 16px; margin: 4px 0 26px; }
+.page-head { display: flex; align-items: center; gap: 16px; margin: 4px 0 28px; }
 .display { margin: 0; font: 600 26px/1.15 var(--serif); letter-spacing: -0.018em; }
 .lead { margin: 6px 0 0; max-width: 62ch; text-wrap: pretty; color: var(--text-2); font-size: 14px; line-height: 1.5; }
 .section-title { display: flex; align-items: baseline; gap: 8px; margin: 28px 0 10px; }
@@ -543,7 +543,7 @@ a.btn { text-decoration: none; }
 .search { position: relative; flex: 1; }
 .search .icon { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--text-3); }
 .search .input { padding-left: 32px; border-radius: 9px; }
-.settings-search { display: block; margin: -6px 0 32px; }
+.settings-search { display: block; margin: -8px 0 28px; }
 .search-kbd { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); pointer-events: none; padding: 1px 6px; font-size: 11px; }
 .group-wrap[hidden], .group > [hidden] { display: none !important; }
 
@@ -563,7 +563,7 @@ a.btn { text-decoration: none; }
 .mem-title { font: 600 14.5px/1.35 var(--sans); letter-spacing: -0.006em; padding-right: 92px; }
 .mem-title .icon { display: inline-block; margin-right: 5px; color: var(--text-3); vertical-align: -1px; }
 .mem-actions .icon-btn.on { color: var(--text); }
-.mem-meta .linkish { font: inherit; font-weight: 500; color: var(--text); text-decoration: underline; text-decoration-color: color-mix(in srgb, currentColor 45%, transparent); text-decoration-thickness: 1px; text-underline-offset: 3px; background: none; border: 0; padding: 0; cursor: pointer; text-decoration: none; }
+.mem-meta .linkish { font: inherit; font-weight: 500; color: var(--text); text-decoration: underline; text-decoration-color: color-mix(in srgb, currentColor 45%, transparent); text-decoration-thickness: 1px; text-underline-offset: 3px; background: none; border: 0; padding: 0; cursor: pointer; }
 .mem-meta .linkish:hover { color: var(--text); text-decoration-color: currentColor; text-decoration: underline; text-underline-offset: 2px; }
 .versions { list-style: none; margin: 10px 0 0; padding: 8px 0 0 12px; border-top: 0.5px solid var(--line); display: grid; gap: 6px; }
 .versions li { display: grid; gap: 1px; font-size: 12.5px; color: var(--text-2); border-left: 2px solid var(--line-strong); padding-left: 10px; }
@@ -628,7 +628,7 @@ a.btn { text-decoration: none; }
 .routine .ri { width: 26px; height: 22px; display: grid; place-items: center; color: var(--text-2); }
 .routine .ri.quiet { color: var(--text-2); }
 .routine .rt { font-weight: 500; color: var(--text-2); display: inline-flex; align-items: center; gap: 6px; }
-.routine .rp { margin-top: 1px; font-size: 14.5px; font-weight: 600; color: var(--text); line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.routine .rp { margin-top: 1px; font-size: 14.5px; font-weight: 500; text-wrap: pretty; color: var(--text); line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .routine .rm { margin-top: 6px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; font-size: 13px; color: var(--text-3); }
 .routine .rh { margin-top: 4px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font-size: 13px; color: var(--text-3); }
 .routine .rh .bad { color: var(--danger); }
@@ -1170,7 +1170,7 @@ kbd, .keys { font: 500 11.5px var(--sans); color: var(--text-2); padding: 3px 7p
 .chat-search .search:not(:hover):not(:focus-within):has(input:placeholder-shown) .input { border-color: transparent; color: transparent; }
 .chat-search .search:not(:hover):not(:focus-within):has(input:placeholder-shown) .input::placeholder { color: transparent; }
 
-@media (prefers-color-scheme: dark) { .provider-card:not(.on) { border-color: var(--line-strong); } .provider-card.on { background: color-mix(in srgb, var(--accent-fill) 24%, var(--surface)); } }
+@media (prefers-color-scheme: dark) { .provider-card:not(.on) { border-color: var(--line-strong); } .provider-card.on { background: color-mix(in srgb, var(--accent) 9%, var(--surface)); box-shadow: inset 0 0 0 1px var(--accent); } }
 .searchbar .btn:not(.btn-primary) { border-color: var(--line); }
 .searchbar .segmented { background: color-mix(in srgb, var(--text) 3%, transparent); }
 /* Library cards: "Added" and "Add" share one size and line; the state is neutral, not a second accent. */
@@ -1180,7 +1180,8 @@ kbd, .keys { font: 500 11.5px var(--sans); color: var(--text-2); padding: 3px 7p
 .chat-search { height: 0; padding-top: 0; overflow: visible; }
 .chat-search .search { position: relative; top: 16px; }
 .so-far { padding-right: 52px; }
-.chat-search .search:not(:hover):not(:focus-within):has(input:placeholder-shown) .input { background: var(--hover); }
+.chat-search .search:not(:hover):not(:focus-within):has(input:placeholder-shown) .input { background: none; }
+.chat-search .search:hover .input { background: var(--hover); }
 .chat-search .search .icon { color: var(--text-2); }
 
 /* Light: an off switch you can see on white. */
@@ -1188,7 +1189,7 @@ kbd, .keys { font: 500 11.5px var(--sans); color: var(--text-2); padding: 3px 7p
 /* Selects in a row size to their text, the same everywhere. */
 .row-ctl .select { width: auto; min-width: 140px; max-width: 240px; }
 /* The bot page's header reads as the page head, not part of Identity. */
-.bot-form > .page-head { margin-bottom: 40px; }
+
 
 .teach:empty { display: none; }
 .account-test .btn { height: 32px; }
@@ -1196,3 +1197,15 @@ kbd, .keys { font: 500 11.5px var(--sans); color: var(--text-2); padding: 3px 7p
 .rail-hint { margin-top: 6px; }
 
 .so-far, .hint, .row-desc, .mem-body { text-wrap: pretty; }
+
+/* Routines' Run now: a ghost until you point at it, so the toggle leads the column. */
+.routine-actions .run-now { border-color: transparent; }
+.routine-actions .run-now:hover, .routine-actions .run-now:focus-visible { border-color: var(--line-strong); }
+/* Activity: the model is a quiet detail. */
+.run-t small { color: var(--text-3); }
+/* A chip in a meta line needs no dot after it. */
+.mem-meta > select + ::before { content: none !important; }
+.mem-meta > select { margin-right: 8px; }
+.mem-meta > :has(+ select)::after { content: none; }
+/* One selected-row treatment in both themes: fill only. */
+@media (prefers-color-scheme: dark) { .rail-glide { box-shadow: none; } }
