@@ -23,7 +23,7 @@ const PROVIDERS = [
   { id: 'grok', name: 'Grok', hint: 'Your SuperGrok login (Grok Build)' },
   { id: 'openrouter', name: 'OpenRouter', hint: 'Hundreds of models, one key' },
   { id: 'xai', name: 'xAI API', hint: 'Grok: your plan, or a key' },
-  { id: 'local', name: 'Local model', hint: 'Ollama or LM Studio, free' },
+  { id: 'local', name: 'Local model', hint: 'Ollama or LM\u00a0Studio, free' },
   { id: 'openai', name: 'API key', hint: 'OpenAI or any compatible API' },
 ]
 
@@ -240,15 +240,16 @@ export function BotPage({ bot, status, canDelete, onSaved, onDeleted, onChat, on
             ))}
           </div>
           <div className="editor" style={{ margin: 0 }}>
-            <div className="er" style={{ alignItems: 'flex-start' }}>
+            {/* Test sits beside the fields it tries. */}
+            <div className="er" style={{ alignItems: 'flex-end' }}>
               <label className="field-label" style={{ flex: 1 }}><span>Model</span>
                 <ModelInput provider={b.provider} baseUrl={b.base_url} value={b.model} onChange={model => edit({ model })} /></label>
               {(b.provider === 'openai' || b.provider === 'local') && (
                 <label className="field-label" style={{ flex: 1 }}><span>Endpoint</span>
                   <input className="input" placeholder={b.provider === 'local' ? 'http://localhost:11434/v1' : 'https://api.openai.com/v1'} value={b.base_url} onChange={e => edit({ base_url: e.target.value })} /></label>
               )}
+              <AccountTest key={`${b.provider}|${b.model}|${b.base_url}`} provider={b.provider} model={b.model} baseUrl={b.base_url} />
             </div>
-            <AccountTest key={`${b.provider}|${b.model}|${b.base_url}`} provider={b.provider} model={b.model} baseUrl={b.base_url} />
           </div>
         </div>
       </Group>

@@ -46,7 +46,7 @@
     --bg: #171719;
     --rail: #1E1E21;
     --rail-glass: rgba(34, 34, 37, 0.7);
-    --surface: #222226;
+    --surface: #252529;
     --sunken: #2F2F35;
     --chev: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'%3E%3Cpath d='M2.5 4l2.5 2.5L7.5 4' fill='none' stroke='%23a8a8b0' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
     --field: #1A1A1D;
@@ -150,7 +150,7 @@ a.btn { text-decoration: none; }
 .rail-item.on .ri-name { font-weight: 600; }
 .rail-item .ri-text { flex: 1; min-width: 0; display: grid; gap: 1px; }
 .rail-item .ri-name { font-size: 14px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.rail-item .ri-sub { font-size: 12.5px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rail-item .ri-sub { font-size: 13px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rail-item .ri-sub.busy { color: var(--text-2); }
 .rail-item .ri-count { font-size: 11px; color: var(--text-3); opacity: 0; transition: opacity 160ms ease; font-variant-numeric: tabular-nums; }
 .rail-item .ri-glyph { width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; color: var(--text-2); background: var(--hover); flex: none; }
@@ -184,7 +184,7 @@ a.btn { text-decoration: none; }
 .display { margin: 0; font: 600 26px/1.15 var(--serif); letter-spacing: -0.018em; }
 .lead { margin: 6px 0 0; max-width: 600px; color: var(--text-2); font-size: 14px; line-height: 1.5; }
 .section-title { display: flex; align-items: baseline; gap: 8px; margin: 28px 0 10px; }
-.section-title h2 { margin: 0; font: 600 16px/1.2 var(--serif); letter-spacing: -0.01em; }
+.section-title h2 { margin: 0; font: 600 19px/1.2 var(--serif); letter-spacing: -0.01em; }
 .section-title .count { font-size: 12px; font-weight: 500; color: var(--text-3); font-variant-numeric: tabular-nums; }
 .section-title .grow { flex: 1; }
 
@@ -290,9 +290,9 @@ a.btn { text-decoration: none; }
 /* Inset grouped list, as in System Settings. */
 .group-wrap { margin: 0 0 40px; }
 .group-head { display: flex; align-items: center; justify-content: space-between; margin: 0 0 8px; }
-.group-head h3 { margin: 0; font: 600 15px/1.25 var(--serif); letter-spacing: -0.005em; color: var(--text); }
+.group-head h3 { margin: 0; font: 600 17px/1.25 var(--serif); letter-spacing: -0.005em; color: var(--text); }
 .group { background: var(--surface); border-radius: 12px; box-shadow: var(--shadow-sm); overflow: hidden; }
-.group-note { margin: 7px 0 0; max-width: 600px; font-size: 13px; color: var(--text-3); line-height: 1.5; }
+.group-note { margin: 10px 0 0; max-width: 600px; font-size: 13px; color: var(--text-3); line-height: 1.5; }
 .row { display: flex; align-items: center; gap: 12px; padding: 10px 14px; min-height: 44px; }
 .row + .row, .row + .row-block, .row-block + .row, .row-block + .row-block { border-top: 0.5px solid var(--line); }
 .row-icon { width: 26px; height: 26px; border-radius: 7px; display: grid; place-items: center; background: none; color: var(--text-2); flex: none; }
@@ -300,7 +300,7 @@ a.btn { text-decoration: none; }
 .row:has(.row-desc) > .row-icon { align-self: flex-start; margin-top: -3px; }
 .row:has(.row-desc) > .row-ctl { align-self: flex-start; min-height: 20px; }
 .row-main { flex: 1; min-width: 0; }
-.row-title { font-size: 14px; font-weight: 550; }
+.row-title { font-size: 14px; font-weight: 500; }
 .row-desc { font-size: 13px; color: var(--text-3); margin-top: 2px; line-height: 1.45; }
 .row-ctl { display: flex; align-items: center; gap: 8px; flex: none; }
 .row-block { padding: 12px 14px; display: grid; gap: 10px; }
@@ -527,7 +527,8 @@ a.btn { text-decoration: none; }
 .attach img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .attach button { position: absolute; top: 4px; right: 4px; width: 18px; height: 18px; border-radius: 50%; border: 0; display: grid; place-items: center; background: rgba(0, 0, 0, 0.55); color: #fff; padding: 0; }
 .composer.dropping { box-shadow: 0 10px 30px -14px rgba(0, 0, 0, 0.18), 0 0 0 3px color-mix(in srgb, var(--focus) 40%, transparent); }
-.composer-note { max-width: 696px; margin: 7px auto 0; text-align: center; font-size: 11px; color: var(--text-3); }
+.composer-note { max-width: 696px; margin: 7px auto 0; text-align: center; font-size: 11.5px; color: var(--text-3); opacity: 0; transition: opacity 200ms ease; }
+.composer-wrap:focus-within .composer-note { opacity: 1; }
 .starters { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 4px; }
 .starter { border: 0.5px solid var(--line-strong); background: var(--surface); border-radius: 99px; padding: 6px 12px; font-size: 12.5px; color: var(--text-2); box-shadow: var(--shadow-sm); }
 .starter:hover { color: var(--text); }
@@ -559,16 +560,16 @@ a.btn { text-decoration: none; }
 .mem-title { font: 600 15px/1.35 var(--sans); letter-spacing: -0.006em; padding-right: 92px; }
 .mem-title .icon { display: inline-block; margin-right: 5px; color: var(--text-3); vertical-align: -1px; }
 .mem-actions .icon-btn.on { color: var(--text); }
-.mem-meta .linkish { font: inherit; font-weight: 500; color: var(--accent); background: none; border: 0; padding: 0; cursor: pointer; text-decoration: none; }
-.mem-meta .linkish:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+.mem-meta .linkish { font: inherit; font-weight: 500; color: var(--text-2); background: none; border: 0; padding: 0; cursor: pointer; text-decoration: none; }
+.mem-meta .linkish:hover { color: var(--text); text-decoration: underline; text-underline-offset: 2px; }
 .versions { list-style: none; margin: 10px 0 0; padding: 8px 0 0 12px; border-top: 0.5px solid var(--line); display: grid; gap: 6px; }
 .versions li { display: grid; gap: 1px; font-size: 12.5px; color: var(--text-2); border-left: 2px solid var(--line-strong); padding-left: 10px; }
 .versions small { font-size: 11px; color: var(--text-3); }
 .editor-card.import { display: grid; gap: 10px; }
 .editor-card.import .er { display: flex; align-items: center; gap: 10px; }
 .editor-card.import .grow { flex: 1; }
-.mem-body { margin: 6px 0 6px; font-size: 14px; line-height: 1.55; color: var(--text-2); white-space: pre-wrap; }
-.mem-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 0; font-size: 12.5px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.mem-body { margin: 6px 0 8px; font-size: 14px; line-height: 1.55; color: var(--text-2); white-space: pre-wrap; }
+.mem-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 0; font-size: 13px; color: var(--text-3); font-variant-numeric: tabular-nums; }
 .mem-meta .lineage { color: var(--pending); }
 .mem-meta .mem-id { opacity: 0; transition: opacity 160ms ease; }
 .mem:hover .mem-meta .mem-id, .mem:focus-within .mem-meta .mem-id { opacity: .6; }
@@ -684,7 +685,7 @@ a.btn { text-decoration: none; }
 .runrow + .run-detail, .run + .run { border-top: 0.5px solid var(--line); }
 .run-t { display: grid; min-width: 0; }
 .run-t b { font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.run-t small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12.5px; color: var(--text-3); }
+.run-t small { font-size: 13px; color: var(--text-3); }
 .run-bot { display: flex; align-items: center; gap: 7px; min-width: 0; font-size: 12.5px; color: var(--text-2); }
 .run-bot span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .num { font-size: 12px; color: var(--text-2); text-align: right; font-variant-numeric: tabular-nums; }
@@ -710,7 +711,7 @@ a.btn { text-decoration: none; }
 .group:has(> .row-block > .provider-cards:not(.templates)) > .row-block { padding: 0; gap: 14px; }
 .provider-card { text-align: left; align-content: start; padding: 11px 12px 12px; border-radius: 10px; border: 1px solid var(--line); background: none; display: grid; gap: 3px; transition: box-shadow 120ms ease, border-color 120ms ease; }
 .provider-card b { font-size: 14px; margin-bottom: 2px; }
-.provider-card span { font-size: 12px; color: var(--text-3); line-height: 1.4; text-wrap: pretty; }
+.provider-card span { font-size: 12px; color: var(--text-3); line-height: 1.4; }
 .templates .provider-card { align-content: start; }
 .templates .provider-card b { display: flex; align-items: center; gap: 6px; }
 .templates .provider-card b .icon { color: var(--text-3); }
@@ -718,7 +719,7 @@ a.btn { text-decoration: none; }
 .starter-routine .row-title { display: flex; align-items: center; gap: 6px; }
 .starter-routine .textarea { margin-top: 6px; min-height: 0; }
 .starter-routine .textarea:disabled { opacity: .5; }
-.provider-card.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); box-shadow: inset 0 0 0 0.5px var(--accent); }
+.provider-card.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); box-shadow: inset 0 0 0 0.5px var(--accent); }
 .provider-card:hover:not(.on) { background: var(--hover); }
 .chan-row .row-icon { color: var(--text); }
 .account-test { display: flex; align-items: center; gap: 10px; min-height: 24px; }
@@ -1160,7 +1161,18 @@ kbd, .keys { font: 500 11.5px var(--sans); color: var(--text-2); padding: 3px 7p
 .bot-lead { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 520px; }
 .sched-when { color: var(--text-3); }
 /* Chat search: a quiet icon until you reach for it (⌘F opens it too). */
-.chat-search .search { width: 32px; max-width: 240px; transition: width 260ms var(--spring); }
+.chat-search .search { width: 44px; max-width: 240px; transition: width 260ms var(--spring); }
+.chat-search .search:not(:hover):not(:focus-within):has(input:placeholder-shown) .icon { left: 14px; }
 .chat-search .search:hover, .chat-search .search:focus-within, .chat-search .search:has(input:not(:placeholder-shown)) { width: 240px; }
 .chat-search .search:not(:hover):not(:focus-within):has(input:placeholder-shown) .input { border-color: transparent; color: transparent; }
 .chat-search .search:not(:hover):not(:focus-within):has(input:placeholder-shown) .input::placeholder { color: transparent; }
+
+@media (prefers-color-scheme: dark) { .provider-card:not(.on) { border-color: var(--line-strong); } }
+/* Library cards: "Added" and "Add" share one size and line; the state is neutral, not a second accent. */
+.library .mem-actions.lib-add .badge.live { height: 30px; padding: 0 11px; font-size: 13px; font-weight: 500; background: none; color: var(--text-3); }
+.library .mem-actions.lib-add .badge.live .icon { color: var(--text-3); }
+/* Chat search overlays the top of the thread instead of taking a row. */
+.chat-search { height: 0; padding-top: 0; overflow: visible; }
+.chat-search .search { position: relative; top: 12px; }
+.so-far { padding-right: 44px; }
+.chat-search .search:not(:hover):not(:focus-within):has(input:placeholder-shown) .input { background: var(--hover); }
