@@ -222,7 +222,7 @@ a.btn { text-decoration: none; }
 .input { height: 32px; }
 .textarea { min-height: 60px; resize: vertical; line-height: 1.5; }
 .input:focus, .textarea:focus, .select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
-.input::placeholder, .textarea::placeholder { color: var(--text-3); }
+.input::placeholder, .textarea::placeholder { color: color-mix(in srgb, var(--text-3) 72%, transparent); }
 .select { height: 32px; appearance: none; padding-right: 28px; background-image: var(--chev); background-position: calc(100% - 10px) 50%; background-size: 10px 10px; background-repeat: no-repeat; }
 .mono { font-family: var(--mono); }
 .field-label { display: grid; gap: 6px; }
@@ -691,7 +691,7 @@ a.btn { text-decoration: none; }
 .run-t small { font-size: 13px; color: var(--text-3); }
 .run-bot { display: flex; align-items: center; gap: 7px; min-width: 0; font-size: 12.5px; color: var(--text-2); }
 .run-bot span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.num { font-size: 12px; color: var(--text-2); text-align: right; font-variant-numeric: tabular-nums; font-feature-settings: 'tnum'; }
+.num { font-size: 13px; color: var(--text-2); text-align: right; font-variant-numeric: tabular-nums; font-feature-settings: 'tnum'; }
 .runrow .icon { color: var(--text-2); transition: transform 160ms ease; }
 .runrow[aria-expanded="true"] .icon { transform: rotate(90deg); }
 .run-detail { padding: 4px 14px 14px 36px; }
@@ -712,7 +712,7 @@ a.btn { text-decoration: none; }
 .provider-cards:has(> :nth-child(8):last-child) { grid-template-columns: repeat(4, 1fr); }
 .group:has(> .row-block > .provider-cards:not(.templates)) { background: none; box-shadow: none; overflow: visible; }
 .group:has(> .row-block > .provider-cards:not(.templates)) > .row-block { padding: 0; gap: 14px; }
-.provider-card { text-align: left; align-content: start; padding: 11px 12px 12px; border-radius: 10px; border: 1px solid var(--line-strong); background: var(--surface); display: grid; gap: 3px; transition: box-shadow 120ms ease, border-color 120ms ease; }
+.provider-card { text-align: left; align-content: start; padding: 11px 12px; border-radius: 10px; border: 1px solid var(--line-strong); background: var(--surface); display: grid; gap: 3px; transition: box-shadow 120ms ease, border-color 120ms ease; }
 .provider-card b { font-size: 14px; margin-bottom: 3px; }
 .provider-card span { font-size: 12px; color: var(--text-3); line-height: 1.4; }
 .templates .provider-card { align-content: start; }
@@ -1178,7 +1178,7 @@ kbd, .keys { font: 500 11.5px var(--sans); color: var(--text-2); padding: 3px 7p
 .library .mem-actions.lib-add .badge.live .icon { color: var(--text-3); }
 /* Chat search overlays the top of the thread instead of taking a row. */
 .chat-search { height: 0; padding-top: 0; overflow: visible; }
-.chat-search .search { position: relative; top: 16px; }
+.chat-search .search { position: relative; top: 22px; }
 .so-far { padding-right: 52px; }
 .chat-search .search:not(:hover):not(:focus-within):has(input:placeholder-shown) .input { background: none; }
 .chat-search .search:hover .input { background: var(--hover); }
@@ -1213,3 +1213,10 @@ kbd, .keys { font: 500 11.5px var(--sans); color: var(--text-2); padding: 3px 7p
 /* Library cards you already have step back, so the ones you can add lead. */
 .library .mem:has(.badge.live) .mem-title { color: var(--text-2); }
 .library .mem:has(.badge.live) .mem-body { color: var(--text-3); }
+
+/* Library cards are offers: a lighter title than your own skills. */
+.library .mem-title { font-weight: 500; }
+.library .mem-body { color: var(--text-3); }
+/* Activity: the status dot sits on the title line. */
+.runrow > .dot { align-self: start; margin-top: 7px; }
+@media (prefers-color-scheme: dark) { .provider-card.on { border-color: var(--accent-fill); box-shadow: inset 0 0 0 1px var(--accent-fill); } }

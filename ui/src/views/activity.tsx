@@ -28,7 +28,7 @@ export function ActivityView({ chatId }: { chatId: number }) {
   return (
     <>
       <div className="page-head"><div><h1 className="display">Activity</h1>
-        <p className="lead">Every run in this chat over the last 30 days. The cost is what the same use would cost on the API; subscriptions aren’t billed per token.</p></div></div>
+        <p className="lead">Every run here in the last 30 days, and what it would cost on the API.</p></div></div>
       {t && (
         <dl className="stats" aria-label="Last 30 days">
           <div className="stat"><dt>AI runs · 30 days</dt><dd>{t.runs}{t.errors ? <small className="bad"> · {t.errors} failed</small> : null}</dd></div>

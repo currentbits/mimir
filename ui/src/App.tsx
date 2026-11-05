@@ -259,7 +259,7 @@ function Main() {
           <div className="brand"><img src="/logo.png" alt="" />Mimir{remoteServer() && <span className="where" title={remoteServer()!.url}>server</span>}</div>
           <button className={'rail-item inbox-item' + (view === 'inbox' ? ' on' : '')} onClick={() => setView('inbox')}>
             <span className="ri-glyph"><Icon name="inbox" size={15} /></span>
-            <span className="ri-text"><span className="ri-name">Needs you</span><span className="ri-sub">{needs ? 'Waiting for you' : 'All clear'}</span></span>
+            <span className="ri-text"><span className="ri-name">Needs you</span>{!needs && <span className="ri-sub">All clear</span>}</span>
             {needs > 0 && <span className="badge count" key={needs}>{needs}</span>}
           </button>
           {inDesktop && (

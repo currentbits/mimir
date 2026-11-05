@@ -17,14 +17,14 @@ type Secrets = { telegram_token: string | null; slack_bot_token: string | null; 
   whatsapp_number_id: string | null; whatsapp_token: string | null; whatsapp_app_secret: string | null; imessage_chat: string | null }
 
 const PROVIDERS = [
-  { id: 'claude', name: 'Claude', hint: 'Your Claude login (Claude Code)' },
-  { id: 'chatgpt', name: 'ChatGPT', hint: 'Your ChatGPT plan, signed in' },
-  { id: 'codex', name: 'Codex CLI', hint: 'Your ChatGPT login, through the Codex CLI' },
-  { id: 'grok', name: 'Grok', hint: 'Your SuperGrok login (Grok Build)' },
-  { id: 'openrouter', name: 'OpenRouter', hint: 'Hundreds of models, one key' },
-  { id: 'xai', name: 'xAI API', hint: 'Grok: your plan, or a key' },
-  { id: 'local', name: 'Local model', hint: 'Ollama or LM\u00a0Studio, free' },
-  { id: 'openai', name: 'API key', hint: 'OpenAI or any compatible API' },
+  { id: 'claude', name: 'Claude', hint: 'Your Claude Code login' },
+  { id: 'chatgpt', name: 'ChatGPT', hint: 'Your ChatGPT plan' },
+  { id: 'codex', name: 'Codex CLI', hint: 'Your ChatGPT, via Codex' },
+  { id: 'grok', name: 'Grok', hint: 'Your SuperGrok login' },
+  { id: 'openrouter', name: 'OpenRouter', hint: 'Many models, one key' },
+  { id: 'xai', name: 'xAI API', hint: 'Grok plan or API key' },
+  { id: 'local', name: 'Local model', hint: 'Ollama or LM\u00a0Studio' },
+  { id: 'openai', name: 'API key', hint: 'Any OpenAI-style API' },
 ]
 
 const PROVIDER_NOTE: Record<string, React.ReactNode> = {
