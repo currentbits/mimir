@@ -757,7 +757,7 @@ export function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, 
                 </span>
                 {openBot && !incognito && (
                   <button type="button" className="bot-settings" onClick={() => openBot(me.id)} title={`${me.name}'s settings`} aria-label={`${me.name}'s settings`}>
-                    <Icon name="settings" size={14} />
+                    <Icon name="settings" size={16} />
                   </button>
                 )}
                 <textarea ref={box} rows={1} placeholder={incognito ? `Message ${me.name} incognito` : working ? 'Add to what you asked, or change it' : `Message ${me.name}`} value={text} onChange={e => setText(e.target.value)} disabled={working && !steerable} autoFocus
