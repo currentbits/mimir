@@ -94,7 +94,7 @@ function SkillLibrary({ chatId, onAdded }: { chatId: number; onAdded: () => void
                 {open === k.slug && <div className="skill-steps selectable"><Markdown text={k.body} /></div>}
                 <div className="mem-meta">
                   <button type="button" className="linkish" aria-expanded={open === k.slug} onClick={() => setOpen(open === k.slug ? null : k.slug)}>{open === k.slug ? 'Hide steps' : 'See the steps'}</button>
-                  {missing.length > 0 && <span className="badge pending" title="It can be added now; it works once these are there.">Needs {[...new Set(missing.map(t => NEED[t] ?? t))].join(', ')}</span>}
+                  {missing.length > 0 && <span className="badge needs" title="It can be added now; it works once these are there.">Needs {[...new Set(missing.map(t => NEED[t] ?? t))].join(', ')}</span>}
                   {/* A habit: once added, run it on a schedule in one click (a routine whose prompt is the skill's command). */}
                   {has && k.schedule && (scheduled.includes(k.slug)
                     ? <span>scheduled {k.schedule.label.toLowerCase()} · change it in Routines</span>
