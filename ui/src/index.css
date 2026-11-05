@@ -13,7 +13,7 @@
   --rail: #F0F0EE;
   --rail-glass: rgba(236, 236, 234, 0.74);
   --surface: #FFFFFF;
-  --sunken: #E9E9E5;
+  --sunken: #E4E4DF;
   --chev: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'%3E%3Cpath d='M2.5 4l2.5 2.5L7.5 4' fill='none' stroke='%2374747c' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
   --field: #FFFFFF;
   --hover: rgba(24, 24, 32, 0.035);
@@ -69,7 +69,7 @@
     --accent-fill: #4268D4;
     --accent-soft: rgba(128, 159, 242, 0.13);
     --focus: rgba(128, 159, 242, 0.5);
-    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(255, 255, 255, 0.14), inset 0 1px 0 rgba(255, 255, 255, 0.03);
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(255, 255, 255, 0.115);
     --shadow-md: 0 8px 24px -8px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.07), inset 0 1px 0 rgba(255, 255, 255, 0.03);
     --shadow-lg: 0 22px 50px -12px rgba(0, 0, 0, 0.65), 0 0 0 0.5px rgba(255, 255, 255, 0.08);
   }
@@ -249,7 +249,7 @@ a.btn { text-decoration: none; }
 .switch:disabled { opacity: 0.5; }
 
 .segmented { display: inline-flex; gap: 2px; padding: 2px; border-radius: 8px; background: var(--hover); flex: none; }
-.toolbar .segmented { background: color-mix(in srgb, var(--text) 3%, transparent); }
+.toolbar .segmented { background: color-mix(in srgb, var(--text) 4.5%, transparent); }
 .segmented button {
   height: 28px; padding: 0 12px; border: 0; border-radius: 6px; background: none; display: inline-flex; align-items: center; gap: 6px;
   font-size: 13px; font-weight: 500; color: var(--text-2); transition: background-color 120ms ease, color 120ms ease;
@@ -292,7 +292,7 @@ a.btn { text-decoration: none; }
 /* Inset grouped list, as in System Settings. */
 .group-wrap { margin: 0 0 40px; }
 .group-head { display: flex; align-items: center; justify-content: space-between; margin: 0 0 8px; }
-.group-head h3 { margin: 0; font: 600 17px/1.25 var(--serif); letter-spacing: -0.005em; color: var(--text); }
+.group-head h3 { margin: 0; font: 600 19px/1.2 var(--serif); letter-spacing: -0.005em; color: var(--text); }
 .group { background: var(--surface); border-radius: 12px; box-shadow: var(--shadow-sm); overflow: hidden; }
 .group-note { margin: 8px 0 0; max-width: 560px; font-size: 12.5px; color: var(--text-3); line-height: 1.55; text-wrap: pretty; }
 .row { display: flex; align-items: center; gap: 12px; padding: 10px 14px; min-height: 44px; }
@@ -302,7 +302,7 @@ a.btn { text-decoration: none; }
 .row:has(.row-desc) > .row-icon { align-self: flex-start; margin-top: -3px; }
 .row:has(.row-desc) > .row-ctl { align-self: flex-start; min-height: 20px; }
 .row-main { flex: 1; min-width: 0; }
-.row-title { font-size: 14px; font-weight: 500; }
+.row-title { font-size: 14.5px; font-weight: 550; }
 .row-desc { font-size: 13px; color: var(--text-3); margin-top: 2px; line-height: 1.45; }
 .row-ctl { display: flex; align-items: center; gap: 8px; flex: none; }
 .row-block { padding: 12px 14px; display: grid; gap: 10px; }
@@ -346,7 +346,7 @@ a.btn { text-decoration: none; }
 .inbox-row { display: grid; grid-template-columns: 26px 1fr auto; gap: 12px; align-items: start; padding: 12px 14px; }
 .inbox-row + .inbox-row { border-top: 0.5px solid var(--line); }
 .inbox-row.leaving { animation: fade-out 240ms var(--ease-out) both; }
-.inbox-title { font-size: 14.5px; font-weight: 600; }
+.inbox-title { font-size: 14.5px; font-weight: 550; }
 .inbox-desc { font-size: 13px; color: var(--text-3); margin-top: 3px; line-height: 1.8; }
 .inbox-row .row-ctl { margin-top: -4px; }
 .inbox-raw { margin-top: 6px; font-size: 12px; color: var(--text-3); }
@@ -561,7 +561,7 @@ a.btn { text-decoration: none; }
 .mem.superseded, .mem.forgotten { background: none; box-shadow: inset 0 0 0 0.5px var(--line-strong); }
 .mem.superseded .mem-title, .mem.superseded .mem-body, .mem.forgotten .mem-title, .mem.forgotten .mem-body { color: var(--text-3); }
 .mem.forgotten .mem-title { text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--danger) 60%, transparent); }
-.mem-title { font: 600 14.5px/1.35 var(--sans); letter-spacing: -0.006em; padding-right: 92px; }
+.mem-title { font: 550 14.5px/1.35 var(--sans); letter-spacing: -0.006em; padding-right: 92px; }
 .mem-title .icon { display: inline-block; margin-right: 5px; color: var(--text-3); vertical-align: -1px; }
 .mem-actions .icon-btn.on { color: var(--text); }
 .mem-meta .linkish { font: inherit; font-weight: 500; color: var(--text); text-decoration: underline; text-decoration-color: color-mix(in srgb, currentColor 35%, transparent); text-decoration-thickness: 1px; text-underline-offset: 3px; background: none; border: 0; padding: 0; cursor: pointer; }
@@ -629,7 +629,7 @@ a.btn { text-decoration: none; }
 .routine .ri { width: 26px; height: 22px; display: grid; place-items: center; color: var(--text-2); }
 .routine .ri.quiet { color: var(--text-2); }
 .routine .rt { font-weight: 400; color: var(--text-2); display: inline-flex; align-items: center; gap: 6px; }
-.routine .rp { margin-top: 1px; font-size: 14.5px; font-weight: 500; color: var(--text); line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.routine .rp { margin-top: 1px; font-size: 14.5px; font-weight: 550; color: var(--text); line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .routine .rm { margin-top: 6px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; font-size: 13px; color: var(--text-3); }
 .routine .rh { margin-top: 4px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font-size: 12.5px; color: var(--text-3); opacity: .85; margin-top: 6px; }
 .routine .rh .bad { color: var(--danger); }
@@ -645,7 +645,7 @@ a.btn { text-decoration: none; }
 .routine-inline { padding: 16px; }
 .routine + .routine-inline, .routine-inline + .routine { border-top: 0.5px solid var(--line); }
 .presets { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
-.preset { text-align: left; padding: 14px; border-radius: 12px; border: 0; background: var(--surface); box-shadow: var(--shadow-sm); display: grid; gap: 4px; transition: box-shadow 160ms ease, transform 90ms ease; }
+.preset { text-align: left; padding: 14px 16px; border-radius: 12px; border: 0; background: var(--surface); box-shadow: var(--shadow-sm); display: grid; gap: 4px; transition: box-shadow 160ms ease, transform 90ms ease; }
 .preset:hover { box-shadow: var(--shadow-md); transform: translateY(-1px); }
 .preset:active { transform: scale(0.985); }
 .preset .icon { color: var(--text-2); margin-bottom: 4px; }
@@ -653,7 +653,7 @@ a.btn { text-decoration: none; }
 .preset span { font-size: 12px; color: var(--text-3); }
 .presets.four { grid-template-columns: repeat(4, 1fr); }
 .presets .preset { align-content: start; }
-.presets.four .preset { padding: 12px 14px 13px; }
+.presets.four .preset { padding: 12px 16px 13px; }
 
 .preset.new .icon { color: var(--text-2); }
 .presets.four .preset.new { grid-row: span 2; align-content: start; background: none; box-shadow: none; border: 1px dashed var(--line-strong); }
@@ -714,7 +714,7 @@ a.btn { text-decoration: none; }
 .group:has(> .row-block > .provider-cards:not(.templates)) { background: none; box-shadow: none; overflow: visible; }
 .group:has(> .row-block > .provider-cards:not(.templates)) > .row-block { padding: 0; gap: 14px; }
 .provider-card { text-align: left; align-content: start; padding: 11px 12px; border-radius: 10px; border: 1px solid var(--line-strong); background: var(--surface); display: grid; gap: 3px; transition: box-shadow 120ms ease, border-color 120ms ease; }
-.provider-card b { font-size: 14px; margin-bottom: 3px; }
+.provider-card b { font-size: 14.5px; font-weight: 550; margin-bottom: 3px; }
 .provider-card span { font-size: 12px; color: var(--text-3); line-height: 1.4; }
 .templates .provider-card { align-content: start; }
 .templates .provider-card b { display: flex; align-items: center; gap: 6px; }
@@ -1170,15 +1170,15 @@ kbd, .keys { font: 500 11.5px var(--sans); color: var(--text-2); padding: 3px 7p
 .chat-search .search:not(:hover):not(:focus-within):has(input:placeholder-shown) .input { border-color: transparent; color: transparent; }
 .chat-search .search:not(:hover):not(:focus-within):has(input:placeholder-shown) .input::placeholder { color: transparent; }
 
-@media (prefers-color-scheme: dark) { .provider-card:not(.on) { border-color: var(--line); } .provider-card.on { background: color-mix(in srgb, var(--accent) 20%, var(--surface)); box-shadow: inset 0 0 0 1px var(--accent); } }
+@media (prefers-color-scheme: dark) { .provider-card:not(.on) { border-color: var(--line); } .provider-card.on { background: color-mix(in srgb, var(--accent-fill) 14%, var(--surface)); box-shadow: inset 0 0 0 1px var(--accent); } }
 .searchbar .btn-ghost { border-color: transparent; color: var(--text-2); }
 .searchbar .segmented { background: color-mix(in srgb, var(--text) 3%, transparent); }
 /* Library cards: "Added" and "Add" share one size and line; the state is neutral, not a second accent. */
-.library .mem-actions.lib-add .badge.live { height: 30px; padding: 0 2px 0 11px; font-size: 13px; font-weight: 600; background: none; color: var(--text-2); }
+.library .mem-actions.lib-add .badge.live { height: 24px; margin-top: 2px; padding: 0 2px 0 11px; font-size: 13px; font-weight: 600; background: none; color: var(--text-2); }
 .library .mem-actions.lib-add .badge.live .icon { color: var(--text-3); }
 /* Chat search overlays the top of the thread instead of taking a row. */
 .chat-search { height: 0; padding-top: 0; overflow: visible; }
-.chat-search .search { position: relative; top: 4px; }
+.chat-search .search { position: relative; top: 30px; }
 
 .chat-search .search:not(:hover):not(:focus-within):has(input:placeholder-shown) .input { background: none; }
 .chat-search .search:hover .input { background: var(--hover); }
@@ -1214,7 +1214,7 @@ kbd, .keys { font: 500 11.5px var(--sans); color: var(--text-2); padding: 3px 7p
 .library .mem:has(.badge.live) .mem-body { color: var(--text-3); }
 
 /* Library cards are offers: a lighter title than your own skills. */
-.library .mem-title { font-weight: 500; }
+.library .mem-title { font-weight: 550; }
 .library .mem-body { color: var(--text-3); }
 /* Activity: the status dot sits on the title line. */
 .runrow > .dot { align-self: start; justify-self: center; margin-top: 7px; }
@@ -1230,7 +1230,7 @@ kbd, .keys { font: 500 11.5px var(--sans); color: var(--text-2); padding: 3px 7p
 
 .clear-history { max-width: none !important; }
 /* Short helper paragraphs balance their lines (no lone last word); headings too. */
-.col > .hint, .library .hint, .group-note, .lead { text-wrap: balance; }
+.col > .hint, .library .hint, .group-note, .lead { text-wrap: pretty; }
 .display, .section-title h2, .group-head h3 { text-wrap: balance; }
 .mem-list .mem-body { max-width: 68ch; }
 /* The last ghost button's text lines up with the column edge. */
@@ -1244,7 +1244,10 @@ kbd, .keys { font: 500 11.5px var(--sans); color: var(--text-2); padding: 3px 7p
 .routine .rh .rh-dots { position: absolute; right: calc(100% + 21px); top: 50%; transform: translateY(-50%); }
 
 /* Library offers: one line each; ones you already have fade back. */
-.library .mem .mem-body { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
+.library .mem .mem-body, .mem-list .mem-body { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 /* A card's note is its muted footer row, not a paragraph floating under it. */
 .group-wrap:not(:has(.field-label)) > .group:has(+ .group-note) { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
-.group-wrap:not(:has(.field-label)) > .group-note { margin: 0; max-width: none; padding: 10px 14px 11px 52px; background: color-mix(in srgb, var(--text) 1.5%, var(--surface)); box-shadow: var(--shadow-sm); border-radius: 0 0 12px 12px; border-top: 0.5px solid var(--line); text-wrap: pretty; }
+.group-wrap:not(:has(.field-label)) > .group-note { margin: 0; max-width: none; padding: 10px 120px 11px 52px; background: color-mix(in srgb, var(--text) 1.5%, var(--surface)); box-shadow: var(--shadow-sm); clip-path: inset(0 -3px -4px -3px); border-radius: 0 0 12px 12px; border-top: 1px solid var(--line); text-wrap: pretty; }
+
+.so-far { padding-right: 48px; }
+.bot-form .row-block > .field-label:first-child > .input { max-width: 400px; }
