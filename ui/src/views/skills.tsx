@@ -98,7 +98,8 @@ function SkillLibrary({ chatId, onAdded }: { chatId: number; onAdded: () => void
                   {/* A habit: once added, run it on a schedule in one click (a routine whose prompt is the skill's command). */}
                   {has && k.schedule && (scheduled.includes(k.slug)
                     ? <span>scheduled {k.schedule.label.toLowerCase()} · change it in Routines</span>
-                    : <button type="button" className="linkish" disabled={busy === k.slug} onClick={() => schedule(k)}>schedule it · {k.schedule.label.toLowerCase()}</button>)}
+                    : <><button type="button" className="linkish" disabled={busy === k.slug} onClick={() => schedule(k)}>Schedule it</button>
+                      <span className="sched-when">{k.schedule.label.toLowerCase()}</span></>)}
                 </div>
               </article>
             )

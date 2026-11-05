@@ -50,7 +50,7 @@ export function ActivityView({ chatId }: { chatId: number }) {
                   const asker = r.parent_run ? list.find(x => x.id === r.parent_run) : undefined
                   return asker ? `Task from ${botOf(asker.bot_id).name}` : runTitle(r, routines.data?.find(x => x.id === r.routine_id))
                 })()}</b>
-                  <small>{ago(r.started_at)}{r.status === 'error' ? ' · failed' : r.status === 'missed' ? ' · missed' : r.status === 'unchanged' ? ' · nothing changed, no AI run' : r.ended_at ? ` · ${r.ended_at - r.started_at}s` : ' · running'}{r.model ? ` · ${r.model}` : ''}{r.delivered ? ` · ${r.delivered.startsWith('not sent') ? 'not sent' : r.delivered}` : ''}</small></span>
+                  <small>{ago(r.started_at)}{r.status === 'error' ? ' · failed' : r.status === 'missed' ? ' · missed' : r.status === 'unchanged' ? ' · unchanged, no AI run' : r.ended_at ? ` · ${r.ended_at - r.started_at}s` : ' · running'}{r.model ? ` · ${r.model}` : ''}{r.delivered ? ` · ${r.delivered.startsWith('not sent') ? 'not sent' : r.delivered}` : ''}</small></span>
                 <span className="run-bot"><Avatar id={b.id} name={b.name} size={20} still /><span>{b.name}</span></span>
                 <span className="num">{r.status === 'running' ? '…' : r.status === 'error' || r.status === 'missed' || r.status === 'unchanged' ? '—' : <span title={r.estimated ? 'Estimated from the text: this AI doesn’t say what it used' : r.cache_read || r.cache_write ? `${tok(r.cache_read ?? 0)} of the input came from the AI’s cache, ${tok(r.cache_write ?? 0)} was written to it` : undefined}>{r.estimated ? '≈ ' : ''}{tok(r.tokens_in)} → {tok(r.tokens_out)}</span>}</span>
                 <span className="num">{r.cost_usd != null ? usd(r.cost_usd) : '—'}</span>

@@ -188,7 +188,7 @@ export function BotPage({ bot, status, canDelete, onSaved, onDeleted, onChat, on
         </button>
         <div>
           <h1 className="display">{isNew ? (b.name.trim() || 'New bot') : b.name || bot.name}</h1>
-          <p className="lead">{isNew ? 'Give it a name, a job, a look and an AI account.' : status?.error ?? [status?.provider, ...on.map(c => `${CHANNEL[c.kind].name} ${c.handle ?? ''}`)].filter(Boolean).join(' · ')}</p>
+          <p className="lead bot-lead">{isNew ? 'Give it a name, a job, a look and an AI account.' : status?.error ?? [bot.persona.trim().split('\n')[0] || status?.provider, ...on.map(c => `${CHANNEL[c.kind].name} ${c.handle ?? ''}`)].filter(Boolean).join(' · ')}</p>
         </div>
         {!isNew && onChat && <button type="button" className="btn head-action" onClick={onChat}><Icon name="chat" size={14} />Chat</button>}
       </div>
