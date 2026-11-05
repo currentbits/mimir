@@ -136,7 +136,8 @@ function Skills({ chatId }: { chatId: number }) {
   }
   return (
     <>
-      <div className="teach">
+      <div className={'teach' + (active.length || teaching ? '' : ' teach-empty')}>
+        {!active.length && !teaching && <span><b>No skills of your own yet</b>Teach one from a link or a few lines of text, or add one from the library below.</span>}
         {teaching ? <form className="er" onSubmit={e => { e.preventDefault(); teach() }}>
           {bots.length > 1 && <select className="select" style={{ width: 'auto' }} value={teaching.bot} onChange={e => setTeaching({ ...teaching, bot: Number(e.target.value) })} aria-label="Which bot learns it">{bots.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}</select>}
           <input className="input" autoFocus placeholder="A link, the text (how our expense process works, a checklist…), or a SKILL.md" aria-label="What to learn from" value={teaching.source} onChange={e => setTeaching({ ...teaching, source: e.target.value })} />

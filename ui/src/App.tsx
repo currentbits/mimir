@@ -344,11 +344,13 @@ function Main() {
       </aside>
 
       <main className="main" style={{ '--dx': `${dx}px` } as React.CSSProperties}>
-        <header className="toolbar" data-tauri-drag-region>
+        {/* Pages outside a chat carry their own big title: the bar stays only as the window's drag area. */}
+        <header className={'toolbar' + (inChat ? '' : ' bare')} data-tauri-drag-region>
           {inChat ? (
             <>
               <div className="toolbar-title" data-tauri-drag-region>
-                <span className="ri-glyph" style={{ width: 26, height: 26, borderRadius: 7, display: 'grid', placeItems: 'center', background: 'var(--hover)', color: 'var(--text-2)' }}><Icon name={ch.icon} size={14} /></span>
+                {botChat ? <Avatar id={chatBot ?? botList[0]?.id ?? 1} name={botOf(chatBot ?? botList[0]?.id ?? 1).name} size={26} still />
+                  : <span className="ri-glyph" style={{ width: 26, height: 26, borderRadius: 7, display: 'grid', placeItems: 'center', background: 'var(--hover)', color: 'var(--text-2)' }}><Icon name={ch.icon} size={14} /></span>}
                 <span className="tt" data-tauri-drag-region><b>{botChat ? botOf(chatBot ?? botList[0]?.id ?? 1).name : chatName(chat)}</b><small>{ch.name} · {chat.memories} {chat.memories === 1 ? 'memory' : 'memories'}{household ? '' : ', shared by all your bots'}{chat.household && !household ? ' · reads the household' : ''}{!household && <GoalLine chatId={chat.chat_id} />}</small></span>
                 {!botChat && chat.chat_id !== LOCAL && !household && !chat.family && (
                   <button className={'btn btn-sm btn-ghost' + (chat.guest ? ' guest-on' : '')}
@@ -377,11 +379,7 @@ function Main() {
               </div>
               <Segmented label="Sections" value={view as Tab} onChange={setView} options={household ? TABS.filter(t => t.id === 'memory') : TABS} />
             </>
-          ) : (
-            <div className="toolbar-title" data-tauri-drag-region>
-              <span className="tt" data-tauri-drag-region><b>{view === 'settings' ? 'Settings' : view === 'inbox' ? 'Needs you' : view === 'computer' ? 'Computer' : view === 'meetings' ? 'Meetings' : botId === 0 ? 'New bot' : botOf(botId).name}</b></span>
-            </div>
-          )}
+          ) : null}
         </header>
 
         {view !== 'inbox' && <Approvals list={approvals} chats={list} chatName={chatName} onDecided={inbox.reload} onOpen={() => setView('inbox')} />}

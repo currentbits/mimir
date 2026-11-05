@@ -2,7 +2,7 @@ import { useContext, useEffect, useState } from 'react'
 import { inDesktop, invoke, remoteServer } from '../api'
 import { ahead, fullDay, fullTime, IDLE, schedule, tok, untilText, usd } from '../format'
 import { ask, Avatar, Empty, Icon, Segmented, Switch } from '../ui'
-import { Paused, pausedText } from './chat'
+import { Menu, Paused, pausedText } from './chat'
 import { RUN_DOT, skillSlug, useLoad, Bots, when, RehearsalResult } from '../shared'
 import type { Run, Delivery, Bot, Skill, Routine, Rehearsed } from '../types'
 
@@ -207,6 +207,8 @@ export function RoutinesView({ chatId, bots }: { chatId: number; bots: Bot[] }) 
   const [editing, setEditing] = useState<{ id: number; draft: RoutineDraft } | null>(null)
   const [runningId, setRunningId] = useState<number | null>(null)
   const [rehearsal, setRehearsal] = useState<{ id: number; r: Rehearsed | null } | null>(null)
+  // A routine's less-used actions (rehearse, edit, delete), behind its ⋯ button.
+  const [more, setMore] = useState<{ x: number; y: number; id: number } | null>(null)
   const rehearse = (id: number) => { setRehearsal({ id, r: null }); invoke<Rehearsed>('rehearse', { chatId, routineId: id }).then(r => setRehearsal({ id, r }), e => { setRehearsal(null); setErr(String(e)) }) }
   const skillRows = useLoad(() => invoke<Skill[]>('skills', { chatId }), [chatId])
   const list = rows.data ?? []
@@ -253,7 +255,7 @@ export function RoutinesView({ chatId, bots }: { chatId: number; bots: Bot[] }) 
                 <div className={'routine' + (r.paused || held !== undefined || r.goal_held ? ' paused' : '')} key={r.id}>
                   <span className={'ri' + (r.quiet ? ' quiet' : '')}><Icon name={r.quiet ? 'moon' : 'clock'} /></span>
                   <div>
-                    <div className="rt">{when(r)}{r.followup && <span className="badge" title="The bot booked this on its own, to check back. Delete it to cancel.">Follow-up</span>}{r.for_goal && <span className="badge" title="Booked for this chat's goal: it goes when the goal is done or removed">For the goal</span>}{!!r.ends && <span className="badge" title="Its last run is the last one before this; then it’s gone">Until {untilText(r.ends)}</span>}{r.quiet && <span className="badge pending" title="Read-only; speaks up only when something needs your attention">Quiet</span>}{(r.paused || held !== undefined) ? <span className="badge">Paused</span> : r.goal_held && <span className="badge" title="Its goal is paused or done; it runs again when the goal is resumed">Paused (goal)</span>}{r.delivery === 'digest' && <span className="badge" title="Collected into your daily digest">In digest</span>}{r.delivery === 'log' && <span className="badge" title="Not sent; see Activity">Log only</span>}{r.delivery === 'card' && <span className="badge" title="Updates a card pinned at the top of the chat; nothing is sent">On a card</span>}{r.urgent && <span className="badge" title={`Comes through right away if: ${r.urgent}`}>Urgent if…</span>}{r.quiet && r.watch && <span className="badge" title="Mimir looks first and only runs the AI when this changed">Watching {r.watch === 'mail' ? 'mail' : (() => { try { return new URL(r.watch).host } catch { return r.watch } })()}</span>}</div>
+                    <div className="rt">{when(r)}{r.followup && <span className="badge" title="The bot booked this on its own, to check back. Delete it to cancel.">Follow-up</span>}{r.for_goal && <span className="badge" title="Booked for this chat's goal: it goes when the goal is done or removed">For the goal</span>}{!!r.ends && <span className="badge" title="Its last run is the last one before this; then it’s gone">Until {untilText(r.ends)}</span>}{r.quiet && <span className="badge" title="Read-only; speaks up only when something needs your attention">Quiet</span>}{(r.paused || held !== undefined) ? <span className="badge">Paused</span> : r.goal_held && <span className="badge" title="Its goal is paused or done; it runs again when the goal is resumed">Paused (goal)</span>}{r.delivery === 'digest' && <span className="badge" title="Collected into your daily digest">In digest</span>}{r.delivery === 'log' && <span className="badge" title="Not sent; see Activity">Log only</span>}{r.delivery === 'card' && <span className="badge" title="Updates a card pinned at the top of the chat; nothing is sent">On a card</span>}{r.urgent && <span className="badge" title={`Comes through right away if: ${r.urgent}`}>Urgent if…</span>}{r.quiet && r.watch && <span className="badge" title="Mimir looks first and only runs the AI when this changed">Watching {r.watch === 'mail' ? 'mail' : (() => { try { return new URL(r.watch).host } catch { return r.watch } })()}</span>}</div>
                     <div className="rp selectable">{r.prompt}</div>
                     <div className="rm"><Avatar id={b.id} name={b.name} size={16} still /><span>{b.name}</span><span>·</span><span>{r.paused ? 'Won’t run until you turn it back on' : held !== undefined ? `${pausedText(held)} with ${b.name}; ${r.once ? 'it runs once then' : 'runs in between are skipped, not caught up'}` : r.goal_held ? 'Waits while its goal is paused' : r.once && !r.cron && r.next_fire >= IDLE ? 'Running, or waits for you in Needs you' : r.next_fire >= IDLE ? `${r.cron === 'webhook' ? 'Waits for a call' : r.cron.startsWith('github:') ? 'Waits for a GitHub event' : r.cron.startsWith('mail:') ? 'Waits for a matching email' : r.cron.startsWith('slack:') ? 'Waits for a matching Slack message' : 'No matching event on the calendar this week'}${r.once ? ', then it’s gone' : ''}` : `${r.once ? 'Runs' : 'Next run'} ${ahead(r.next_fire)}${r.once ? ', then it’s gone' : ''}`}</span></div>
                     {(r.cron === 'webhook' || r.cron.startsWith('github:')) && <WebhookAddress chatId={chatId} id={r.id} />}
@@ -262,15 +264,12 @@ export function RoutinesView({ chatId, bots }: { chatId: number; bots: Bot[] }) 
                   </div>
                   <div className="routine-actions">
                     <Switch label={r.paused ? `Resume: ${when(r)}` : `Pause: ${when(r)}`} checked={!r.paused} onChange={on => update(r, { paused: !on })} />
-                    <button className="btn btn-ghost btn-sm" disabled={runningId === r.id} title="Run it once now; the result goes to the chat"
+                    <button className="btn btn-ghost btn-sm run-now" disabled={runningId === r.id} title="Run it once now; the result goes to the chat"
                       onClick={() => { setRunningId(r.id); invoke<string>('run_routine', { chatId, id: r.id }).then(() => setErr(null), e => setErr(String(e))).finally(() => { setRunningId(null); rows.reload(); stats.reload() }) }}>
                       {runningId === r.id ? 'Running…' : 'Run now'}
                     </button>
-                    <button className="btn btn-ghost btn-sm" disabled={rehearsal?.id === r.id && !rehearsal.r} title="Run it once without sending or changing anything: see what it would do"
-                      onClick={() => rehearse(r.id)}>Rehearse</button>
-                    {/* A one-off has no schedule to edit: change its words by asking the bot, or delete it. */}
-                    {!r.once && <button className="btn btn-ghost btn-sm" onClick={() => setEditing({ id: r.id, draft: { prompt: r.prompt, quiet: r.quiet, botId: r.bot_id, when: toWhen(r.cron), delivery: r.delivery ?? 'now', watch: r.watch ?? '', urgent: r.urgent ?? '', until: dayOf(r.ends) } })}>Edit</button>}
-                    <button className="btn btn-ghost btn-danger btn-sm icon-btn" title="Delete" aria-label="Delete routine" onClick={() => ask('Delete this routine?', 'Delete', true).then(ok => { if (ok) void invoke('delete_routine', { chatId, id: r.id }).then(rows.reload, e => setErr(String(e))) })}><Icon name="trash" size={14} /></button>
+                    <button className="btn btn-ghost btn-sm icon-btn" title="Rehearse, edit or delete" aria-label="More for this routine" aria-haspopup="menu"
+                      onClick={e => { const b = e.currentTarget.getBoundingClientRect(); setMore({ x: b.right - 190, y: b.bottom + 4, id: r.id }) }}><Icon name="more" size={16} /></button>
                   </div>
                 </div>
               )
@@ -279,6 +278,12 @@ export function RoutinesView({ chatId, bots }: { chatId: number; bots: Bot[] }) 
         </>
       )}
 
+      {more && (() => { const r = list.find(x => x.id === more.id); return r && <Menu at={more} name="Routine" onClose={() => setMore(null)} items={[
+                      ['play', 'Rehearse', () => { setMore(null); rehearse(r.id) }],
+                      // A one-off has no schedule to edit: change its words by asking the bot, or delete it.
+                      ...(r.once ? [] : [['pencil', 'Edit', () => { setMore(null); setEditing({ id: r.id, draft: { prompt: r.prompt, quiet: r.quiet, botId: r.bot_id, when: toWhen(r.cron), delivery: r.delivery ?? 'now', watch: r.watch ?? '', urgent: r.urgent ?? '', until: dayOf(r.ends) } }) }] as [string, string, () => void]]),
+                      ['trash', 'Delete…', () => { setMore(null); void ask('Delete this routine?', 'Delete', true).then(ok => { if (ok) void invoke('delete_routine', { chatId, id: r.id }).then(rows.reload, e => setErr(String(e))) }) }],
+                    ]} /> })()}
       <div className="section-title"><h2>Add a routine</h2></div>
       <p className="hint" style={{ margin: '-4px 0 12px' }}>Anything a bot should do on a schedule. Quiet ones only message you when something needs your attention.</p>
       {draft ? <RoutineForm skills={skillRows.data ?? []} draft={draft} setDraft={setDraft} bots={bots} onCancel={() => setDraft(null)} onSave={add} /> : (

@@ -1,3 +1,4 @@
+import { createPortal } from 'react-dom'
 import { createContext, Fragment, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { copyText, inDesktop, invoke, platform } from '../api'
 import { moodOf, type Mood } from '../face'
@@ -291,10 +292,12 @@ export function Menu({ at, name, items, onClose }: { at: { x: number; y: number 
     else if (e.key === 'ArrowDown') { e.preventDefault(); items[(i + 1) % items.length]?.focus() }
     else if (e.key === 'ArrowUp') { e.preventDefault(); items[(i - 1 + items.length) % items.length]?.focus() }
   }
-  return (
+  // On the body: a view's entrance animation would otherwise make "fixed" mean fixed to that view.
+  return createPortal(
     <div ref={ref} className="ctx-menu" role="menu" aria-label={name} onKeyDown={onKey} onContextMenu={e => e.preventDefault()}>
       {items.map(([icon, label, run]) => <button key={label} role="menuitem" onClick={run}><Icon name={icon} size={14} />{label}</button>)}
-    </div>
+    </div>,
+    document.body,
   )
 }
 

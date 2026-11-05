@@ -244,7 +244,7 @@ export function BotPage({ bot, status, canDelete, onSaved, onDeleted, onChat, on
               <label className="field-label" style={{ flex: 1 }}><span>Model</span>
                 <ModelInput provider={b.provider} baseUrl={b.base_url} value={b.model} onChange={model => edit({ model })} /></label>
               {(b.provider === 'openai' || b.provider === 'local') && (
-                <label className="field-label" style={{ flex: 1.2 }}><span>Endpoint</span>
+                <label className="field-label" style={{ flex: 1 }}><span>Endpoint</span>
                   <input className="input" placeholder={b.provider === 'local' ? 'http://localhost:11434/v1' : 'https://api.openai.com/v1'} value={b.base_url} onChange={e => edit({ base_url: e.target.value })} /></label>
               )}
             </div>
