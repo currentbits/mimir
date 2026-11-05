@@ -88,7 +88,8 @@ export function SettingsView({ onComputer, find = '' }: { onComputer: () => void
     <>
       <div className="page-head"><div><h1 className="display">Settings</h1><p className="lead">How your bots run, what they may do, and where they live.</p></div></div>
       <label className="search settings-search"><Icon name="search" size={15} />
-        <input ref={box} className="input" type="search" placeholder={`Search settings  ${shortcut('F')}`} aria-label="Search settings" value={q} onChange={e => setQ(e.target.value)} autoFocus={!('ontouchstart' in window)} />
+        <input ref={box} className="input" type="search" placeholder="Search settings" aria-label="Search settings" value={q} onChange={e => setQ(e.target.value)} autoFocus={!('ontouchstart' in window)} />
+        {!q && <kbd className="search-kbd" aria-hidden="true">{shortcut('F')}</kbd>}
       </label>
       {none && <Empty icon="search" title={`Nothing in Settings matches “${q.trim()}”`}>A bot's name, role, AI account, tools and its Telegram, Slack or Discord connection are on its own page: right-click the bot in the sidebar.</Empty>}
       {!none && /telegram|slack|discord|role|persona|pair|bot token|model/i.test(q) && <p className="hint" style={{ margin: '-12px 0 18px' }}>Each bot's Telegram, Slack and Discord connection, role and AI account are on its own page: right-click the bot in the sidebar.</p>}
