@@ -387,7 +387,7 @@ function AccountTest({ provider, model, baseUrl }: { provider: string; model: st
   return (
     <div className="account-test">
       <button type="button" className="btn btn-sm" disabled={st.state === 'running'} onClick={run}>
-        <Icon name="bolt" size={13} />{st.state === 'running' ? 'Testing…' : 'Test'}
+        <Icon name="play" size={13} />{st.state === 'running' ? 'Testing…' : 'Test'}
       </button>
       {st.state === 'running' && <span className="typing" aria-hidden="true"><i /><i /><i /></span>}
       {st.text && <span className={st.state === 'ok' ? 'ok-note' : 'error'} style={{ margin: 0 }}>{st.text}</span>}

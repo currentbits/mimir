@@ -770,7 +770,7 @@ export function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, 
                   }} />
                 {!working && setIncognito && (
                   <button type="button" className={'incog-toggle' + (incognito ? ' on' : '')} aria-pressed={incognito} onClick={() => setIncognito(!incognito)}
-                    title={incognito ? 'Back to the normal chat' : 'Incognito chat: no memory, nothing saved'}><Icon name="incognito" size={16} /></button>
+                    title={incognito ? 'Back to the normal chat' : 'Incognito chat: no memory, nothing saved'}><Icon name="incognito" size={18} /></button>
                 )}
                 {working && steerable && text.trim() && <button className="send" aria-label="Send now: the reply changes course" title="Send now: the reply changes course"><Icon name="send" size={15} /></button>}
                 {working
