@@ -55,6 +55,7 @@ const PATHS: Record<string, string> = {
   play: 'M7.5 5.5v13l11-6.5-11-6.5Z',
   retry:'M4.5 12a7.5 7.5 0 1 0 2.2-5.3L4.5 9m0-4.5V9H9',
   branch: 'M6.5 3.5v11m0 0a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5Zm11-6a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5Zm0 0c0 4.5-11 3-11 6',
+  attach: 'm19.5 11.5-7.4 7.4a4.5 4.5 0 0 1-6.4-6.4l7.8-7.8a3 3 0 0 1 4.2 4.2l-7.8 7.8a1.5 1.5 0 0 1-2.1-2.1l7-7',
 }
 
 export function Icon({ name, size = 16, className }: { name: keyof typeof PATHS | string; size?: number; className?: string }) {
@@ -145,6 +146,42 @@ export function Group({ title, note, children, action }: { title?: ReactNode; no
 }
 
 /** An empty state: an icon by name, or anything else (a bot's face) in its place. */
+/** A view over the chat (Settings, Memory, a bot's page…): the chat dims behind it; Escape, × or a click beside it closes it. */
+/** `head`: a title (and a line under it) for views that don't bring their own. */
+/** `nav`: tabs between related sheets (the chat's sections), above the title; `page` resets the scroll when it changes. */
+export function Sheet({ label, onClose, wide, head, lead, nav, page, children }: {
+  label: string; onClose: () => void; wide?: boolean; head?: boolean; lead?: ReactNode; nav?: ReactNode; page?: string; children: ReactNode
+}) {
+  const panel = useRef<HTMLElement>(null)
+  const close = useRef(onClose)
+  close.current = onClose
+  useEffect(() => {
+    // Focus moves in, unless something inside asked for it (Settings' search box).
+    if (!panel.current?.contains(document.activeElement)) panel.current?.focus({ preventScroll: true })
+    const key = (e: KeyboardEvent) => {
+      // A dialog or menu on top takes its own Escape; a box with text in it clears first.
+      if (e.key !== 'Escape' || e.defaultPrevented || document.querySelector('.ask-backdrop, .ctx-menu, .palette')) return
+      const t = e.target
+      if ((t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement) && t.value) return
+      close.current()
+    }
+    window.addEventListener('keydown', key)
+    return () => window.removeEventListener('keydown', key)
+  }, [])
+  return (
+    <div className="sheet-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) onClose() }}>
+      <section ref={panel} tabIndex={-1} className={'sheet' + (wide ? ' wide' : '')} role="dialog" aria-label={label}>
+        <button type="button" className="sheet-close" onClick={onClose} aria-label={`Close ${label}`} title="Close  esc"><Icon name="x" size={15} /></button>
+        <div className="sheet-scroll" key={page}><div className="col">
+          {nav && <div className="sheet-nav">{nav}</div>}
+          {head && <div className="page-head"><div><h1 className="display">{label}</h1>{lead && <p className="lead">{lead}</p>}</div></div>}
+          {children}
+        </div></div>
+      </section>
+    </div>
+  )
+}
+
 export function Empty({ icon, title, children, actions }: { icon: string | ReactNode; title: ReactNode; children?: ReactNode; actions?: ReactNode }) {
   return (
     <div className="empty">
@@ -239,5 +276,15 @@ export function useHoldToTalk(add: (words: string) => void, fail: (e: string) =>
     }, 250)
   }
   const onKeyUp = (e: React.KeyboardEvent) => { if (e.key === TALK_KEY) stop(true) }
-  return { state, keys: { onKeyDown, onKeyUp, onBlur: () => stop(false) } }
+  // The microphone button: hold it while you speak, as with the key.
+  const begin = () => {
+    if (!inDesktop || started.current) return
+    setState('listening')
+    started.current = localInvoke('dictate', { action: 'start' }).then(() => true, err => { fail(String(err)); return false })
+  }
+  return { state, keys: { onKeyDown, onKeyUp, onBlur: () => stop(false) }, press: {
+    onPointerDown: begin, onPointerUp: () => stop(true), onPointerLeave: () => stop(true),
+    // Focus stays in the text box: moving it would blur the box, and its blur drops the recording just started.
+    onMouseDown: (e: React.MouseEvent) => e.preventDefault(),
+  } }
 }

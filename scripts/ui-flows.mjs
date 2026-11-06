@@ -19,7 +19,10 @@ let failed = 0
 const check = (name, ok, detail = '') => { if (!ok) failed++; console.log((ok ? 'PASS ' : 'FAIL ') + name + (!ok && detail ? `  [${detail}]` : '')) }
 const main = () => p.locator('.main').innerText()
 const bot = name => p.locator('.rail-item', { hasText: name }).filter({ hasNot: p.locator('text=Built-in chat') }).first()
-const tab = name => p.locator('.toolbar').getByText(name, { exact: true }).first()
+// The chat's sections open as sheets over it from the icons at its top right (or, with one open, its tabs); back to the
+// chat is the sheet's ×.
+const tab = name => name === 'Chat' ? p.locator('.sheet-close')
+  : p.locator(`.sheet [role=tab]:text-is("${name}"), .main:not(:has(.sheet)) .chat-tool[aria-label="${name}"]`)
 const say = async text => { const box = p.locator('textarea').first(); await box.fill(text); await box.press('Enter') }
 const until = async (fn, ms = 15000) => { const t = Date.now(); while (Date.now() - t < ms) { if (await fn()) return true; await p.waitForTimeout(300) } return false }
 
@@ -151,14 +154,14 @@ await bot('Ada').click(); await p.waitForTimeout(500)
 
 // Bot settings: Ada's page, then Search's: Search's own name and role
 await settings('Ada')
-const nameOf = () => p.locator('.main input').first().inputValue()
+const nameOf = () => p.locator('.sheet input').first().inputValue()
 check("Ada's page shows Ada", (await nameOf()) === 'Ada', await nameOf())
 await settings('Search')
 check("Search's page shows Search", (await nameOf()) === 'Search', await nameOf())
-check("Search's page shows its role", (await main()).includes('SEO research') || (await p.locator('.main textarea').first().inputValue()).includes('SEO research'))
+check("Search's page shows its role", (await main()).includes('SEO research') || (await p.locator('.sheet textarea').first().inputValue()).includes('SEO research'))
 // Rename from the page
-await p.locator('.main input').first().fill('Searcher')
-const save = p.locator('.main').getByRole('button', { name: /^Save/ }).first()
+await p.locator('.sheet input').first().fill('Searcher')
+const save = p.locator('.sheet').getByRole('button', { name: /^Save/ }).first()
 check('bot page has a Save button', (await save.count()) > 0)
 if (await save.count()) { await save.click(); await p.waitForTimeout(1200) }
 check('rename shows in the sidebar', await until(async () => (await p.locator('.rail-item', { hasText: 'Searcher' }).count()) > 0))
@@ -185,7 +188,7 @@ execFileSync('sqlite3', [db, `${seed} INSERT INTO tool_calls(run_id, chat_id, to
 ${seed} INSERT INTO messages(chat_id, bot_id, role, content, ts, run_id)
   SELECT c.chat_id, c.bot_id, CASE i % 2 WHEN 1 THEN 'user' ELSE 'assistant' END, 'seed ' || i, strftime('%s', 'now'), CASE i % 2 WHEN 0 THEN 900000 + i END FROM n, c;`])
 const before = errs.length
-await bot('Ada').click(); await tab('Chat').click(); await p.waitForTimeout(1000)
+await bot('Ada').click(); await p.waitForTimeout(1000)
 const shown = () => p.locator('.main').innerText({ timeout: 2000 }).catch(() => '')
 for (const k of [1, 2, 3]) { await say(`long chat ${k}`).catch(() => {}); await until(async () => (await shown()).includes(`OK: long chat ${k}`), 8000); await p.waitForTimeout(4500) }
 check('a 250-message chat takes 3 more exchanges', (await shown()).includes('OK: long chat 3') && errs.length === before, errs.slice(before).join(' | '))

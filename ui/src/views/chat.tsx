@@ -1,8 +1,8 @@
 import { createPortal } from 'react-dom'
-import { createContext, Fragment, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { copyText, inDesktop, invoke, platform } from '../api'
+import { createContext, Fragment, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { copyText, inDesktop, invoke, shortcut } from '../api'
 import { moodOf, type Mood } from '../face'
-import { ago, ahead, dayLabel, fullTime, IDLE, pigment, schedule } from '../format'
+import { ago, ahead, dayLabel, fullTime, IDLE, pigment, schedule, time } from '../format'
 import { Markdown, SentFile, splitSent } from '../markdown'
 import { PinnedCards } from './cards'
 import { ToolCard, type ToolCardData } from './toolcard'
@@ -301,8 +301,10 @@ export function Menu({ at, name, items, onClose }: { at: { x: number; y: number 
   )
 }
 
-export function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, openBot, openSettings, botId: chosen, onBot, troubleOf: trouble, only = false, busy: running = [] }: {
+export function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, openBot, openSettings, botId: chosen, onBot, troubleOf: trouble, only = false, busy: running = [], top }: {
   chat: Chat; bots: Bot[]; onTurn: () => void; incognito?: boolean; setIncognito?: (on: boolean) => void; openBot?: (id: number) => void
+  // The floating header's content (who you're talking to, the chat's sections); the chat adds its search to it.
+  top?: ReactNode
   openSettings?: (find: string) => void
   // Opened from a bot in the sidebar: only that bot's conversation, not everyone's in this chat.
   only?: boolean
@@ -367,6 +369,7 @@ export function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, 
   // All the way down: the composer floats over the thread's end, so scrolling a marker into view would hide the last message.
   const toEnd = (smooth = false) => scroller.current?.scrollTo({ top: scroller.current.scrollHeight, behavior: smooth ? 'smooth' : 'auto' })
   const box = useRef<HTMLTextAreaElement>(null)
+  const file = useRef<HTMLInputElement>(null)
   const local = chat.chat_id === LOCAL
   const msgs = incognito ? secret : log.data ?? []
   const conv = useLoad(() => invoke<{ tainted: boolean; title: string | null; so_far: string | null }>('conversation', { botId, chatId: cid }), [botId, cid], 4000)
@@ -425,6 +428,7 @@ export function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, 
 
   // Search this chat: a hit loads what's needed and scrolls to it, lit for a moment.
   const [query, setQuery] = useState('')
+  const [searching, setSearching] = useState(false)
   const [hits, setHits] = useState<{ id: number; ts: number; bot_id: number; role: string; excerpt: string }[] | null>(null)
   useEffect(() => {
     const q = query.trim()
@@ -434,7 +438,7 @@ export function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, 
   }, [query, chat.chat_id, mine, incognito])
   const target = useRef<number | null>(null)
   const jump = (id: number) => {
-    setQuery('')
+    setQuery(''); setSearching(false)
     target.current = id
     setLit(id)
     setTimeout(() => setLit(l => (l === id ? null : l)), 2400)
@@ -568,7 +572,8 @@ export function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, 
       // Swap the pending bubbles for the saved messages in one frame: no flash in between.
       .finally(() => { ownSend.current = true; log.reload().finally(() => { setPending(null); setTo(null) }); conv.reload(); onTurn(); if (only && to !== botId) onBot?.(to) })
   }
-  const bubble = (m: Message, last = false) => {
+  // cont: the same bot's reply right after its last one: one face and name for the run.
+  const bubble = (m: Message, last = false, cont = false) => {
     const sched = m.role === 'user' ? m.content.match(SCHEDULED) : null
     if (sched) return (
       <div id={`m${m.id}`} className={'msg-trigger' + anim(m)} title={sched[4]}>
@@ -583,17 +588,23 @@ export function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, 
         <span>Task from {handed[1]} — {handed[2]}</span>
       </div>
     )
-    if (m.role === 'user') return <div id={`m${m.id}`} className={'msg-user' + anim(m)} title={fullTime(m.ts)}><Said text={m.content} /></div>
+    if (m.role === 'user') return <div id={`m${m.id}`} className={'msg-user' + anim(m)} title={fullTime(m.ts)} style={{ '--pig': pigment(m.bot_id) } as React.CSSProperties}><Said text={m.content} /></div>
     const b = botOf(m.bot_id)
     const [text, files] = splitSent(m.content)
     return (
-      <div id={`m${m.id}`} className={'msg-bot' + anim(m)} style={{ '--pig': pigment(b.id) } as React.CSSProperties}>
-        <Avatar id={b.id} name={b.name} size={26} still />
-        <div>
-          <div className="msg-head"><b>{b.name}</b><time title={fullTime(m.ts)}>{ago(m.ts)}</time>
-            {local && !incognito && !working && (!only || m.bot_id === botId) && <button type="button" className="msg-copy" onClick={() => branchFrom(m)} aria-label="Branch from here" title="Branch from here: a new conversation that picks up from this message"><Icon name="branch" size={13} /></button>}
-            <CopyButton text={text} /></div>
-          {text && <div className="msg-body"><Markdown text={text} /></div>}
+      <div id={`m${m.id}`} className={'msg-bot' + (cont ? ' cont' : '') + anim(m)} style={{ '--pig': pigment(b.id) } as React.CSSProperties}>
+        {cont ? <span /> : <Avatar id={b.id} name={b.name} size={28} still />}
+        <div className="msg-main">
+          {!cont && <div className="msg-head"><b>{b.name}</b><time title={fullTime(m.ts)}>{ago(m.ts)}</time></div>}
+          {text && (
+            <div className="msg-line">
+              <div className="msg-bubble msg-body" title={cont ? fullTime(m.ts) : undefined}><Markdown text={text} /></div>
+              <span className="msg-tools">
+                {local && !incognito && !working && (!only || m.bot_id === botId) && <button type="button" className="msg-copy" onClick={() => branchFrom(m)} aria-label="Branch from here" title="Branch from here: a new conversation that picks up from this message"><Icon name="branch" size={13} /></button>}
+                <CopyButton text={text} />
+              </span>
+            </div>
+          )}
           {m.cards?.map(c => <ToolCard key={c.key} card={c} onMessage={t => { setText(t); box.current?.focus() }} />)}
           {files.map(f => <SentFile key={f} chatId={chat.chat_id} name={f} />)}
           {/* Only under the latest message: once anything follows, it's been answered one way or another. */}
@@ -618,12 +629,14 @@ export function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, 
   return (
     <div className="page view-in" ref={scroller} onScroll={onScroll}>
       <div className="chat">
-        {!incognito && <PinnedCards chatId={chat.chat_id} botId={mine} botName={id => botOf(id).name} />}
-        {!incognito && (msgs.length > 0 || hasEarlier) && (
+        <header className="chat-top" data-tauri-drag-region>
+          {top}
+          {!incognito && (msgs.length > 0 || hasEarlier) && (searching ? (
           <div className="chat-search">
             <label className="search"><Icon name="search" size={14} />
-              <input className="input" type="search" placeholder="Search this chat" aria-label="Search this chat" value={query}
-                onChange={e => setQuery(e.target.value)} onKeyDown={e => { if (e.key === 'Escape') setQuery('') }} /></label>
+              <input className="input" type="search" placeholder="Search this chat" aria-label="Search this chat" value={query} autoFocus
+                onChange={e => setQuery(e.target.value)} onBlur={() => { if (!query.trim()) setSearching(false) }}
+                onKeyDown={e => { if (e.key === 'Escape') { if (!query) setSearching(false); setQuery('') } }} /></label>
             {hits && query.trim() && (
               <div className="transcript">{hits.length ? hits.map(h => (
                 <button key={h.id} type="button" className="tl hit" onClick={() => jump(h.id)} title={fullTime(h.ts)}>
@@ -632,7 +645,11 @@ export function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, 
               )) : <span className="hint">Nothing in this chat matches.</span>}</div>
             )}
           </div>
-        )}
+          ) : (
+            <button type="button" className="chat-tool chat-search-toggle" onClick={() => setSearching(true)} aria-label="Search this chat" title={`Search this chat  ${shortcut('F')}`}><Icon name="search" size={16} /></button>
+          ))}
+        </header>
+        {!incognito && <PinnedCards chatId={chat.chat_id} botId={mine} botName={id => botOf(id).name} />}
         <div className="thread selectable">
           {hasEarlier && msgs.length > 0 && <button type="button" className="btn btn-sm btn-ghost show-earlier" onClick={showEarlier}>Show earlier messages</button>}
           {back && msgs.length > 0 && <p className="so-far" role="note">{back.title && <b>{back.title}</b>}<span>So far: {back.line}</span></p>}
@@ -649,19 +666,24 @@ export function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, 
               <Empty icon={CHANNEL[chat.channel]?.icon ?? 'chat'} title="No messages yet">Messages with this {CHANNEL[chat.channel]?.name ?? ''} chat show up here.</Empty>
             )
           )}
-          {msgs.map((m, i) => (
-            <Fragment key={m.id}>
-              {(i === 0 || dayLabel(m.ts) !== dayLabel(msgs[i - 1].ts)) && <div className="day-sep" role="separator"><span>{dayLabel(m.ts)}</span></div>}
-              {bubble(m, i === msgs.length - 1)}
-            </Fragment>
-          ))}
+          {msgs.map((m, i) => {
+            const prev = msgs[i - 1]
+            // A new day, or a pause of over an hour: when it was, in the middle.
+            const sep = !prev || dayLabel(m.ts) !== dayLabel(prev.ts) || m.ts - prev.ts > 3600
+            return (
+              <Fragment key={m.id}>
+                {sep && <div className="day-sep" role="separator"><span>{dayLabel(m.ts)} {time(new Date(m.ts * 1000))}</span></div>}
+                {bubble(m, i === msgs.length - 1, !sep && m.role === 'assistant' && prev.role === 'assistant' && prev.bot_id === m.bot_id)}
+              </Fragment>
+            )
+          })}
           {working && (
             <>
-              {pending && <div className="msg-user msg-in"><Said text={pending} /></div>}
-              {steered.map((t, i) => <div key={i} className="msg-user msg-in"><Said text={t} /></div>)}
+              {pending && <div className="msg-user msg-in" style={{ '--pig': pigment(them.id) } as React.CSSProperties}><Said text={pending} /></div>}
+              {steered.map((t, i) => <div key={i} className="msg-user msg-in" style={{ '--pig': pigment(them.id) } as React.CSSProperties}><Said text={t} /></div>)}
               <div className="msg-bot msg-in" style={{ '--pig': pigment(them.id), animationDelay: '120ms' } as React.CSSProperties}>
-                <Avatar id={them.id} name={them.name} size={26} alive mood={moodOf(step, draft)} />
-                <div><div className="msg-head"><b>{them.name}</b>{draft && <time>writing…</time>}
+                <Avatar id={them.id} name={them.name} size={28} alive mood={moodOf(step, draft)} />
+                <div className="msg-main"><div className="msg-head"><b>{them.name}</b>{draft && <time>writing…</time>}
                   {now - started >= 5 && <time className="elapsed">{now - started >= 60 ? `${Math.floor((now - started) / 60)}m ${(now - started) % 60}s` : `${now - started}s`}</time>}</div>
                   {checklist.length > 0 && (
                     <ol className="steps checklist" aria-label={`Checklist: ${checklist.filter(c => c.done).length} of ${checklist.length} done`}>
@@ -674,7 +696,8 @@ export function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, 
                       {step && <li className="now" key={'now' + done.length}><span className="typing" aria-hidden="true"><i /><i /><i /></span><span className="shine">{step}…</span></li>}
                     </ol>
                   )}
-                  {draft ? <div className="msg-body"><Markdown text={draft} caret /></div> : !step && <span className="typing" aria-label="Thinking"><i /><i /><i /></span>}</div>
+                  {draft ? <div className="msg-line"><div className="msg-bubble msg-body"><Markdown text={draft} caret /></div></div>
+                    : !step && <div className="msg-line"><div className="msg-bubble"><span className="typing" aria-label="Thinking"><i /><i /><i /></span></div></div>}</div>
               </div>
             </>
           )}
@@ -741,7 +764,7 @@ export function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, 
                   </button>
                 ))}</div>
               )}
-              <form className={'composer' + (dragging ? ' dropping' : '') + (incognito ? ' incog' : '')} onSubmit={e => { e.preventDefault(); send() }}
+              <form className={'composer' + (dragging ? ' dropping' : '') + (incognito ? ' incog' : '')} onSubmit={e => { e.preventDefault(); send() }} style={{ '--pig': pigment(me.id) } as React.CSSProperties}
                 // Photos are saved to disk, so incognito doesn't take them.
                 onDragOver={e => { if (!incognito && e.dataTransfer.types.includes('Files')) { e.preventDefault(); setDragging(true) } }}
                 onDragLeave={() => setDragging(false)}
@@ -755,10 +778,12 @@ export function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, 
                     </select>
                   )}
                 </span>
-                {openBot && !incognito && (
-                  <button type="button" className="bot-settings" onClick={() => openBot(me.id)} title={`${me.name}'s settings`} aria-label={`${me.name}'s settings`}>
-                    <Icon name="settings" size={16} />
-                  </button>
+                {!incognito && (
+                  <>
+                    <button type="button" className="composer-btn" onClick={() => file.current?.click()} aria-label="Attach a photo or file" title="Attach a photo or file (or paste or drop one here)"><Icon name="attach" size={17} /></button>
+                    <input ref={file} type="file" hidden multiple accept="image/png,image/jpeg,image/gif,image/webp,.pdf,.docx,.xlsx,.pptx,.txt,.md,.csv,.json,.log"
+                      onChange={e => { if (e.target.files) addPhotos([...e.target.files]); e.target.value = '' }} />
+                  </>
                 )}
                 <textarea ref={box} rows={1} placeholder={incognito ? `Message ${me.name} incognito` : working ? 'Add to what you asked, or change it' : `Message ${me.name}`} value={text} onChange={e => setText(e.target.value)} disabled={working && !steerable} autoFocus
                   onPaste={e => { if (incognito) return; const imgs = [...e.clipboardData.files].filter(f => f.type.startsWith('image/')); if (imgs.length) { e.preventDefault(); addPhotos(imgs) } }}
@@ -768,6 +793,9 @@ export function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, 
                     if (e.key === 'Tab' && skillHits[0]) { e.preventDefault(); setText(`/${skillSlug(skillHits[0].name)} `); return }
                     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send() }
                   }} />
+                {inDesktop && !working && (
+                  <button type="button" className={'composer-btn' + (talk.state === 'listening' ? ' on' : '')} aria-label="Hold to talk" title={`Hold to talk (or hold ${talkLabel} while typing)`} {...talk.press}><Icon name="mic" size={16} /></button>
+                )}
                 {!working && setIncognito && (
                   <button type="button" className={'incog-toggle' + (incognito ? ' on' : '')} aria-pressed={incognito} onClick={() => setIncognito(!incognito)}
                     title={incognito ? 'Back to the normal chat' : 'Incognito chat: no memory, nothing saved'}><Icon name="incognito" size={18} /></button>
@@ -777,8 +805,7 @@ export function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, 
                   ? <button type="button" className="send stop" aria-label="Stop" title="Stop" onClick={() => invoke('stop', { botId: replier, chatId: cid }).catch(e => setErr(`Couldn't stop it: ${e}`))}><span className="stop-square" /></button>
                   : <button className="send" aria-label="Send" disabled={!text.trim() && !photos.length}><Icon name="send" size={15} /></button>}
               </form>
-              <p className="composer-note">{talk.state === 'listening' ? `Listening… let go of ${talkLabel} to stop` : talk.state === 'writing' ? 'Writing it out…'
-                : (platform === 'mac' ? 'Return to send · Shift-Return for a new line' : 'Enter to send · Shift+Enter for a new line') + (inDesktop ? ` · Hold ${talkLabel} to talk` : '')}</p>
+              {talk.state !== 'idle' && <p className="composer-note">{talk.state === 'listening' ? 'Listening… let go to stop' : 'Writing it out…'}</p>}
             </>
           ) : (
             <p className="composer-note">Reply from {CHANNEL[chat.channel]?.name ?? 'the app'}; this is a read-only view.</p>
