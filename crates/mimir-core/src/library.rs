@@ -4,22 +4,28 @@
 //! only: no scripts, no install steps, nothing fetched.
 
 /// One skill from the library. `needs`: tools it can't do without (a bot without them gets a warning, not the skill).
-/// `schedule`: a suggested routine (cron, in words) for skills that are a habit, offered after adding.
+/// `schedule`: a suggested routine (cron, in words) for skills that are a habit, offered after adding; `quiet`: that
+/// routine is a quiet check (speaks only when something needs the person).
 pub struct LibrarySkill {
     pub slug: &'static str,
     pub category: &'static str,
     pub needs: &'static [&'static str],
     pub schedule: Option<(&'static str, &'static str)>,
+    pub quiet: bool,
     pub name: String,
     pub description: String,
     pub body: String,
 }
 
 type Entry = (&'static str, &'static str, &'static [&'static str], Option<(&'static str, &'static str)>, &'static str);
-const LIST: [Entry; 24] = [
+/// Skills whose suggested routine runs as a quiet check.
+const QUIET: [&str; 1] = ["noticed"];
+
+const LIST: [Entry; 25] = [
     ("morning-briefing", "Every day", &["memory_search"], Some(("30 7 * * Mon-Fri", "Weekdays at 07:30")), include_str!("../skills/morning-briefing.md")),
     ("inbox-triage", "Every day", &["email_search"], None, include_str!("../skills/inbox-triage.md")),
     ("follow-up-tracker", "Every day", &["memory_search", "chat_search"], Some(("0 9 * * Mon", "Mondays at 09:00")), include_str!("../skills/follow-up-tracker.md")),
+    ("noticed", "Every day", &["memory_search"], Some(("0 17 * * *", "Every day at 17:00")), include_str!("../skills/noticed.md")),
     ("weekly-review", "Every day", &["memory_search", "chat_search"], Some(("0 16 * * Fri", "Fridays at 16:00")), include_str!("../skills/weekly-review.md")),
     ("meeting-prep", "Meetings", &["calendar_list"], None, include_str!("../skills/meeting-prep.md")),
     ("meeting-follow-up", "Meetings", &["meeting_read"], None, include_str!("../skills/meeting-follow-up.md")),
@@ -47,7 +53,7 @@ pub fn all() -> Vec<LibrarySkill> {
     LIST.iter()
         .filter_map(|(slug, category, needs, schedule, md)| {
             let (name, description, body) = crate::tidy::parse_skill_md(md)?;
-            Some(LibrarySkill { slug, category, needs, schedule: *schedule, name, description, body })
+            Some(LibrarySkill { slug, category, needs, schedule: *schedule, quiet: QUIET.contains(slug), name, description, body })
         })
         .collect()
 }

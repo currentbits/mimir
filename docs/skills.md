@@ -22,6 +22,7 @@ text is Mimir's own. They're plain text: no scripts, nothing downloaded.
 | **Morning briefing** | Today's calendar, open tasks and what you follow, in ten lines | memory (a linked calendar helps) |
 | **Inbox triage** | What in your email needs you, FYI and noise; short replies as drafts; scams flagged | [email](connect.md#email) |
 | **Follow-up tracker** | What you're waiting on, and what you promised others | memory, earlier chats |
+| **What I noticed** | A daily quiet check: mail that asks you something and is still unanswered, follow-ups due, tomorrow's clashes, overdue tasks; short replies drafted for your OK | memory ([email](connect.md#email) and [a linked calendar](connect.md#calendar) help) |
 | **Weekly review** | Done, slipped, next week's priorities | memory, earlier chats |
 | **Meeting prep** | Before a meeting: the people, last time, what's open | [a linked calendar](connect.md#calendar) |
 | **Meeting follow-up** | After a transcribed meeting: decided, to do, open questions | a [transcribed meeting](meetings.md) |

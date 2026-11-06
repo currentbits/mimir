@@ -68,6 +68,6 @@ export type Skill = {
   kind: 'learned' | 'patch' | 'merge' | 'retire' | 'taught' | 'saved' | 'library'; reason: string; replaces: number[]; uses: number; last_used: number | null
 }
 
-export type LibrarySkill = { slug: string; category: string; name: string; description: string; body: string; needs: string[]; added: number[]; missing: Record<string, string[]>; schedule: { cron: string; label: string; prompt: string } | null }
+export type LibrarySkill = { slug: string; category: string; name: string; description: string; body: string; needs: string[]; added: number[]; missing: Record<string, string[]>; schedule: { cron: string; label: string; prompt: string; quiet: boolean } | null }
 
 export type ToolServer = { name: string; preset: string | null; command: string; args: string[]; url: string; env: string[]; headers: string[]; tools: number; signed_in?: boolean; sensitive?: boolean; suggest_sensitive?: boolean; update?: string | null; unconfirmed?: number }

@@ -943,7 +943,7 @@ impl Host {
                             })
                             .collect();
                         // Routines run a skill when their prompt is its command.
-                        let schedule = k.schedule.map(|(cron, label)| json!({"cron": cron, "label": label, "prompt": format!("/{}", crate::skill_slug(&k.name))}));
+                        let schedule = k.schedule.map(|(cron, label)| json!({"cron": cron, "label": label, "prompt": format!("/{}", crate::skill_slug(&k.name)), "quiet": k.quiet}));
                         json!({"slug": k.slug, "category": k.category, "name": k.name, "description": k.description, "body": k.body, "needs": k.needs, "added": added, "missing": missing, "schedule": schedule})
                     })
                     .collect::<Vec<_>>())

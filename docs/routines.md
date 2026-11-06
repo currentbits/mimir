@@ -241,6 +241,10 @@ memory and the chat) and compares the dates, amounts, names and quantities. It s
 "Hotel confirmation says 12–14 Nov; your calendar says 13–15." Like any quiet check it only reads, so it never replies
 to the email. It's off until you add it; edit its rule or words like any routine's.
 
+Quiet checks don't act, with one exception: with [email](connect.md#email) set up, one may save a short reply as a
+draft (the **What I noticed** skill does). Each draft waits for your OK in **Needs you** before it's saved, and
+nothing is ever sent.
+
 A quiet check about one page, feed or your inbox can **watch** it (the page's address, or `mail` for new unread email;
 bots set it when you ask them to keep an eye on something). Mimir then looks itself before each run: when nothing
 changed, the AI doesn't run at all (the run log shows "nothing changed, no AI run", and the routine counts these as

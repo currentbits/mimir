@@ -47,7 +47,7 @@ pub(super) fn usable(ctx: &ToolCtx, tool: &str) -> bool {
         // The computer only where it's switched on and can run (a self-hosted Linux server); never incognito
         // (its browser keeps history and cookies), and like email only in a chat with you alone.
         && (!tool.starts_with("computer_") || (crate::computer::usable(&ctx.db) && !ctx.incognito() && ctx.db.chat_private(ctx.chat_id)))
-        && (!ctx.read_only || is_read_only(&ctx.db, tool))
+        && (!ctx.read_only || is_read_only(&ctx.db, tool) || QUIET_EXTRA.contains(&tool))
         && (tool != "ask_bot" || ctx.depth == 0)
         // A goal is the chat's: kept by the bot the person talks to, never incognito (nothing there lasts).
         && (!tool.starts_with("goal_") || (ctx.depth == 0 && !ctx.incognito()))
@@ -88,6 +88,10 @@ pub const READ_ONLY: [&str; 16] = [
     "memory_search", "chat_search", "meeting_search", "meeting_read", "calendar_list", "calendar_add", "email_search", "email_read", "file_list", "file_read",
     "routine_list", "card_read", "skill_view", "web_fetch", "web_search", "x_search",
 ];
+
+/// Not read-only, but a quiet check may still use them: each call waits for the person's OK in Needs you (a draft
+/// is only ever saved, never sent).
+pub const QUIET_EXTRA: [&str; 1] = ["email_draft"];
 
 /// Built-in rule when the user hasn't set one: destructive actions ask, everything else is allowed.
 pub fn default_action(tool: &str) -> &'static str {

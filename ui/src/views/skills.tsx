@@ -57,7 +57,7 @@ function SkillLibrary({ chatId, onAdded }: { chatId: number; onAdded: () => void
   const schedule = (k: LibrarySkill) => {
     if (!k.schedule) return
     setBusy(k.slug)
-    invoke('add_routine', { chatId, botId: target || bots[0]?.id || 1, cron: k.schedule.cron, prompt: k.schedule.prompt, quiet: false })
+    invoke('add_routine', { chatId, botId: target || bots[0]?.id || 1, cron: k.schedule.cron, prompt: k.schedule.prompt, quiet: k.schedule.quiet })
       .then(() => { setErr(null); setScheduled(v => [...v, k.slug]) }, e => setErr(String(e))).finally(() => setBusy(null))
   }
   const cats = [...new Set(lib.data.map(k => k.category))]

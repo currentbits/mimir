@@ -2,6 +2,15 @@
 
 What changed for people using Mimir. The newest release is at the top; "Unreleased" is what the next one brings.
 
+## Unreleased
+
+### Routines
+- **What I noticed:** a new library skill for a daily quiet check: mail older than two days that asks you something,
+  follow-ups due, tomorrow's calendar clashes and tasks past their date. *Schedule it* adds it as a quiet check, so
+  you only hear from it when something's there.
+- **Quiet checks can draft a reply:** with email set up, a quiet check may save a short reply as a draft. Each one
+  waits for your OK in **Needs you** first; nothing is sent.
+
 ## 0.7.0
 
 ### The app
