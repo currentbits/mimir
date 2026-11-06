@@ -246,30 +246,24 @@ pub fn specs() -> Vec<(&'static str, &'static str, Value)> {
         (
             "routine_create",
             "Schedule a task: recurring with cron (5-field, the user's local time, e.g. '0 8 * * Mon-Fri'), or once with at \
-             ('2026-10-12 15:00', the user's local time) for reminders and anything for later; a one-off is gone after it runs. \
-             For something tied to the user's calendar, cron can be calendar:<minutes before>, optionally :meetings (only \
-             events with someone else invited) or :outside (only ones with someone from another company): \
-             'calendar:60:outside' runs an hour before each meeting with someone outside, and each run is told the event. \
-             For \"tell me when X arrives\" by email, cron can be mail:<rule> instead: from:<address or domain>, \
-             subject:<word or \"phrase\">, and any other words the email must contain, e.g. 'mail:from:acme.com subject:invoice'; \
-             a|b is either one (subject:invoice|quote). \
-             Mimir checks new mail every 2 minutes itself and runs you only for a match, with that email. It ends after the \
-             first match unless keep=true (\"every time…\"). For a message in a Slack channel you're in, cron can be \
-             slack:#<channel> with optional from:@<person> and words the message must contain, e.g. 'slack:#deploys failed'; \
-             it works the same way (each run is told the message). \
-             prompt is what you will be asked to do each time it fires; the result is sent to this chat. \
-             Set quiet=true for watches/check-ins (\"keep an eye on…\", \"only tell me if…\"): it runs read-only and \
-             messages the user only when something needs their attention. A quiet check about one web page or feed, or \
-             about new email, should set watch (the page's address, or \"mail\"): Mimir then looks itself before each \
-             run and only runs you when it changed, with what changed, which costs far less. \
-             For someone else in the household (\"remind Sam at 6 to…\"), set for to their name: it runs in their own chat \
-             (write prompt as what to tell them), and the first time for each person the user is asked. \
-             A repeating one with an end (\"every morning until the 30th\", \"for two weeks\") sets until: after its last run \
-             before then, it's gone. \
-             When you tell the person you'll check back on something yourself (\"I'll check Friday whether they replied\"), \
-             book it: at, with followup=true, and prompt as what to check and tell them. Say in your reply when, and that \
-             they can cancel it. It counts like any routine.",
-            json!({"type":"object","properties":{"until":{"type":"string","description":"YYYY-MM-DD (through that day) or YYYY-MM-DD HH:MM: when a repeating routine ends"},"followup":{"type":"boolean","description":"with at: a check-back you booked on your own, not one the person asked for"},"cron":{"type":"string"},"at":{"type":"string","description":"YYYY-MM-DD HH:MM, for a one-off instead of cron"},"prompt":{"type":"string","description":"up to 1000 characters"},"quiet":{"type":"boolean"},"watch":{"type":"string","description":"quiet checks only: a page or feed URL, or \"mail\""},"keep":{"type":"boolean","description":"mail: and slack: only: run for every match, not just the first"},"for":{"type":"string","description":"a household member's name, to send it to their chat instead of this one"}},"required":["prompt"]}),
+             for reminders and anything for later (gone after it runs). prompt is what you'll be asked each time; the result \
+             comes to this chat. cron can also be an event: calendar:<minutes before>[:meetings|:outside] ('calendar:60:outside': \
+             an hour before each meeting with someone from another company); mail:<rule> for \"tell me when X arrives\" \
+             (from:<address or domain>, subject:<word or \"phrase\">, other words it must contain, a|b for either; e.g. \
+             'mail:from:acme.com subject:invoice|quote'); slack:#<channel> [from:@<person>] [words]. Mimir watches for these \
+             itself and runs you only on a match, told what matched. quiet=true for watches and check-ins (\"only tell me \
+             if…\"): runs read-only and messages only when something needs attention.",
+            json!({"type":"object","properties":{
+                "prompt":{"type":"string","description":"up to 1000 characters"},
+                "cron":{"type":"string"},
+                "at":{"type":"string","description":"YYYY-MM-DD HH:MM, for a one-off instead of cron"},
+                "quiet":{"type":"boolean"},
+                "watch":{"type":"string","description":"quiet, about one page/feed URL or \"mail\": runs only when it changed (far cheaper)"},
+                "keep":{"type":"boolean","description":"mail:/slack: run on every match, not just the first"},
+                "for":{"type":"string","description":"a household member's name: runs in their chat (prompt = what to tell them)"},
+                "until":{"type":"string","description":"YYYY-MM-DD or YYYY-MM-DD HH:MM: a repeating one ends then"},
+                "followup":{"type":"boolean","description":"with at: a check-back you promised (\"I'll check Friday\"); say when, and that they can cancel"}
+            },"required":["prompt"]}),
         ),
         ("routine_list", "List this chat's routines.", json!({"type":"object","properties":{}})),
         (
@@ -497,6 +491,28 @@ pub fn specs_for(ctx: &ToolCtx) -> Vec<(String, String, Value)> {
     }
     let bot = ctx.db.bot(ctx.bot_id).ok();
     all_specs(&ctx.db).into_iter().filter(|(n, ..)| bot.as_ref().is_none_or(|b| b.allows(n)) && usable(ctx, n)).collect()
+}
+
+/// About how many tokens a text takes: ~4 characters each.
+pub fn tokens(chars: usize) -> usize {
+    chars.div_ceil(4)
+}
+
+/// What the tools offered to this bot take of the context: (how many, about how many tokens, each tool server's share
+/// as (server, tokens), biggest first).
+pub fn weight(ctx: &ToolCtx) -> (usize, usize, Vec<(String, usize)>) {
+    let tools = specs_for(ctx);
+    let (mut total, mut servers) = (0, std::collections::BTreeMap::<String, usize>::new());
+    for (n, d, s) in &tools {
+        let t = tokens(n.len() + d.len() + s.to_string().len());
+        total += t;
+        if let Some((server, _)) = n.split_once("__") {
+            *servers.entry(server.to_string()).or_default() += t;
+        }
+    }
+    let mut servers: Vec<_> = servers.into_iter().collect();
+    servers.sort_by_key(|s| std::cmp::Reverse(s.1));
+    (tools.len(), total, servers)
 }
 
 #[cfg(test)]

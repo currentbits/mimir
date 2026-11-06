@@ -100,6 +100,11 @@ The app finds a running Ollama or LM Studio and lists its models. Models that ca
 chat but can't remember things or run routines. Ollama's default 4k-token context drops older messages in a long
 conversation (instructions and memory are kept); start it with `OLLAMA_CONTEXT_LENGTH=16384` for more.
 
+Mimir's tools and standing memory go with every message: the bot page (under What it can do) and `mimir doctor`
+show about how many tokens they take. On an Ollama bot they also warn when Ollama's window, as `/api/ps` or the
+model's `num_ctx` reports it, leaves too little for the conversation. Switching off tools a bot doesn't need makes
+room too.
+
 ## What a run costs
 
 The run log shows each reply's model, tokens and cost. For Claude it's the API list-price equivalent that `claude -p`

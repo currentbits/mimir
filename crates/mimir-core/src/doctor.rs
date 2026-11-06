@@ -75,6 +75,10 @@ pub async fn run(home: &Path) -> Vec<Check> {
         out.push(account(&b.name, &b.provider, &seen[&b.provider]));
     }
     for b in &bots {
+        let (line, warnings) = context(&db, b).await;
+        out.push(if warnings.is_empty() { ok(format!("{}: {line}", b.name)) } else { bad(State::Warn, format!("{}: {line}", b.name), warnings.join("\n    ")) });
+    }
+    for b in &bots {
         out.extend(channels(&b.name, crate::host::channels_of(b.id)).await);
     }
     for a in crate::email::accounts(&db) {
@@ -223,6 +227,40 @@ fn account(bot: &str, kind: &str, v: &serde_json::Value) -> Check {
     }
 }
 
+/// How much of every turn's context a bot's tools and standing memory take, and what's wrong with that: tools past
+/// about 8k tokens, or a local model whose window they (nearly) fill. For `mimir doctor` and the bot page.
+pub async fn context(db: &Db, bot: &crate::db::Bot) -> (String, Vec<String>) {
+    let ctx = crate::tools::ToolCtx::new(db.clone(), bot.id, crate::host::LOCAL_CHAT);
+    let (count, tools, servers) = crate::tools::weight(&ctx);
+    let memory = crate::tools::tokens(db.standing_usage(&ctx.scope()).map_or(0, |u| u.0));
+    let line = format!("tools offered: {count}, about {}; standing memory about {}", k(tools), k(memory));
+    let mut warnings = vec![];
+    if tools > 8000 {
+        let big: Vec<String> = servers.iter().take(3).map(|(s, t)| format!("{s} ({})", k(*t))).collect();
+        let big = if big.is_empty() { String::new() } else { format!(" The biggest tool servers: {}.", big.join(", ")) };
+        warnings.push(format!("That's a lot of tools for every message.{big} Switch off what it doesn't need under What it can do."));
+    }
+    if bot.provider == "local" {
+        let base = Some(bot.base_url.trim()).filter(|b| !b.is_empty()).unwrap_or(crate::provider::OLLAMA);
+        // Leave about 4k for its instructions and the conversation itself.
+        let need = tools + memory + 4096;
+        if let Some(window) = crate::provider::ollama_context(base, &bot.model).await.filter(|w| (*w as usize) < need) {
+            let want = need.next_power_of_two().max(16384);
+            warnings.push(format!(
+                "Ollama is set to {window} tokens for {}; Mimir's tools and memory take about {} of that before the conversation starts. Start Ollama with OLLAMA_CONTEXT_LENGTH={want}, or switch off tools it doesn't need.",
+                bot.model,
+                k(tools + memory)
+            ));
+        }
+    }
+    (line, warnings)
+}
+
+/// Tokens as "3.7k tokens".
+fn k(tokens: usize) -> String {
+    format!("{:.1}k tokens", tokens as f64 / 1000.0)
+}
+
 /// Each connected channel answers with its token (who the bot is there).
 async fn channels(bot: &str, ch: crate::runtime::Channels) -> Vec<Check> {
     async fn within(f: impl std::future::Future<Output = anyhow::Result<String>>) -> anyhow::Result<String> {
@@ -333,5 +371,24 @@ mod tests {
         assert_eq!(account("Ava", "codex", &v(r#"{"installed":true,"signed_in":false}"#)).state, State::Fail);
         assert_eq!(account("Ava", "claude", &v(r#"{"installed":true,"signed_in":null}"#)).state, State::Warn);
         assert_eq!(account("Ava", "openai", &v(r#"{"installed":true,"signed_in":true}"#)).state, State::Ok);
+    }
+
+    #[tokio::test]
+    async fn context_counts_tools_and_memory() {
+        let p = std::env::temp_dir().join(format!("mimir-doctor-context-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = Db::open(&p).unwrap();
+        // A local bot whose Ollama doesn't answer: no window known, so no warning about it.
+        let bot = serde_json::json!({"id":0,"name":"Ava","persona":"","provider":"local","model":"qwen3","base_url":"http://127.0.0.1:9/v1","tools":""});
+        let id = db.bot_save(&serde_json::from_value(bot).unwrap()).unwrap();
+        let (line, warnings) = context(&db, &db.bot(id).unwrap()).await;
+        assert!(line.starts_with("tools offered: ") && line.contains("k tokens; standing memory about 0.0k tokens"), "{line}");
+        assert!(warnings.is_empty(), "{warnings:?}");
+        // Only a few tools: fewer tokens.
+        let few = serde_json::json!({"id":id,"name":"Ava","persona":"","provider":"local","model":"qwen3","base_url":"http://127.0.0.1:9/v1","tools":"web_fetch"});
+        db.bot_save(&serde_json::from_value(few).unwrap()).unwrap();
+        let (fewer, _) = context(&db, &db.bot(id).unwrap()).await;
+        assert!(fewer.starts_with("tools offered: 1, about 0."), "{fewer}");
+        let _ = std::fs::remove_file(&p);
     }
 }

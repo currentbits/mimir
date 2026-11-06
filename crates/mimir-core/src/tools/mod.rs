@@ -645,6 +645,14 @@ pub(crate) fn looks_secret(db: &Db, text: &str) -> Option<&'static str> {
 
 #[cfg(test)]
 mod tests {
+    /// Every built-in tool's definition goes to the model each turn (a local model's whole context can be 4k tokens):
+    /// growing past this is a choice, made by raising it here.
+    #[test]
+    fn builtin_tools_stay_within_budget() {
+        let size = serde_json::to_string(&super::specs()).unwrap().len();
+        assert!(size < 28_000, "the built-in tools' definitions are {size} characters, over the 28,000 budget");
+    }
+
     #[test]
     fn needs_you_suggests_a_rule_after_five_plain_allows_and_stops_when_dismissed() {
         let p = std::env::temp_dir().join(format!("mimir-rule-hints-{}.db", std::process::id()));

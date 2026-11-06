@@ -447,6 +447,12 @@ impl Host {
                 let (reply, secs) = boxed(|| p.check(&self.db)).await?;
                 ok(json!({"reply": crate::tools::truncate(&reply, 200), "seconds": (secs * 10.0).round() / 10.0, "provider": p.name()}))
             }
+            // How much of each turn its tools and standing memory take, with any warning (the bot page).
+            "bot_context" => {
+                let bot = self.db.bot(arg(a, "bot_id")?)?;
+                let (line, warnings) = boxed(|| crate::doctor::context(&self.db, &bot)).await;
+                ok(json!({"line": line, "warnings": warnings}))
+            }
             "statuses" => {
                 // A bot another bot made (bot_create, in the AI CLI's own tool process) starts here, so its routines run.
                 // Not while this app's bots are switched off (it shows a server's).
