@@ -288,7 +288,7 @@ export function BotPage({ bot, status, canDelete, onSaved, onDeleted, onChat, on
 
       {bot && <Fallback bot={bot} onErr={e => { setErr(e); setMsg(null) }} />}
 
-      <Group title="Messaging apps" note={`Each bot is its own Telegram, Slack, Discord, Signal or WhatsApp bot{imessageHere ? ', or answers in one iMessage conversation' : ''}. Tokens are stored in ${SECRETS_AT}.`}>
+      <Group title="Messaging apps" note={`Each bot is its own Telegram, Slack, Discord, Signal or WhatsApp bot${imessageHere ? ', or answers in one iMessage conversation' : ''}. Tokens are stored in ${SECRETS_AT}.`}>
         <ChannelRow icon="telegram" title="Telegram" st={chan('telegram')} has={has('has_telegram_token')} onRemove={() => save({ ...NO_SECRETS, telegram_token: '' })}
           hint="Message @BotFather, send /newbot, and paste the token it gives you.">
           <input className="input" type="password" aria-label="Telegram bot token" placeholder="123456:ABC…" value={typed('telegram_token')} onChange={e => type('telegram_token', e.target.value)} autoComplete="off" />
@@ -340,7 +340,7 @@ export function BotPage({ bot, status, canDelete, onSaved, onDeleted, onChat, on
       </Group>
 
       <Group title="Working folder" note={<>Where its files go (file_list, file_read, file_write), on {pickHere ? 'this computer' : folder.data?.machine ?? 'the machine Mimir runs on'}. Pick a folder of yours to see and edit them in {platform === 'mac' ? 'Finder' : 'your file manager'}; paths stay inside it (no ../, no links out). Empty: Mimir's own workspace for each chat.</>}>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <div className="row">
           <input className="input" aria-label="Working folder" placeholder={pickHere ? 'Mimir’s own workspace (default)' : 'A folder on the server, like /data/bots/scout'} value={b.workdir ?? ''} onChange={e => edit({ workdir: e.target.value })} autoComplete="off" spellCheck={false} />
           {pickHere && <button type="button" className="btn btn-sm btn-ghost" onClick={pick}>Choose…</button>}
           {!!b.workdir && <button type="button" className="btn btn-sm btn-ghost" onClick={() => edit({ workdir: '' })}>Use Mimir’s</button>}

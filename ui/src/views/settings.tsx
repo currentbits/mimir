@@ -1315,7 +1315,7 @@ function AskFirstRules() {
           <button type="button" className="btn btn-sm btn-ghost btn-danger" onClick={() => save(all.filter((_, j) => j !== i))}>Remove</button>
         </Row>
       ))}
-      <form style={{ display: 'flex', gap: 8, alignItems: 'center' }} onSubmit={e => { e.preventDefault(); if (draft.pattern.trim()) void save([...all, draft]) }}>
+      <form className="row" onSubmit={e => { e.preventDefault(); if (draft.pattern.trim()) void save([...all, draft]) }}>
         <select className="select" style={{ width: 'auto' }} aria-label="Rule about" value={draft.kind} onChange={e => setDraft({ ...draft, kind: e.target.value as TargetRule['kind'] })}>
           <option value="email">Emails to</option>
           <option value="folder">Files copied into</option>
@@ -1343,7 +1343,7 @@ function ExportFolders() {
           <button type="button" className="btn btn-sm btn-ghost btn-danger" onClick={() => save(all.filter(x => x !== f))}>Remove</button>
         </Row>
       ))}
-      <form style={{ display: 'flex', gap: 8, alignItems: 'center' }} onSubmit={e => { e.preventDefault(); if (add.trim()) void save([...all, add.trim()]) }}>
+      <form className="row" onSubmit={e => { e.preventDefault(); if (add.trim()) void save([...all, add.trim()]) }}>
         <input className="input" aria-label="Add an export folder" placeholder="~/.claude/skills" value={add} onChange={e => setAdd(e.target.value)} autoComplete="off" spellCheck={false} />
         {pickHere && <button type="button" className="btn btn-sm btn-ghost" onClick={() => localInvoke<string | null>('pick_folder').then(p => { if (p) void save([...all, p]) }, e => setErr(String(e)))}>Choose…</button>}
         <button type="submit" className="btn btn-sm" disabled={!add.trim()}>Add</button>
