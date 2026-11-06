@@ -19,13 +19,6 @@ function useGoal(chatId: number) {
   return { goal, setGoal, load }
 }
 
-/** One line for the chat's header: the goal and how it stands. */
-export function GoalLine({ chatId }: { chatId: number }) {
-  const { goal } = useGoal(chatId)
-  if (!goal) return null
-  return <> · <span title={`Done when ${goal.done_when}`}>Goal{goal.status === 'active' ? '' : ` (${goal.status})`}: {goal.text}</span></>
-}
-
 /** The goal pinned above the cards: yours to pause, resume, mark done or remove, whatever the bot is doing. */
 function GoalCard({ chatId, botName }: { chatId: number; botName: (id: number) => string }) {
   const { goal: g, setGoal, load } = useGoal(chatId)

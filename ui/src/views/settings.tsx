@@ -70,6 +70,12 @@ function useSettingsFilter(q: string) {
   return { ref, none }
 }
 
+/** The left-hand nav of Settings: where each run of groups starts. */
+const SETTING_CATS: [string, string, string][] = [
+  ['general', 'General', 'settings'], ['ai', 'AI & search', 'wand'], ['accounts', 'Accounts', 'user'],
+  ['tools', 'Computer & tools', 'laptop'], ['permissions', 'Permissions', 'shield'], ['data', 'Data & server', 'server'],
+]
+
 export function SettingsView({ onComputer, find = '' }: { onComputer: () => void; find?: string }) {
   // Adding a tool server (or the browser) adds tools: show their permissions straight away.
   const [tools, setTools] = useState(0)
@@ -77,6 +83,21 @@ export function SettingsView({ onComputer, find = '' }: { onComputer: () => void
   const [q, setQ] = useState(find)
   const box = useRef<HTMLInputElement>(null)
   const { ref, none } = useSettingsFilter(q)
+  // The section you're reading, lit in the nav: the last one whose top has scrolled past the top of the view.
+  const [on, setOn] = useState('general')
+  useEffect(() => {
+    const scroller = ref.current?.closest('.sheet-scroll, .page')
+    if (!scroller) return
+    const spy = () => {
+      const top = scroller.getBoundingClientRect().top + 90
+      let cur = 'general'
+      for (const c of ref.current?.querySelectorAll<HTMLElement>('.set-cat') ?? []) if (c.offsetHeight && c.getBoundingClientRect().top <= top) cur = c.dataset.cat!
+      setOn(cur)
+    }
+    scroller.addEventListener('scroll', spy, { passive: true })
+    return () => scroller.removeEventListener('scroll', spy)
+  }, [ref])
+  const goTo = (id: string) => { ref.current?.querySelector(`[data-cat="${id}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }); setOn(id) }
   useEffect(() => {
     // ⌘F / Ctrl+F (handled with the app's other shortcuts) or / finds a setting; Escape clears the search.
     const key = (e: KeyboardEvent) => {
@@ -96,32 +117,51 @@ export function SettingsView({ onComputer, find = '' }: { onComputer: () => void
       </label>
       {none && <Empty icon="search" title={`Nothing in Settings matches “${q.trim()}”`}>A bot's name, role, AI account, tools and its Telegram, Slack or Discord connection are on its own page: right-click the bot in the sidebar.</Empty>}
       {!none && /telegram|slack|discord|role|persona|pair|bot token|model/i.test(q) && <p className="hint" style={{ margin: '-12px 0 18px' }}>Each bot's Telegram, Slack and Discord connection, role and AI account are on its own page: right-click the bot in the sidebar.</p>}
-      <div ref={ref}>
-      {inDesktop && !remoteServer() && <AppSettings />}
-      {inDesktop && <UpdateSettings />}
-      <DigestSettings />
-      <MainBotSettings />
-      <DecisionsSettings />
-      <LanguageSettings />
-      <LimitsSettings />
-      <ApiKeySettings />
-      <WebSearchSettings />
-      <ScanSettings />
-      <EmailSettings />
-      <CalendarSettings />
-      <KnowMeSettings />
-      <MemoryFolderSettings />
-      <ComputerSettings onChange={() => { onComputer(); toolsChanged() }} />
-      <BrowserSettings onChange={toolsChanged} />
-      <ToolServerSettings onChange={toolsChanged} />
-      <SensitiveSettings key={'s' + tools} />
-      <Permissions key={tools} />
-      <AskFirstRules />
-      <ExportFolders />
-      <WebhooksOutSettings />
-      <DataSettings />
-      {(!inDesktop || remoteServer()) && <ChatApiSettings />}
-      <ServerSettings />
+      <div className="settings-layout">
+        <nav className="settings-nav" aria-label="Settings sections">
+          {SETTING_CATS.map(([id, label, icon]) => (
+            <button key={id} type="button" className={on === id ? 'on' : ''} aria-current={on === id ? 'true' : undefined} onClick={() => goTo(id)}><Icon name={icon} size={15} />{label}</button>
+          ))}
+        </nav>
+        <div ref={ref}>
+        <div className="set-cat" data-cat="general">
+        {inDesktop && !remoteServer() && <AppSettings />}
+        {inDesktop && <UpdateSettings />}
+        <DigestSettings />
+        <MainBotSettings />
+        <DecisionsSettings />
+        <LanguageSettings />
+        <LimitsSettings />
+        </div>
+        <div className="set-cat" data-cat="ai">
+        <ApiKeySettings />
+        <WebSearchSettings />
+        <ScanSettings />
+        </div>
+        <div className="set-cat" data-cat="accounts">
+        <EmailSettings />
+        <CalendarSettings />
+        <KnowMeSettings />
+        <MemoryFolderSettings />
+        </div>
+        <div className="set-cat" data-cat="tools">
+        <ComputerSettings onChange={() => { onComputer(); toolsChanged() }} />
+        <BrowserSettings onChange={toolsChanged} />
+        <ToolServerSettings onChange={toolsChanged} />
+        </div>
+        <div className="set-cat" data-cat="permissions">
+        <SensitiveSettings key={'s' + tools} />
+        <Permissions key={tools} />
+        <AskFirstRules />
+        <WebhooksOutSettings />
+        </div>
+        <div className="set-cat" data-cat="data">
+        <ExportFolders />
+        <DataSettings />
+        {(!inDesktop || remoteServer()) && <ChatApiSettings />}
+        <ServerSettings />
+        </div>
+        </div>
       </div>
     </>
   )
