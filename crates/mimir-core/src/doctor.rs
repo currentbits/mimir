@@ -232,7 +232,13 @@ fn account(bot: &str, kind: &str, v: &serde_json::Value) -> Check {
 pub async fn context(db: &Db, bot: &crate::db::Bot) -> (String, Vec<String>) {
     let ctx = crate::tools::ToolCtx::new(db.clone(), bot.id, crate::host::LOCAL_CHAT);
     let (count, tools, servers) = crate::tools::weight(&ctx);
-    let memory = crate::tools::tokens(db.standing_usage(&ctx.scope()).map_or(0, |u| u.0));
+    // The standing memory this bot's prompt gets (as in lib.rs): this chat's, and the household's when it's in one.
+    let mut scopes = vec![ctx.scope()];
+    if db.in_household(ctx.chat_id) {
+        scopes.push(crate::HOUSEHOLD.to_string());
+    }
+    let chars = scopes.iter().flat_map(|s| db.bootstrap(s, bot.id).unwrap_or_default()).map(|e| e.line().len()).sum();
+    let memory = crate::tools::tokens(chars);
     let line = format!("tools offered: {count}, about {}; standing memory about {}", k(tools), k(memory));
     let mut warnings = vec![];
     if tools > 8000 {
@@ -384,6 +390,12 @@ mod tests {
         let (line, warnings) = context(&db, &db.bot(id).unwrap()).await;
         assert!(line.starts_with("tools offered: ") && line.contains("k tokens; standing memory about 0.0k tokens"), "{line}");
         assert!(warnings.is_empty(), "{warnings:?}");
+        // Another bot's own memory isn't in this bot's prompt, so it isn't counted.
+        let m = db.store("chat:0", "knowledge", "Theirs", &"x".repeat(400), "", None).unwrap();
+        assert!(db.set_for_bot("chat:0", m, id + 1).unwrap());
+        assert_eq!(context(&db, &db.bot(id).unwrap()).await.0, line);
+        assert!(db.set_for_bot("chat:0", m, id).unwrap());
+        assert!(context(&db, &db.bot(id).unwrap()).await.0.contains("standing memory about 0.1k tokens"));
         // Only a few tools: fewer tokens.
         let few = serde_json::json!({"id":id,"name":"Ava","persona":"","provider":"local","model":"qwen3","base_url":"http://127.0.0.1:9/v1","tools":"web_fetch"});
         db.bot_save(&serde_json::from_value(few).unwrap()).unwrap();
