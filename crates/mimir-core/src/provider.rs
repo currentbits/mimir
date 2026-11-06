@@ -1013,6 +1013,29 @@ async fn ollama_tools(http: &reqwest::Client, base: &str, model: &str) -> Option
     Some(v["capabilities"].as_array()?.iter().any(|c| c == "tools"))
 }
 
+/// The context window Ollama gives `model`, in tokens: what it's loaded with now (`/api/ps`), else what its Modelfile
+/// sets (`num_ctx`). None when it can't say: not Ollama, or not loaded and not set (Ollama then picks by GPU memory,
+/// 4k under 24 GB, or OLLAMA_CONTEXT_LENGTH).
+pub async fn ollama_context(base: &str, model: &str) -> Option<u64> {
+    let root = base.trim_end_matches('/').strip_suffix("/v1")?;
+    let http = reqwest::Client::builder().timeout(Duration::from_secs(2)).build().ok()?;
+    let same = |n: &str| n == model || n.strip_suffix(":latest") == Some(model);
+    if let Ok(r) = http.get(format!("{root}/api/ps")).send().await {
+        let ps: Value = r.json().await.unwrap_or_default();
+        let loaded = ps["models"].as_array().into_iter().flatten().find(|m| m["name"].as_str().is_some_and(same) || m["model"].as_str().is_some_and(same));
+        if let Some(n) = loaded.and_then(|m| m["context_length"].as_u64()) {
+            return Some(n);
+        }
+    }
+    let show: Value = http.post(format!("{root}/api/show")).json(&json!({"model": model})).send().await.ok()?.json().await.ok()?;
+    num_ctx(show["parameters"].as_str()?)
+}
+
+/// `num_ctx` from `/api/show`'s parameters ("num_ctx 8192\nstop ...").
+fn num_ctx(params: &str) -> Option<u64> {
+    params.lines().find_map(|l| l.trim().strip_prefix("num_ctx")?.trim().parse().ok())
+}
+
 impl Provider {
     /// One tiny real round-trip, for "Test" buttons. Returns (reply, seconds).
     pub async fn check(&self, db: &crate::db::Db) -> Result<(String, f64)> {
@@ -1587,6 +1610,12 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn ollama_num_ctx() {
+        assert_eq!(num_ctx("stop \"<|im_end|>\"\nnum_ctx                        8192\ntemperature 0.7"), Some(8192));
+        assert_eq!(num_ctx("temperature 0.7"), None);
+    }
 
     #[test]
     fn api_accounts() {

@@ -165,6 +165,8 @@ export function BotPage({ bot, status, canDelete, onSaved, onDeleted, onChat, on
     invoke('set_hands_off', { botId: bot!.id, on }).then(handsOff.reload, e => setErr(String(e)))
   }
   const computer = useLoad(() => invoke<ComputerStatus>('computer'), [], 60000)
+  // Reloads when the saved bot changes (its tools or model), not as the form is edited.
+  const context = useLoad(() => bot ? invoke<{ line: string; warnings: string[] }>('bot_context', { botId: bot.id }) : Promise.resolve(null), [bot?.id, bot?.tools, bot?.model, bot?.base_url, bot?.provider], 60000)
   const serverTools: [string, string][] = (toolServers.data?.servers ?? []).filter(s => !s.preset).map(s => [`${s.name}__*`, `Use ${s.name}`])
   const ALL = [...Object.keys(TOOL_LABEL), 'browser__*', ...serverTools.map(([t]) => t)]
   // What each tool does for this bot once it's on: Settings → Permissions (the same for every bot), defaults included.
@@ -337,6 +339,8 @@ export function BotPage({ bot, status, canDelete, onSaved, onDeleted, onChat, on
             <Row key={tool} title={label} desc={enabled.includes(tool) ? effective(tool) : 'off for this bot'}><Switch label={label} checked={enabled.includes(tool)} onChange={() => toggle(tool)} /></Row>
           ))}
         </div>
+        {context.data && <div className="row-block"><span className="hint">{context.data.line[0].toUpperCase() + context.data.line.slice(1)}, as of the last save.</span>
+          {context.data.warnings.map(w => <p key={w} className="error">{w}</p>)}</div>}
       </Group>
 
       <Group title="Working folder" note={<>Where its files go (file_list, file_read, file_write), on {pickHere ? 'this computer' : folder.data?.machine ?? 'the machine Mimir runs on'}. Pick a folder of yours to see and edit them in {platform === 'mac' ? 'Finder' : 'your file manager'}; paths stay inside it (no ../, no links out). Empty: Mimir's own workspace for each chat.</>}>
