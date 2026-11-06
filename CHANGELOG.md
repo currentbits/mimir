@@ -2,7 +2,11 @@
 
 What changed for people using Mimir. The newest release is at the top; "Unreleased" is what the next one brings.
 
-## Unreleased
+## 0.7.0
+
+### The app
+- **Easier on the eyes:** a calmer look throughout, in light and dark: one accent color, clearer headings, roomier
+  cards and rows, readable approval cards, and settings that fit a phone screen.
 
 ### Files and folders
 - **A bot's working folder:** pick a folder of yours in a bot's settings (`~/Projects/security`, `~/.claude/skills`)
