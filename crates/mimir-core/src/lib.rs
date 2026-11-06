@@ -1102,7 +1102,7 @@ const TUNING_RUNS: i64 = 3;
 /// How many of a routine's earlier results its next run sees.
 const PREVIOUS_RESULTS: usize = 3;
 
-const QUIET: &str = "\n\nThis is a quiet check that runs on a schedule. You can only look (read-only tools), not act. \
+const QUIET: &str = "\n\nThis is a quiet check that runs on a schedule. You can only look (read-only tools), not act; an email draft, where you have email_draft, waits for their OK and is never sent. \
 If nothing needs the user's attention right now, reply with exactly NOTHING and no other text. \
 Otherwise reply with a short message saying what needs their attention and why.";
 

@@ -36,7 +36,7 @@ pub struct ToolCtx {
     pub stream: bool,
     /// No tools at all (memory tidy-up: the model only proposes, it doesn't act).
     pub tools_off: bool,
-    /// Only READ_ONLY tools (heartbeat checks: look, never act).
+    /// Only READ_ONLY tools, plus QUIET_EXTRA which always ask (quiet checks: look, never act).
     pub read_only: bool,
     /// 1 inside a task handed over by another bot; ask_bot is off there (no delegation chains).
     pub depth: u8,
@@ -355,6 +355,8 @@ async fn gated(ctx: &ToolCtx, name: &str, args: &Value) -> Result<String> {
     // run read from, never as "always" or part of a plan. Only ever allow → ask.
     let from = ctx.sensitive().filter(|_| decision != "deny" && sends_out(ctx, name, args));
     let (decision, why) = if from.is_some() { ("ask".to_string(), "sensitive") } else { (decision, why) };
+    // A quiet check only looks: the few things it may prepare (a draft) always wait for the person's OK.
+    let (decision, why) = if ctx.read_only && decision == "allow" && QUIET_EXTRA.contains(&name) { ("ask".to_string(), if ctx.is_tainted() { "guarded" } else { "rule" }) } else { (decision, why) };
     // A write that doesn't fit what the person asked (or the routine's brief) asks first. Only ever allow → ask.
     let (decision, why) = if decision == "allow" && off_brief(ctx, name, args) { ("ask".to_string(), "unasked") } else { (decision, why) };
     // Always, pressed on such a card: the person chose never to be asked before this again, whatever made it ask. So did
@@ -1045,6 +1047,25 @@ mod tests {
         assert!(out.contains("each action asks") && !tainted.db.approvals_pending().unwrap().iter().any(|a| a.kind == "plan"), "{out}");
         assert!(planned(&[("browser__browser_navigate".into(), Some("playtomic.io".into()))], "browser__browser_navigate", Some("playtomic.io")));
         assert!(!planned(&[("browser__browser_navigate".into(), Some("playtomic.io".into()))], "browser__browser_navigate", Some("evil.example")), "another site isn't covered");
+    }
+
+    #[tokio::test]
+    async fn a_quiet_check_may_draft_an_email_but_it_waits_in_needs_you() {
+        let p = std::env::temp_dir().join(format!("mimir-quiet-draft-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = Db::open(&p).unwrap();
+        db.set_setting("email_accounts", r#"[{"host":"127.0.0.1","port":9,"user":"me@example.com","oauth":"gone"}]"#).unwrap();
+        let mut ctx = ToolCtx::new(db.clone(), 1, 0);
+        ctx.unattended = true;
+        let has = |c: &ToolCtx, t: &str| specs_for(c).iter().any(|s| s.0 == t);
+        assert!(has(&ctx, "email_draft") && has(&ctx, "email_send"));
+        ctx.read_only = true;
+        assert!(has(&ctx, "email_draft") && !has(&ctx, "email_send"), "a quiet check drafts, never sends");
+        // Not even tainted, and no rule: it still parks rather than saving the draft.
+        let mail = json!({"to": "sam@example.com", "subject": "Re: invoice", "body": "Paid on Friday."});
+        assert!(call(&ctx, "email_draft", &mail).await.unwrap().starts_with("Not done yet"));
+        let a = db.approvals_pending().unwrap().pop().unwrap();
+        assert_eq!(a.tool, "email_draft");
     }
 
     #[tokio::test]
