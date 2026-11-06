@@ -453,7 +453,7 @@ pub(crate) fn offers_all(a: &Approval) -> bool {
 /// …and "Always" on every card with something to allow, like the app. Not in a guest's chat (of any kind): the guest
 /// answers there, and Always would change your rules for every chat.
 pub fn offers_always(a: &Approval) -> bool {
-    !matches!(a.kind.as_str(), "signin" | "takeover" | "guest" | "drift" | "userfile" | "target" | "shell") && !a.guest
+    !matches!(a.kind.as_str(), "signin" | "takeover" | "guest" | "drift" | "userfile" | "target" | "shell" | "purchase") && !a.guest
 }
 
 /// Allowed the same plain ask a few times already: the card offers to stop asking.
@@ -466,6 +466,10 @@ pub(crate) fn card_buttons(a: &Approval) -> Vec<Vec<(String, String)>> {
     let b = |label: String, d: char| (label, format!("ap:{}:{d}", a.id));
     if a.kind == "takeover" {
         return vec![vec![b(tr("Done").into(), 'y'), b(tr("Can't now").into(), 'n')]];
+    }
+    // A purchase is approved only with Touch ID in the Mac app: here it can only be turned down.
+    if a.kind == "purchase" {
+        return vec![vec![b(tr("Deny").into(), 'n')]];
     }
     // Signing in happens in Mimir's own form (the link on the card), never in the chat.
     if a.kind == "signin" {

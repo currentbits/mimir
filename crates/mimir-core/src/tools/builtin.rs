@@ -528,6 +528,7 @@ pub(super) async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<Stri
             ctx.taint();
             out
         }
+        "purchase_request" => crate::cards::request(ctx, args).await?,
         "file_export" => crate::files::export(&ctx.db, ws(ctx)?, s(args, "path")?, s(args, "dest")?, args["replace"].as_bool() == Some(true))?,
         "file_delete" => {
             let p = s(args, "path")?;

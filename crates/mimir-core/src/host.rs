@@ -1261,6 +1261,16 @@ impl Host {
                 ok(true)
             }
             "vault" => ok(ext::vault(&self.db)),
+            // Saved cards (no details, ever) and what was bought with them.
+            "pay_cards" => ok(json!({"cards": crate::cards::cards(&self.db), "log": crate::cards::log(&self.db).into_iter().rev().take(50).collect::<Vec<_>>(), "here": crate::mac::here(&self.db)})),
+            // Added and removed only in the Mac app: never from the web UI or the API of a server.
+            "pay_card_save" => {
+                if !is_desktop() || !cfg!(target_os = "macos") {
+                    bail!("cards can only be added in the Mimir app on a Mac (purchases are approved with Touch ID there)");
+                }
+                ok(crate::cards::save(&self.db, arg(a, "card")?, &arg::<crate::cards::Secret>(a, "secret")?)?)
+            }
+            "pay_card_delete" => ok(crate::cards::delete(&self.db, &arg::<String>(a, "name")?)?),
             // The main bot (first point of contact; runs the memory tidy-up): with `bot_id`, set it.
             "main_bot" => {
                 if let Some(id) = arg::<Option<i64>>(a, "bot_id")? {
@@ -1698,6 +1708,10 @@ impl Host {
                 let (id, approve): (i64, bool) = (arg(a, "id")?, arg(a, "approve")?);
                 let edits: Option<Value> = arg(a, "edits").unwrap_or(None);
                 let reason: Option<String> = arg(a, "reason").unwrap_or(None);
+                // A purchase is approved only with Touch ID in the Mac app ("purchase_approve" there), never here.
+                if approve && self.db.approval(id)?.is_some_and(|ap| ap.kind == "purchase") {
+                    bail!("a purchase is approved only with Touch ID, in the Mimir app on your Mac");
+                }
                 if approve && let Some(edits) = edits.filter(|e| !e.is_null()) {
                     let Some(ap) = self.db.approval(id)?.filter(|ap| ap.status == "pending") else { return ok(false) };
                     tools::edit_card(&self.db, &ap, &edits)?;
@@ -2128,7 +2142,7 @@ mod tests {
         assert_eq!(secret_get("vault:PAD_EXAMPLE").as_deref(), Some("  two spaces  "));
         // Another bot's login named like a user name (X_USER) never reaches this bot's browser.
         crate::ext::vault_save(&host.db, ext::VaultEntry { name: "PAD_EXAMPLE_USER".into(), domains: vec!["pad.example".into()], bot: Some(99), totp: false, user: false }, Some("not-yours"), None).unwrap();
-        assert!(!ext::vault_values_for(&host.db, 1).iter().any(|(_, v)| v == "not-yours"));
+        assert!(!ext::vault_values_for(&host.db, 1, 0).iter().any(|(_, v)| v == "not-yours"));
         // Not a password export: said plainly.
         assert!(host.call("logins_import", &json!({"csv": "a,b\n1,2\n"})).await.unwrap_err().to_string().contains("password export"));
     }
