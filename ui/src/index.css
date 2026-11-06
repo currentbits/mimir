@@ -1257,3 +1257,8 @@ kbd, .keys { font: 500 11.5px var(--sans); color: var(--text-2); padding: 3px 7p
 
 .bot-form .row-block:has(> .field-label) { gap: 18px; }
 .routine-actions { margin-right: -6px; }
+/* Approval cards: the ask keeps a readable width; the choices wrap under each other before squeezing it. */
+.approval { grid-template-columns: auto minmax(260px, 1fr) auto; }
+.approval .choices { flex-wrap: wrap; max-width: 300px; }
+/* Needs you: every section after the first gets the usual gap above its heading. */
+.inbox > * + .section-title { margin-top: 32px !important; }
