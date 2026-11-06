@@ -64,14 +64,16 @@ export function MemoryView({ chatId, onChange }: { chatId: number; onChange: () 
 
   return (
     <>
+      <div className="page-head"><div><h1 className="display">Memory</h1>
+        <p className="lead">What your bots know about you here. Correct it, pin it, or forget it anytime.</p></div>
+        <button className="btn btn-primary head-action" onClick={() => setAdding(a => a === 'one' ? null : 'one')}><Icon name="plus" size={14} />Add memory</button></div>
       <div className="searchbar">
         <label className="search"><Icon name="search" size={15} /><input className="input" placeholder="Search memory" aria-label="Search memory" value={query} onChange={e => setQuery(e.target.value)} /></label>
         <Segmented size="sm" label="Which memories" value={history} onChange={setHistory}
           options={[{ id: 'now', label: 'Current' }, { id: 'all', label: `History${inactive ? ` · ${inactive}` : ''}` }, { id: 'timeline', label: 'Timeline' }]} />
         {/* The tidy-up reads a chat's conversations; the household has none. */}
         {chatId !== HOUSEHOLD && <TidyButton chatId={chatId} onDone={refresh} />}
-        <button className="btn btn-ghost" onClick={() => setAdding(a => a === 'import' ? null : 'import')} title="Bring in what another assistant remembers about you">Import</button>
-        <button className="btn" onClick={() => setAdding(a => a === 'one' ? null : 'one')}><Icon name="plus" size={14} />Add</button>
+        <button className="btn btn-ghost" onClick={() => setAdding(a => a === 'import' ? null : 'import')} title="Bring in what another assistant remembers about you"><Icon name="archive" size={14} />Import</button>
       </div>
       {(err || rows.error) && <p className="error">{err || rows.error}</p>}
       {standing.data && standing.data.count > 0 && (() => {
@@ -457,7 +459,8 @@ function MemoryCard({ r, versions, act, chatId, showKind }: { r: EntryRow; versi
       )}
       <div className="mem-meta">
         {showKind && <span>{KIND_SINGULAR[r.kind]}</span>}
-        <span>{who}</span>
+        {/* Where it came from, unless it's the usual: you. */}
+        {r.origin !== 'you' && <span>{who}</span>}
         {r.tainted && <span className="warn" title="A bot saved this in a conversation that had read outside content (a web page, a file, a tool’s result). Check it says what you meant; until you confirm it, your bots don't keep it in mind (they only see it, labelled, if they search for it).">after reading outside content</span>}
         {r.tainted && r.status === 'active' && <button type="button" className="linkish" onClick={() => act(invoke('confirm_memory', { chatId, id: r.id }))}>Looks right</button>}
         <span>{ago(r.created_at)}</span>
@@ -490,7 +493,7 @@ function MemoryCard({ r, versions, act, chatId, showKind }: { r: EntryRow; versi
           {showVersions ? 'hide' : versions.length === 1 ? 'earlier version' : `${versions.length} earlier versions`}</button>}
         {r.status === 'superseded' && <span className="lineage">replaced by #{r.superseded_by}</span>}
         {r.status === 'forgotten' && <span className="gone">forgotten</span>}
-        <span>#{r.id}</span>
+        <span className="mem-id">#{r.id}</span>
       </div>
       {check.busy && <p className="mem-check"><span className="typing" aria-hidden="true"><i /><i /><i /></span>Replaying past corrections…</p>}
       {check.note && (

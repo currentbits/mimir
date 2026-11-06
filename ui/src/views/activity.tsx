@@ -27,14 +27,18 @@ export function ActivityView({ chatId }: { chatId: number }) {
   if (!list.length) return <Empty icon="activity" title="No activity yet">Each reply, routine and tidy-up shows up here with its model, tokens, cost and every tool it used.</Empty>
   return (
     <>
+      <div className="page-head"><div><h1 className="display">Activity</h1>
+        <p className="lead">Every run in this chat, by any of your bots, in the last 30 days.</p></div></div>
       {t && (
         <dl className="stats" aria-label="Last 30 days">
-          <div className="stat"><dt>Runs · 30 days</dt><dd>{t.runs}{t.errors ? <small className="bad"> · {t.errors} failed</small> : null}</dd></div>
-          <div className="stat"><dt>Tokens in / out</dt><dd>{tok(t.tokens_in)} <small>/ {tok(t.tokens_out)}</small></dd></div>
-          <div className="stat"><dt>API-equivalent cost</dt><dd>{usd(t.cost_usd)}</dd><p>Subscriptions aren’t billed per token; this is what the same use would cost on the API.</p></div>
+          <div className="stat"><dt>AI runs</dt><dd>{t.runs}{t.errors ? <small className="bad"> · {t.errors} failed</small> : null}</dd></div>
+          <div className="stat"><dt>Tokens in → out</dt><dd>{tok(t.tokens_in)} <small aria-hidden="true">→</small> {tok(t.tokens_out)}</dd></div>
+          <div className="stat"><dt>API-equivalent cost</dt><dd>{usd(t.cost_usd)}</dd></div>
         </dl>
       )}
-      <div className="group">
+      {/* No run used a tool: the Tools column goes, and the run gets its width. */}
+      <div className={'group' + (list.some(r => r.tool_calls) ? '' : ' no-tools')}>
+        {list.length > 0 && <div className="runhead" aria-hidden="true"><span /><span>Run</span><span>Bot</span><span className="num">Tokens in → out</span><span className="num">Cost</span><span className="num">Tools</span><span /></div>}
         {list.map(r => {
           const b = botOf(r.bot_id)
           return (
@@ -46,11 +50,11 @@ export function ActivityView({ chatId }: { chatId: number }) {
                   const asker = r.parent_run ? list.find(x => x.id === r.parent_run) : undefined
                   return asker ? `Task from ${botOf(asker.bot_id).name}` : runTitle(r, routines.data?.find(x => x.id === r.routine_id))
                 })()}</b>
-                  <small>{ago(r.started_at)}{r.status === 'error' ? ' · failed' : r.status === 'missed' ? ' · missed' : r.status === 'unchanged' ? ' · nothing changed, no AI run' : r.ended_at ? ` · ${r.ended_at - r.started_at}s` : ' · running'}{r.model ? ` · ${r.model}` : ''}{r.delivered ? ` · ${r.delivered.startsWith('not sent') ? 'not sent' : r.delivered}` : ''}</small></span>
-                <span className="run-bot"><Avatar id={b.id} name={b.name} size={18} still /><span>{b.name}</span></span>
+                  <small>{ago(r.started_at)}{r.status === 'error' ? ' · failed' : r.status === 'missed' ? ' · missed' : r.status === 'unchanged' ? ' · unchanged, no AI run' : r.ended_at ? ` · ${r.ended_at - r.started_at}s` : ' · running'}{r.model && r.status !== 'unchanged' ? ` · ${r.model}` : ''}{r.delivered ? ` · ${r.delivered.startsWith('not sent') ? 'not sent' : r.delivered}` : ''}</small></span>
+                <span className="run-bot"><Avatar id={b.id} name={b.name} size={20} still /><span>{b.name}</span></span>
                 <span className="num">{r.status === 'running' ? '…' : r.status === 'error' || r.status === 'missed' || r.status === 'unchanged' ? '—' : <span title={r.estimated ? 'Estimated from the text: this AI doesn’t say what it used' : r.cache_read || r.cache_write ? `${tok(r.cache_read ?? 0)} of the input came from the AI’s cache, ${tok(r.cache_write ?? 0)} was written to it` : undefined}>{r.estimated ? '≈ ' : ''}{tok(r.tokens_in)} → {tok(r.tokens_out)}</span>}</span>
                 <span className="num">{r.cost_usd != null ? usd(r.cost_usd) : '—'}</span>
-                <span className="num">{r.tool_calls} {r.tool_calls === 1 ? 'tool' : 'tools'}</span>
+                <span className="num">{r.tool_calls ? `${r.tool_calls} ${r.tool_calls === 1 ? 'tool' : 'tools'}` : ''}</span>
                 <Icon name="chevron" size={14} />
               </button>
               {open === r.id && <RunDetail run={r} />}

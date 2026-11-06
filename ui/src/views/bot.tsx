@@ -17,14 +17,14 @@ type Secrets = { telegram_token: string | null; slack_bot_token: string | null; 
   whatsapp_number_id: string | null; whatsapp_token: string | null; whatsapp_app_secret: string | null; imessage_chat: string | null }
 
 const PROVIDERS = [
-  { id: 'claude', name: 'Claude', hint: 'Your Claude login (Claude Code)' },
-  { id: 'chatgpt', name: 'ChatGPT', hint: 'Your ChatGPT plan, signed in' },
-  { id: 'codex', name: 'Codex CLI', hint: 'Your ChatGPT login, through the Codex CLI' },
-  { id: 'grok', name: 'Grok', hint: 'Your SuperGrok login (Grok Build)' },
-  { id: 'openrouter', name: 'OpenRouter', hint: 'Hundreds of models, one key' },
-  { id: 'xai', name: 'xAI API', hint: 'Grok: your plan, or a key' },
-  { id: 'local', name: 'Local model', hint: 'Ollama or LM Studio, free' },
-  { id: 'openai', name: 'API key', hint: 'OpenAI or any compatible API' },
+  { id: 'claude', name: 'Claude', hint: 'Your Claude Code login' },
+  { id: 'chatgpt', name: 'ChatGPT', hint: 'Your ChatGPT plan' },
+  { id: 'codex', name: 'Codex CLI', hint: 'Your ChatGPT, via Codex' },
+  { id: 'grok', name: 'Grok', hint: 'Your SuperGrok login' },
+  { id: 'openrouter', name: 'OpenRouter', hint: 'Many models, one key' },
+  { id: 'xai', name: 'xAI API', hint: 'Grok plan or API key' },
+  { id: 'local', name: 'Local model', hint: 'Ollama or LM\u00a0Studio' },
+  { id: 'openai', name: 'API key', hint: 'Any OpenAI-style API' },
 ]
 
 const PROVIDER_NOTE: Record<string, React.ReactNode> = {
@@ -212,7 +212,7 @@ export function BotPage({ bot, status, canDelete, onSaved, onDeleted, onChat, on
   const on = online(status)
 
   return (
-    <form onSubmit={e => { e.preventDefault(); save(sec) }} style={{ '--pig': pigment(b.id || 99, look) } as React.CSSProperties}>
+    <form className="bot-form" onSubmit={e => { e.preventDefault(); save(sec) }} style={{ '--pig': pigment(b.id || 99, look) } as React.CSSProperties}>
       <div className="page-head">
         <button type="button" className="look-avatar" onClick={() => setStyling(s => !s)} aria-expanded={styling} title="Change how it looks">
           <Avatar id={b.id || 99} name={b.name || '?'} size={56} alive look={look} presence={isNew ? undefined : presenceOf(status)} />
@@ -220,7 +220,7 @@ export function BotPage({ bot, status, canDelete, onSaved, onDeleted, onChat, on
         </button>
         <div>
           <h1 className="display">{isNew ? (b.name.trim() || 'New bot') : b.name || bot.name}</h1>
-          <p className="lead">{isNew ? 'Give it a name, a job, a look and an AI account.' : status?.error ?? [status?.provider, ...on.map(c => `${CHANNEL[c.kind].name} ${c.handle ?? ''}`)].filter(Boolean).join(' · ')}</p>
+          <p className="lead bot-lead">{isNew ? 'Give it a name, a job, a look and an AI account.' : status?.error ?? [bot.persona.trim().split('\n')[0] || status?.provider, ...on.map(c => `${CHANNEL[c.kind].name} ${c.handle ?? ''}`)].filter(Boolean).join(' · ')}</p>
         </div>
         {!isNew && onChat && <button type="button" className="btn head-action" onClick={onChat}><Icon name="chat" size={14} />Chat</button>}
       </div>
@@ -272,22 +272,23 @@ export function BotPage({ bot, status, canDelete, onSaved, onDeleted, onChat, on
             ))}
           </div>
           <div className="editor" style={{ margin: 0 }}>
-            <div className="er" style={{ alignItems: 'flex-start' }}>
+            {/* Test sits beside the fields it tries. */}
+            <div className="er" style={{ alignItems: 'flex-end' }}>
               <label className="field-label" style={{ flex: 1 }}><span>Model</span>
                 <ModelInput provider={b.provider} baseUrl={b.base_url} value={b.model} onChange={model => edit({ model })} /></label>
               {(b.provider === 'openai' || b.provider === 'local') && (
-                <label className="field-label" style={{ flex: 1.2 }}><span>Endpoint</span>
+                <label className="field-label" style={{ flex: 1 }}><span>Endpoint</span>
                   <input className="input" placeholder={b.provider === 'local' ? 'http://localhost:11434/v1' : 'https://api.openai.com/v1'} value={b.base_url} onChange={e => edit({ base_url: e.target.value })} /></label>
               )}
+              <AccountTest key={`${b.provider}|${b.model}|${b.base_url}`} provider={b.provider} model={b.model} baseUrl={b.base_url} />
             </div>
-            <AccountTest key={`${b.provider}|${b.model}|${b.base_url}`} provider={b.provider} model={b.model} baseUrl={b.base_url} />
           </div>
         </div>
       </Group>
 
       {bot && <Fallback bot={bot} onErr={e => { setErr(e); setMsg(null) }} />}
 
-      <Group title="Messaging apps" note={`Each bot is its own Telegram, Slack, Discord, Signal or WhatsApp bot{imessageHere ? ', or answers in one iMessage conversation' : ''}. Tokens are stored in ${SECRETS_AT}.`}>
+      <Group title="Messaging apps" note={`Each bot is its own Telegram, Slack, Discord, Signal or WhatsApp bot${imessageHere ? ', or answers in one iMessage conversation' : ''}. Tokens are stored in ${SECRETS_AT}.`}>
         <ChannelRow icon="telegram" title="Telegram" st={chan('telegram')} has={has('has_telegram_token')} onRemove={() => save({ ...NO_SECRETS, telegram_token: '' })}
           hint="Message @BotFather, send /newbot, and paste the token it gives you.">
           <input className="input" type="password" aria-label="Telegram bot token" placeholder="123456:ABC…" value={typed('telegram_token')} onChange={e => type('telegram_token', e.target.value)} autoComplete="off" />
@@ -339,7 +340,7 @@ export function BotPage({ bot, status, canDelete, onSaved, onDeleted, onChat, on
       </Group>
 
       <Group title="Working folder" note={<>Where its files go (file_list, file_read, file_write), on {pickHere ? 'this computer' : folder.data?.machine ?? 'the machine Mimir runs on'}. Pick a folder of yours to see and edit them in {platform === 'mac' ? 'Finder' : 'your file manager'}; paths stay inside it (no ../, no links out). Empty: Mimir's own workspace for each chat.</>}>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <div className="row">
           <input className="input" aria-label="Working folder" placeholder={pickHere ? 'Mimir’s own workspace (default)' : 'A folder on the server, like /data/bots/scout'} value={b.workdir ?? ''} onChange={e => edit({ workdir: e.target.value })} autoComplete="off" spellCheck={false} />
           {pickHere && <button type="button" className="btn btn-sm btn-ghost" onClick={pick}>Choose…</button>}
           {!!b.workdir && <button type="button" className="btn btn-sm btn-ghost" onClick={() => edit({ workdir: '' })}>Use Mimir’s</button>}
@@ -369,7 +370,7 @@ export function BotPage({ bot, status, canDelete, onSaved, onDeleted, onChat, on
         </Group>
       )}
 
-      <div className="savebar">
+      <div className={'savebar' + (dirty || isNew ? ' stuck' : '')}>
         {!isNew && canDelete && <button type="button" className="btn btn-ghost btn-danger" onClick={() => {
           ask(`Delete ${bot.name}? Its routines, conversations and run log go with it. Memories stay: they belong to you.`, 'Delete bot', true).then(ok => { if (ok) invoke('delete_bot', { id: bot.id }).then(onDeleted, e => setErr(String(e))) })
         }}><Icon name="trash" size={14} />Delete bot</button>}
@@ -444,7 +445,7 @@ function AccountTest({ provider, model, baseUrl }: { provider: string; model: st
   return (
     <div className="account-test">
       <button type="button" className="btn btn-sm" disabled={st.state === 'running'} onClick={run}>
-        <Icon name="bolt" size={13} />{st.state === 'running' ? 'Testing…' : 'Test'}
+        <Icon name="play" size={13} />{st.state === 'running' ? 'Testing…' : 'Test'}
       </button>
       {st.state === 'running' && <span className="typing" aria-hidden="true"><i /><i /><i /></span>}
       {st.text && <span className={st.state === 'ok' ? 'ok-note' : 'error'} style={{ margin: 0 }}>{st.text}</span>}

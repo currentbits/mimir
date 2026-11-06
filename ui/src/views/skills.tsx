@@ -30,8 +30,6 @@ export function SkillsView({ chatId }: { chatId: number }) {
   const [added, setAdded] = useState(0)
   return (
     <>
-      <div className="page-head"><div><h1 className="display">Skills</h1>
-        <p className="lead">Step-by-step procedures your bots follow for a task. Add one from the library, teach one, or let a bot learn one from a task that went well. Use one on purpose by typing <code>/</code> in a chat.</p></div></div>
       <Skills key={added} chatId={chatId} />
       <SkillLibrary chatId={chatId} onAdded={() => setAdded(n => n + 1)} />
     </>
@@ -72,10 +70,10 @@ function SkillLibrary({ chatId, onAdded }: { chatId: number; onAdded: () => void
   return (
     <section className="library" aria-label="Skill library">
       <div className="section-title"><h2>From the library</h2><span className="count">{lib.data.length}</span>
-        {bots.length > 1 && <select className="select select-inline" value={target} aria-label="Add skills for" onChange={e => setTarget(Number(e.target.value))}>
+        {bots.length > 1 && <select className="select" style={{ width: 'auto' }} value={target} aria-label="Add skills for" onChange={e => setTarget(Number(e.target.value))}>
           <option value={0}>For all bots</option>{bots.map(b => <option key={b.id} value={b.id}>For {b.name}</option>)}
         </select>}</div>
-      <p className="hint">Written for Mimir's tools. Adding one gives it to {target === 0 ? 'all your bots' : botOf(target).name} in this chat; you can change or remove it like any skill.</p>
+      <p className="hint">Written for Mimir's tools. Adding one gives it to {target === 0 ? 'all your bots' : botOf(target).name} here; change or remove it like any skill.</p>
       {err && <p className="error">{err}</p>}
       {cats.map(c => (
         <div key={c} className="lib-cat">
@@ -93,12 +91,13 @@ function SkillLibrary({ chatId, onAdded }: { chatId: number; onAdded: () => void
                 <p className="mem-body">{k.description}</p>
                 {open === k.slug && <div className="skill-steps selectable"><Markdown text={k.body} /></div>}
                 <div className="mem-meta">
-                  <button type="button" className="linkish" aria-expanded={open === k.slug} onClick={() => setOpen(open === k.slug ? null : k.slug)}>{open === k.slug ? 'hide steps' : 'see the steps'}</button>
-                  {missing.length > 0 && <span className="warn" title="It can be added now; it works once these are there.">needs {[...new Set(missing.map(t => NEED[t] ?? t))].join(', ')}</span>}
+                  {missing.length > 0 && <span className="badge needs" title="It can be added now; it works once these are there.">Needs {[...new Set(missing.map(t => NEED[t] ?? t))].join(', ')}</span>}
                   {/* A habit: once added, run it on a schedule in one click (a routine whose prompt is the skill's command). */}
                   {has && k.schedule && (scheduled.includes(k.slug)
                     ? <span>scheduled {k.schedule.label.toLowerCase()} · change it in Routines</span>
-                    : <button type="button" className="linkish" disabled={busy === k.slug} onClick={() => schedule(k)}>schedule it · {k.schedule.label.toLowerCase()}</button>)}
+                    : <><span className="sched-when">{k.schedule.label}</span>
+                      <button type="button" className="linkish" disabled={busy === k.slug} onClick={() => schedule(k)}>Schedule it</button></>)}
+                  <button type="button" className="linkish" aria-expanded={open === k.slug} onClick={() => setOpen(open === k.slug ? null : k.slug)}>{open === k.slug ? 'Hide steps' : 'See the steps'}</button>
                 </div>
               </article>
             )
@@ -124,6 +123,8 @@ function Skills({ chatId }: { chatId: number }) {
   const bots = useLoad(() => invoke<Bot[]>('bots'), []).data ?? []
   const [teaching, setTeaching] = useState<{ source: string; bot: number; busy: boolean } | null>(null)
   const [rehearsal, setRehearsal] = useState<{ id: number; r: Rehearsed | null } | null>(null)
+  // A skill's steps open in place, as in the library (a list of full procedures is a wall of text).
+  const [shown, setShown] = useState<number | null>(null)
   const rehearse = (k: Skill) => {
     setRehearsal({ id: k.id, r: null })
     invoke<Rehearsed>('rehearse', { chatId, botId: k.bot_id || bots[0]?.id || 1, skillId: k.id }).then(r => setRehearsal({ id: k.id, r }), e => { setRehearsal(null); setErr(String(e)) })
@@ -136,13 +137,17 @@ function Skills({ chatId }: { chatId: number }) {
   }
   return (
     <>
-      <div className="teach">
+      <div className="page-head"><div><h1 className="display">Skills</h1>
+        <p className="lead">Step-by-step procedures your bots follow. Add one from the library, teach one, or let a bot learn one from a task that went well. <span style={{ whiteSpace: 'nowrap' }}>Type <code>/</code></span> in a chat to use one.</p></div>
+        {!teaching && <button className="btn btn-primary head-action" onClick={() => setTeaching({ source: '', bot: bots[0]?.id ?? 1, busy: false })}><Icon name="bolt" size={14} />Teach a skill</button>}</div>
+      <div className={'teach' + (active.length || teaching ? '' : ' teach-empty')}>
+        {!active.length && !teaching && <span><b>No skills of your own yet</b>Teach one from a link or a few lines of text, or add one from the library below.</span>}
         {teaching ? <form className="er" onSubmit={e => { e.preventDefault(); teach() }}>
           {bots.length > 1 && <select className="select" style={{ width: 'auto' }} value={teaching.bot} onChange={e => setTeaching({ ...teaching, bot: Number(e.target.value) })} aria-label="Which bot learns it">{bots.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}</select>}
           <input className="input" autoFocus placeholder="A link, the text (how our expense process works, a checklist…), or a SKILL.md" aria-label="What to learn from" value={teaching.source} onChange={e => setTeaching({ ...teaching, source: e.target.value })} />
           <button className="btn btn-sm btn-ghost" type="button" onClick={() => setTeaching(null)}>Cancel</button>
           <button className="btn btn-sm" disabled={teaching.busy || !teaching.source.trim()}>{teaching.busy ? 'Learning…' : 'Learn'}</button>
-        </form> : <button className="btn btn-sm btn-ghost" onClick={() => setTeaching({ source: '', bot: bots[0]?.id ?? 1, busy: false })}><Icon name="bolt" size={14} />Teach a skill</button>}
+        </form> : null}
       </div>
       {proposed.length > 0 && (
         <section className="suggest" aria-label="Suggested skills">
@@ -185,7 +190,7 @@ function Skills({ chatId }: { chatId: number }) {
               </div>
               <div className="mem-title">{k.name}</div>
               <p className="mem-body">{k.description}</p>
-              <div className="skill-steps selectable"><Markdown text={k.body} /></div>
+              {shown === k.id && <div className="skill-steps selectable"><Markdown text={k.body} /></div>}
               {rehearsal?.id === k.id && (rehearsal.r ? <RehearsalResult r={rehearsal.r} onClose={() => setRehearsal(null)} /> : <p className="hint">Rehearsing… it runs for real, but anything it would send or change is only described.</p>)}
               <div className="mem-meta">
                 {bots.length > 1
@@ -195,7 +200,8 @@ function Skills({ chatId }: { chatId: number }) {
                     </select>
                   : <span>{who(k.bot_id)}</span>}
                 <span>{ago(k.created_at)}</span>
-                <span>{k.uses ? `used ${k.uses}× · last ${ago(k.last_used ?? k.created_at)}` : 'not used yet'}</span></div>
+                <span>{k.uses ? `used ${k.uses}× · last ${ago(k.last_used ?? k.created_at)}` : 'not used yet'}</span>
+                <button type="button" className="linkish" aria-expanded={shown === k.id} onClick={() => setShown(shown === k.id ? null : k.id)}>{shown === k.id ? 'Hide steps' : 'See the steps'}</button></div>
             </article>
           ))}</div>
         </section>

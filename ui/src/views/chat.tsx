@@ -1,3 +1,4 @@
+import { createPortal } from 'react-dom'
 import { createContext, Fragment, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { copyText, inDesktop, invoke, platform } from '../api'
 import { moodOf, type Mood } from '../face'
@@ -291,10 +292,12 @@ export function Menu({ at, name, items, onClose }: { at: { x: number; y: number 
     else if (e.key === 'ArrowDown') { e.preventDefault(); items[(i + 1) % items.length]?.focus() }
     else if (e.key === 'ArrowUp') { e.preventDefault(); items[(i - 1 + items.length) % items.length]?.focus() }
   }
-  return (
+  // On the body: a view's entrance animation would otherwise make "fixed" mean fixed to that view.
+  return createPortal(
     <div ref={ref} className="ctx-menu" role="menu" aria-label={name} onKeyDown={onKey} onContextMenu={e => e.preventDefault()}>
       {items.map(([icon, label, run]) => <button key={label} role="menuitem" onClick={run}><Icon name={icon} size={14} />{label}</button>)}
-    </div>
+    </div>,
+    document.body,
   )
 }
 
@@ -754,7 +757,7 @@ export function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, 
                 </span>
                 {openBot && !incognito && (
                   <button type="button" className="bot-settings" onClick={() => openBot(me.id)} title={`${me.name}'s settings`} aria-label={`${me.name}'s settings`}>
-                    <Icon name="settings" size={14} />
+                    <Icon name="settings" size={16} />
                   </button>
                 )}
                 <textarea ref={box} rows={1} placeholder={incognito ? `Message ${me.name} incognito` : working ? 'Add to what you asked, or change it' : `Message ${me.name}`} value={text} onChange={e => setText(e.target.value)} disabled={working && !steerable} autoFocus
@@ -767,7 +770,7 @@ export function ChatView({ chat, bots, onTurn, incognito = false, setIncognito, 
                   }} />
                 {!working && setIncognito && (
                   <button type="button" className={'incog-toggle' + (incognito ? ' on' : '')} aria-pressed={incognito} onClick={() => setIncognito(!incognito)}
-                    title={incognito ? 'Back to the normal chat' : 'Incognito chat: no memory, nothing saved'}><Icon name="incognito" size={16} /></button>
+                    title={incognito ? 'Back to the normal chat' : 'Incognito chat: no memory, nothing saved'}><Icon name="incognito" size={18} /></button>
                 )}
                 {working && steerable && text.trim() && <button className="send" aria-label="Send now: the reply changes course" title="Send now: the reply changes course"><Icon name="send" size={15} /></button>}
                 {working

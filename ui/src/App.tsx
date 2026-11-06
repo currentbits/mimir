@@ -185,7 +185,8 @@ function Main() {
   // Clicking a bot opens a chat with it (on this computer); its settings are a right-click (or the gear by the
   // composer's bot picker) away.
   const talkTo = (id: number) => { setChatBot(id); setChatId(LOCAL); setIncognito(false); setViaBot(true); setView('chat'); setMenu(null) }
-  const botChat = viaBot && view === 'chat' && chat.chat_id === LOCAL
+  // Opened from a bot: it stays that bot's chat across the section tabs, so the header and sidebar don't jump.
+  const botChat = viaBot && inChat && chat.chat_id === LOCAL
   // A bot's right-click menu, or pause choices (for one bot, or all of them: id null).
   const [menu, setMenu] = useState<{ x: number; y: number; id: number | null; pick?: boolean } | null>(null)
   // A bot file being read before it's added (from a file, or a bot's own for Duplicate).
@@ -258,7 +259,7 @@ function Main() {
           <div className="brand"><img src="/logo.png" alt="" />Mimir{remoteServer() && <span className="where" title={remoteServer()!.url}>server</span>}</div>
           <button className={'rail-item inbox-item' + (view === 'inbox' ? ' on' : '')} onClick={() => setView('inbox')}>
             <span className="ri-glyph"><Icon name="inbox" size={15} /></span>
-            <span className="ri-text"><span className="ri-name">Needs you</span><span className="ri-sub">{needs ? 'Waiting for you' : 'All clear'}</span></span>
+            <span className="ri-text"><span className="ri-name">Needs you</span>{!needs && <span className="ri-sub">All clear</span>}</span>
             {needs > 0 && <span className="badge count" key={needs}>{needs}</span>}
           </button>
           {inDesktop && (
@@ -338,18 +339,20 @@ function Main() {
         </div>
         <div className="rail-foot">
           <button className={'rail-item' + (view === 'settings' ? ' on' : '')} onClick={() => setView('settings')} title={`Settings  ${shortcut(',')}`}>
-            <Icon name="settings" /> <span className="ri-text"><span className="ri-name">Settings</span></span>
+            <span className="ri-glyph"><Icon name="settings" size={15} /></span><span className="ri-text"><span className="ri-name">Settings</span></span>
           </button>
         </div>
       </aside>
 
       <main className="main" style={{ '--dx': `${dx}px` } as React.CSSProperties}>
-        <header className="toolbar" data-tauri-drag-region>
+        {/* Pages outside a chat carry their own big title: the bar stays only as the window's drag area. */}
+        <header className={'toolbar' + (inChat ? '' : ' bare')} data-tauri-drag-region>
           {inChat ? (
             <>
               <div className="toolbar-title" data-tauri-drag-region>
-                <span className="ri-glyph" style={{ width: 26, height: 26, borderRadius: 7, display: 'grid', placeItems: 'center', background: 'var(--hover)', color: 'var(--text-2)' }}><Icon name={ch.icon} size={14} /></span>
-                <span className="tt" data-tauri-drag-region><b>{botChat ? botOf(chatBot ?? botList[0]?.id ?? 1).name : chatName(chat)}</b><small>{ch.name} · {chat.memories} {chat.memories === 1 ? 'memory' : 'memories'}{household ? '' : ', shared by all your bots'}{chat.household && !household ? ' · reads the household' : ''}{!household && <GoalLine chatId={chat.chat_id} />}</small></span>
+                {botChat ? <Avatar id={chatBot ?? botList[0]?.id ?? 1} name={botOf(chatBot ?? botList[0]?.id ?? 1).name} size={26} still />
+                  : <span className="ri-glyph" style={{ width: 26, height: 26, borderRadius: 7, display: 'grid', placeItems: 'center', background: 'var(--hover)', color: 'var(--text-2)' }}><Icon name={ch.icon} size={14} /></span>}
+                <span className="tt" data-tauri-drag-region><b>{botChat ? botOf(chatBot ?? botList[0]?.id ?? 1).name : chatName(chat)}</b><small title={household ? undefined : 'Memories here are shared by all your bots'}>{ch.name} · {chat.memories} {chat.memories === 1 ? 'memory' : 'memories'}{chat.household && !household ? ' + household memories' : ''}{!household && <GoalLine chatId={chat.chat_id} />}</small></span>
                 {!botChat && chat.chat_id !== LOCAL && !household && !chat.family && (
                   <button className={'btn btn-sm btn-ghost' + (chat.guest ? ' guest-on' : '')}
                     title={chat.guest ? 'Paired by someone else: bots here have their own memory, and none of your email, calendar, meetings, saved logins or tool servers. Click if this chat is yours.' : 'Click if someone else uses this chat (a partner, a housemate): bots here then get none of your email, calendar, meetings, saved logins or tool servers.'}
@@ -377,11 +380,7 @@ function Main() {
               </div>
               <Segmented label="Sections" value={view as Tab} onChange={setView} options={household ? TABS.filter(t => t.id === 'memory') : TABS} />
             </>
-          ) : (
-            <div className="toolbar-title" data-tauri-drag-region>
-              <span className="tt" data-tauri-drag-region><b>{view === 'settings' ? 'Settings' : view === 'inbox' ? 'Needs you' : view === 'computer' ? 'Computer' : view === 'meetings' ? 'Meetings' : botId === 0 ? 'New bot' : botOf(botId).name}</b></span>
-            </div>
-          )}
+          ) : null}
         </header>
 
         {view !== 'inbox' && <Approvals list={approvals} chats={list} chatName={chatName} onDecided={inbox.reload} onOpen={() => setView('inbox')} />}
@@ -394,7 +393,7 @@ function Main() {
         ) : (
           // Keyed: each view starts at the top (the scroller used to keep the last view's position).
           <div className="page" key={`${view}-${chat.chat_id}-${botId}`}>
-            <div className={'col fade-in' + (view === 'activity' || view === 'computer' ? ' wide' : '')}>
+            <div className={'col fade-in' + (view === 'computer' ? ' wide' : '')}>
               {view === 'memory' && <MemoryView chatId={chat.chat_id} onChange={chats.reload} />}
               {view === 'skills' && <SkillsView chatId={chat.chat_id} />}
               {view === 'routines' && <RoutinesView chatId={chat.chat_id} bots={botList} />}
