@@ -1252,6 +1252,10 @@ kbd, .keys { font: 500 11.5px var(--sans); color: var(--text-2); padding: 3px 7p
 
 .so-far { padding-right: 48px; }
 
+/* An input bar (a field and its buttons in one card row): the field fills the row; on a phone the buttons wrap under it. */
+.row:has(> .input) { flex-wrap: wrap; }
+.row > .input { flex: 1 1 120px; min-width: 120px; }
+@media (max-width: 760px) { .group-wrap:not(:has(.field-label)) > .group-note { padding: 10px 16px 11px; } }
 @media (prefers-color-scheme: dark) { .group-wrap:not(:has(.field-label)) > .group-note { background: color-mix(in srgb, var(--text) 4%, var(--surface)); } }
 .inbox-row .row-icon { color: var(--text-2); }
 
