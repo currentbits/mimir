@@ -282,5 +282,9 @@ export function useHoldToTalk(add: (words: string) => void, fail: (e: string) =>
     setState('listening')
     started.current = localInvoke('dictate', { action: 'start' }).then(() => true, err => { fail(String(err)); return false })
   }
-  return { state, keys: { onKeyDown, onKeyUp, onBlur: () => stop(false) }, press: { onPointerDown: begin, onPointerUp: () => stop(true), onPointerLeave: () => stop(true) } }
+  return { state, keys: { onKeyDown, onKeyUp, onBlur: () => stop(false) }, press: {
+    onPointerDown: begin, onPointerUp: () => stop(true), onPointerLeave: () => stop(true),
+    // Focus stays in the text box: moving it would blur the box, and its blur drops the recording just started.
+    onMouseDown: (e: React.MouseEvent) => e.preventDefault(),
+  } }
 }

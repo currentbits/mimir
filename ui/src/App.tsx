@@ -203,13 +203,15 @@ function Main() {
 
   // ⌘F: on the Settings page it searches settings; anywhere else, memory.
   const findIt = () => {
-    // In Settings or a chat, its own search box (a chat's opens from its button); elsewhere, Memory's.
-    const box = document.querySelector<HTMLInputElement>('.settings-search input, .chat-search input')
+    // What's in front: Settings' own search box, or the chat's (it opens from its button) when no sheet covers it;
+    // anything else, Memory's.
+    const sheet = !!document.querySelector('.sheet')
+    const box = document.querySelector<HTMLInputElement>(sheet ? '.sheet .settings-search input' : '.chat-search input')
     if (box) { box.focus(); box.select(); return }
-    const open = document.querySelector<HTMLButtonElement>('.chat-search-toggle')
+    const open = !sheet && document.querySelector<HTMLButtonElement>('.chat-search-toggle')
     if (open) { open.click(); return }
     setView('memory')
-    setTimeout(() => document.querySelector<HTMLInputElement>('.search input')?.focus(), 50)
+    setTimeout(() => document.querySelector<HTMLInputElement>('.sheet .search input')?.focus(), 50)
   }
   // The macOS menu bar sends its commands here (same actions as the shortcuts below).
   useEffect(() => {
