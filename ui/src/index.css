@@ -710,7 +710,8 @@ a.btn { text-decoration: none; }
 /* ---------------- bot page ---------------- */
 
 .provider-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
-.provider-cards:has(> :nth-child(8):last-child) { grid-template-columns: repeat(4, 1fr); }
+/* Eight accounts: four to a row on wider screens (phones keep one column, below). */
+@media (min-width: 761px) { .provider-cards:has(> :nth-child(8):last-child) { grid-template-columns: repeat(4, 1fr); } }
 .group:has(> .row-block > .provider-cards:not(.templates)) { background: none; box-shadow: none; overflow: visible; }
 .group:has(> .row-block > .provider-cards:not(.templates)) > .row-block { padding: 0; gap: 14px; }
 .provider-card { text-align: left; align-content: start; padding: 11px 12px; border-radius: 10px; border: 1px solid var(--line-strong); background: var(--surface); display: grid; gap: 3px; transition: box-shadow 120ms ease, border-color 120ms ease; }
