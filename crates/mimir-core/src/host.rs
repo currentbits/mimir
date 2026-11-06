@@ -241,6 +241,8 @@ pub fn is_api_chat(chat: i64) -> bool {
 impl Host {
     pub fn new(db: Db, home: PathBuf, secrets: Arc<dyn SecretStore>, rt: tokio::runtime::Handle, mode: &'static str) -> Self {
         let _ = MODE.set(mode);
+        // For the tools process this host spawns (mac.rs: the Mac's own apps only from the desktop app).
+        let _ = db.set_setting("host_mode", mode);
         install_secrets(secrets.clone());
         crate::say::load(&db);
         if let Err(e) = db.incognito_leftovers().and_then(|_| db.prune_old()).and_then(|_| db.close_interrupted()) {
@@ -489,7 +491,16 @@ impl Host {
                     }
                     crate::imessage::IMessage::new(chat)?;
                 }
+                // A working folder: checked and stored as it really is (links resolved); its files copied in if asked.
+                let mut bot = bot;
+                let was = (bot.id > 0).then(|| self.db.bot(bot.id).ok()).flatten().map(|b| b.workdir).unwrap_or_default();
+                if !bot.workdir.trim().is_empty() && bot.workdir != was {
+                    bot.workdir = crate::files::check_workdir(&self.db, &bot.workdir)?;
+                }
                 let id = self.db.bot_save(&bot)?;
+                if arg::<Option<bool>>(a, "copy_files")?.unwrap_or(false) && !bot.workdir.is_empty() && bot.workdir != was {
+                    crate::files::copy_into_workdir(&self.db, id, std::path::Path::new(&bot.workdir))?;
+                }
                 for (name, value) in
                     [(TG, secrets.telegram_token), (SLACK_BOT, secrets.slack_bot_token), (SLACK_APP, secrets.slack_app_token), (DISCORD, secrets.discord_token), (SIGNAL, secrets.signal_number),
                     (SIGNAL_API, secrets.signal_api),
@@ -777,7 +788,13 @@ impl Host {
             // A Claude bot on the Anthropic API key (the monthly API credits): see api_credits.
             "api_credits" => self.api_credits(a),
             // The request-match check: off until false asks are measured (scripts/e2e-flows.py turns it on).
+            // Folders bots may copy files into with file_export (each asks); none: any folder of the person's.
+            "export_folders" => ok(crate::files::export_folders(&self.db)),
+            "set_export_folders" => ok(crate::files::set_export_folders(&self.db, &arg::<Vec<String>>(a, "folders")?)?),
             "set_ask_check" => ok(self.db.set_setting("ask_check", if arg(a, "on")? { "on" } else { "off" })?),
+            // A bot whose tools run without asking you first (tools::hands_off).
+            "hands_off" => ok(self.db.hands_off(arg(a, "bot_id")?)),
+            "set_hands_off" => ok(self.db.set_hands_off(arg(a, "bot_id")?, arg(a, "on")?)?),
             "set_telegram_topics" => ok(self.db.set_setting(&format!("telegram_topics:{}", arg::<i64>(a, "bot_id")?), if arg(a, "on")? { "on" } else { "off" })?),
             // Has this conversation read untrusted content (so changes ask first)? And: start a fresh one.
             // Whether it read outside content, and its title and "so far" line (tidy::catch_up), if it has them yet.
@@ -855,6 +872,51 @@ impl Host {
             "skills" => ok(self.db.skills(&scope(a)?)?),
             // The chat's file workspace, as the bots keep it: list, read, delete.
             "files" => ok(crate::files::list(&self.db, arg(a, "chat_id")?, "")?.into_iter().map(|(path, size)| json!({"path": path, "size": size})).collect::<Vec<_>>()),
+            // Where it is (path and machine), and on the desktop, open it in Finder / Explorer.
+            "workspace" => {
+                let root = crate::files::root(&self.db, arg(a, "chat_id")?);
+                ok(json!({"path": root.display().to_string(), "machine": crate::files::machine(), "exists": root.is_dir(), "can_open": is_desktop()}))
+            }
+            "open_workspace" => {
+                if !is_desktop() {
+                    bail!("the folder is on the server; open it there");
+                }
+                let root = crate::files::root(&self.db, arg(a, "chat_id")?);
+                std::fs::create_dir_all(&root)?;
+                ok(crate::files::reveal(&root)?)
+            }
+            // A bot's working folder: where (and on which machine), whether it's there, and open it on the desktop.
+            // Commands in a bot's working folder: whether this machine can sandbox them, and (with `on`) switch them.
+            "bot_shell" => {
+                let bot: i64 = arg(a, "bot_id")?;
+                if let Some(on) = arg::<Option<bool>>(a, "on")? {
+                    if on && !crate::shell::available() {
+                        bail!("commands can't be sandboxed on this machine (macOS, or Linux with bubblewrap installed)");
+                    }
+                    self.db.set_setting(&format!("shell:{bot}"), if on { "on" } else { "off" })?;
+                }
+                ok(json!({"available": crate::shell::available(), "on": self.db.setting(&format!("shell:{bot}"))?.as_deref() == Some("on")}))
+            }
+            "bot_folder" => {
+                let bot = self.db.bot(arg(a, "bot_id")?)?;
+                let ws = crate::files::bot_ws(bot.id);
+                let root = crate::files::root(&self.db, ws);
+                // In the person's words (the bot's own error tells it what to tell them).
+                let problem = crate::files::workspace(&self.db, bot.id, 0, true, true).err().map(|_| {
+                    format!("{} is missing or can't be read on {}: moved or renamed, or a drive that isn't connected. {} can't read or write files until you reconnect it or choose another folder.", bot.workdir, crate::files::machine(), bot.name)
+                });
+                ok(json!({"path": root.display().to_string(), "chosen": !bot.workdir.is_empty(), "machine": crate::files::machine(), "problem": problem, "can_open": is_desktop()}))
+            }
+            "open_bot_folder" => {
+                if !is_desktop() {
+                    bail!("the folder is on the server; open it there");
+                }
+                let bot: i64 = arg(a, "bot_id")?;
+                crate::files::workspace(&self.db, bot, 0, true, true)?;
+                let root = crate::files::root(&self.db, crate::files::bot_ws(bot));
+                std::fs::create_dir_all(&root)?;
+                ok(crate::files::reveal(&root)?)
+            }
             "file" => ok(crate::files::read(&self.db, arg(a, "chat_id")?, &arg::<String>(a, "path")?)?.0),
             "delete_file" => ok(crate::files::delete(&self.db, arg(a, "chat_id")?, &arg::<String>(a, "path")?)?),
             // A file a bot sent to the chat ([[file:…]] in its reply), as base64, to show or save.
@@ -1199,6 +1261,23 @@ impl Host {
                 ok(true)
             }
             "vault" => ok(ext::vault(&self.db)),
+            // The main bot (first point of contact; runs the memory tidy-up): with `bot_id`, set it.
+            "main_bot" => {
+                if let Some(id) = arg::<Option<i64>>(a, "bot_id")? {
+                    self.db.bot(id)?;
+                    self.db.set_setting("memory_bot", &id.to_string())?;
+                }
+                ok(crate::tidy::memory_bot(&self.db))
+            }
+            // A password manager's CSV export: without `pick`, what's in it (sites and user names, no passwords); with
+            // `pick` (row numbers), save those as logins, everyone's or one bot's.
+            "logins_import" => {
+                let text: String = arg(a, "csv")?;
+                match arg::<Option<Vec<usize>>>(a, "pick")? {
+                    Some(pick) => ok(json!({"saved": crate::passwords::import(&self.db, &text, &pick, arg(a, "bot_id")?)?})),
+                    None => ok(crate::passwords::read(&self.db, &text)?),
+                }
+            }
             "vault_save" => ok(ext::vault_save(&self.db, arg(a, "entry")?, arg::<Option<String>>(a, "value")?.as_deref(), arg::<Option<String>>(a, "totp").unwrap_or(None).as_deref())?),
             // The masked form a bot's sign-in card links to. What you type goes from here into the page on the
             // computer's screen (only while it's on the card's site) and into the secret store as that bot's login
@@ -1566,6 +1645,13 @@ impl Host {
                 }
                 ok(self.db.setting(crate::tidy::SENSITIVE)?.as_deref() == Some("on"))
             }
+            // Instructions bots learn are saved without waiting for you to accept them (get without `on`).
+            "accept_instructions" => {
+                if let Some(on) = arg::<Option<bool>>(a, "on")? {
+                    self.db.set_setting(tools::ACCEPT_INSTRUCTIONS, if on { "on" } else { "off" })?;
+                }
+                ok(self.db.setting(tools::ACCEPT_INSTRUCTIONS)?.as_deref() == Some("on"))
+            }
             "update_routine" => {
                 let (chat, id, cron): (i64, i64, String) = (arg(a, "chat_id")?, arg(a, "id")?, arg(a, "cron")?);
                 // A new trigger needs what it runs on; pausing one whose mailbox went away still works.
@@ -1635,6 +1721,8 @@ impl Host {
             // Everything that needs the person: approvals waiting, ones that ran out, failed runs, memory suggestions.
             "inbox" => {
                 let now = crate::db::now();
+                // The app is about to list every pending ask: each counts as shown (a timeout then says nobody answered).
+                self.db.approvals_shown_in_app()?;
                 let counts: Vec<Value> = self.db.suggestion_counts()?.into_iter().map(|(chat, n)| json!({"chat_id": chat, "count": n})).collect();
                 ok(json!({
                     "approvals": self.db.approvals_pending()?,
@@ -1652,6 +1740,8 @@ impl Host {
                     "goals": self.db.goals_waiting()?,
                     // Replies to a bot's email that it handed to you instead of answering.
                     "mail": crate::email::handed_over(&self.db),
+                    // Routines paused because the person was away (since when), until they write or press Resume.
+                    "away": self.db.away(),
                     // The daily check found the database damaged: restore a backup.
                     "damage": self.db.setting(crate::backup::DAMAGE)?,
                     // Plain asks you keep allowing: stop asking?
@@ -1689,6 +1779,22 @@ impl Host {
                     bail!("not a hold");
                 }
                 ok(self.db.hold_clear(&key, true)?)
+            }
+            // Routines paused while the person was away: resume them (as their first message back would).
+            "away_resume" => ok(self.db.away_end()?),
+            // Days without a word before routines pause (0: never); without `days`, the current value.
+            "away_days" => {
+                if let Some(d) = arg::<Option<i64>>(a, "days")? {
+                    if !(0..=365).contains(&d) {
+                        bail!("days is 0 (never) to 365");
+                    }
+                    self.db.set_setting("away_days", &d.to_string())?;
+                    // Turned off: a pause it already made ends too (routines keep running from now on).
+                    if d == 0 {
+                        self.db.away_end()?;
+                    }
+                }
+                ok(self.db.away_days())
             }
             // Pause all bots (no bot_id) or one, until a time (or until resumed); on: false resumes. Without `on`, what's paused.
             "pause" => {
@@ -1742,6 +1848,13 @@ impl Host {
             "rule_hint_dismiss" => ok(tools::rule_hint_dismiss(&self.db, &arg::<String>(a, "tool")?, arg::<Option<String>>(a, "site")?.as_deref())?),
             "site_rules" => ok(self.db.site_rules()?.into_iter().map(|(tool, host, action)| json!({"tool": tool, "host": host, "action": action})).collect::<Vec<_>>()),
             "set_site_rule" => ok(self.db.set_site_rule(&arg::<String>(a, "tool")?, &arg::<String>(a, "host")?, &arg::<String>(a, "action")?)?),
+            // Ask first rules about what an action is for (emails to…, files into…); with `rules`, replace them.
+            "target_rules" => {
+                if let Some(rules) = arg::<Option<Vec<tools::TargetRule>>>(a, "rules")? {
+                    tools::set_target_rules(&self.db, &rules)?;
+                }
+                ok(tools::target_rules(&self.db).into_iter().map(|r| json!({"label": r.label(), "kind": r.kind, "pattern": r.pattern, "action": r.action})).collect::<Vec<_>>())
+            }
             "rules" => ok(tools::all_specs(&self.db)
                 .into_iter()
                 .map(|(tool, description, _)| {
@@ -1969,12 +2082,55 @@ mod tests {
         ext::login_failed_set(db, &e.name).unwrap();
         assert!(ext::signin_login(db, 3, url).is_none());
         // What they sign in with on the card replaces it (and an older one of this bot's for the site under another name).
-        let old = ext::VaultEntry { name: "GH_OLD".into(), domains: vec!["github.com".into()], bot: Some(3), totp: false };
+        let old = ext::VaultEntry { name: "GH_OLD".into(), domains: vec!["github.com".into()], bot: Some(3), totp: false, user: false };
         ext::vault_save(db, old, Some("older-pass"), None).unwrap();
         ext::vault_save_signin(db, 3, "github.com", "me", "new-pass", None).unwrap();
         assert_eq!(ext::signin_login(db, 3, url).map(|e| e.name).as_deref(), Some("GITHUB_COM_BOT3"));
         assert_eq!(secret_get("vault:GITHUB_COM_BOT3").as_deref(), Some("new-pass"));
         assert_eq!(ext::vault(db).iter().map(|e| e.name.as_str()).collect::<Vec<_>>(), ["GITHUB_COM_BOT3"]);
+    }
+
+    #[tokio::test]
+    async fn logins_come_in_from_a_password_managers_export() {
+        let home = Home::new("logins-csv");
+        let host = Host::new(Db::open(&home.0.join("mimir.db")).unwrap(), home.0.clone(), Arc::new(Mem(Default::default())), tokio::runtime::Handle::current(), "server");
+        let csv = "name,url,username,password,note\n\
+                   GitHub,https://github.com/login,dana,gh-secret,\n\
+                   GitHub again,https://www.github.com/session,dana,gh-secret,\n\
+                   Shop,shop.example,sam@x.com,\"s,hop\",\n\
+                   No password,https://bank.example,me,,\n";
+        // The preview: sites and user names, no passwords anywhere in it.
+        let preview = host.call("logins_import", &json!({"csv": csv})).await.unwrap();
+        let text = preview.to_string();
+        assert!(!text.contains("gh-secret") && !text.contains("s,hop"), "{text}");
+        let rows = preview.as_array().unwrap();
+        assert_eq!(rows.iter().map(|r| r["site"].as_str().unwrap()).collect::<Vec<_>>(), ["github.com", "shop.example"], "one per site and user; no password, no row");
+        assert_eq!(rows[0]["name"], "GITHUB_COM");
+        // Only what was picked is saved: the password and user name in the secret store, NAME_USER for the browser.
+        let pick: Vec<i64> = vec![rows[0]["i"].as_i64().unwrap()];
+        assert_eq!(host.call("logins_import", &json!({"csv": csv, "pick": pick})).await.unwrap()["saved"], 1);
+        assert_eq!(secret_get("vault:GITHUB_COM").as_deref(), Some("gh-secret"));
+        let v = ext::vault(&host.db);
+        assert!(v.len() == 1 && v[0].user && v[0].domains == ["github.com"] && v[0].bot.is_none(), "{v:?}");
+        assert!(ext::vault_values(&host.db).contains(&("GITHUB_COM_USER".to_string(), "dana".to_string())));
+        // Again: already saved, so marked and not saved twice.
+        let again = host.call("logins_import", &json!({"csv": csv})).await.unwrap();
+        assert_eq!(again[0]["exists"], true);
+        assert_eq!(host.call("logins_import", &json!({"csv": csv, "pick": pick})).await.unwrap()["saved"], 0);
+        // One bot's own login doesn't stop the same one being saved for everyone; a password keeps its spaces.
+        crate::ext::vault_delete(&host.db, "GITHUB_COM").unwrap();
+        assert_eq!(host.call("logins_import", &json!({"csv": csv, "pick": pick, "bot_id": 1})).await.unwrap()["saved"], 1);
+        assert_eq!(host.call("logins_import", &json!({"csv": csv, "pick": pick, "bot_id": 1})).await.unwrap()["saved"], 0, "that bot has it");
+        assert_eq!(host.call("logins_import", &json!({"csv": csv})).await.unwrap()[0]["exists"], false);
+        assert_eq!(host.call("logins_import", &json!({"csv": csv, "pick": pick})).await.unwrap()["saved"], 1);
+        let spaced = "url,username,password\nhttps://pad.example,me,\"  two spaces  \"\n";
+        host.call("logins_import", &json!({"csv": spaced, "pick": [0]})).await.unwrap();
+        assert_eq!(secret_get("vault:PAD_EXAMPLE").as_deref(), Some("  two spaces  "));
+        // Another bot's login named like a user name (X_USER) never reaches this bot's browser.
+        crate::ext::vault_save(&host.db, ext::VaultEntry { name: "PAD_EXAMPLE_USER".into(), domains: vec!["pad.example".into()], bot: Some(99), totp: false, user: false }, Some("not-yours"), None).unwrap();
+        assert!(!ext::vault_values_for(&host.db, 1).iter().any(|(_, v)| v == "not-yours"));
+        // Not a password export: said plainly.
+        assert!(host.call("logins_import", &json!({"csv": "a,b\n1,2\n"})).await.unwrap_err().to_string().contains("password export"));
     }
 
     #[tokio::test]
@@ -1995,7 +2151,7 @@ mod tests {
             ..Default::default()
         };
         crate::ext::set_servers(&host.db, &[server]).unwrap();
-        crate::ext::vault_save(&host.db, crate::ext::VaultEntry { name: "SHOP_PASSWORD".into(), domains: vec!["shop.example".into()], bot: None, totp: false }, Some("hunter2-shop"), None).unwrap();
+        crate::ext::vault_save(&host.db, crate::ext::VaultEntry { name: "SHOP_PASSWORD".into(), domains: vec!["shop.example".into()], bot: None, totp: false, user: false }, Some("hunter2-shop"), None).unwrap();
         host.db.routine_create(id, 0, "0 9 * * 1", "Check the status page", false).unwrap();
         host.db.routine_create(id, 0, "0 9 * * 2", "Log in with hunter2-shop and check orders", false).unwrap();
         host.call("skill_add", &json!({"chat_id": 0, "slug": "summarize-link", "bot_id": id})).await.unwrap();

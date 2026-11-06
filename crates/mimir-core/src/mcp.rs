@@ -23,6 +23,7 @@ pub fn ctx_from_args(db: crate::db::Db, args: &[String]) -> Result<ToolCtx> {
     ctx.tools_off = args.iter().any(|a| a == "--no-tools");
     ctx.read_only = args.iter().any(|a| a == "--read-only");
     ctx.depth = flag("--depth").unwrap_or(0).clamp(0, 9) as u8;
+    ctx.own_chat = args.iter().any(|a| a == "--own-chat");
     ctx.via_bot = flag("--via");
     ctx.sticky = args.iter().any(|a| a == "--sticky");
     ctx.unattended = args.iter().any(|a| a == "--unattended");

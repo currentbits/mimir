@@ -113,6 +113,9 @@ pub struct VaultEntry {
     /// Has an authenticator key: Mimir types the current code for NAME_CODE.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub totp: bool,
+    /// Has a user name too (saved from a sign-in card, or imported): the browser types it for NAME_USER.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub user: bool,
 }
 
 pub fn servers(db: &Db) -> Vec<ServerConf> {
@@ -490,8 +493,8 @@ pub fn vault_save(db: &Db, entry: VaultEntry, value: Option<&str>, totp: Option<
     }
     list.retain(|e| e.name != name);
     // Changing a login in Settings keeps whose it is.
-    let (bot, had) = old.map_or((None, false), |o| (o.bot, o.totp));
-    list.push(VaultEntry { name, domains, bot: entry.bot.or(bot), totp: had || totp.is_some() });
+    let (bot, had, user) = old.map_or((None, false, false), |o| (o.bot, o.totp, o.user));
+    list.push(VaultEntry { name, domains, bot: entry.bot.or(bot), totp: had || totp.is_some(), user: user || entry.user });
     db.set_setting("vault", &serde_json::to_string(&list)?)
 }
 
@@ -526,7 +529,7 @@ pub fn vault_save_signin(db: &Db, bot: i64, site: &str, user: &str, password: &s
     for old in vault(db).into_iter().filter(|e| e.bot == Some(bot) && e.name != name && e.domains == [site]) {
         vault_delete(db, &old.name)?;
     }
-    vault_save(db, VaultEntry { name: name.clone(), domains: vec![site.to_string()], bot: Some(bot), totp: false }, Some(password), totp)?;
+    vault_save(db, VaultEntry { name: name.clone(), domains: vec![site.to_string()], bot: Some(bot), totp: false, user: true }, Some(password), totp)?;
     crate::host::secret_set(&format!("vault:{name}:user"), user)?;
     db.set_setting(&format!("login_failed:{name}"), "")?;
     Ok(name)
@@ -576,8 +579,28 @@ pub fn redact(text: &str, values: &[(String, String)]) -> String {
     values.iter().filter(|(_, v)| v.len() >= 4).fold(text.to_string(), |t, (n, v)| t.replace(v.as_str(), &format!("<secret>{n}</secret>")))
 }
 
+/// What the browser types for each saved login's names: NAME (the password) and, if it has one, NAME_USER.
 pub(crate) fn vault_values(db: &Db) -> Vec<(String, String)> {
-    vault(db).into_iter().filter_map(|e| crate::host::secret_get(&format!("vault:{}", e.name)).map(|v| (e.name, v))).collect()
+    values_of_logins(vault(db))
+}
+
+/// The same for one bot's logins only (everyone's and its own): picked by entry, never by name, so another bot's
+/// login whose name ends like a user name (LOGIN_USER) isn't taken along.
+pub(crate) fn vault_values_for(db: &Db, bot: i64) -> Vec<(String, String)> {
+    values_of_logins(vault_for(db, bot))
+}
+
+fn values_of_logins(logins: Vec<VaultEntry>) -> Vec<(String, String)> {
+    let mut out = vec![];
+    for e in logins {
+        if let Some(v) = crate::host::secret_get(&format!("vault:{}", e.name)) {
+            out.push((e.name.clone(), v));
+        }
+        if let Some(u) = crate::host::secret_get(&format!("vault:{}:user", e.name)).filter(|u| e.user && !u.is_empty()) {
+            out.push((format!("{}_USER", e.name), u));
+        }
+    }
+    out
 }
 
 // ---------------- MCP client (stdio: newline-delimited JSON-RPC; remote: Streamable HTTP) ----------------
@@ -814,8 +837,7 @@ fn spawn(conf: &ServerConf, db: &Db, bot: i64) -> Result<(Io, Option<std::path::
     let (command, args, secrets_file) = match conf.preset.as_deref() {
         Some("playwright") => {
             std::fs::create_dir_all(&dir)?;
-            let mine: Vec<String> = vault_for(db, bot).into_iter().map(|e| e.name).collect();
-            let file = write_secrets_file(&dir, &vault_values(db).into_iter().filter(|(n, _)| mine.contains(n)).collect::<Vec<_>>())?;
+            let file = write_secrets_file(&dir, &vault_values_for(db, bot))?;
             let mut args: Vec<String> = vec!["-y".into(), PLAYWRIGHT.into()];
             if crate::computer::usable(db) {
                 // The bots' computer is on: drive the Chromium on its screen, so you can watch (and take over).
@@ -1384,7 +1406,7 @@ mod tests {
         let p = std::env::temp_dir().join(format!("mimir-vault-bots-{}.db", std::process::id()));
         let _ = std::fs::remove_file(&p);
         let db = Db::open(&p).unwrap();
-        let e = |name: &str, bot| VaultEntry { name: name.into(), domains: vec!["github.com".into()], bot, totp: false };
+        let e = |name: &str, bot| VaultEntry { name: name.into(), domains: vec!["github.com".into()], bot, totp: false, user: false };
         db.set_setting("vault", &serde_json::to_string(&[e("SHARED", None), e("GITHUB_COM_BOT3", Some(3))]).unwrap()).unwrap();
         let names = |bot| vault_for(&db, bot).into_iter().map(|e| e.name).collect::<Vec<_>>();
         assert_eq!(names(3), ["SHARED", "GITHUB_COM_BOT3"]);
@@ -1397,7 +1419,7 @@ mod tests {
 
     #[test]
     fn vault_rules() {
-        let v = vec![VaultEntry { name: "GH_PASS".into(), domains: vec!["github.com".into()], bot: None, totp: false }];
+        let v = vec![VaultEntry { name: "GH_PASS".into(), domains: vec!["github.com".into()], bot: None, totp: false, user: false }];
         assert_eq!(secrets_used(&v, &json!({"ref":"e3","text":"GH_PASS"})).len(), 1);
         assert_eq!(secrets_used(&v, &json!({"fields":[{"value":"x GH_PASS y"}]})).len(), 1, "nested + substring");
         assert!(secrets_used(&v, &json!({"text":"hello"})).is_empty());

@@ -224,7 +224,37 @@ Bots send files back too, with `send_file`: a file from the chat's workspace, or
 (the proof that a booking or a form went through). It arrives after the reply: a photo or document on Telegram, an
 upload in Slack (needs the `files:write` scope), an attachment on Discord (invite the bot with Attach Files), and in
 the app's chat, shown in place. In your own direct chat it just goes; in a group, channel or guest's chat it asks you
-first. At most 5 files with one reply.
+first. At most 5 files with one reply; a folder goes as one zip.
+
+## A bot's working folder
+
+By default a bot's files live in Mimir's own workspace for each chat ([Where the files are](memory.md#files)). In a
+bot's settings, **Working folder** lets you pick a folder of yours instead (`~/Projects/security`, `~/.claude/skills`):
+that bot's `file_list`, `file_read`, `file_write` and `file_delete` then work there, in every chat, with paths relative
+to it, so you see and edit its files in Finder or Explorer (**Reveal in Finder**). Its system prompt states the folder's
+real path, so it can tell you exactly where a file is.
+
+- **Only for you.** In a guest's chat, a group or a channel the bot uses that chat's own workspace, as before, so
+  nobody else reaches your folder (or files from your private chats).
+- **It stays inside.** `../`, absolute paths and links (to anywhere) are refused; the folder itself is stored with links
+  resolved. The disk's root, your home folder itself, system folders and Mimir's data can't be chosen.
+- **Your files ask.** Deleting a file there, or rewriting or appending to one that's already there, asks every time (no
+  Always, no plan covers it). **Writing files** sets whether a new file asks: as Permissions says, Ask, Allow or Off.
+  Earlier versions of rewritten files are kept in Mimir's data, not in your folder.
+- **If it's gone** (moved, renamed, a drive that isn't connected), the bot gets an error saying so and tells you; it
+  never writes to another folder instead. The bot's settings show the problem too.
+- **On a server or in Docker**, the folder is a path on the server (a mounted volume in Docker); the settings say which
+  machine it's on, and there's no picker.
+- **Commands, if you want.** *Let it run commands here* lets that bot run a command in the folder (build, test,
+  convert files). Each one asks you first, showing exactly what runs, also with Always or "Don't ask me first". It runs
+  sandboxed: no network, nothing written outside the folder, the rest of your home folder unreadable, no Mimir secrets
+  in its environment, and it stops after a minute; what it prints counts as outside content. macOS uses its built-in
+  sandbox; Linux needs bubblewrap (`bwrap`) that's allowed to run (Mimir tries it once: some systems, and Docker, don't let it), else the switch says it's not available. The command must fit on the card whole.
+- **Copy its files there** (when you set the folder) copies what it has in Mimir's workspace, its own and the app chat's,
+  without replacing anything already there.
+
+To put a file somewhere else once, a bot can use `file_export`: it copies a workspace file or folder to a folder you
+name, after you approve a card that shows where and which files.
 
 ## Pinned cards
 
@@ -243,6 +273,14 @@ it. A chat holds up to 20 cards.
 The mask button in the app's chat starts an incognito chat: the bot can't see or save memories, routines or meetings,
 and nothing is kept: no chat history, run log or tool log, and the AI CLIs are told not to save the session. The
 conversation exists only in the window. Photos are off there (they'd be saved to disk).
+
+## Your main bot
+
+With two or more bots, one is your **main bot** (Settings → Main bot; the first one unless you pick another). It's
+your first point of contact: it hands work to the bot whose job fits (with `ask_bot`) and says so, and in a chat with
+you alone it knows how the others did in the last day: runs that didn't work and asks waiting for you, from Needs you.
+Ask it "how are my bots doing?", or to check in every morning with a routine. The other bots know which one it is. It
+also runs the daily memory tidy-up.
 
 ## Handing tasks to another bot
 

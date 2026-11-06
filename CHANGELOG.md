@@ -2,6 +2,77 @@
 
 What changed for people using Mimir. The newest release is at the top; "Unreleased" is what the next one brings.
 
+## Unreleased
+
+### Files and folders
+- **A bot's working folder:** pick a folder of yours in a bot's settings (`~/Projects/security`, `~/.claude/skills`)
+  and its files go there, in every chat with you, so you see and edit them in Finder. Paths can't leave it; deleting
+  or changing a file of yours there always asks; **Writing files** sets whether new files ask. If the folder goes
+  missing the bot says so, and never writes somewhere else.
+- **Copy files out:** a bot can copy a workspace file or folder to a folder on your computer with `file_export`, after
+  a card that shows where and which files. **Settings → Permissions → Export folders** limits where.
+- **Where files are:** bots, and **Memory → Files**, now give the workspace's real path and machine;
+  **Open workspace folder** opens it.
+- **Folders as a zip:** `send_file` sends a whole folder as one zip.
+
+### Saved logins
+- **Import from a password manager:** Settings → Browser → Saved logins reads a CSV export from 1Password, Chrome,
+  Edge, Safari / Passwords, Firefox, Bitwarden or LastPass. You see sites and user names (never the passwords) and pick
+  which to save; each works only on its own site and asks before every use. User names are typed for `NAME_USER`, so
+  the AI never sees those either.
+
+### Working folders
+- **Commands:** a bot with a working folder can run a command there once you turn it on in its settings (build, test,
+  convert). Every command asks you, showing exactly what runs, and runs sandboxed: no network, nothing written outside
+  the folder, the rest of your home folder unreadable, a minute at most. macOS, or Linux with bubblewrap.
+
+### Your Mac
+- **Mail, Messages and apps:** in the Mimir app on a Mac, bots can send an email from Mail, an iMessage from Messages,
+  or open an app (with a workspace file in it). Each asks first, showing who it's to and the whole text. macOS asks
+  once to let Mimir control Mail or Messages.
+
+### Routines
+- **A short rate limit isn't a used-up plan:** a bare "429 Too Many Requests", a rate limit or an overloaded AI is now
+  tried again in 5, 15 and 30 minutes, instead of holding every bot on that login for an hour. The plan's own limit
+  ("usage limit", out of quota, or a 429 that says when it resets) still waits for the reset. A reply hit by one says
+  the AI is busy, not that the plan is used up.
+- **Paused while you're away:** after a week without a message from you (change it under Settings → Daily digest),
+  routines stop so they don't use up your AI plan on results nobody reads. Bots still answer; your next message, or
+  **Resume** in Needs you, starts them again without a burst of catch-up runs.
+
+### Approvals
+- **Ask first rules:** rules about who or where, in Settings → Permissions: emails to an address, anyone at a domain
+  or anyone outside it (`!acme.com`), and files copied into a folder. Each asks or never lets it happen, for every bot,
+  also with Always or "Don't ask me first"; the card says which rule asked.
+- **Cards that didn't arrive:** a chat-app card that fails to send is tried again, and a timed-out ask tells the bot
+  whether you saw it or it never reached you. The app shows when a card couldn't be sent.
+- **Clearer denials:** a blocked tool says which rule blocked it (yours, a site's, or Mimir's default) and where to
+  change it. A bot's page shows what Permissions decides for each of its tools; unsafe browser tools say they're off
+  by default.
+- **Plans after outside content:** a plan proposed after a web page no longer fails; each step asks instead.
+
+### Bots working together
+- **Main bot:** with several bots, one is your first point of contact (Settings → Main bot). It hands work to the bot
+  that fits, knows when another bot's runs failed or it's waiting for you, and the others point you to it.
+- A task handed to another bot keeps its files in that bot's own workspace, its answer is kept in its own chat too,
+  and `ask_bot` can share files with it. A save that's denied or times out no longer loses its text.
+- Tool names work as the bot sees them (`WebSearch`, `mcp__mimir__web_fetch`), a new bot is only offered tools that
+  work, and bots with their own web search aren't told it isn't connected. Size limits are in the tools' descriptions.
+
+## 0.6.1
+
+### Approvals
+- **Bots that don't ask:** turn on **Don't ask me first** on a bot's page (under What it can do) and its tools run
+  without approval cards, also after it reads a web page or email, and instructions it saves to memory apply right
+  away, as do skills it saves, instead of waiting for you to accept them. Deny rules still hold, and signing in or
+  taking over the computer still need you. **Check everything** lists bots set this way.
+- **Always means always:** pressing Always on a card now stops that ask for good, also after a bot reads outside
+  content (before, a plain card's Always still asked again after the next web page). The tray menu offers Always
+  too, and accepting *Stop asking?* in Needs you does the same.
+- **Always accept instructions:** a new switch in **Settings → Memory** saves the instructions any bot learns ("reply
+  in Dutch") right away, instead of suggesting them for you to accept. One picked up from a web page or email still
+  stays unconfirmed until you check it.
+
 ## 0.6.0
 
 ### Email

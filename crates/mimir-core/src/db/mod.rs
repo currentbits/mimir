@@ -55,7 +55,7 @@ PRAGMA secure_delete=ON;
 
 /// The schema version this build writes (`PRAGMA user_version`). A schema change bumps it and adds a step to
 /// `migrate`; each step runs once per database.
-pub(crate) const VERSION: i64 = 15;
+pub(crate) const VERSION: i64 = 17;
 
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS entries(
@@ -235,6 +235,12 @@ fn migrate(c: &Connection) -> Result<()> {
     }
     if v < 15 {
         migrate_v15(c)?;
+    }
+    if v < 16 {
+        migrate_v16(c)?;
+    }
+    if v < 17 {
+        migrate_v17(c)?;
     }
     // New installs only: emails a bot sends to someone new say they're from an assistant (an update keeps its mail as it was).
     if v == 0 {
@@ -553,6 +559,26 @@ fn migrate_v15(c: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Version 16: whether an approval's card reached the person (`shown:<where>`), or why it couldn't (`failed:<error>`).
+/// NULL: nothing showed it yet. Lets a timed-out ask say which it was.
+fn migrate_v16(c: &Connection) -> Result<()> {
+    if !c.prepare("SELECT 1 FROM pragma_table_info('approvals') WHERE name='delivery'")?.exists([])? {
+        c.execute_batch("ALTER TABLE approvals ADD COLUMN delivery TEXT")?;
+    }
+    Ok(())
+}
+
+/// Version 17: a bot's working folder, chosen by the person (empty: the workspaces Mimir keeps), and how its
+/// file_write asks (empty: as Permissions says; ask, allow or off).
+fn migrate_v17(c: &Connection) -> Result<()> {
+    for col in ["workdir", "file_write"] {
+        if !c.prepare(&format!("SELECT 1 FROM pragma_table_info('bots') WHERE name='{col}'"))?.exists([])? {
+            c.execute_batch(&format!("ALTER TABLE bots ADD COLUMN {col} TEXT NOT NULL DEFAULT ''"))?;
+        }
+    }
+    Ok(())
+}
+
 impl Db {
     /// Opens the database, migrating it first if an older Mimir wrote it. An up-to-date database only reads its
     /// version: the tools process opens it on every turn, and mustn't compete with the app for the write lock.
@@ -697,24 +723,27 @@ mod tests {
         assert_eq!(n, 2);
         drop(d);
 
-        // Version 10 → 15: the goals (11), an approval's draft and reason (12), cache writes and what a session holds (13),
-        // tool servers' cards (14), whose allowance a run counts against (15).
+        // Version 10 → 16: the goals (11), an approval's draft and reason (12), cache writes and what a session holds (13),
+        // tool servers' cards (14), whose allowance a run counts against (15), whether an approval's card got through (16),
+        // a bot's working folder and file_write mode (17).
         Connection::open(&p)
             .unwrap()
             .execute_batch(
                 "DROP TABLE goals; ALTER TABLE routines DROP COLUMN goal_id; ALTER TABLE delegations DROP COLUMN goal_id; ALTER TABLE runs DROP COLUMN goal_id;
                  ALTER TABLE approvals DROP COLUMN draft; ALTER TABLE approvals DROP COLUMN reason;
                  ALTER TABLE runs DROP COLUMN cache_write; ALTER TABLE sessions DROP COLUMN sent; ALTER TABLE sessions DROP COLUMN prompt;
-                 DROP TABLE tool_cards; ALTER TABLE runs DROP COLUMN person; PRAGMA user_version = 10",
+                 DROP TABLE tool_cards; ALTER TABLE runs DROP COLUMN person; ALTER TABLE approvals DROP COLUMN delivery; ALTER TABLE bots DROP COLUMN workdir; ALTER TABLE bots DROP COLUMN file_write; PRAGMA user_version = 10",
             )
             .unwrap();
         let d = Db::open(&p).unwrap();
-        assert_eq!(user_version(&d.c()).unwrap(), 15);
+        assert_eq!(user_version(&d.c()).unwrap(), 17);
         assert!(d.c().prepare("SELECT goal_id FROM runs").is_ok() && d.c().prepare("SELECT id FROM goals").is_ok(), "v11 ran");
         assert!(d.c().prepare("SELECT draft, reason FROM approvals").is_ok(), "v12 ran");
         assert!(d.c().prepare("SELECT cache_write FROM runs").is_ok() && d.c().prepare("SELECT sent, prompt FROM sessions").is_ok(), "v13 ran");
         assert!(d.c().prepare("SELECT key, html, csp FROM tool_cards").is_ok(), "v14 ran");
         assert!(d.c().prepare("SELECT person FROM runs").is_ok(), "v15 ran");
+        assert!(d.c().prepare("SELECT delivery FROM approvals").is_ok(), "v16 ran");
+        assert!(d.c().prepare("SELECT workdir, file_write FROM bots").is_ok(), "v17 ran");
         drop(d);
         // A new database starts at the latest.
         let fresh = dir.join("fresh.db");
@@ -1671,6 +1700,38 @@ mod tests {
         assert!(d.due(2, now() + 60).unwrap().iter().any(|r| r.id == c.id));
         d.routine_advance(&d.routines(crate::host::LOCAL_CHAT).unwrap()[0]).unwrap();
         assert_eq!(d.routines(crate::host::LOCAL_CHAT).unwrap()[0].next_fire, IDLE, "the next event is the scheduler's to find");
+    }
+
+    #[test]
+    fn routines_pause_while_the_person_is_away_and_go_on_when_they_write() {
+        let d = db();
+        let r = d.routine_create(2, 7, "0 9 * * *", "brief", false).unwrap();
+        // Never written yet (a new install): never "away".
+        assert!(!d.away_check(now()).unwrap() && d.away().is_none());
+        // Last wrote 8 days ago (a guest since, and routines, don't count).
+        let mine = d.run_start(2, 7, "message", None, "test").unwrap();
+        d.c().execute("UPDATE runs SET started_at=?1 WHERE id=?2", params![now() - 8 * 86400, mine]).unwrap();
+        let guest = d.run_start(2, 9, "message", None, "test").unwrap();
+        d.run_person(guest, 9).unwrap();
+        d.run_start(2, 7, "routine", Some(r.id), "test").unwrap();
+        assert!(d.away_check(now()).unwrap(), "paused, and this caller tells the person");
+        assert!(!d.away_check(now()).unwrap(), "only once, whichever bot checks next");
+        assert!(d.away().is_some());
+        // Back: due slots move on instead of catching up all at once.
+        d.c().execute("UPDATE routines SET next_fire=?1", [now() - 3 * 86400]).unwrap();
+        assert!(d.away_end().unwrap() && d.away().is_none() && !d.away_end().unwrap());
+        assert!(d.due(2, now()).unwrap().is_empty());
+        // Resumed without writing: that counts as back, so the next pass doesn't pause again straight away.
+        assert!(!d.away_check(now()).unwrap() && d.away().is_none());
+        // A note after the reply was saved goes into the saved reply too.
+        d.log(2, 7, "assistant", "Done.", None).unwrap();
+        d.amend_last_reply(2, 7, "\n\n_Welcome back_").unwrap();
+        assert!(d.messages(7, 5).unwrap().iter().any(|m| m.content == "Done.\n\n_Welcome back_"));
+        // Off (0 days), or a shorter wait than the absence: as set.
+        d.set_setting("away_days", "0").unwrap();
+        assert!(!d.away_check(now()).unwrap());
+        d.set_setting("away_days", "30").unwrap();
+        assert!(!d.away_check(now()).unwrap(), "8 days isn't 30");
     }
 
     #[test]

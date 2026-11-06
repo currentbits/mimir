@@ -107,6 +107,10 @@ async fn security(db: &Db) -> Vec<Check> {
             "Settings → Permissions: set these back to Allow or Ask, so a page's instructions can't use them without you.",
         ));
     }
+    let free: Vec<String> = db.bots().unwrap_or_default().into_iter().filter(|b| db.hands_off(b.id)).map(|b| b.name).collect();
+    if !free.is_empty() {
+        out.push(bad(State::Warn, format!("Never ask you first, whatever they read: {}", free.join(", ")), "On the bot's page: turn off “Don't ask me first”."));
+    }
     let loose = crate::ext::unpinned(db);
     if !loose.is_empty() {
         out.push(bad(State::Warn, format!("Tool servers without a fixed version: {}", loose.join(", ")), "Each start can fetch a new release. Its Update button in Settings → Tool servers pins one, or add the version yourself (like `pkg@1.2.3`)."));

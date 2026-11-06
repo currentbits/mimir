@@ -17,6 +17,9 @@ function approvalRisk(a: Approval): { icon: string; label: string; tone: string;
   if (a.kind === 'send') return { icon: 'send', label: 'Sends an email as you, to the address shown first. Each email asks you, until you choose Always.', tone: 'rule', always: true }
   if (a.kind === 'remind') return { icon: 'user', label: 'Sends to someone else’s chat in your household. Asked the first time for each person.', tone: 'rule', always: true }
   if (a.kind === 'bot') return { icon: 'user', label: 'Makes a new bot with this role, on the same AI account. Each new bot asks you, until you choose Always.', tone: 'rule', always: true }
+  if (a.kind === 'shell') return { icon: 'alert', label: 'Runs this exact command in the bot’s working folder, sandboxed: no network, nothing written outside the folder. Asks every time.', tone: 'rule', always: false }
+  if (a.kind === 'target') return { icon: 'shield', label: 'Asking because of one of your Ask first rules (named first). Change them in Settings → Permissions.', tone: 'guarded', always: false }
+  if (a.kind === 'userfile') return { icon: 'file', label: 'Changes or deletes a file of yours, in the working folder you chose for this bot. Asks every time.', tone: 'rule', always: false }
   if (a.kind === 'plan') return { icon: 'check', label: 'One OK for the whole plan: these steps won\'t ask again during this reply.', tone: 'rule', always: true }
   if (a.kind === 'unasked') return { icon: 'shield', label: 'Asking because this doesn’t look like what you asked for (who or what it acts on wasn’t in your message).', tone: 'guarded', always: true }
   if (a.kind === 'drift') return { icon: 'shield', label: 'Asking because this routine is doing it differently from its earlier runs (why comes first). Allowed, it counts as usual from now on.', tone: 'guarded', always: false }
@@ -48,8 +51,10 @@ export function useLeave() {
 /** The Always button's words: the whole tool, the tool on one site, or what a plan or a loop card stops asking. */
 const alwaysLabel = (a: Approval) => a.site ? `Always on ${a.site}` : a.kind === 'plan' ? 'Always approve plans' : `Always: ${toolLabel(a.tool).toLowerCase()}`
 
-/** Asks that stopped for more than the tool's rule: Always on them means never asking, not even after outside content. */
-const neverAsks = (a: Approval) => !!a.kind && a.kind !== 'rule' && a.kind !== 'guest'
+/** Always means never asking, not even after outside content; in a guest's chat it's a plain allow (still guarded). */
+const neverAsks = (a: Approval) => a.kind !== 'guest'
+/** Asks only because of the tool's rule (not a guard): allowed a few times, the card offers Always first. */
+const plainAsk = (a: Approval) => !a.kind || a.kind === 'rule' || a.kind === 'guest'
 
 type Decide = (id: number, approve: boolean, always?: 'tool' | 'site' | 'run', more?: { edits?: Record<string, string>; reason?: string }) => void
 
@@ -62,7 +67,7 @@ function ApprovalCard({ a, where, leaving, decide, inline }: {
   const b = botOf(a.bot_id)
   const risk = approvalRisk(a)
   // Allowed the same plain thing a few times already: offer to stop asking (never a nudge to drop a guard).
-  const learned = risk.always && !neverAsks(a) && (a.allowed_before ?? 0) >= 2
+  const learned = risk.always && plainAsk(a) && (a.allowed_before ?? 0) >= 2
   const [edits, setEdits] = useState<Record<string, string> | null>(null)
   const [why, setWhy] = useState<string | null>(null)
   const d = a.draft
@@ -87,6 +92,7 @@ function ApprovalCard({ a, where, leaving, decide, inline }: {
         </div> : <div className={'what selectable' + (a.kind === 'plan' ? ' plan' : '')}>{a.summary}</div>}
         <div className="risk"><Icon name={risk.icon} size={12} />{risk.label}</div>
         {learned && <div className="learned">You've allowed this {a.allowed_before} times. Stop asking?</div>}
+        {a.delivery?.includes('failed:') && <div className="parked">Its card couldn't be sent on {a.delivery.split('failed:')[1].split(':')[0]}, so answer it here.</div>}
         {a.parked && <div className="parked">From a routine. It runs when you approve; it waits {((w: string) => w.startsWith('in ') ? `for ${w.slice(3)}` : `until ${w}`)(ahead(a.expires_at))}.</div>}
       </div>
       {a.kind === 'signin' ? <div className="choices">
@@ -229,7 +235,7 @@ export function SignInForm({ onClose }: { onClose: () => void }) {
 /** One item per usage limit: every bot on that AI login waits for the same reset. */
 const holdGroups = (hs: Hold[]) => Object.values(hs.reduce<Record<string, Hold[]>>((g, h) => { const k = h.cap || h.routine_id ? h.key : `limit:${h.until}`; (g[k] ??= []).push(h); return g }, {}))
 
-export const inboxCount = (i: Inbox | null) => i ? (i.server_update ? 1 : 0) + (i.damage ? 1 : 0) + i.approvals.length + i.missed.length + i.failed.length + holdGroups(i.holds ?? []).length + (i.goals ?? []).length + (i.mail ?? []).length + i.suggestions.reduce((n, s) => n + s.count, 0) + (i.unconfirmed ?? []).reduce((n, s) => n + s.count, 0) + (i.rule_hints ?? []).length : 0
+export const inboxCount = (i: Inbox | null) => i ? (i.server_update ? 1 : 0) + (i.damage ? 1 : 0) + (i.away ? 1 : 0) + i.approvals.length + i.missed.length + i.failed.length + holdGroups(i.holds ?? []).length + (i.goals ?? []).length + (i.mail ?? []).length + i.suggestions.reduce((n, s) => n + s.count, 0) + (i.unconfirmed ?? []).reduce((n, s) => n + s.count, 0) + (i.rule_hints ?? []).length : 0
 
 /** A failed run in plain words, with the fix that most likely helps. */
 export function failure(error: string | null, status?: Run['status'], delivered?: string | null): { title: string; fix: 'bot' | 'chat' | 'routines' | null; fixLabel?: string } {
@@ -271,6 +277,19 @@ export function InboxView({ data, troubled, reload, chats, chatName, openBot, op
               <div className="inbox-desc selectable">Today's check found: {data.damage}. No backup was taken over the good ones; restore the latest from Settings.</div>
             </div>
             <div className="row-ctl"><button className="btn btn-sm" onClick={openSettings}>Restore a backup…</button></div>
+          </div>
+        </div>
+      </>}
+      {data.away && <>
+        <div className="section-title" style={{ marginTop: 0 }}><h2>Routines</h2></div>
+        <div className="group">
+          <div className="inbox-row">
+            <span className="row-icon"><Icon name="pause" size={15} /></span>
+            <div className="inbox-main">
+              <div className="inbox-title">Your routines are paused while you were away</div>
+              <div className="inbox-desc">Since {new Date(data.away * 1000).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })}, so they don't use up your AI plan on results nobody reads. Your next message to any bot starts them again too. Change after how many days in Settings → Daily digest.</div>
+            </div>
+            <div className="row-ctl"><button className="btn btn-sm" onClick={() => invoke('away_resume').then(reload, e => tell(String(e)))}>Resume</button></div>
           </div>
         </div>
       </>}
@@ -317,14 +336,14 @@ export function InboxView({ data, troubled, reload, chats, chatName, openBot, op
         <div className="section-title"><h2>Stop asking?</h2></div>
         <div className="group">{data.rule_hints!.map(h => {
           const b = botOf(h.bot_id), key = `${h.tool}:${h.site ?? ''}`
-          const accept = () => (h.site ? invoke('set_site_rule', { tool: h.tool, host: h.site, action: 'allow' }) : invoke('set_rule', { tool: h.tool, action: 'allow' }))
+          const accept = () => (h.site ? invoke('set_site_rule', { tool: h.tool, host: h.site, action: 'always' }) : invoke('set_rule', { tool: h.tool, action: 'always' }))
           const dismiss = () => invoke('rule_hint_dismiss', { tool: h.tool, site: h.site })
           return (
             <div key={key} className="inbox-row">
               <Avatar id={b.id} name={b.name} size={28} still />
               <div className="inbox-main">
                 <div className="inbox-title">You allowed “{toolLabel(h.tool)}”{h.site ? ` on ${h.site}` : ''} {h.times} times. Always allow it?</div>
-                <div className="inbox-desc">Last asked by {b.name}, never denied in 30 days. For every bot; it still asks after a bot reads outside content. Change it in Settings → Permissions.</div>
+                <div className="inbox-desc">Last asked by {b.name}, never denied in 30 days. For every bot, also after a bot reads outside content. Change it in Settings → Permissions.</div>
               </div>
               <div className="row-ctl">
                 <button className="btn btn-sm" onClick={() => accept().then(reload, e => tell(`Couldn't change the rule: ${e}`))}>Always allow</button>

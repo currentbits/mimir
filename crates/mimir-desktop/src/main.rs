@@ -143,6 +143,10 @@ async fn api(app: AppHandle, host: State<'_, Host>, cmd: String, args: Value) ->
         }
         _ => {}
     }
+    // A folder on this computer, picked in the system's own dialog (a bot's working folder).
+    if cmd == "pick_folder" {
+        return Ok(json!(rfd::AsyncFileDialog::new().pick_folder().await.map(|f| f.path().display().to_string())));
+    }
     // Meeting transcription runs on this computer even when the app is connected to a server.
     if cmd == "meeting" {
         let m = app.state::<meeting::Meeting>();
@@ -377,6 +381,9 @@ fn tray_menu(app: &AppHandle, pending: &[mimir_core::db::Approval], header: &str
         // Allow from the menu only when the menu shows all of it; otherwise it's decided in the app, where it's whole.
         if a.kind == "rule" && whole {
             sub.append(&item(format!("ap:{}:y", a.id), if a.parked { "Allow (runs it now)" } else { "Allow" }, true)?)?;
+            if mimir_core::runtime::offers_always(a) {
+                sub.append(&item(format!("ap:{}:w", a.id), &mimir_core::tools::always_label(a), true)?)?;
+            }
         } else {
             let why = match a.kind.as_str() {
                 "rule" => "Too long to show here: review it in Mimir",
@@ -457,15 +464,17 @@ fn tray_meeting(app: &AppHandle) {
     });
 }
 
-/// A tray "Allow"/"Deny": the same decision as the card in the app (a parked routine step runs).
+/// A tray "Allow"/"Always"/"Deny": the same decision as the card in the app (a parked routine step runs).
 fn tray_decide(app: &AppHandle, id: &str) {
     let Some((id, d)) = mimir_core::runtime::parse_decision(id) else { return };
-    // The tray offers Allow and Deny only.
     let approve = d != mimir_core::runtime::Decision::Deny;
+    let always = d == mimir_core::runtime::Decision::Always;
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let host = app.state::<Host>();
-        if let Err(e) = host.call("decide", &json!({ "id": id, "approve": approve })).await {
+        let site = host.db.approval(id).ok().flatten().is_some_and(|a| a.site.is_some());
+        let always = always.then_some(if site { "site" } else { "tool" });
+        if let Err(e) = host.call("decide", &json!({ "id": id, "approve": approve, "always": always })).await {
             eprintln!("tray decision: {e:#}");
         }
         update_tray(&app, &host.db.approvals_pending().unwrap_or_default());
@@ -532,6 +541,8 @@ async fn notifier(app: AppHandle) {
             }
         }
         let pending = host.db.approvals_pending().unwrap_or_default();
+        // In the menu bar or tray (and a notification below): shown.
+        let _ = host.db.approvals_shown_in_app();
         let ids: Vec<i64> = pending.iter().map(|a| a.id).collect();
         if ids != shown {
             shown = ids;

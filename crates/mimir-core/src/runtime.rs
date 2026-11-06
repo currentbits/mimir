@@ -452,8 +452,8 @@ pub(crate) fn offers_all(a: &Approval) -> bool {
 
 /// …and "Always" on every card with something to allow, like the app. Not in a guest's chat (of any kind): the guest
 /// answers there, and Always would change your rules for every chat.
-pub(crate) fn offers_always(a: &Approval) -> bool {
-    !matches!(a.kind.as_str(), "signin" | "takeover" | "guest" | "drift") && !a.guest
+pub fn offers_always(a: &Approval) -> bool {
+    !matches!(a.kind.as_str(), "signin" | "takeover" | "guest" | "drift" | "userfile" | "target" | "shell") && !a.guest
 }
 
 /// Allowed the same plain ask a few times already: the card offers to stop asking.
@@ -2071,6 +2071,18 @@ impl Core {
                     Ok(Ok(_)) => {}
                 }
             }
+            // Away: no word from the person in a while, so nothing runs on its own (it would only spend their usage on
+            // results nobody reads). Unlike a pause, bots still answer, and the first message back ends it (turn()).
+            if self.db.away_check(now).unwrap_or_else(|e| { eprintln!("away: {e:#}"); false }) {
+                let days = self.db.away_days();
+                let text = trf("I paused your routines because you've been away for over {days} days, so they don't use up your AI plan on results nobody reads. Write to me, or press Resume in Mimir's Needs you, and they start again.", &[("days", &days.to_string())]);
+                let _ = self.db.log(self.bot, crate::host::LOCAL_CHAT, "assistant", &text, None);
+                self.tell_decisions(&chans, None, &text).await;
+            }
+            if self.db.away().is_some() {
+                tokio::time::sleep(Duration::from_secs(30)).await;
+                continue;
+            }
             // Paused by you: nothing runs on its own (routines, digest, weekly review, tidy-up) until it ends.
             if self.db.paused(self.bot, now).unwrap_or_else(|e| { eprintln!("pause: {e:#}"); None }).is_some() {
                 tokio::time::sleep(Duration::from_secs(30)).await;
@@ -2172,18 +2184,37 @@ impl Core {
     /// cards once they're decided.
     /// The waiting tool call (possibly in an MCP subprocess) sees the decision through SQLite.
     async fn approvals(self: Arc<Self>, chans: Vec<Chan>) -> Result<()> {
+        // A card that failed to send: when it was last tried, and how often. Tried again a little later, a few times.
+        let mut failed: std::collections::HashMap<i64, (std::time::Instant, u32)> = Default::default();
         loop {
             let quiet = quiet_now(&self.db, chrono::Local::now());
             // A routine's ask waits hours anyway: its card can wait until quiet hours end. Live asks still go.
             for mut a in self.db.approvals_to_notify(self.bot).unwrap_or_default().into_iter().filter(|a| !(quiet && a.parked)) {
                 // Channel not connected: leave it pending for the app banner (and a later reconnect).
                 let Some((c, ext)) = Self::chan_for(&chans, a.chat_id, &self.db) else { continue };
+                if failed.get(&a.id).is_some_and(|(at, _)| at.elapsed() < CARD_RETRY) {
+                    continue;
+                }
                 a.edit_link = edit_link(&self.db, &a);
-                let card = c.card(&ext, &a).await.unwrap_or_else(|e| {
-                    eprintln!("approval #{} card failed: {e:#}", a.id);
-                    None
-                });
-                let _ = self.db.approval_mark_notified(a.id, card.as_deref());
+                match c.card(&ext, &a).await {
+                    Ok(card) => {
+                        failed.remove(&a.id);
+                        let _ = self.db.approval_shown(a.id, c.kind());
+                        let _ = self.db.approval_mark_notified(a.id, card.as_deref());
+                    }
+                    // Not marked sent: tried again on a later pass, and the bot hears why if it times out unseen.
+                    Err(e) => {
+                        eprintln!("approval #{} card failed: {e:#}", a.id);
+                        let _ = self.db.approval_send_failed(a.id, &format!("{}: {}", c.kind(), crate::tools::truncate(&format!("{e:#}"), 160)));
+                        let tries = failed.get(&a.id).map_or(0, |f| f.1) + 1;
+                        if tries >= CARD_TRIES {
+                            failed.remove(&a.id);
+                            let _ = self.db.approval_mark_notified(a.id, None);
+                        } else {
+                            failed.insert(a.id, (std::time::Instant::now(), tries));
+                        }
+                    }
+                }
             }
             // A routine's ask from any other chat (the app's too) also goes to the decisions chat, saying where it's from.
             if let Some(to) = decisions_chat(&self.db).filter(|_| !quiet)
@@ -2218,6 +2249,10 @@ impl Core {
         }
     }
 }
+
+/// A card that failed to send is tried again after this, up to CARD_TRIES times in all.
+const CARD_RETRY: Duration = Duration::from_secs(20);
+const CARD_TRIES: u32 = 4;
 
 /// How long a message waits on its chat's routine or earlier reply before saying so.
 const BUSY_NOTE_AFTER: Duration = Duration::from_secs(4);
@@ -2423,8 +2458,20 @@ mod tests {
         assert_eq!((failed.len(), failed[0].repeats), (1, 2), "one item for the same failure");
         assert!(failed[0].error.as_deref().unwrap().contains("Trying again at"), "{:?}", failed[0].error);
 
+        // Just too many requests right now (#408): another routine is tried again soon; nobody is held.
+        let busy = core_on(&db, &fake_ai("429 Too Many Requests", r#"{"error":{"message":"Rate limit reached for gpt-5-mini on tokens per min"}}"#).await);
+        let r2 = db.routine_create(1, 0, "0 9 * * *", "news", false).unwrap();
+        busy.run_routine(&[], db.routines(0).unwrap().into_iter().find(|x| x.id == r2.id).unwrap(), None).await.unwrap();
+        let after = db.routines(0).unwrap().into_iter().find(|x| x.id == r2.id).unwrap();
+        assert!(after.retries == 1 && after.next_fire <= now + 400, "{after:?}");
+        assert!(db.hold("hold:1").unwrap().is_none(), "a rate limit holds nobody");
+        db.routine_delete(0, r2.id).unwrap();
+        for f in db.runs_failed(0).unwrap().iter().filter(|f| f.error.as_deref().is_some_and(|e| e.contains("Rate limit"))) {
+            db.inbox_dismiss("run", f.id).unwrap();
+        }
+
         // The plan's usage limit: the bot's routines wait (an hour, when nobody says when it resets), this one runs then.
-        let limited = core_on(&db, &fake_ai("429 Too Many Requests", r#"{"error":{"message":"Rate limit reached"}}"#).await);
+        let limited = core_on(&db, &fake_ai("429 Too Many Requests", r#"{"error":{"message":"You exceeded your current quota","type":"insufficient_quota"}}"#).await);
         limited.run_routine(&[], fresh(&db), None).await.unwrap();
         let h = db.hold("hold:1").unwrap().expect("held");
         assert!(h.until > now + 3000 && h.until <= now + 3700 && fresh(&db).next_fire <= h.until, "{h:?}");
@@ -2614,7 +2661,7 @@ mod tests {
         let _ = std::fs::remove_file(&p);
         let db = Db::open(&p).unwrap();
         let (base, asked) = recording_ai().await;
-        let scout = crate::db::Bot { id: 0, name: "Scout".into(), persona: String::new(), provider: "openai".into(), model: "m".into(), base_url: base.clone(), tools: String::new(), look: String::new() };
+        let scout = crate::db::Bot { id: 0, name: "Scout".into(), persona: String::new(), provider: "openai".into(), model: "m".into(), base_url: base.clone(), tools: String::new(), look: String::new(), workdir: String::new(), file_write: String::new() };
         let scout = db.bot_save(&scout).unwrap();
         let run = db.run_start(1, 0, "message", None, "test").unwrap();
         let ctx = ToolCtx::new(db.clone(), 1, 0).with_run(Some(run));
@@ -2657,7 +2704,7 @@ mod tests {
         let p = std::env::temp_dir().join(format!("mimir-later-limits-{}.db", std::process::id()));
         let _ = std::fs::remove_file(&p);
         let db = Db::open(&p).unwrap();
-        let scout = crate::db::Bot { id: 0, name: "Scout".into(), persona: String::new(), provider: "openai".into(), model: "m".into(), base_url: String::new(), tools: String::new(), look: String::new() };
+        let scout = crate::db::Bot { id: 0, name: "Scout".into(), persona: String::new(), provider: "openai".into(), model: "m".into(), base_url: String::new(), tools: String::new(), look: String::new(), workdir: String::new(), file_write: String::new() };
         db.bot_save(&scout).unwrap();
         db.pair(200, "Sam").unwrap();
         db.chat_set_guest(200, true).unwrap();
@@ -2674,12 +2721,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_helpers_files_go_to_its_own_workspace_and_its_answer_stays_in_its_chat() {
+        let top = std::env::temp_dir().join(format!("mimir-helper-files-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&top);
+        std::fs::create_dir_all(&top).unwrap();
+        let db = Db::open(&top.join("mimir.db")).unwrap();
+        // Scout writes its plan to a file, then answers.
+        let (base, asked) = scripted_ai(&[
+            r#"{"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[{"id":"c1","type":"function","function":{"name":"file_write","arguments":"{\"path\":\"plan.md\",\"content\":\"The plan\",\"mode\":\"create\"}"}}]}}]}"#,
+            r#"{"choices":[{"message":{"role":"assistant","content":"Done: the plan is in plan.md."}}],"usage":{"prompt_tokens":3,"completion_tokens":2}}"#,
+        ])
+        .await;
+        let scout = crate::db::Bot { id: 0, name: "Scout".into(), persona: String::new(), provider: "openai".into(), model: "m".into(), base_url: base, tools: String::new(), look: String::new(), workdir: String::new(), file_write: String::new() };
+        let scout = db.bot_save(&scout).unwrap();
+        db.pair(300, "You").unwrap();
+        let ctx = ToolCtx::new(db.clone(), 1, 300).with_run(Some(db.run_start(1, 300, "message", None, "test").unwrap()));
+        // The asker shares a brief from its own workspace.
+        crate::tools::call(&ctx, "file_write", &serde_json::json!({"path": "brief.md", "content": "Launch in May", "mode": "create"})).await.unwrap();
+        let out = crate::tools::call(&ctx, "ask_bot", &serde_json::json!({"bot": "Scout", "task": "Write a launch plan", "files": ["brief.md"]})).await.unwrap();
+        let own = crate::files::root(&db, crate::files::bot_ws(scout));
+        assert_eq!(std::fs::read_to_string(own.join("brief.md")).unwrap(), "Launch in May", "shared into its workspace");
+        assert!(asked.lock().unwrap()[0].contains("Files shared with you"), "the task names them");
+        assert!(own.join("plan.md").is_file() && !crate::files::root(&db, 300).join("plan.md").exists(), "its file is in its own workspace, not the asker's");
+        assert!(out.contains("Done: the plan") && out.contains(&own.display().to_string()), "{out}");
+        // Its answer is kept in its own chat too.
+        let kept: Vec<_> = db.messages_of(crate::host::LOCAL_CHAT, Some(scout), None, 0, 10).unwrap().into_iter().map(|m| m.content).collect();
+        assert!(kept.len() == 2 && kept[0].starts_with("[Task from ") && kept[1].starts_with("Done: the plan"), "{kept:?}");
+        let _ = std::fs::remove_dir_all(&top);
+    }
+
+    #[tokio::test]
     async fn a_task_done_in_its_own_chat_stays_there() {
         let p = std::env::temp_dir().join(format!("mimir-own-chat-{}.db", std::process::id()));
         let _ = std::fs::remove_file(&p);
         let db = Db::open(&p).unwrap();
         let (base, asked) = recording_ai().await;
-        let scout = crate::db::Bot { id: 0, name: "Scout".into(), persona: String::new(), provider: "openai".into(), model: "m".into(), base_url: base.clone(), tools: String::new(), look: String::new() };
+        let scout = crate::db::Bot { id: 0, name: "Scout".into(), persona: String::new(), provider: "openai".into(), model: "m".into(), base_url: base.clone(), tools: String::new(), look: String::new(), workdir: String::new(), file_write: String::new() };
         let scout = db.bot_save(&scout).unwrap();
         db.set_setting("public_url", "https://mimir.example").unwrap();
         // Asked from your Telegram chat: the task and its whole answer land in Scout's app chat, the asker gets a link.
@@ -2987,6 +3064,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_card_that_cant_be_sent_is_tried_again_and_the_timeout_says_so() {
+        let p = std::env::temp_dir().join(format!("mimir-undelivered-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let db = Db::open(&p).unwrap();
+        let core = Arc::new(core_on(&db, "http://127.0.0.1:9"));
+        // Nothing listens there: every send fails at once.
+        let tg = Chan::Telegram(Tg::at("http://127.0.0.1:9", "t").unwrap());
+        let chat = db.pair_external("telegram", "42", "42").unwrap();
+        let id = db.approval_create(1, chat, "file_write", "Create notes.md", 300, "rule", None).unwrap();
+        let task = tokio::spawn(core.clone().approvals(vec![tg]));
+        let delivery = loop {
+            if let Some(d) = db.approval(id).unwrap().and_then(|a| a.delivery) {
+                break d;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        };
+        task.abort();
+        assert!(delivery.starts_with("failed:telegram"), "{delivery}");
+        assert!(db.approvals_to_notify(1).unwrap().iter().any(|a| a.id == id), "not marked sent: tried again later");
+        assert!(crate::tools::unanswered(&delivery).contains("couldn't be sent, so the user never saw it"));
+        // The app listed it after all: shown, and still says the card failed.
+        db.approvals_shown_in_app().unwrap();
+        let d = db.approval(id).unwrap().unwrap().delivery.unwrap();
+        let why = crate::tools::unanswered(&d);
+        assert!(why.contains("shown in the Mimir app") && why.contains("card couldn't be sent: telegram"), "{why}");
+        assert!(crate::tools::unanswered("shown:slack").contains("sent on slack, but nobody answered"));
+        assert!(crate::tools::unanswered("").contains("never reached the user"));
+    }
+
+    #[tokio::test]
     async fn routine_asks_also_go_to_the_decisions_chat_and_close_everywhere() {
         let p = std::env::temp_dir().join(format!("mimir-decisions-{}.db", std::process::id()));
         let _ = std::fs::remove_file(&p);
@@ -3231,18 +3338,20 @@ mod tests {
             let id = db.approval_create(1, 5, tool, "do it", 60, kind, site).unwrap();
             db.approval_decide(id, true, Some(5)).unwrap().unwrap()
         };
-        // A plain ask: the card offers Always, and it allows the tool from now on.
+        // A plain ask: the card offers Always, and it never asks before the tool again, not even after outside content.
         let a = ask("memory_forget", "rule", None);
         let rows = card_buttons(&a);
         assert!(rows.iter().flatten().any(|(l, d)| l.starts_with("Always") && d.ends_with(":w")), "{rows:?}");
         crate::tools::always_allow(&db, &a).unwrap();
-        assert_eq!(db.rule("memory_forget").unwrap().as_deref(), Some("allow"));
+        assert_eq!(db.rule("memory_forget").unwrap().as_deref(), Some("always"));
+        assert_eq!(crate::tools::decide(&db, "memory_forget", true).unwrap(), "allow");
+        db.set_rule("memory_forget", "default").unwrap();
         assert!(verdict_for(&a, Decision::Always).contains("without asking"));
         // A website: only that site.
         let w = ask("web_fetch", "rule", Some("example.com"));
         assert_eq!(crate::tools::always_label(&w), "Always on example.com");
         crate::tools::always_allow(&db, &w).unwrap();
-        assert!(db.site_rules().unwrap().iter().any(|(t, h, act)| t == "web_fetch" && h == "example.com" && act == "allow"));
+        assert!(db.site_rules().unwrap().iter().any(|(t, h, act)| t == "web_fetch" && h == "example.com" && act == "always"));
         assert_ne!(db.rule("web_fetch").unwrap().as_deref(), Some("allow"), "not the whole tool");
         // Asked for more than its rule (after outside content, an email, a new bot, a loop…): Always means never ask
         // again, not even after outside content.

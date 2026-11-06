@@ -20,6 +20,11 @@ Bots act through **tools**. Every tool call is checked against your rules before
 | `email_draft` | Write an email (or a reply in its thread) into your Drafts folder; nothing is sent, you send it from your mail app. After reading outside content (an email included) it asks, with the recipient first on the card | allow |
 | `file_list`, `file_read`, `file_write` | A text-file workspace per chat (notes, lists, drafts, research), shown under Memory → Files. Paths stay inside it (no `..`, no links); rewriting keeps the previous version; a file written after outside content (or dropped in by hand) counts as outside content when read. Not in incognito | allow |
 | `file_delete` | Delete a workspace file | **ask** |
+| `shell_run` | Run one command in the bot's working folder. Off until you turn it on for that bot (its settings → Working folder); asks every time, never Always. Sandboxed: no network, no writing outside the folder, the rest of the home folder unreadable, a clean environment, one minute. macOS, or Linux with bubblewrap | **ask** |
+| `mail_send` | Send an email from the Mail app on your Mac, from your own account in it. The card shows who it's to and the whole text (it has to fit on the card: about 1100 characters); at most 20 a day from a chat. Mimir app on a Mac only, in a chat with you alone | **ask** |
+| `messages_send` | Send an iMessage from the Messages app on your Mac, to a phone number (+31…) or Apple ID. Mimir app on a Mac only, in a chat with you alone | **ask** |
+| `app_open` | Open an app on your Mac, or a workspace file in it (a spreadsheet in Numbers). Mimir app on a Mac only | **ask** |
+| `file_export` | Copy a workspace file or folder to a folder on the machine Mimir runs on (`~/.claude/skills`, say). The card shows the destination, the files and how many it would replace (only with `replace`). Never into system folders, the home folder itself, Mimir's data, or `~/.ssh`-style folders; links are resolved first and never written through. With folders under **Settings → Permissions → Export folders**, only into those | **ask** |
 | `send_file` | Send a workspace file, or a screenshot of the bots' computer, to this chat with the reply ([Photos, voice notes and files](bots-and-chats.md#photos-voice-notes-and-files)). Not in incognito or for a bot working on another's task | allow in your own direct chat; **ask** in a group, channel or guest's chat |
 | `email_send` | Send an email as you, after you approve it: every email asks (until you press "Always" on one), with who it's to first and the whole text on the card; one too long for the card has to be a draft instead; at most 20 a day from a chat. Sent through your outgoing server (worked out from the incoming one, or set in Settings → Email), with a copy in your Sent folder | **asks, every time** |
 | `web_search` | Search the web through **Settings → Web search** (Brave Search with a free key, or your own SearXNG), for every AI account; offered once one is set up. Results are outside content; after outside content, a search that would carry one of your memories (or over 200 characters) asks | allow |
@@ -27,7 +32,7 @@ Bots act through **tools**. Every tool call is checked against your rules before
 | `meeting_search`, `meeting_read` | Look through your transcribed meetings ([Meetings](meetings.md)); offered once you have one | allow |
 | `calendar_create` | Add an event straight to your calendar (**Settings → Calendar**: iCloud, Fastmail, Nextcloud or any CalDAV, with an app password); offered once one is connected, in a chat with you only. The card shows when, what and where; "Always" works for it | **ask** |
 | `calendar_list` | Read your calendar between two dates (from the calendar link in Settings); offered once one is linked, in a chat with you only. Event titles are outside content | allow |
-| `ask_bot` | Hand a task to another of your bots | allow |
+| `ask_bot` | Hand a task to another of your bots. The other bot's files go to its own workspace (its working folder, if you chose one), and its answer is kept in its own app chat as well as going back. `files` copies workspace files to it (as new files); `in_own_chat` has it work and answer in its own chat, and the asker gets a link | allow |
 | `bot_create` | Make a new bot for a job you describe ([Bots and chats](bots-and-chats.md#a-bot-that-makes-a-bot)) | **asks, every time** |
 | `skill_view` | Read the steps of an accepted skill | allow |
 | `skill_save` | Propose a skill from what the conversation did, when you ask; you press Save ([Skills](skills.md)) | allow |
@@ -138,10 +143,26 @@ rest of that reply. Every live card also has **Approve all like this**: this act
 without asking until the reply ends. Neither covers anything after the bot read outside content, saved-login use, or
 routines.
 
-To stop being asked at all, press **Always** on the card (in the app, Telegram, Slack or Discord): from then on that
-tool, or that tool on that website, runs without asking. On a plain card that's Allow (it still asks after outside
-content); on any other card it's Always (see above). On a saved login's card it's that site's login; on a plan's card,
-plans no longer ask. Change it back in **Settings → Permissions**.
+To stop being asked at all, press **Always** on the card (in the app, the tray menu, Telegram, Slack or Discord): from
+then on that tool, or that tool on that website, runs without asking, also after outside content. On a saved login's
+card it's that site's login; on a plan's card, plans no longer ask. In a guest's chat it's Allow (it still asks after
+outside content). Change it back in **Settings → Permissions**.
+
+**Ask first rules.** Rules about *who* or *where*, on top of the rules per tool: **Settings → Permissions → Ask first
+rules**. *Emails to* an address (`dana@acme.com`), anyone at a domain (`acme.com`, subdomains included) or anyone
+outside one (`!acme.com`), for sending (also from Mail on your Mac) and drafting; *Files copied into* a folder (`file_export`). Each one asks, or
+never lets it happen. They hold for every bot, over Always and "Don't ask me first", and no plan covers them; the card
+starts with the rule ("Your rule “Emails to dana@acme.com” asks.") and offers no Always, and a refused call tells the
+bot which rule stopped it.
+
+**A bot that never asks.** On a bot's page, **What it can do → Don't ask me first** lets that bot act without any
+approval card: whatever would ask (a rule, outside content, a sensitive source, a loop, a routine's drift, a saved
+login, a plan) just runs, and an instruction it saves to memory ("reply in Dutch") is kept right away instead of
+waiting in Memory for you to accept (one picked up from outside content stays unconfirmed), and so is a skill it
+saves. Deny rules and Ask first rules still hold, signing in and taking over the computer still need you, so does deleting or changing a file
+of yours in a [working folder](bots-and-chats.md#a-bots-working-folder) you chose, and a guest's
+chat still asks the guest. A task one bot hands another only skips the asks if both bots are set so. **Settings → Your
+data → Check everything** lists the bots set this way.
 
 **Several at once.** With two or more waiting, **Allow all** and **Deny all** (in the app and in Needs you) answer every
 waiting card together, after a confirmation that lists each one. Signing in and taking over the computer aren't
@@ -164,6 +185,13 @@ only works on the sites you listed for it, and you approve each use. Values are 
 A login can have an authenticator key too: a bot types `NAME_CODE` and Mimir fills in the current code, only on the
 login's sites. On the bots' computer, a bot can also ask you to sign in with a masked form in Mimir instead of the
 chat ([Signing in from your phone](computer.md#signing-in-from-your-phone)); that login is kept for that bot and site.
+
+**Import from a password manager.** Under **Settings → Browser → Saved logins**, *Import from a password manager…*
+reads a CSV export from 1Password, Chrome, Edge, Safari / Passwords, Firefox, Bitwarden or LastPass. The preview shows
+sites and user names only; the logins you tick are saved one per site (`GITHUB_COM`, with `GITHUB_COM_USER` for its
+user name and `GITHUB_COM_CODE` if the export has an authenticator key), for every bot or just one. They work like any
+saved login: only on their own site, and you approve each use. Delete the export afterwards: it holds every password in
+plain text.
 
 ## Tool servers (MCP)
 

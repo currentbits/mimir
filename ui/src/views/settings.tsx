@@ -10,7 +10,7 @@ import { DIRECTORY, type Listed } from '../directory'
 
 type VaultEntry = { name: string; domains: string[]; bot?: number; totp?: boolean }
 
-type Rule = { tool: string; description: string; action: 'always' | 'allow' | 'ask' | 'deny'; default: string }
+export type Rule = { tool: string; description: string; action: 'always' | 'allow' | 'ask' | 'deny'; default: string }
 
 /** Words a setting goes by besides its own text, so a search finds it ("token" → AI keys, "2fa"…). */
 const SETTING_WORDS: Record<string, string> = {
@@ -22,6 +22,9 @@ const SETTING_WORDS: Record<string, string> = {
   'Daily digest': 'quiet hours notifications summary weekly review do not disturb',
   'Limits': 'cap budget tokens cost usage limit plan subscription quota five hour weekly cheaper model haiku',
   'Permissions': 'allow ask deny approve rules tools safety always',
+  'Main bot': 'main primary first contact coordinator team bots tidy',
+  'Export folders': 'export copy files folder skills file_export',
+  'Ask first rules': 'email domain outside recipient folder ask deny rule target',
   'Browser': 'playwright chromium saved logins passwords vault',
   'Tool servers': `mcp plugins integrations connectors apps browse directory ${DIRECTORY.map(d => d.name).join(' ')}`,
   'Sensitive sources': 'bank banking health medical private finance money leak',
@@ -97,6 +100,7 @@ export function SettingsView({ onComputer, find = '' }: { onComputer: () => void
       {inDesktop && !remoteServer() && <AppSettings />}
       {inDesktop && <UpdateSettings />}
       <DigestSettings />
+      <MainBotSettings />
       <DecisionsSettings />
       <LanguageSettings />
       <LimitsSettings />
@@ -112,6 +116,8 @@ export function SettingsView({ onComputer, find = '' }: { onComputer: () => void
       <ToolServerSettings onChange={toolsChanged} />
       <SensitiveSettings key={'s' + tools} />
       <Permissions key={tools} />
+      <AskFirstRules />
+      <ExportFolders />
       <WebhooksOutSettings />
       <DataSettings />
       {(!inDesktop || remoteServer()) && <ChatApiSettings />}
@@ -325,7 +331,9 @@ function DigestSettings() {
   const [msg, setMsg] = useState<string | null>(null)
   const [weekly, setWeekly] = useState<boolean | null>(null)
   const [quiet, setQuiet] = useState<string | null>(null)
+  const [away, setAway] = useState<number | null>(null)
   useEffect(() => {
+    invoke<number>('away_days').then(setAway, () => {})
     invoke<string>('digest_time').then(setAt, () => {})
     invoke<boolean>('weekly_review').then(setWeekly, () => {})
     invoke<string>('quiet_hours').then(setQuiet, () => {})
@@ -354,8 +362,32 @@ function DigestSettings() {
           <Switch label="Quiet hours" checked={!!quiet} onChange={v => saveQuiet(v ? '22:00-07:00' : '')} />
         </>}
       </Row>
+      <Row icon={<Icon name="pause" size={15} />} title="Pause routines when I'm away"
+        desc={away ? `After ${away} days without a message from you to any bot, routines stop until you write again (or press Resume in Needs you), so they don't use up your AI plan on results nobody reads. Bots still answer.` : 'Off: routines keep running however long you are away.'}>
+        {away !== null && <>
+          {away > 0 && <><input className="input" type="number" min={1} max={365} aria-label="Days away" style={{ width: 72 }} value={away} onChange={e => { const d = Number(e.target.value); if (d >= 1 && d <= 365) { setAway(d); void invoke<number>('away_days', { days: d }).then(setAway, x => setMsg(String(x))) } }} /><span className="hint">days</span></>}
+          <Switch label="Pause routines when I'm away" checked={away > 0} onChange={v => { const d = v ? 7 : 0; setAway(d); void invoke<number>('away_days', { days: d }).then(setAway, x => setMsg(String(x))) }} />
+        </>}
+      </Row>
       <Row icon={<Icon name="memory" size={15} />} title="Weekly “what I learned”" desc="Once a week at that time, each Telegram, Slack or Discord chat gets a list of what your bots learned there on their own. Reply /undo with a number to take one back.">
         {weekly !== null && <Switch label="Weekly what I learned" checked={weekly} onChange={v => { setWeekly(v); invoke<boolean>('weekly_review', { on: v }).then(setWeekly, () => setWeekly(!v)) }} />}
+      </Row>
+    </Group>
+  )
+}
+
+/** The bot that's your first point of contact: it sees how the others are doing, and runs the daily memory tidy-up. */
+function MainBotSettings() {
+  const bots = useLoad(() => invoke<Bot[]>('bots'), [], 60000)
+  const main = useLoad(() => invoke<number | null>('main_bot'), [], 60000)
+  const [msg, setMsg] = useState<string | null>(null)
+  if ((bots.data ?? []).length < 2) return null
+  return (
+    <Group title="Main bot" note="Your first point of contact when you have several bots: it hands work to the one that fits, tells you when another bot's runs fail or it's waiting for you, and runs the daily memory tidy-up. Ask it to check in every morning if you'd like that.">
+      <Row icon={<Icon name="user" size={15} />} title="Main bot" desc={msg ?? 'The others know to point you there for how things are going.'}>
+        <select className="select" style={{ width: 'auto' }} aria-label="Main bot" value={main.data ?? ''} onChange={e => invoke<number>('main_bot', { botId: Number(e.target.value) }).then(() => { setMsg(null); main.reload() }, x => setMsg(String(x)))}>
+          {(bots.data ?? []).map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+        </select>
       </Row>
     </Group>
   )
@@ -729,6 +761,18 @@ function SensitiveRow() {
   )
 }
 
+/** Whether an instruction a bot learns ("reply in Dutch") is saved right away or suggested for you to accept. */
+function AcceptInstructionsRow() {
+  const [on, setOn] = useState<boolean | null>(null)
+  useEffect(() => { invoke<boolean>('accept_instructions').then(setOn, () => {}) }, [])
+  return (
+    <Row icon={<Icon name="memory" size={15} />} title="Always accept instructions"
+      desc={on ? 'Instructions your bots learn are saved right away. One picked up from a web page or email stays unconfirmed until you check it.' : 'An instruction a bot learns waits in Memory for you to accept, unless you said it as a rule (“always…”, “from now on…”).'}>
+      {on !== null && <Switch label="Always accept instructions" checked={on} onChange={v => { setOn(v); invoke<boolean>('accept_instructions', { on: v }).then(setOn, () => setOn(!v)) }} />}
+    </Row>
+  )
+}
+
 /** Memories as Markdown files in a folder you pick (vault.rs): Obsidian, grep, git. What you change there is asked about. */
 function MemoryFolderSettings() {
   const st = useLoad(() => invoke<string>('memory_folder', {}), [])
@@ -747,6 +791,7 @@ function MemoryFolderSettings() {
         </div></div>
       </form>
       <SensitiveRow />
+      <AcceptInstructionsRow />
     </Group>
   )
 }
@@ -856,10 +901,59 @@ function BrowserSettings({ onChange }: { onChange: () => void }) {
               <button className="btn" disabled={!draft.name.trim() || !(draft.value || (exists && draft.totp)) || !draft.domains.trim()}>Save</button>
             </div></div>
           </form>
+          {on && <ImportLogins onDone={vault.reload} />}
         </>
       )}
       {err && <div className="row-block"><p className="error" style={{ margin: 0 }}>{err}</p></div>}
     </Group>
+  )
+}
+
+type ImportRow = { i: number; site: string; user: string; totp: boolean; name: string; exists: boolean }
+
+/** Saved logins from a password manager's CSV export: a preview (sites and user names only), then the ones you tick. */
+function ImportLogins({ onDone }: { onDone: () => void }) {
+  const [csv, setCsv] = useState<string | null>(null)
+  const [rows, setRows] = useState<ImportRow[]>([])
+  const [pick, setPick] = useState<Set<number>>(new Set())
+  const [bot, setBot] = useState<number>(0)
+  const [msg, setMsg] = useState<string | null>(null)
+  const bots = useLoad(() => invoke<Bot[]>('bots'), [], 60000)
+  const open = (f: File | undefined) => f && f.text().then(text => invoke<ImportRow[]>('logins_import', { csv: text }).then(r => {
+    setCsv(text); setRows(r); setPick(new Set(r.filter(x => !x.exists).map(x => x.i))); setMsg(null)
+  }, e => setMsg(String(e))))
+  const save = () => csv && invoke<{ saved: number }>('logins_import', { csv, pick: [...pick], botId: bot || null }).then(r => {
+    setCsv(null); setRows([]); onDone()
+    setMsg(`Saved ${r.saved} login${r.saved === 1 ? '' : 's'}. Delete the export file now: it has every password in plain text.`)
+  }, e => setMsg(String(e)))
+  const toggle = (i: number) => setPick(p => { const n = new Set(p); if (n.has(i)) n.delete(i); else n.add(i); return n })
+  return (
+    <div className="row-block">
+      {!csv ? <label className="btn btn-sm btn-ghost" style={{ cursor: 'pointer' }}>
+        Import from a password manager…
+        <input type="file" accept=".csv,text/csv" style={{ display: 'none' }} onChange={e => { void open(e.target.files?.[0]); e.target.value = '' }} />
+      </label> : <>
+        <p className="hint" style={{ margin: '0 0 8px' }}>Export as CSV from 1Password, Chrome, Edge, Safari / Passwords, Firefox, Bitwarden or LastPass. Only sites and user names are shown here; each login works only on its site, and you approve every use.</p>
+        <div style={{ maxHeight: 280, overflow: 'auto' }}>
+          {rows.map(r => (
+            <label key={r.i} className="row" style={{ cursor: r.exists ? 'default' : 'pointer' }}>
+              <input type="checkbox" checked={pick.has(r.i)} disabled={r.exists} onChange={() => toggle(r.i)} />
+              <div className="row-main"><div className="row-title">{r.site}</div>
+                <div className="row-desc">{r.user || 'no user name'}{r.totp ? ' · authenticator codes' : ''}{r.exists ? ' · already saved' : ` · saved as ${r.name}`}</div></div>
+            </label>
+          ))}
+        </div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 }}>
+          <select className="select" style={{ width: 'auto' }} aria-label="For which bot" value={bot} onChange={e => setBot(Number(e.target.value))}>
+            <option value={0}>For every bot</option>
+            {(bots.data ?? []).map(b => <option key={b.id} value={b.id}>Only {b.name}</option>)}
+          </select>
+          <button type="button" className="btn btn-sm" disabled={!pick.size} onClick={() => void save()}>Import {pick.size}</button>
+          <button type="button" className="btn btn-sm btn-ghost" onClick={() => { setCsv(null); setRows([]) }}>Cancel</button>
+        </div>
+      </>}
+      {msg && <p className="hint" style={{ margin: '8px 0 0' }}>{msg}</p>}
+    </div>
   )
 }
 
@@ -1196,13 +1290,67 @@ export const TOOL_LABEL: Record<string, string> = {
   computer_screenshot: "Look at the computer's screen", computer_scroll: 'Scroll on the computer',
   computer_signin: 'Use saved logins', computer_type: 'Type on the computer', email_draft: 'Draft emails', email_hand_over: 'Hand replies to you',
   email_read: 'Read your email', email_search: 'Search your email', email_send: 'Send emails',
-  file_delete: 'Delete files', file_list: 'List files', file_read: 'Read files', file_write: 'Write files',
+  file_delete: 'Delete files', file_export: 'Copy files to your folders', shell_run: 'Run commands in its working folder', mail_send: 'Send email from Mail on your Mac', messages_send: 'Send messages from your Mac', app_open: 'Open apps on your Mac', file_list: 'List files', file_read: 'Read files', file_write: 'Write files',
   goal_set: 'Set goals', goal_update: 'Update goals', routine_update: 'Change routines', send_file: 'Send files',
   skill_save: 'Save skills', web_search: 'Search the web', x_search: 'Search X',
 }
 
 /** "browser__browser_click" → "Click" (grouped under Browser) */
 export const toolLabel = (t: string) => TOOL_LABEL[t] ?? (t.includes('__') ? t.split('__')[1].replace(/^browser_/, '').replaceAll('_', ' ').replace(/^./, c => c.toUpperCase()) : t)
+
+type TargetRule = { kind: 'email' | 'folder'; pattern: string; action: 'ask' | 'deny'; label?: string }
+
+/** Rules about what an action is for: emails to someone, or files copied into a folder. They hold over Always and "Don't ask me first". */
+function AskFirstRules() {
+  const rules = useLoad(() => invoke<TargetRule[]>('target_rules'), [], 60000)
+  const [draft, setDraft] = useState<TargetRule>({ kind: 'email', pattern: '', action: 'ask' })
+  const [err, setErr] = useState<string | null>(null)
+  const all = rules.data ?? []
+  const save = (next: TargetRule[]) => invoke<TargetRule[]>('target_rules', { rules: next.map(({ kind, pattern, action }) => ({ kind, pattern, action })) })
+    .then(() => { setErr(null); setDraft(d => ({ ...d, pattern: '' })); rules.reload() }, e => setErr(String(e)))
+  return (
+    <Group title="Ask first rules" note={err ?? 'Rules about who or where, on top of Permissions: every bot asks (or never does it) when one matches, even with Always or “Don’t ask me first”. For emails: an address (dana@acme.com), a domain (acme.com), or !acme.com for anyone outside it.'}>
+      {all.map((r, i) => (
+        <Row key={r.kind + r.pattern + r.action} icon={<Icon name="shield" size={15} />} title={r.label ?? r.pattern} desc={r.action === 'deny' ? 'Never done' : 'Asks you first'}>
+          <button type="button" className="btn btn-sm btn-ghost btn-danger" onClick={() => save(all.filter((_, j) => j !== i))}>Remove</button>
+        </Row>
+      ))}
+      <form style={{ display: 'flex', gap: 8, alignItems: 'center' }} onSubmit={e => { e.preventDefault(); if (draft.pattern.trim()) void save([...all, draft]) }}>
+        <select className="select" style={{ width: 'auto' }} aria-label="Rule about" value={draft.kind} onChange={e => setDraft({ ...draft, kind: e.target.value as TargetRule['kind'] })}>
+          <option value="email">Emails to</option>
+          <option value="folder">Files copied into</option>
+        </select>
+        <input className="input" aria-label="Who or where" placeholder={draft.kind === 'email' ? '!acme.com' : '~/Documents'} value={draft.pattern} onChange={e => setDraft({ ...draft, pattern: e.target.value })} autoComplete="off" spellCheck={false} />
+        <Segmented size="sm" label="Action" value={draft.action} onChange={v => setDraft({ ...draft, action: v })} options={[{ id: 'ask', label: 'Ask' }, { id: 'deny', label: 'Never' }]} />
+        <button type="submit" className="btn btn-sm" disabled={!draft.pattern.trim()}>Add</button>
+      </form>
+    </Group>
+  )
+}
+
+/** Folders bots may copy files into (file_export, which asks every time). None: any folder of yours. */
+function ExportFolders() {
+  const folders = useLoad(() => invoke<string[]>('export_folders'), [], 60000)
+  const [add, setAdd] = useState('')
+  const [err, setErr] = useState<string | null>(null)
+  const all = folders.data ?? []
+  const save = (next: string[]) => invoke<string[]>('set_export_folders', { folders: next }).then(() => { setErr(null); setAdd(''); folders.reload() }, e => setErr(String(e)))
+  const pickHere = inDesktop && !remoteServer()
+  return (
+    <Group title="Export folders" note={err ?? `Where bots may copy files with file_export, on ${pickHere ? 'this computer' : 'the machine Mimir runs on'}; each copy still asks you. With none here, any folder of yours (never system folders, your home folder itself, or ~/.ssh-style ones).`}>
+      {all.map(f => (
+        <Row key={f} icon={<Icon name="file" size={15} />} title={f}>
+          <button type="button" className="btn btn-sm btn-ghost btn-danger" onClick={() => save(all.filter(x => x !== f))}>Remove</button>
+        </Row>
+      ))}
+      <form style={{ display: 'flex', gap: 8, alignItems: 'center' }} onSubmit={e => { e.preventDefault(); if (add.trim()) void save([...all, add.trim()]) }}>
+        <input className="input" aria-label="Add an export folder" placeholder="~/.claude/skills" value={add} onChange={e => setAdd(e.target.value)} autoComplete="off" spellCheck={false} />
+        {pickHere && <button type="button" className="btn btn-sm btn-ghost" onClick={() => localInvoke<string | null>('pick_folder').then(p => { if (p) void save([...all, p]) }, e => setErr(String(e)))}>Choose…</button>}
+        <button type="submit" className="btn btn-sm" disabled={!add.trim()}>Add</button>
+      </form>
+    </Group>
+  )
+}
 
 function Permissions() {
   const rules = useLoad(() => invoke<Rule[]>('rules'), [], 60000)
@@ -1214,7 +1362,7 @@ function Permissions() {
   const byServer = new Map<string, Rule[]>()
   all.filter(r => r.tool.includes('__')).forEach(r => { const s = r.tool.split('__')[0]; byServer.set(s, [...(byServer.get(s) ?? []), r]) })
   const row = (r: Rule) => (
-    <Row key={r.tool} title={toolLabel(r.tool)} desc={r.action === 'always' ? 'Never asks, not even after a bot reads a web page (Always on a card)' : r.action !== r.default ? `Changed from “${r.default}”` : undefined}>
+    <Row key={r.tool} title={toolLabel(r.tool)} desc={r.action === 'always' ? 'Never asks, not even after a bot reads a web page (Always on a card)' : r.action !== r.default ? `Changed from “${r.default}”` : r.default === 'deny' ? 'Denied by default: it can run any code in a page or upload your files' : undefined}>
       {/* Always is set from a card; here it shows, and goes back to Allow, Ask or Deny. */}
       <Segmented size="sm" label={toolLabel(r.tool)} value={r.action} onChange={a => set(r.tool, a)}
         options={[...(r.action === 'always' ? [{ id: 'always', label: 'Always' }] : []), { id: 'allow', label: 'Allow' }, { id: 'ask', label: 'Ask' }, { id: 'deny', label: 'Deny' }]} />
@@ -1250,7 +1398,7 @@ function Permissions() {
             <button type="button" className="row" style={{ width: '100%', border: 0, background: 'none', textAlign: 'left', borderTop: '0.5px solid var(--line)' }} onClick={() => setOpenServer(o => o === server ? null : server)} aria-expanded={openServer === server}>
               <span className="row-icon"><Icon name={server === 'browser' ? 'browser' : 'plug'} size={15} /></span>
               <div className="row-main"><div className="row-title">{server === 'browser' ? 'Browser actions' : `${server} tools`}</div>
-                <div className="row-desc">{rs.length} tools{changed ? ` · ${changed} changed` : ''}</div></div>
+                <div className="row-desc">{rs.length} tools{changed ? ` · ${changed} changed` : ''}{rs.some(r => r.default === 'deny' && r.action === 'deny') ? ' · unsafe ones denied by default' : ''}</div></div>
               <Icon name={openServer === server ? 'down' : 'chevron'} size={14} />
             </button>
             {openServer === server && rs.map(row)}

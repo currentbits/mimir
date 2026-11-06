@@ -5,7 +5,18 @@ use super::*;
 /// The bot's tools that ask the user first under their rules (not counting per-site rules or outside content),
 /// so it knows when a plan saves the person several asks.
 pub fn asking_tools(ctx: &ToolCtx) -> Vec<String> {
+    if hands_off(ctx) {
+        return vec![];
+    }
     specs_for(ctx).into_iter().map(|s| s.0).filter(|n| n != "plan_propose" && gate(&ctx.db, n, None, false).is_ok_and(|g| g.0 == "ask")).collect()
+}
+
+/// The bot is set to "Don't ask me first": what would ask runs without a card, whatever made it ask (a rule, outside
+/// content, a sensitive source, a loop, a routine's drift, a saved login, a plan). A deny rule still holds; signing in
+/// and taking over still need you (your own steps, not an OK); a guest's chat still asks the guest. A task handed over
+/// by another bot only if both bots are set so, so no bot gets around its own asks through another.
+pub(crate) fn hands_off(ctx: &ToolCtx) -> bool {
+    [Some(ctx.bot_id), ctx.via_bot].into_iter().flatten().all(|b| ctx.db.hands_off(b)) && !ctx.db.chat_guest(ctx.ask_chat)
 }
 
 /// Tools that only read: built-in READ_ONLY, or external tools their server marks read-only.
@@ -21,6 +32,11 @@ pub(super) const GUEST_TOOLS: [&str; 27] = [
     "memory_store", "memory_search", "memory_forget", "chat_search", "routine_create", "routine_update", "routine_list", "routine_delete", "goal_set", "goal_update", "web_fetch", "web_search", "x_search",
     "file_list", "file_read", "file_write", "file_delete", "skill_view", "skill_save", "calendar_add", "plan_propose", "ask_bot", "ask_choice", "send_file", "card_read", "card_write", "progress_set",
 ];
+
+/// This bot may run commands: it has a working folder and the person switched commands on for it.
+pub(crate) fn shell_on(ctx: &ToolCtx) -> bool {
+    ctx.db.bot(ctx.bot_id).is_ok_and(|b| !b.workdir.is_empty()) && ctx.db.setting(&format!("shell:{}", ctx.bot_id)).ok().flatten().as_deref() == Some("on")
+}
 
 pub(super) fn usable(ctx: &ToolCtx, tool: &str) -> bool {
     !ctx.tools_off
@@ -48,6 +64,11 @@ pub(super) fn usable(ctx: &ToolCtx, tool: &str) -> bool {
         && (!tool.starts_with("meeting_") || (ctx.db.has_meetings() && ctx.db.chat_private(ctx.chat_id)))
         // Your email, once an account is set up, and only in a conversation with you alone.
         && (!tool.starts_with("email_") || (crate::email::account(&ctx.db).is_some() && ctx.db.chat_private(ctx.chat_id)))
+        // The Mac's own apps: only from the desktop app on a Mac, in a chat with the person alone, never incognito.
+        && (!matches!(tool, "mail_send" | "messages_send" | "app_open") || (crate::mac::here(&ctx.db) && ctx.db.chat_private(ctx.chat_id) && !ctx.incognito()))
+        // Commands: only for a bot with a working folder whose person turned them on, where a sandbox exists, in a chat
+        // with the person alone.
+        && (tool != "shell_run" || (crate::shell::available() && shell_on(ctx) && ctx.db.chat_private(ctx.chat_id) && !ctx.incognito()))
         // The workspace keeps files on disk: not in incognito.
         && !(ctx.incognito() && tool.starts_with("file_"))
         // Web search once a search service is set up.
@@ -72,7 +93,7 @@ pub const READ_ONLY: [&str; 16] = [
 pub fn default_action(tool: &str) -> &'static str {
     match tool {
         // Opening a site asks, like the browser's (with "always on this site"); looking, clicking and typing don't.
-        "memory_forget" | "routine_delete" | "computer_open" | "bot_create" | "file_delete" | "email_send" | "calendar_create" => "ask",
+        "memory_forget" | "routine_delete" | "computer_open" | "bot_create" | "file_delete" | "file_export" | "email_send" | "calendar_create" | "mail_send" | "messages_send" | "app_open" => "ask",
         _ => "allow",
     }
 }
@@ -83,6 +104,21 @@ pub fn default_for(db: &Db, tool: &str) -> &'static str {
         Some(t) => crate::ext::default_action(tool, t.read_only),
         None => default_action(tool),
     }
+}
+
+/// Where the rule gate() used for this tool is set, in words a bot can pass on: a per-site rule, the person's own
+/// rule, or Mimir's default (all under Settings → Permissions; rules there are the same for every bot).
+pub fn rule_source(db: &Db, tool: &str, site: Option<&str>) -> String {
+    if let Some(h) = site.filter(|h| db.site_rule(tool, h).ok().flatten().is_some()) {
+        return format!("the user's rule for {tool} on {h} (Settings → Permissions, under the sites)");
+    }
+    if db.rule(tool).ok().flatten().is_some() {
+        return format!("the user's rule for {tool} (Settings → Permissions; it applies to every bot)");
+    }
+    if default_for(db, tool) == "deny" {
+        return format!("Mimir's default: {tool} can run any code in a page or upload the user's files, so it's off until they allow it (Settings → Permissions → Browser actions)");
+    }
+    format!("Mimir's default for {tool} (Settings → Permissions)")
 }
 
 /// allow | ask | deny for this call. Untrusted content bumps "allow" to "ask" for anything that isn't
@@ -399,7 +435,7 @@ pub fn looks_sensitive(name: &str) -> bool {
 pub(super) fn sends_out(ctx: &ToolCtx, name: &str, args: &Value) -> bool {
     match name {
         // A sign-in types a login into a site, like typing does.
-        "email_send" | "web_fetch" | "web_search" | "x_search" | "ask_bot" | "computer_open" | "computer_type" | "computer_signin" => true,
+        "email_send" | "mail_send" | "messages_send" | "web_fetch" | "web_search" | "x_search" | "ask_bot" | "computer_open" | "computer_type" | "computer_signin" => true,
         "routine_create" => args["for"].as_str().is_some_and(|f| !f.trim().is_empty()),
         "memory_store" => args["household"].as_bool() == Some(true),
         "send_file" => ctx.db.chat_guest(ctx.chat_id) || !ctx.db.chat_private(ctx.chat_id),
@@ -446,6 +482,107 @@ pub(super) fn site_of(name: &str, args: &Value) -> Option<String> {
     let host = u.host_str()?.to_lowercase();
     let host = host.trim_start_matches("www.").to_string();
     (!host.is_empty()).then_some(host)
+}
+
+/// A rule about what an action is for (Settings → Permissions → Ask first rules): emails to an address, to anyone at a
+/// domain or anyone outside it (`!acme.com`), or files copied into a folder. It asks (or denies) whatever the tool's
+/// rule, Always or "Don't ask me first" say. Kept in the setting target_rules.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct TargetRule {
+    /// email | folder
+    pub kind: String,
+    pub pattern: String,
+    /// ask | deny
+    pub action: String,
+}
+
+impl TargetRule {
+    /// The rule in words, for the card, a denial and Settings.
+    pub fn label(&self) -> String {
+        let p = self.pattern.trim_start_matches(['!', '@']);
+        match (self.kind.as_str(), self.pattern.starts_with('!'), self.pattern.contains('@') && !self.pattern.starts_with('@')) {
+            ("email", true, _) => format!("Emails to anyone outside {p}"),
+            ("email", false, true) => format!("Emails to {p}"),
+            ("email", ..) => format!("Emails to anyone at {p}"),
+            _ => format!("Files copied into {}", self.pattern),
+        }
+    }
+
+    fn matches(&self, ctx: &ToolCtx, name: &str, args: &Value) -> bool {
+        match (self.kind.as_str(), name) {
+            ("email", "email_send" | "email_draft" | "mail_send") => {
+                let to = recipients(args);
+                let p = self.pattern.to_lowercase();
+                let at = |d: &str, a: &str| a.rsplit_once('@').is_some_and(|(_, h)| h == d || h.ends_with(&format!(".{d}")));
+                match p.strip_prefix('!') {
+                    Some(d) => to.iter().any(|a| !at(d.trim_start_matches('@'), a)),
+                    None if p.contains('@') && !p.starts_with('@') => to.contains(&p),
+                    None => to.iter().any(|a| at(p.trim_start_matches('@'), a)),
+                }
+            }
+            // Where each file really lands (a folder exported into ~/Documents lands in ~/Documents/<its name>), not just
+            // the folder named: a rule for ~/Documents/private holds for an export of "private" into ~/Documents.
+            ("folder", "file_export") => {
+                let (path, dest) = (args["path"].as_str().unwrap_or(""), args["dest"].as_str().unwrap_or(""));
+                match ws(ctx).and_then(|w| crate::files::export_plan(&ctx.db, w, path, dest)) {
+                    Ok((dir, files, _)) => dir.starts_with(&self.pattern) || files.iter().any(|(_, to)| to.starts_with(&self.pattern)),
+                    // Can't tell where it would go: it won't go anywhere either (the export fails the same way).
+                    Err(_) => crate::files::real_dir(&ctx.db, dest).is_ok_and(|d| d.starts_with(&self.pattern)),
+                }
+            }
+            _ => false,
+        }
+    }
+}
+
+/// Every address an email goes to (to and cc), in lower case.
+fn recipients(args: &Value) -> Vec<String> {
+    ["to", "cc"]
+        .iter()
+        .filter_map(|k| args[*k].as_str())
+        .flat_map(|s| s.split([',', ';', ' ', '<', '>', '"']))
+        .map(|a| a.trim().trim_matches(['\'', '(', ')']).to_lowercase())
+        .filter(|a| a.contains('@'))
+        .collect()
+}
+
+pub fn target_rules(db: &Db) -> Vec<TargetRule> {
+    db.setting("target_rules").ok().flatten().and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default()
+}
+
+/// Save the rules, each checked: an email pattern is an address, a domain or !domain; a folder is a real one (kept with
+/// links resolved, like an export's destination).
+pub fn set_target_rules(db: &Db, rules: &[TargetRule]) -> Result<Vec<TargetRule>> {
+    let mut kept: Vec<TargetRule> = vec![];
+    for r in rules {
+        let pattern = r.pattern.trim().to_string();
+        if !["ask", "deny"].contains(&r.action.as_str()) {
+            bail!("a rule asks or denies");
+        }
+        let pattern = match r.kind.as_str() {
+            "email" => {
+                let d = pattern.trim_start_matches(['!', '@']);
+                if d.is_empty() || !d.contains('.') || d.contains(char::is_whitespace) || d.matches('@').count() > 1 {
+                    bail!("an email rule takes an address (dana@acme.com), a domain (acme.com) or !acme.com for anyone outside it");
+                }
+                pattern.to_lowercase()
+            }
+            "folder" => crate::files::real_dir(db, &pattern)?.display().to_string(),
+            _ => bail!("a rule is about emails or folders"),
+        };
+        let rule = TargetRule { kind: r.kind.clone(), pattern, action: r.action.clone() };
+        if !kept.contains(&rule) {
+            kept.push(rule);
+        }
+    }
+    db.set_setting("target_rules", &serde_json::to_string(&kept)?)?;
+    Ok(kept)
+}
+
+/// The rule that applies to this call, if any: a deny before an ask.
+pub(super) fn target_rule(ctx: &ToolCtx, name: &str, args: &Value) -> Option<TargetRule> {
+    let hits: Vec<TargetRule> = target_rules(&ctx.db).into_iter().filter(|r| r.matches(ctx, name, args)).collect();
+    hits.iter().find(|r| r.action == "deny").or(hits.first()).cloned()
 }
 
 /// Human-readable one-liner for an approval card.
@@ -501,6 +638,33 @@ pub(super) fn describe(ctx: &ToolCtx, name: &str, args: &Value) -> String {
         "file_read" => format!("Read {}", args["path"].as_str().unwrap_or("?")),
         "file_write" => format!("{} {}: {}", match args["mode"].as_str() { Some("append") => "Add to", Some("replace") => "Rewrite", _ => "Create" }, args["path"].as_str().unwrap_or("?"), truncate(args["content"].as_str().unwrap_or(""), 300)),
         "file_delete" => format!("Delete the file {}", args["path"].as_str().unwrap_or("?")),
+        "shell_run" => format!(
+            "Run in {}:\n$ {}",
+            args["folder"].as_str().map(String::from).unwrap_or_else(|| ctx.db.bot(ctx.bot_id).map(|b| b.workdir).unwrap_or_default()),
+            args["command"].as_str().unwrap_or("?")
+        ),
+        // Who first, in full; then the whole text.
+        "mail_send" => format!(
+            "Send from Mail on this Mac to {}{}\nSubject: {}\n\n{}",
+            args["to"].as_str().unwrap_or("?"),
+            args["cc"].as_str().filter(|c| !c.trim().is_empty()).map(|c| format!(" (cc {c})")).unwrap_or_default(),
+            args["subject"].as_str().unwrap_or(""),
+            args["body"].as_str().unwrap_or("")
+        ),
+        "messages_send" => format!("Send from Messages on this Mac to {}:\n{}", args["to"].as_str().unwrap_or("?"), args["text"].as_str().unwrap_or("")),
+        "app_open" => format!("Open {} on this Mac{}", args["app"].as_str().unwrap_or("?"), args["path"].as_str().map(|p| format!(" with {p}")).unwrap_or_default()),
+        // Where first (in full), then what, and what it would overwrite.
+        "file_export" => match crate::files::export_plan(&ctx.db, ws(ctx).unwrap_or(ctx.chat_id), args["path"].as_str().unwrap_or(""), args["dest"].as_str().unwrap_or("")) {
+            Ok((dir, files, there)) => format!(
+                "Copy to {} on {}: {}{}{}",
+                dir.display(),
+                crate::files::machine(),
+                files.iter().take(12).map(|(f, _)| f.as_str()).collect::<Vec<_>>().join(", "),
+                if files.len() > 12 { format!(" and {} more", files.len() - 12) } else { String::new() },
+                if there > 0 { format!(". Replaces {there} file(s) already there.") } else { String::new() }
+            ),
+            Err(e) => format!("Copy {} to {}: {e}", args["path"].as_str().unwrap_or("?"), args["dest"].as_str().unwrap_or("?")),
+        },
         "send_file" => match args["path"].as_str().filter(|_| args["screenshot"].as_bool() != Some(true)) {
             Some(p) => format!("Send the file {p} to this chat{}", args["format"].as_str().map(|f| format!(" as {f}")).unwrap_or_default()),
             None => "Send a screenshot of the computer's screen to this chat".into(),
@@ -647,16 +811,20 @@ pub(super) async fn propose_plan(ctx: &ToolCtx, args: &Value) -> Result<String> 
         bail!("plans need the person there to approve them; in a routine, just do the steps (each ask waits in their inbox).");
     }
     let run = ctx.run_id.context("no run to attach the plan to")?;
+    // After outside content one OK can't cover actions a page might have steered: not an error, though (that read as
+    // a failure and cost the plan); the bot carries on and each step asks on its own card.
     if ctx.is_tainted() {
-        bail!("this conversation read outside content, so each action asks on its own; just go ahead step by step.");
+        return Ok("Noted, no plan card: this conversation read outside content, so each action asks the user on its own card \
+                   (they see why). Go ahead step by step, and tell them to expect one ask per step."
+            .into());
     }
     // One line per step: a step can't add lines that look like more of the card.
     let steps: Vec<String> = args["steps"].as_array().into_iter().flatten().filter_map(|s| s.as_str()).map(|s| truncate(&s.split_whitespace().collect::<Vec<_>>().join(" "), 200)).take(12).collect();
     let bot = ctx.db.bot(ctx.bot_id)?;
     let mut actions: Vec<(String, Option<String>)> = vec![];
     for a in args["actions"].as_array().into_iter().flatten() {
-        // Claude and Codex know our tools by their MCP names (mcp__mimir__memory_forget); grok as mimir__….
-        let Some(tool) = a["tool"].as_str().map(|t| t.trim_start_matches("mcp__").trim_start_matches("mimir__")) else { continue };
+        let Some(tool) = a["tool"].as_str().map(canonical) else { continue };
+        let tool = tool.as_str();
         let exists = specs().iter().any(|(n, ..)| *n == tool) || crate::ext::find(&ctx.db, tool).is_some();
         if !exists || tool == "plan_propose" || !usable(ctx, tool) || !bot.allows(tool) {
             continue;
@@ -699,6 +867,35 @@ pub(super) fn always_ask(name: &str, decision: String, why: &'static str, tainte
 pub(super) fn precheck(ctx: &ToolCtx, name: &str, args: &Value) -> Result<()> {
     let len = |k: &str| args[k].as_str().map_or(0, |s| s.chars().count());
     match name {
+        "shell_run" if len("command") == 0 || describe(ctx, name, args).chars().count() > CARD_FITS => {
+            bail!("one command line that fits on the approval card whole (about 1000 characters): split it, or put it in a script file in the folder and run that")
+        }
+        // Who and what, before anyone is asked: the card must show all of it.
+        "mail_send" => {
+            crate::mac::mail_args(args["to"].as_str().unwrap_or(""), args["cc"].as_str().unwrap_or(""), "", "")?;
+            if len("subject") > 200 || describe(ctx, name, args).chars().count() > CARD_FITS {
+                bail!("too long to show whole on the approval card (about 1100 characters with who it's to): shorten it, or save it as a file and send that");
+            }
+            if ctx.db.sent_today(ctx.chat_id, "mail_send")? >= 20 {
+                bail!("20 emails were sent from Mail in this chat in the last day; that's the limit");
+            }
+        }
+        "messages_send" => {
+            crate::mac::handle(args["to"].as_str().unwrap_or(""))?;
+            if len("text") == 0 || describe(ctx, name, args).chars().count() > CARD_FITS {
+                bail!("a message is 1 to about 1100 characters: the whole text has to fit on the approval card");
+            }
+        }
+        "app_open" => {
+            crate::mac::app_name(args["app"].as_str().unwrap_or(""))?;
+        }
+        // Where it goes and what it would overwrite, before anyone is asked.
+        "file_export" => {
+            let (dir, _, there) = crate::files::export_plan(&ctx.db, ws(ctx)?, s(args, "path")?, s(args, "dest")?)?;
+            if there > 0 && args["replace"].as_bool() != Some(true) {
+                bail!("{there} of these already exist in {}; pass replace: true to overwrite them (the card will say so), or pick another folder", dir.display());
+            }
+        }
         // Memories are short facts; a long one would also outgrow its approval card.
         "memory_store" if len("title") > 120 || len("body") > 1000 => {
             bail!("too long for a memory (title up to 120 characters, body up to 1000): keep it to the fact, or split it")
@@ -842,6 +1039,9 @@ pub(super) fn precheck(ctx: &ToolCtx, name: &str, args: &Value) -> Result<()> {
 
 /// What an approval card shows: all of it up to a size every chat app can display, and if it's longer, a plain note
 /// that it was cut (memories, routine prompts and hand-offs are capped below that, so theirs is always whole).
+/// What a card may hold for a send that must show whole (with room for a helper's "for X" line): see card_text.
+const CARD_FITS: usize = 1150;
+
 fn card_text(summary: &str) -> String {
     const MAX: usize = 1200;
     // Characters that silently reverse or reorder the text after them show as what they are, so the card reads the
@@ -892,6 +1092,11 @@ pub(crate) fn describe_tool(name: &str) -> String {
         "email_search" => "search your email",
         "email_send" => "send emails",
         "file_delete" => "delete files",
+        "file_export" => "copy files to your folders",
+        "shell_run" => "run commands in its working folder",
+        "mail_send" => "send emails from Mail on your Mac",
+        "messages_send" => "send messages from your Mac",
+        "app_open" => "open apps on your Mac",
         "file_list" => "list files",
         "file_read" => "read files",
         "file_write" => "write files",
@@ -975,10 +1180,37 @@ pub fn edit_card(db: &Db, a: &crate::db::Approval, edits: &Value) -> Result<()> 
     Ok(())
 }
 
+/// For a save that didn't happen: its text exists nowhere else, so it goes in the reply (kept in the chat's history).
+fn unsaved(tool: &str) -> &'static str {
+    if matches!(tool, "file_write" | "memory_store" | "card_write" | "skill_save") {
+        " What you meant to save wasn't saved anywhere: put it in your reply in full, so it isn't lost."
+    } else {
+        ""
+    }
+}
+
+/// Why an ask timed out, from its delivery record: one the person saw and didn't answer is not one that never reached them.
+pub(crate) fn unanswered(delivery: &str) -> String {
+    match delivery.split_once(':') {
+        Some(("shown", app)) if app.starts_with("app") => format!(
+            "it was shown in the Mimir app, but nobody answered within 5 minutes{}",
+            app.split_once("; card failed:").map(|(_, e)| format!(" (its chat-app card couldn't be sent: {e})")).unwrap_or_default()
+        ),
+        Some(("shown", place)) => format!("its card was sent on {place}, but nobody answered within 5 minutes"),
+        Some(("failed", e)) => format!("its card couldn't be sent, so the user never saw it ({e})"),
+        _ => "it never reached the user: no chat app is connected for this chat and the Mimir app wasn't open".into(),
+    }
+}
+
 /// Block until the user approves, denies, or the request expires. Works across processes via SQLite.
 /// `kind` says why it asks (rule | guarded | login); `site` is the website, for a per-site "always".
 /// Approved, it gives back the call's arguments with any text you edited on the card (`args` itself otherwise).
 pub(crate) async fn wait_for_approval_with(ctx: &ToolCtx, name: &str, args: &Value, summary: &str, kind: &str, site: Option<&str>) -> Result<Value> {
+    // "Don't ask me first" skips a card, but never one that must always be asked: a command, a change to the person's own
+    // files, or one of their Ask first rules.
+    if hands_off(ctx) && !matches!(kind, "shell" | "userfile" | "target") {
+        return Ok(args.clone());
+    }
     let summary = for_helper(ctx, card_text(summary));
     let kind = guest_kind(ctx, kind);
     let id = ctx.db.approval_create(ctx.via_bot.unwrap_or(ctx.bot_id), ctx.ask_chat, name, &summary, APPROVAL_TTL_SECS, kind, site)?;
@@ -1004,11 +1236,14 @@ pub(crate) async fn wait_for_approval_with(ctx: &ToolCtx, name: &str, args: &Val
                 }
                 match reason {
                     // Their own words: the bot changes course instead of only giving up.
-                    Some(r) => bail!("the user denied this action ({summary}) and said why, in their own words: \"Denied: {r}\". Don't retry it as it was: do what they said instead, or ask them if it isn't clear."),
-                    None => bail!("the user denied this action ({summary}). Don't retry it; tell the user it was not done."),
+                    Some(r) => bail!("the user denied this action ({summary}) and said why, in their own words: \"Denied: {r}\". Don't retry it as it was: do what they said instead, or ask them if it isn't clear.{}", unsaved(name)),
+                    None => bail!("the user denied this action ({summary}). Don't retry it; tell the user it was not done.{}", unsaved(name)),
                 }
             }
-            "expired" => bail!("approval request timed out ({summary}); the action was not done."),
+            "expired" => {
+                let why = unanswered(&ctx.db.approval(id)?.and_then(|a| a.delivery).unwrap_or_default());
+                bail!("approval request timed out ({summary}): {why}. The action was not done; tell the user that, and why.{}", unsaved(name))
+            }
             _ => tokio::time::sleep(Duration::from_millis(500)).await,
         }
     }
@@ -1119,8 +1354,8 @@ pub async fn run_parked(db: Db, a: crate::db::Approval) {
 }
 
 /// Call after any approval decision (app or messaging button): an approved parked call runs now.
-/// "Always" on an approval: from now on this tool (or this tool on this website) runs without asking. Only plain rule
-/// asks qualify: ones after outside content, saved logins and plans must keep asking.
+/// "Always" on an approval: from now on this tool (or this tool on this website) runs without asking, not even after
+/// outside content. Signing in, taking over and a routine's drift have no rule to change.
 pub fn always_allow(db: &Db, a: &crate::db::Approval) -> Result<()> {
     if a.status != "approved" {
         return Ok(());
@@ -1133,10 +1368,9 @@ pub fn always_allow(db: &Db, a: &crate::db::Approval) -> Result<()> {
     if a.kind == "drift" {
         bail!("approved once; from now on this counts as usual for the routine");
     }
-    // A plain ask: allowed, still asking after outside content. Any other (after outside content, a sensitive source,
-    // an email, a new bot, a saved login, a plan, a loop…): the person chose never to be asked before it again.
-    // A guest's card was a plain ask in their chat.
-    let action = if matches!(a.kind.as_str(), "rule" | "guest") { "allow" } else { "always" };
+    // Always means not being asked again: a plain "allow" would still ask after the next web page, which reads as Always
+    // not working. A guest's card was a plain ask in their chat: allowed, still guarded.
+    let action = if a.kind == "guest" { "allow" } else { "always" };
     match a.site.as_deref() {
         Some(site) => db.set_site_rule(&a.tool, site, action),
         None => db.set_rule(&a.tool, action),
@@ -1148,7 +1382,7 @@ fn hint_off_key(tool: &str, site: Option<&str>) -> String {
 }
 
 /// For Needs you: what you allowed 5 times in 30 days and never denied, while the rules still ask before it ("always
-/// allow it?"). Accepting is a plain allow (it still asks after outside content); dismissing stops it for that pair.
+/// allow it?"). Accepting is Always, like the card's button; dismissing stops it for that pair.
 pub fn rule_hints(db: &Db) -> Result<Vec<Value>> {
     let since = crate::db::now() - 30 * 86400;
     Ok(db

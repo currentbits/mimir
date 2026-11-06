@@ -26,6 +26,9 @@ pub(crate) fn checklist(steps: &[(String, bool)]) -> String {
 /// How long a bot waits for the person to take over its computer.
 const HANDOFF_SECS: i64 = 600;
 
+/// The setting (Settings → Memory) that saves an instruction a bot learns right away, instead of suggesting it.
+pub const ACCEPT_INSTRUCTIONS: &str = "accept_instructions";
+
 /// chat_search results for the model: "[Mon 5 Oct 2026 14:02] You: …" / "Ada: …", flagging replies that came from
 /// a conversation that had read outside content.
 fn chat_hits(db: &Db, hits: &[crate::db::ChatHit]) -> String {
@@ -285,11 +288,11 @@ pub(super) fn new_bot(ctx: &ToolCtx, args: &Value) -> Result<crate::db::Bot> {
         bail!("there's already a bot called {name}; pick another name or hand it the task with ask_bot");
     }
     let me = ctx.db.bot(ctx.bot_id)?;
-    // Never more than this bot may use itself, and no bot-making of its own.
-    let all: Vec<String> = all_specs(&ctx.db).into_iter().map(|t| t.0).filter(|t| me.allows(t) && t != "bot_create").collect();
+    // Never more than this bot can call itself, here (the same list it's offered), and no bot-making of its own.
+    let all: Vec<String> = specs_for(ctx).into_iter().map(|t| t.0).filter(|t| t != "bot_create").collect();
     let tools: Vec<String> = match args.get("tools").and_then(Value::as_array) {
         Some(asked) if !asked.is_empty() => {
-            let asked: Vec<String> = asked.iter().filter_map(Value::as_str).map(|t| t.trim().to_string()).collect();
+            let asked: Vec<String> = asked.iter().filter_map(Value::as_str).map(canonical).collect();
             let not: Vec<&str> = asked.iter().filter(|t| !all.contains(t)).map(String::as_str).collect();
             if !not.is_empty() {
                 bail!("can't give it {}: only tools you have yourself ({})", not.join(", "), all.join(", "));
@@ -298,7 +301,7 @@ pub(super) fn new_bot(ctx: &ToolCtx, args: &Value) -> Result<crate::db::Bot> {
         }
         _ => all,
     };
-    Ok(crate::db::Bot { id: 0, name: name.into(), persona: role.into(), provider: me.provider, model: me.model, base_url: me.base_url, tools: tools.join(","), look: String::new() })
+    Ok(crate::db::Bot { id: 0, name: name.into(), persona: role.into(), provider: me.provider, model: me.model, base_url: me.base_url, tools: tools.join(","), look: String::new(), workdir: String::new(), file_write: String::new() })
 }
 
 /// An event's time from a tool's arguments (a whole day, or a start and how many minutes) and how a card says it.
@@ -389,7 +392,11 @@ pub(super) async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<Stri
             }
             // Replacing one of the person's conventions counts too, whatever type the new entry claims to be.
             let replaces_convention = sup.is_some_and(|id| ctx.db.entries(&scope).is_ok_and(|v| v.iter().any(|e| e.id == id && e.kind == "convention")));
-            if (kind == "convention" || replaces_convention) && !own_words {
+            // Settings → Memory → Always accept instructions, or a bot set to "Don't ask me first": saved straight away
+            // (one picked up from outside content is still kept unconfirmed, like any memory: out of the standing
+            // instructions until you check it).
+            let accept = crate::tools::hands_off(ctx) || ctx.db.setting(ACCEPT_INSTRUCTIONS)?.as_deref() == Some("on");
+            if (kind == "convention" || replaces_convention) && !own_words && !accept {
                 let why = if src.is_empty() { String::new() } else { format!(" ({src})") };
                 let sug = crate::db::Suggestion {
                     id: 0,
@@ -485,20 +492,46 @@ pub(super) async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<Stri
             out.join("\n\n")
         }
         "file_list" => {
-            let v = crate::files::list(&ctx.db, ctx.chat_id, args["dir"].as_str().unwrap_or(""))?;
-            if v.is_empty() { "The workspace is empty.".into() } else { v.iter().map(|(p, n)| format!("{p} ({n} bytes)")).collect::<Vec<_>>().join("\n") }
+            let v = crate::files::list(&ctx.db, ws(ctx)?, args["dir"].as_str().unwrap_or(""))?;
+            // Where it really is, so the bot can tell the person where to find the files.
+            let at = format!("Workspace: {}", crate::files::whereabouts(&crate::files::root(&ctx.db, ws(ctx)?)));
+            if v.is_empty() { format!("{at}\nIt's empty.") } else { format!("{at}\n{}", v.iter().map(|(p, n)| format!("{p} ({n} bytes)")).collect::<Vec<_>>().join("\n")) }
         }
         "file_read" => {
-            let (text, outside) = crate::files::read(&ctx.db, ctx.chat_id, s(args, "path")?)?;
+            let (text, outside) = crate::files::read(&ctx.db, ws(ctx)?, s(args, "path")?)?;
             if outside {
                 ctx.taint();
             }
             truncate(&text, 60_000)
         }
-        "file_write" => crate::files::write(&ctx.db, ctx.chat_id, s(args, "path")?, s(args, "content")?, s(args, "mode")?, ctx.is_tainted())?,
+        "file_write" => crate::files::write(&ctx.db, ws(ctx)?, s(args, "path")?, s(args, "content")?, s(args, "mode")?, ctx.is_tainted())?,
+        "mail_send" => crate::mac::mail_send(s(args, "to")?, args["cc"].as_str().unwrap_or(""), s(args, "subject")?, s(args, "body")?).await?,
+        "messages_send" => crate::mac::messages_send(s(args, "to")?, s(args, "text")?).await?,
+        "app_open" => {
+            // A workspace file, by the same path checks as reading it (inside, no links).
+            let file = match args["path"].as_str().filter(|p| !p.trim().is_empty()) {
+                Some(p) => Some(crate::files::path_of(&ctx.db, ws(ctx)?, p)?),
+                None => None,
+            };
+            crate::mac::app_open(s(args, "app")?, file).await?
+        }
+        "shell_run" => {
+            let dir = ctx.db.bot(ctx.bot_id)?.workdir;
+            // Only in the folder its card showed: if it changed while the card waited, nothing runs.
+            if args["folder"].as_str() != Some(dir.as_str()) {
+                bail!("the working folder changed after this command was approved; ask again for the new folder");
+            }
+            // Checked again here: the folder must still be there (never another one instead).
+            crate::files::workspace(&ctx.db, ctx.bot_id, ctx.chat_id, false, true)?;
+            let out = crate::shell::run(std::path::Path::new(&dir), s(args, "command")?).await?;
+            // What a command prints can be anything (a file someone else wrote, a web page saved earlier).
+            ctx.taint();
+            out
+        }
+        "file_export" => crate::files::export(&ctx.db, ws(ctx)?, s(args, "path")?, s(args, "dest")?, args["replace"].as_bool() == Some(true))?,
         "file_delete" => {
             let p = s(args, "path")?;
-            crate::files::delete(&ctx.db, ctx.chat_id, p)?;
+            crate::files::delete(&ctx.db, ws(ctx)?, p)?;
             format!("deleted {p}")
         }
         "send_file" => {
@@ -510,10 +543,16 @@ pub(super) async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<Stri
                 ("screen.jpg".to_string(), tokio::task::spawn_blocking(crate::computer::screenshot_jpeg).await??)
             } else {
                 let p = s(args, "path").map_err(|_| anyhow::anyhow!("give a workspace path, or screenshot=true"))?;
-                let (text, _) = crate::files::read(&ctx.db, ctx.chat_id, p)?;
-                match args["format"].as_str() {
-                    Some(f) => crate::office::make(f, p, &text)?,
-                    None => (p.rsplit('/').next().unwrap_or(p).to_string(), text.into_bytes()),
+                // A folder goes as one zip (a skill with its files, a site): one of the 5, whatever it holds.
+                match crate::files::zip_folder(&ctx.db, ws(ctx)?, p)? {
+                    Some(zipped) => zipped,
+                    None => {
+                        let (text, _) = crate::files::read(&ctx.db, ws(ctx)?, p)?;
+                        match args["format"].as_str() {
+                            Some(f) => crate::office::make(f, p, &text)?,
+                            None => (p.rsplit('/').next().unwrap_or(p).to_string(), text.into_bytes()),
+                        }
+                    }
                 }
             };
             let name = crate::files::send(&ctx.db, ctx.chat_id, run, &name, &bytes)?;
@@ -721,6 +760,11 @@ pub(super) async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<Stri
                 reason.push_str(" The conversation had read outside content: check the steps.");
             }
             match ctx.db.skill_saved_propose(&scope, ctx.bot_id, title, description, body, &reason, ctx.run_id)? {
+                // A bot set to "Don't ask me first" keeps it straight away (its reason, with the steps, stays on it).
+                Some(id) if crate::tools::hands_off(ctx) => {
+                    ctx.db.skill_decide(&scope, id, true)?;
+                    format!("Saved skill #{id} \"{}\".", title.trim())
+                }
                 Some(id) => format!("Proposed skill #{id} \"{}\". It's waiting for the person to press Save (here in the chat, or in Memory → Skills); tell them.", title.trim()),
                 None => "A version of that skill is already waiting for the person, or they turned it down recently.".into(),
             }
@@ -909,6 +953,24 @@ pub(super) async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<Stri
             if own && ctx.chat_id != crate::host::LOCAL_CHAT && !crate::runtime::decisions_ok(&ctx.db, ctx.chat_id) {
                 bail!("in_own_chat only works from the person's own private chat; hand it over without it");
             }
+            // Files from this workspace go into the helper's (as new files: never over one of the person's), and the task
+            // names them. A file that's outside content stays marked there.
+            let mut task = task.to_string();
+            let shared: Vec<&str> = args["files"].as_array().into_iter().flatten().filter_map(Value::as_str).take(20).collect();
+            if !shared.is_empty() && !ctx.rehearsing() {
+                let (from, to) = (ws(ctx)?, helper_ws(ctx, target.id, own)?);
+                let mut given = vec![];
+                for p in shared {
+                    let (text, outside) = crate::files::read(&ctx.db, from, p)?;
+                    match crate::files::write(&ctx.db, to, p, &text, "create", outside || ctx.is_tainted()) {
+                        Ok(_) => given.push(p.to_string()),
+                        Err(e) if e.to_string().contains("already exists") => given.push(format!("{p} (yours already had one; not replaced)")),
+                        Err(e) => return Err(e),
+                    }
+                }
+                task = format!("{task}\n\n[Files shared with you, in your workspace: {}]", given.join(", "));
+            }
+            let task = task.as_str();
             // Later: it runs on its own (the asking bot's scheduler starts it) and reports back. A rehearsal waits for it,
             // so nothing outlives the rehearsal.
             if args["later"].as_bool() == Some(true) && !ctx.rehearsing() {
@@ -936,13 +998,22 @@ pub(super) async fn exec(ctx: &ToolCtx, name: &str, args: &Value) -> Result<Stri
                 return Ok(format!("Handed to {}. Its result comes back to you in this chat when it's done; tell the person then.", target.name));
             }
             let reply = delegate(ctx, target, task, own).await?;
+            // Where its files are: its own workspace, not this one.
+            let folder = crate::files::root(&ctx.db, helper_ws(ctx, target.id, own).unwrap_or(ctx.chat_id));
+            let files = if folder.is_dir() { format!("\n(Files it wrote are in its own workspace: {}.)", crate::files::whereabouts(&folder)) } else { String::new() };
             if own {
-                return own_chat_answer(&ctx.db, target, &reply);
+                return Ok(format!("{}{files}", own_chat_answer(&ctx.db, target, &reply)?));
             }
-            format!("{} replied:\n{}", target.name, truncate(&reply, 6000))
+            format!("{} replied (its answer is also kept in its own chat):\n{}{files}", target.name, truncate(&reply, 6000))
         }
         _ => bail!("unknown tool {name}"),
     })
+}
+
+/// The workspace a helper's turn on this task uses (see delegate): in its own chat, that chat's; else its own.
+fn helper_ws(ctx: &ToolCtx, helper: i64, own: bool) -> Result<i64> {
+    let chat = if own { crate::host::LOCAL_CHAT } else { ctx.chat_id };
+    crate::files::workspace(&ctx.db, helper, chat, !own, mine(ctx))
 }
 
 /// `target`'s turn on a task from the bot of `ctx`, one level down (no chains), under the asking run.
@@ -958,6 +1029,7 @@ pub(crate) async fn delegate(ctx: &ToolCtx, target: &crate::db::Bot, task: &str,
     sub.private = ctx.private.clone();
     sub.sensitive = ctx.sensitive.clone();
     sub.depth = ctx.depth + 1;
+    sub.own_chat = own;
     // Inside a routine, the helper's asks wait in the inbox too, rather than sending a live card.
     sub.unattended = ctx.unattended;
     // A rehearsal stays one in the helper.

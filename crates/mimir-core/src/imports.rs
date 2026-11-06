@@ -654,7 +654,7 @@ pub fn import_bot(db: &Db, text: &str, chat: i64, rules: bool, duplicate_of: Opt
         bail!("none of that bot's tools are here (its tool servers aren't set up): add them first");
     }
     let name = free_name(db, &f.name)?;
-    let bot = crate::db::Bot { id: 0, name: name.clone(), persona: f.role, base_url: own_base_url(db, &f.provider, duplicate_of)?, provider: f.provider, model: f.model, tools: tools.join(","), look: f.look };
+    let bot = crate::db::Bot { id: 0, name: name.clone(), persona: f.role, base_url: own_base_url(db, &f.provider, duplicate_of)?, provider: f.provider, model: f.model, tools: tools.join(","), look: f.look, workdir: String::new(), file_write: String::new() };
     let id = db.bot_save(&bot)?;
     let scope = format!("chat:{chat}");
     let mut done = Imported::default();
@@ -732,7 +732,7 @@ mod tests {
     #[test]
     fn an_exported_url_keeps_no_credentials() {
         let db = temp_db("creds");
-        let bot = crate::db::Bot { id: 0, name: "Ops".into(), persona: String::new(), provider: "openai".into(), model: "m".into(), base_url: "https://u:p@h.example/v1?key=x".into(), tools: "mytools__*".into(), look: String::new() };
+        let bot = crate::db::Bot { id: 0, name: "Ops".into(), persona: String::new(), provider: "openai".into(), model: "m".into(), base_url: "https://u:p@h.example/v1?key=x".into(), tools: "mytools__*".into(), look: String::new(), workdir: String::new(), file_write: String::new() };
         let id = db.bot_save(&bot).unwrap();
         crate::ext::set_servers(&db, &[crate::ext::ServerConf { name: "mytools".into(), url: "https://u:p@h.example/mcp".into(), ..Default::default() }]).unwrap();
         let f = export_bot(&db, id).unwrap();
@@ -745,7 +745,7 @@ mod tests {
     #[test]
     fn a_routines_settings_come_back_with_it() {
         let db = temp_db("routine");
-        let bot = crate::db::Bot { id: 0, name: "Watcher".into(), persona: String::new(), provider: "openai".into(), model: "m".into(), base_url: String::new(), tools: String::new(), look: String::new() };
+        let bot = crate::db::Bot { id: 0, name: "Watcher".into(), persona: String::new(), provider: "openai".into(), model: "m".into(), base_url: String::new(), tools: String::new(), look: String::new(), workdir: String::new(), file_write: String::new() };
         let id = db.bot_save(&bot).unwrap();
         let r = db.routine_create(id, 0, "0 9 * * *", "Tell me when the price drops", true).unwrap();
         let ends = crate::db::now() + 30 * 86_400;
@@ -796,7 +796,7 @@ mod tests {
 
         // Two of your own bots on one account, at different addresses: a duplicate keeps its original's.
         let mine = |name: &str, url: &str| {
-            db.bot_save(&crate::db::Bot { id: 0, name: name.into(), persona: String::new(), provider: "openai".into(), model: "m".into(), base_url: url.into(), tools: String::new(), look: String::new() })
+            db.bot_save(&crate::db::Bot { id: 0, name: name.into(), persona: String::new(), provider: "openai".into(), model: "m".into(), base_url: url.into(), tools: String::new(), look: String::new(), workdir: String::new(), file_write: String::new() })
                 .unwrap()
         };
         mine("A", "https://a.gateway.example/v1");

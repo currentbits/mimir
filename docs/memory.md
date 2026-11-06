@@ -41,7 +41,9 @@ commitment).
 
 - **Preferences need your own words.** A bot saves a "When …, …" preference directly only when *your* message in that
   reply states the rule ("from now on…", "always…", "I prefer…") and it matches what's saved. A habit a bot works out
-  on its own becomes a *suggestion* you accept or dismiss.
+  on its own becomes a *suggestion* you accept or dismiss. **Settings → Memory → Always accept instructions** saves
+  them right away instead, for every bot (one picked up from a web page or email still stays unconfirmed until you
+  check it); so does a bot set to *Don't ask me first*.
 - **No secrets.** Memory refuses passwords and API keys; use saved logins for those
   ([Tools and safety](tools-and-safety.md#the-browser-and-saved-logins)).
 - **Sensitive topics stay out.** The tidy-up, imports and *Get to know me* don't suggest memories about your health,
@@ -68,6 +70,20 @@ list, running notes, a draft, research too long for a memory. They're under **Me
 folder is `files/chat-<id>/` in Mimir's data folder. Rewriting a file keeps the previous version, deleting one asks,
 and a file written after reading a web page stays marked as outside content when a bot reads it again. Like memory,
 it belongs to the chat, so a group chat can't read your private chat's files.
+
+**Where the files are.** They're plain files on disk, not in the database (SQLite keeps only which ones count as
+outside content):
+
+| Where Mimir runs | Folder |
+| --- | --- |
+| Desktop app (macOS, Linux) | `~/.mimir/files/chat-<id>/` (hidden in Finder: **Memory → Files → Open workspace folder**, or Go → Go to Folder) |
+| Desktop app (Windows) | `%USERPROFILE%\.mimir\files\chat-<id>\` |
+| `mimir server` | `files/chat-<id>/` in its data folder (`$MIMIR_HOME`, default `~/.mimir`) on the server |
+| Docker | the same inside the container; on the host, in the volume mounted for Mimir's data |
+
+**Memory → Files** shows the exact path and which machine it's on, and a bot's `file_list` says the same, so you can
+ask a bot where it put something. (An AI tool may also show a "working directory" of its own, like
+`~/.mimir/workspace`: that's only where it starts, and nothing is kept there.)
 
 ## Changing and removing
 
@@ -102,7 +118,7 @@ instructions until you mark one **Looks right**.
 
 ## The daily tidy-up
 
-Once a day, after a quiet half hour, your first bot (setting `memory_bot`) reviews memory against recent conversations
+Once a day, after a quiet half hour, your main bot (Settings → Main bot; the first bot unless you pick another) reviews memory against recent conversations
 and **suggests** changes: remember a new fact or habit, update an outdated one, forget a finished task or a duplicate,
 move something rarely relevant to the background. Suggestions appear at the top of the Memory tab with a reason;
 nothing changes until you accept. *Tidy up now* runs it on demand; a dismissed suggestion isn't proposed again for 90

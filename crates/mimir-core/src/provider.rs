@@ -1046,8 +1046,7 @@ pub fn quota_reset(db: &crate::db::Db, kind: &str, error: &str, now: i64) -> Opt
         let full = info["unifiedWindows"].as_object().into_iter().flatten().filter(|(_, w)| w["utilization"].as_f64().is_some_and(|u| u >= 1.0)).filter_map(|(_, w)| w["resetsAt"].as_i64()).max();
         if info["status"] == "rejected" { info["resetsAt"].as_i64().or(full) } else { full }
     });
-    let in_error = error.split('|').filter_map(|p| p.trim().get(..10)).find_map(|d| d.parse::<i64>().ok().filter(|t| *t > 1_600_000_000));
-    from_cli.or(in_error).filter(|t| *t > now)
+    from_cli.or(crate::reset_in(error)).filter(|t| *t > now)
 }
 
 impl Provider {
