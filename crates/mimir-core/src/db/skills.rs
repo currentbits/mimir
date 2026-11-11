@@ -284,7 +284,27 @@ impl Db {
         if body.chars().count() > limit || body.trim() == k.body.trim() {
             bail!("the fixed skill would be too long, or unchanged");
         }
-        self.skill_insert(scope, k.bot_id, &k.name, &k.description, &body, None, "patch", reason, &[])
+        let reason = self.fix_reason(scope, std::slice::from_ref(&k), &k.body, &body, reason)?;
+        self.skill_insert(scope, k.bot_id, &k.name, &k.description, &body, None, "patch", &reason, &[])
+    }
+
+    /// A fix's reason, with what a quick approval could miss: rules it drops, and that you chose the skill yourself
+    /// (saved it or added it from the library, in any version of it).
+    fn fix_reason(&self, scope: &str, skills: &[Skill], before: &str, after: &str, reason: &str) -> Result<String> {
+        let mut out = reason.trim().to_string();
+        for rule in dropped_rules(before, after) {
+            out.push_str(&format!(" Warning: this fix drops a rule: “{rule}”."));
+        }
+        for k in skills {
+            let chosen = self
+                .c()
+                .prepare("SELECT 1 FROM skills WHERE scope=?1 AND bot_id=?2 AND lower(name)=lower(?3) AND kind IN ('saved','library') AND status IN ('active','removed')")?
+                .exists(params![scope, k.bot_id, k.name])?;
+            if chosen {
+                out.push_str(&format!(" You chose “{}” yourself.", k.name));
+            }
+        }
+        Ok(out)
     }
 
     /// What this conversation actually did lately: the successful actions of the bot's last few runs here (not memory,
@@ -364,7 +384,9 @@ impl Db {
         if self.skills_active(scope, skills[0].bot_id)?.iter().any(|k| k.name.eq_ignore_ascii_case(name.trim()) && !ids.contains(&k.id)) {
             bail!("another skill already has that name");
         }
-        self.skill_insert(scope, skills[0].bot_id, name, description, body, None, "merge", reason, ids)
+        let before = skills.iter().map(|k| k.body.as_str()).collect::<Vec<_>>().join("\n");
+        let reason = self.fix_reason(scope, &skills, &before, body, reason)?;
+        self.skill_insert(scope, skills[0].bot_id, name, description, body, None, "merge", &reason, ids)
     }
 
     /// Propose retiring a skill nobody has used for a while (it's kept, and can come back).
@@ -422,4 +444,15 @@ impl Db {
     pub fn skill_remove(&self, scope: &str, id: i64) -> Result<bool> {
         Ok(self.c().execute("UPDATE skills SET status='removed' WHERE id=?1 AND scope=?2 AND status='active'", params![id, scope])? > 0)
     }
+}
+
+/// Rule lines of `before` ("never", "only", "always", "unless", "don't", "do not", "must") that `after` no longer has.
+/// A line kept inside a longer one ("Never pay" → "Never pay twice") isn't dropped.
+pub fn dropped_rules(before: &str, after: &str) -> Vec<String> {
+    let rule = |line: &str| {
+        let lower = line.to_lowercase().replace('’', "'");
+        let words: Vec<&str> = lower.split(|c: char| !c.is_alphanumeric() && c != '\'').collect();
+        words.iter().any(|w| matches!(*w, "never" | "only" | "always" | "unless" | "don't" | "must")) || words.windows(2).any(|p| p == ["do", "not"])
+    };
+    before.lines().map(str::trim).filter(|l| !l.is_empty() && rule(l) && !after.contains(*l)).map(str::to_string).collect()
 }

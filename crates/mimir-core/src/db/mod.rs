@@ -1049,6 +1049,16 @@ mod tests {
         let b = d.skill_propose(s, 1, "Pay invoices", "When paying invoices", "1. Open bank\n2. Pay", None).unwrap().unwrap();
         d.skill_decide(s, b, true).unwrap();
         assert!(d.skill_merge_propose(s, &[a, b], "Book padel", "x", "y", "r").is_err(), "Book padel is another active skill");
+        // A fix that drops a rule says so; one of a skill you saved says you chose it.
+        let saved = d.skill_saved_propose(s, 1, "Pay safely", "When paying", "Never pay before checking the invoice.\nOpen the bank app.", "you asked", None).unwrap().unwrap();
+        d.skill_decide(s, saved, true).unwrap();
+        let fix = d.skill_patch_propose(s, saved, "Never pay before checking the invoice.\nOpen the bank app.", "Open the bank app.", "faster").unwrap().unwrap();
+        let reason = d.skills(s).unwrap().into_iter().find(|k| k.id == fix).unwrap().reason;
+        assert!(reason.contains("drops a rule: “Never pay before checking the invoice.”") && reason.contains("You chose “Pay safely”"), "{reason}");
+        let merged = d.skill_merge_propose(s, &[a, b], "Pay invoices", "When paying", "1. Open bank\n2. Pay the bill", "Same job").unwrap().unwrap();
+        let reason = d.skills(s).unwrap().into_iter().find(|k| k.id == merged).unwrap().reason;
+        assert!(!reason.contains("drops a rule") && !reason.contains("You chose"), "{reason}");
+        assert_eq!(super::skills::dropped_rules("Don’t pay twice.\nOnly on weekdays", "Only on weekdays, mornings"), vec!["Don’t pay twice."]);
 
         // Facts nobody looks up can leave standing memory; looking one up counts.
         let e = d.store(s, "knowledge", "Old wifi hint", "the cat is called Bob", "user said", None).unwrap();

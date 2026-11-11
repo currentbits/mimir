@@ -2,7 +2,28 @@
 
 What changed for people using Mimir. The newest release is at the top; "Unreleased" is what the next one brings.
 
-## Unreleased
+## 0.8.0
+
+### The app
+- **The chat in the middle:** a new layout. The sidebar lists your bots, then your chats, with search (⌘K jumps to a
+  bot, a chat or a place) and new bot at the top, and Needs you, Meetings, Computer and Settings at the bottom.
+- **Replies as bubbles:** one face and name per run of replies, your own messages tinted in the bot's colour, and a
+  time on a new day or after an hour's gap. The composer has attach and hold-to-talk beside it.
+- **Everything else opens over the chat:** Memory, Skills, Routines and Activity are icons in the chat's corner and
+  share one sheet with tabs; Settings, Needs you, Meetings, Computer and a bot's page open the same way. Esc, × or a
+  click beside the sheet closes it, and the sidebar stays live meanwhile. On a phone, sheets fill the screen.
+- **Settings by category:** a list of sections that follows your scroll.
+
+### Skills
+- **A fix that drops a rule says so:** when a proposed fix or merge of a skill leaves out a line with "never",
+  "only", "always", "unless", "don't" or "must", its card warns you and quotes the rule. It also says when the
+  skill is one you saved or added from the library yourself.
+
+### AI accounts
+- **What tools and memory cost:** `mimir doctor` and a bot's page (under *What it can do*) show about how many tokens
+  the offered tools and the standing memory take in every request, and warn when tool servers take a lot.
+- **Ollama's window too small:** a bot on Ollama warns when the model's context window is smaller than Mimir's tools
+  and memory need, with the `OLLAMA_CONTEXT_LENGTH` to start Ollama with.
 
 ### Routines
 - **What I noticed:** a new library skill for a daily quiet check: mail older than two days that asks you something,
