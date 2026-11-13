@@ -220,6 +220,19 @@ pub fn specs() -> Vec<(&'static str, &'static str, Value)> {
             },"required":["command"]}),
         ),
         (
+            "purchase_request",
+            "Before paying with one of the user's saved cards (see <saved_cards>): open the checkout page in the browser, \
+             then ask with the card, the exact total and what it's for. The user approves it with Touch ID in the Mimir \
+             app; only then, for 10 minutes and only on that site, can you type the card's placeholders with \
+             browser_type or browser_fill_form. Never type card details any other way, and never pay more than asked.",
+            json!({"type":"object","properties":{
+                "card":{"type":"string","description":"its name, like CARD_1234"},
+                "amount":{"type":"string","description":"the total to pay, as on the page, like 24.99"},
+                "currency":{"type":"string","description":"its 3-letter code, like EUR"},
+                "what":{"type":"string","description":"what it's for and from whom, one line"}
+            },"required":["card","amount","currency","what"]}),
+        ),
+        (
             "file_delete",
             "Delete a file from this chat's workspace.",
             json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}),

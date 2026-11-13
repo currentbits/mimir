@@ -193,7 +193,7 @@ impl Db {
         let c = self.c();
         Self::expire_stale(&c)?;
         let n = c.execute(
-            "UPDATE approvals SET status=?2 WHERE id=?1 AND status='pending' AND (?3 IS NULL OR chat_id=?3) AND kind != 'signing' AND (?2 = 'denied' OR kind != 'signin')",
+            "UPDATE approvals SET status=?2 WHERE id=?1 AND status='pending' AND (?3 IS NULL OR chat_id=?3) AND kind != 'signing' AND (?2 = 'denied' OR kind NOT IN ('signin', 'purchase'))",
             params![id, if approve { "approved" } else { "denied" }, chat],
         )?;
         if n == 0 {

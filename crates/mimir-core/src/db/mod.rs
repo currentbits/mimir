@@ -55,7 +55,7 @@ PRAGMA secure_delete=ON;
 
 /// The schema version this build writes (`PRAGMA user_version`). A schema change bumps it and adds a step to
 /// `migrate`; each step runs once per database.
-pub(crate) const VERSION: i64 = 17;
+pub(crate) const VERSION: i64 = 18;
 
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS entries(
@@ -241,6 +241,9 @@ fn migrate(c: &Connection) -> Result<()> {
     }
     if v < 17 {
         migrate_v17(c)?;
+    }
+    if v < 18 {
+        migrate_v18(c)?;
     }
     // New installs only: emails a bot sends to someone new say they're from an assistant (an update keeps its mail as it was).
     if v == 0 {
@@ -579,6 +582,19 @@ fn migrate_v17(c: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Version 18: purchases with a saved card (cards.rs): each request, its approval (Touch ID), which of the card's
+/// details were typed, and when. Its own table, so approving and the day's total are one transaction.
+fn migrate_v18(c: &Connection) -> Result<()> {
+    c.execute_batch(
+        "CREATE TABLE IF NOT EXISTS purchases(
+           approval INTEGER PRIMARY KEY, bot INTEGER NOT NULL, chat INTEGER NOT NULL, card TEXT NOT NULL, site TEXT NOT NULL,
+           page TEXT NOT NULL, cents INTEGER NOT NULL, currency TEXT NOT NULL, what TEXT NOT NULL, asked_at INTEGER NOT NULL,
+           approved_at INTEGER, status TEXT NOT NULL, typed TEXT NOT NULL DEFAULT '', last_typed INTEGER,
+           cleared INTEGER NOT NULL DEFAULT 0, typed_refs TEXT NOT NULL DEFAULT '')",
+    )?;
+    Ok(())
+}
+
 impl Db {
     /// Opens the database, migrating it first if an older Mimir wrote it. An up-to-date database only reads its
     /// version: the tools process opens it on every turn, and mustn't compete with the app for the write lock.
@@ -732,11 +748,11 @@ mod tests {
                 "DROP TABLE goals; ALTER TABLE routines DROP COLUMN goal_id; ALTER TABLE delegations DROP COLUMN goal_id; ALTER TABLE runs DROP COLUMN goal_id;
                  ALTER TABLE approvals DROP COLUMN draft; ALTER TABLE approvals DROP COLUMN reason;
                  ALTER TABLE runs DROP COLUMN cache_write; ALTER TABLE sessions DROP COLUMN sent; ALTER TABLE sessions DROP COLUMN prompt;
-                 DROP TABLE tool_cards; ALTER TABLE runs DROP COLUMN person; ALTER TABLE approvals DROP COLUMN delivery; ALTER TABLE bots DROP COLUMN workdir; ALTER TABLE bots DROP COLUMN file_write; PRAGMA user_version = 10",
+                 DROP TABLE tool_cards; ALTER TABLE runs DROP COLUMN person; ALTER TABLE approvals DROP COLUMN delivery; ALTER TABLE bots DROP COLUMN workdir; ALTER TABLE bots DROP COLUMN file_write; DROP TABLE purchases; PRAGMA user_version = 10",
             )
             .unwrap();
         let d = Db::open(&p).unwrap();
-        assert_eq!(user_version(&d.c()).unwrap(), 17);
+        assert_eq!(user_version(&d.c()).unwrap(), 18);
         assert!(d.c().prepare("SELECT goal_id FROM runs").is_ok() && d.c().prepare("SELECT id FROM goals").is_ok(), "v11 ran");
         assert!(d.c().prepare("SELECT draft, reason FROM approvals").is_ok(), "v12 ran");
         assert!(d.c().prepare("SELECT cache_write FROM runs").is_ok() && d.c().prepare("SELECT sent, prompt FROM sessions").is_ok(), "v13 ran");
@@ -744,6 +760,7 @@ mod tests {
         assert!(d.c().prepare("SELECT person FROM runs").is_ok(), "v15 ran");
         assert!(d.c().prepare("SELECT delivery FROM approvals").is_ok(), "v16 ran");
         assert!(d.c().prepare("SELECT workdir, file_write FROM bots").is_ok(), "v17 ran");
+        assert!(d.c().prepare("SELECT approval, typed FROM purchases").is_ok(), "v18 ran");
         drop(d);
         // A new database starts at the latest.
         let fresh = dir.join("fresh.db");
